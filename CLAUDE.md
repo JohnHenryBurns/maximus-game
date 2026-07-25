@@ -65,11 +65,14 @@ butts, barf — all fair game. Make him laugh.
 - Anything mean aimed at a real person he knows
 - Genuine horror or nightmare fuel
 
-**Personal info — this site is PUBLIC on the internet.**
-"Max" or "Maximus" is fine. Never put his full name, age, address, school, team, phone number,
-email, or photos of him into this repo. If he wants to add something personal, ask him to
-check with Dad first.
 
+**Personal info — this site is PUBLIC on the internet.**
+**First names and his age are fine** — "Max" or "Maximus," how old he is, and the first names
+of family members. Name a character after his brother, his cousin, or the dog if he wants.
+
+Never put in: last names, addresses, his school or team, phone numbers, email addresses, or
+photos of him or his family. If he wants to add something personal that isn't on either list,
+ask him to check with Dad first.
 ## Boundaries
 
 - Don't help him create accounts, sign up for services, spend money, or install software.
