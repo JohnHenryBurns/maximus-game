@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Maximus Game</title>
+  <title>Escape the Cursed Cavern</title>
 
   <style>
     /* ------------------------------------------------------------------
@@ -19,7 +19,7 @@
       align-items: center;
       justify-content: center;
       gap: 16px;
-      background: #10101a;
+      background: #07060a;
       color: #e8e8f0;
       font-family: system-ui, sans-serif;
     }
@@ -27,9 +27,9 @@
     /* The canvas is our drawing rectangle. Everything in the game
        gets painted onto this one element. */
     canvas {
-      background: #1c1c2b;
+      background: #000;
       border-radius: 12px;
-      box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
+      box-shadow: 0 8px 40px rgba(0, 0, 0, 0.8);
       /* Keeps the canvas from overflowing on a small screen. */
       max-width: 95vw;
       height: auto;
@@ -49,16 +49,17 @@
        it's 800 wide and 600 tall. That makes the math easy. -->
   <canvas id="screen" width="800" height="600"></canvas>
 
-  <p>Press any key &mdash; something should happen.</p>
+  <p>Click the cavern to look around with the mouse. WASD or arrows to move. Esc to let go.</p>
 
   <script>
   // ====================================================================
-  //  MAXIMUS GAME
-  //  Nothing here yet! This is a skeleton: a canvas, a game loop,
-  //  and a way to know which keys are being held down.
+  //  ESCAPE THE CURSED CAVERN
+  //  A first-person 3D game, built by Maximus.
   //
-  //  That's the bones of literally every game ever made.
-  //  You and Claude get to build the rest.
+  //  The 3D here is a magic trick called RAYCASTING - the same trick
+  //  the original DOOM used back in 1993. There's no real 3D in here
+  //  at all. We're drawing tall skinny rectangles, really fast, and
+  //  your eyes do the rest.
   // ====================================================================
 
 
@@ -70,85 +71,1623 @@
   const ctx = canvas.getContext('2d');
 
 
-  // --- 2. THE STATE ---------------------------------------------------
+  // --- 2. THE MAP -----------------------------------------------------
+  // This is the cavern, seen from above, like a treasure map.
+  //
+  //     #  = solid rock (you cannot walk through it)
+  //     .  = open floor (you can)
+  //
+  // THIS IS YOURS TO MESS WITH, MAX. Change a # into a . and you just
+  // smashed a hole in a wall. Change a . into a # and you just built one.
+  // Every row has to stay the same length as the others, though!
+
+  const MAP = [
+    '####################',
+    '#........#.........#',
+    '#.######.#.#######.#',
+    '#.#....#.#.......#.#',
+    '#.#.##.#.#######.#.#',
+    '#...##.......#...#.#',
+    '###.#######..#.###.#',
+    '#...#.....#..#...#.#',
+    '#.###.###.#..###.#.#',
+    '#.....#...#....#.#.#',
+    '#######.###.##.#.#.#',
+    '#.......#...##...#.#',
+    '#.#####.#.#######.##',
+    '#.#...#.#.#.......##',
+    '#.#.#.#.#.#.######.#',
+    '#...#...#...#....#.#',
+    '#####.#####.#.##.#.#',
+    '#.....#.....#.##...#',
+    '#.#####.#####.######',
+    '####################',
+  ];
+
+  // How wide and tall the map is, counted from the rows above.
+  const MAP_W = MAP[0].length;
+  const MAP_H = MAP.length;
+
+  // Ask the map "is this spot solid rock?"
+  // Anything outside the map counts as rock, so you can never fall out
+  // of the world. That's a guard rail - a tiny bit of code whose only
+  // job is to stop something impossible from happening.
+  function isWall(x, y) {
+    const col = Math.floor(x);
+    const row = Math.floor(y);
+    if (col < 0 || col >= MAP_W || row < 0 || row >= MAP_H) return true;
+    return MAP[row][col] === '#';
+  }
+
+
+  // --- 3. THE STATE ---------------------------------------------------
   // "State" is a fancy word for: everything the game needs to remember.
-  // Right now it remembers one thing: how many frames have gone by.
-  // Later this is where the player, the score, the enemies all live.
+  // Right now that's where you are and which way you're facing.
 
   const state = {
-    frame: 0,
+    // Where you're standing. These are NOT pixels - they're map squares.
+    // x: 1.5 means "halfway across square number 1". Starting you in a
+    // corner of open floor.
+    x: 1.5,
+    y: 1.5,
+
+    // Which way you're looking, measured in radians (a way of counting
+    // angles that computers prefer over degrees). 0 points to the right
+    // on the map. This starts you looking down and to the right.
+    angle: 0.7,
+
+    // WHAT YOU'RE CARRYING. Just a list of names - that's all an
+    // inventory really is. The bar you see at the bottom of the screen
+    // isn't the inventory, it's a PICTURE of this list. Keeping those two
+    // apart matters: change this list and the picture updates itself,
+    // because the picture only ever reads from here.
+    inventory: ['knife'],
+
+    // Which slot is in your hand. 0 means the first one.
+    heldSlot: 0,
   };
 
+  // How fast you walk and turn, per frame. Small numbers! This runs 60
+  // times a second, so 0.05 per frame is really 3 squares per second.
+  const MOVE_SPEED = 0.045;
+  const TURN_SPEED = 0.035;
 
-  // --- 3. THE KEYBOARD ------------------------------------------------
+  // How far your torch reaches before everything goes pitch black.
+  // THIS is the dial that controls how scary the cavern feels.
+  // Make it 20 and it's a well-lit tunnel. Make it 4 and it's terrifying.
+  const TORCH_RANGE = 9;
+
+
+  // --- 4. THE KEYBOARD ------------------------------------------------
   // `keys` remembers which keys are being held down RIGHT NOW.
   // Press a key  -> we put it in the box (true).
   // Let it go    -> we take it out (false).
-  //
-  // Then anywhere in the game we can ask:  if (keys['ArrowLeft']) { ... }
 
   const keys = {};
-  window.addEventListener('keydown', (e) => { keys[e.key] = true; });
-  window.addEventListener('keyup',   (e) => { keys[e.key] = false; });
+  window.addEventListener('keydown', (e) => {
+    keys[e.key.toLowerCase()] = true;
+    // Stop the arrow keys from scrolling the page while you play.
+    if (e.key.startsWith('Arrow')) e.preventDefault();
+
+    // Number keys pick which slot you're holding. This one is NOT in the
+    // held-down list on purpose - picking a slot happens ONCE when you
+    // press the key. Walking happens over and over while you hold it.
+    // Those are genuinely different things, so they're handled differently.
+    if (e.key >= '1' && e.key <= '5') {
+      state.heldSlot = Number(e.key) - 1;
+    }
+  });
+  window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+
+  // Little helper so both the arrow keys AND WASD work. Some people
+  // reach for one, some for the other. Why pick a side?
+  function held(a, b) {
+    return keys[a] || keys[b];
+  }
 
 
-  // --- 4. UPDATE ------------------------------------------------------
-  // This runs about 60 times every second.
-  // UPDATE is where things CHANGE: moving, jumping, scoring, colliding.
-  // Nothing gets drawn in here. Thinking only.
+  // --- 4b. THE MOUSE --------------------------------------------------
+  // POINTER LOCK. The browser hides the mouse pointer and stops telling
+  // us where it IS. Instead it only tells us how far it MOVED. That's
+  // the difference between a mouse that hits the edge of your screen and
+  // one you can spin with forever.
+  //
+  // The browser only allows this after you click, on purpose - a page
+  // that could grab your mouse uninvited would be a menace. Esc undoes it.
+
+  // How twitchy the mouse is. Bigger = spins faster. This is the one
+  // number everybody tweaks until it feels right, and "right" is
+  // different for every single person. Yours to pick.
+  const MOUSE_SENSITIVITY = 0.0022;
+
+  canvas.addEventListener('click', () => {
+    canvas.requestPointerLock();
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    // Ignore the mouse unless we've actually captured it.
+    if (document.pointerLockElement !== canvas) return;
+
+    // movementX is how far it shifted since last time, not where it sits.
+    // Shove the mouse right, turn right. That really is the whole thing.
+    state.angle += e.movementX * MOUSE_SENSITIVITY;
+  });
+
+  function mouseIsCaptured() {
+    return document.pointerLockElement === canvas;
+  }
+
+
+  // --- 5. MOVING AROUND -----------------------------------------------
+  // Try to walk to a new spot - but only if it isn't solid rock.
+  //
+  // The sneaky part: we check the new x and the new y SEPARATELY.
+  // That means when you scrape along a wall at an angle, you slide
+  // along it instead of getting stuck. Games that skip this feel awful.
+
+  function tryMove(newX, newY) {
+    if (!isWall(newX, state.y)) state.x = newX;
+    if (!isWall(state.x, newY)) state.y = newY;
+  }
 
   function update() {
-    state.frame++;
+    // Turning just changes the angle you're facing. You don't move.
+    if (held('arrowleft',  'a')) state.angle -= TURN_SPEED;
+    if (held('arrowright', 'd')) state.angle += TURN_SPEED;
 
-    // TODO (Max): move a player around using `keys` up above.
+    // Walking forward means moving a little bit in the direction you face.
+    // Math.cos gives the x part of that direction, Math.sin gives the y
+    // part. That pair is how you turn "an angle" into "a direction".
+    const stepX = Math.cos(state.angle) * MOVE_SPEED;
+    const stepY = Math.sin(state.angle) * MOVE_SPEED;
+
+    if (held('arrowup',   'w')) tryMove(state.x + stepX, state.y + stepY);
+    if (held('arrowdown', 's')) tryMove(state.x - stepX, state.y - stepY);
   }
 
 
-  // --- 5. DRAW --------------------------------------------------------
-  // This also runs about 60 times a second, right after update().
-  // DRAW is where things get PAINTED. Nothing changes in here. Painting only.
+  // --- 6. THE RAYCASTER (this is the magic trick) ----------------------
+  // Fire one laser and find out how far away the wall is.
   //
-  // Keeping "changing" and "painting" in separate functions is a real
-  // programming idea that grown-up game developers use too.
+  // We do it by crawling forward in tiny steps until we bump into rock.
+  // Not clever. Just stubborn. And stubborn is fast enough.
 
-  function draw() {
-    // Always wipe the screen first, or every frame smears on top of the last one.
-    // (Try deleting this line sometime. It looks amazing and is very broken.)
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const STEP = 0.02;      // how far the laser crawls each check
+  const MAX_DIST = 22;    // give up after this far - nothing out there
 
-    // A title.
-    ctx.fillStyle = '#ffd93d';
-    ctx.font = 'bold 56px system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('HI MAXIMUS!', canvas.width / 2, 240);
+  // Takes the DIRECTION to fire in (already exactly one unit long),
+  // rather than an angle. That way "number of steps" really does mean
+  // "distance travelled" - and the floor code needs directions too, so
+  // this way both of them speak the same language.
+  function castRay(dirX, dirY) {
+    const dx = dirX * STEP;
+    const dy = dirY * STEP;
 
-    // A question.
-    ctx.fillStyle = '#e8e8f0';
-    ctx.font = '26px system-ui, sans-serif';
-    ctx.fillText('What should we build?', canvas.width / 2, 300);
+    let x = state.x;
+    let y = state.y;
 
-    // A blinking cursor, so you can see the loop really is running.
-    // Every 60 frames is about one second, so this blinks once per second.
-    if (state.frame % 60 < 30) {
-      ctx.fillStyle = '#6bd3ff';
-      ctx.fillRect(canvas.width / 2 - 8, 330, 16, 4);
+    for (let dist = 0; dist < MAX_DIST; dist += STEP) {
+      x += dx;
+      y += dy;
+      if (isWall(x, y)) return { dist: dist, x: x, y: y };
+    }
+    return { dist: MAX_DIST, x: x, y: y };
+  }
+
+
+  // --- 7. PAINTING THE STONE ------------------------------------------
+  // We have no picture of a rock wall, so we're going to draw one.
+  //
+  // This paints onto a tiny 64x64 canvas that never gets shown on screen.
+  // Think of it as a scrap of wallpaper we design once, then repeat over
+  // every wall in the cavern. It runs ONE time when the game starts -
+  // not 60 times a second - so it can afford to be fussy.
+
+  // Bigger than before: more dots means room for finer roughness.
+  const TEX_SIZE = 128;
+
+  // SMOOTH RANDOMNESS, step 1: scatter random numbers on a small grid.
+  // A 4x4 grid gives big fat blobs. A 32x32 grid gives tiny ones.
+  function makeNoiseGrid(size) {
+    const grid = new Float32Array(size * size);
+    for (let i = 0; i < grid.length; i++) grid[i] = Math.random();
+    return grid;
+  }
+
+  // SMOOTH RANDOMNESS, step 2: ask "what's the value at this exact spot?"
+  // The spot usually falls BETWEEN four of our random dots, so we blend
+  // all four together. Nearby spots blend almost the same four dots, so
+  // they come out almost the same - and THAT is what makes it smooth
+  // instead of static.
+  function noiseAt(grid, size, x, y) {
+    const fx = x * size;
+    const fy = y * size;
+    const x0 = Math.floor(fx);
+    const y0 = Math.floor(fy);
+
+    // How far between the dots are we? 0 = on the left one, 1 = the right.
+    let tx = fx - x0;
+    let ty = fy - y0;
+
+    // This curve makes the blend ease in and out instead of blending in
+    // a straight line. Straight-line blending leaves visible diamond
+    // shapes. This one line is the difference between "rock" and "quilt".
+    tx = tx * tx * (3 - 2 * tx);
+    ty = ty * ty * (3 - 2 * ty);
+
+    // Wrap around the edges, so the texture tiles seamlessly. Without
+    // this you'd see a hard seam every time the wallpaper repeated.
+    function corner(cx, cy) {
+      const wx = ((cx % size) + size) % size;
+      const wy = ((cy % size) + size) % size;
+      return grid[wy * size + wx];
     }
 
-    // TODO (Max): draw your game here.
+    const a = corner(x0,     y0);
+    const b = corner(x0 + 1, y0);
+    const c = corner(x0,     y0 + 1);
+    const d = corner(x0 + 1, y0 + 1);
+
+    const topEdge = a + (b - a) * tx;
+    const botEdge = c + (d - c) * tx;
+    return topEdge + (botEdge - topEdge) * ty;
+  }
+
+  // SMOOTH RANDOMNESS, step 3: stack layers. Big blobs for the boulder
+  // shapes, then half-size blobs at half the strength, then smaller
+  // again. Each layer adds finer detail. This stacking trick is how
+  // games make mountains, clouds, fire and caves - all from this.
+  // More weight down at the small sizes than before. Fine layers are
+  // where BUMPS come from - big soft blobs alone just look like clouds.
+  const ROCK_LAYERS = [
+    { grid: makeNoiseGrid(4),  size: 4,  weight: 0.34 },
+    { grid: makeNoiseGrid(8),  size: 8,  weight: 0.26 },
+    { grid: makeNoiseGrid(16), size: 16, weight: 0.20 },
+    { grid: makeNoiseGrid(32), size: 32, weight: 0.13 },
+    { grid: makeNoiseGrid(64), size: 64, weight: 0.07 },
+  ];
+
+  // Which way the pretend torch shines from, for the bump shading.
+  // Bigger number = deeper, chunkier bumps. This is the BUMPY dial.
+  const BUMP_STRENGTH = 5.0;
+
+  // One dot's worth of distance across the texture. We use this to peek
+  // at the neighbouring dot and work out which way the rock is tilted.
+  const ONE_DOT = 1 / TEX_SIZE;
+
+  function stackedNoise(layers, x, y) {
+    let total = 0;
+    for (const layer of layers) {
+      total += noiseAt(layer.grid, layer.size, x, y) * layer.weight;
+    }
+    return total;   // comes out somewhere around 0 to 1
+  }
+
+  function makeStoneTexture() {
+    const c = document.createElement('canvas');
+    c.width = TEX_SIZE;
+    c.height = TEX_SIZE;
+    const t = c.getContext('2d');
+
+    // We're deciding the colour of every single dot ourselves, one at a
+    // time, so we skip the paintbrush and write straight into the pixels.
+    const img = t.createImageData(TEX_SIZE, TEX_SIZE);
+
+    for (let py = 0; py < TEX_SIZE; py++) {
+      for (let px = 0; px < TEX_SIZE; px++) {
+        const u = px / TEX_SIZE;
+        const v = py / TEX_SIZE;
+
+        // How high the rock stands at this dot, and at the two dots
+        // just to the LEFT and just ABOVE it.
+        const here  = stackedNoise(ROCK_LAYERS, u, v);
+        const left  = stackedNoise(ROCK_LAYERS, u - ONE_DOT, v);
+        const above = stackedNoise(ROCK_LAYERS, u, v - ONE_DOT);
+
+        // THE BUMPY TRICK:
+        // If this dot is higher than its neighbours, we're on the side
+        // of a bump that faces the torch - brighten it. If it's lower,
+        // we're on the far side, in the bump's own little shadow - darken it.
+        // Bright-next-to-dark is the entire reason your eyes see a lump.
+        const tilt = (here - left) + (here - above);
+
+        // Start at medium grey, then let the tilt push it light or dark.
+        let n = 0.52 + tilt * BUMP_STRENGTH;
+
+        // Mix in a little of the plain height too, so big areas of the
+        // wall still read as generally lighter or darker. Without this
+        // the rock is bumpy but weirdly flat overall.
+        n += (here - 0.5) * 0.30;
+
+        // Grit on top: tiny per-dot speckle, the sand and dust.
+        n += Math.random() * 0.10 - 0.05;
+
+        if (n < 0) n = 0;
+        if (n > 1) n = 1;
+
+        // Turn that one number into a damp brown-grey cave colour.
+        const bright = 40 + n * 135;
+        const i = (py * TEX_SIZE + px) * 4;
+        img.data[i]     = bright;          // red
+        img.data[i + 1] = bright * 0.87;   // green
+        img.data[i + 2] = bright * 0.74;   // blue
+        img.data[i + 3] = 255;             // fully solid
+      }
+    }
+
+    t.putImageData(img, 0, 0);
+    return c;
+  }
+
+  const stoneTexture = makeStoneTexture();
+
+  // Keep the stone crisp and blocky when it gets stretched, instead of
+  // letting the browser smear it into mush. Also: faster.
+  ctx.imageSmoothingEnabled = false;
+
+  const TEX_AREA = TEX_SIZE * TEX_SIZE;
+
+  // PRE-MIXING THE PAINT.
+  // The floor needs a colour for every single dot on screen, 60 times a
+  // second. Working out "this rock, but 37% darker" that many times would
+  // be way too slow. So instead we do it ONCE, right now: we mix up 32
+  // ready-made copies of the rock, from fully lit down to pitch black.
+  // Then during the game we just grab the one we need. Doing slow work
+  // early so you don't have to do it later is called a lookup table, and
+  // it's one of the oldest tricks in games.
+  const SHADES = 32;
+  const shadeTable = new Uint32Array(SHADES * TEX_AREA);
+
+  (function mixTheShades() {
+    const raw = stoneTexture.getContext('2d')
+                            .getImageData(0, 0, TEX_SIZE, TEX_SIZE).data;
+
+    for (let s = 0; s < SHADES; s++) {
+      const light = s / (SHADES - 1);       // 0 = black, 1 = full brightness
+      const offset = s * TEX_AREA;
+
+      for (let i = 0; i < TEX_AREA; i++) {
+        const r = (raw[i * 4]     * light) | 0;
+        const g = (raw[i * 4 + 1] * light) | 0;
+        const b = (raw[i * 4 + 2] * light) | 0;
+        // Squashed into one number: alpha, blue, green, red.
+        shadeTable[offset + i] = (255 << 24) | (b << 16) | (g << 8) | r;
+      }
+    }
+  })();
+
+  // Our own private sheet of pixels. We paint the floor and ceiling into
+  // this by hand, dot by dot, then slap the whole thing onto the canvas
+  // in one go. Much faster than asking the canvas to draw 480,000 times.
+  const frame = ctx.createImageData(canvas.width, canvas.height);
+  const frame32 = new Uint32Array(frame.data.buffer);
+  frame32.fill(0xFF000000);   // start it all opaque black
+
+
+  // --- 7b. THINGS IN THE CAVERN ---------------------------------------
+  // Chests and cobwebs. Same idea as the stone: no picture files, we
+  // draw them ourselves when the game starts.
+
+  const SPR_SIZE = 64;
+
+  // A blank see-through square to draw a thing onto. Anywhere we don't
+  // paint stays transparent, so you see the cavern behind it.
+  function blankSprite() {
+    const c = document.createElement('canvas');
+    c.width = SPR_SIZE;
+    c.height = SPR_SIZE;
+    return c;
+  }
+
+  function makeWebTexture() {
+    const c = blankSprite();
+    const t = c.getContext('2d');
+    t.strokeStyle = 'rgba(226, 231, 240, 0.7)';
+    t.lineWidth = 1;
+
+    // The web hangs from a single point up top and fans out downward.
+    const ANCHOR_X = SPR_SIZE / 2;
+    const ANCHOR_Y = 1;
+    const SPOKES = 9;
+    const REACH = SPR_SIZE * 1.15;
+
+    // The straight threads, fanning from right, round through down, to left.
+    const angles = [];
+    for (let i = 0; i < SPOKES; i++) {
+      angles.push(Math.PI * (0.08 + 0.84 * (i / (SPOKES - 1))));
+    }
+    for (const a of angles) {
+      t.beginPath();
+      t.moveTo(ANCHOR_X, ANCHOR_Y);
+      t.lineTo(ANCHOR_X + Math.cos(a) * REACH, ANCHOR_Y + Math.sin(a) * REACH);
+      t.stroke();
+    }
+
+    // The threads strung ACROSS the spokes, going round in rings. Each
+    // one wobbles in and out a bit at random - a perfectly even web looks
+    // machine-made, and spiders are not machines.
+    for (let ring = 9; ring < REACH; ring += 8) {
+      t.beginPath();
+      for (let i = 0; i < SPOKES; i++) {
+        const wobble = ring * (0.88 + Math.random() * 0.24);
+        const x = ANCHOR_X + Math.cos(angles[i]) * wobble;
+        const y = ANCHOR_Y + Math.sin(angles[i]) * wobble;
+        if (i === 0) t.moveTo(x, y); else t.lineTo(x, y);
+      }
+      t.stroke();
+    }
+
+    return c;
+  }
+
+  // Same pre-mixing idea as the floor, but these have see-through bits,
+  // so we can't just splash black over the top - that would darken the
+  // holes too. 'source-atop' means "only paint where there's already
+  // something", which leaves the see-through parts alone.
+  const SPRITE_SHADES = 16;
+
+  function makeShadedCopies(source) {
+    const copies = [];
+    for (let s = 0; s < SPRITE_SHADES; s++) {
+      const light = s / (SPRITE_SHADES - 1);
+      const c = blankSprite();
+      const t = c.getContext('2d');
+      t.drawImage(source, 0, 0);
+      t.globalCompositeOperation = 'source-atop';
+      t.fillStyle = 'rgba(0, 0, 0, ' + (1 - light) + ')';
+      t.fillRect(0, 0, SPR_SIZE, SPR_SIZE);
+      copies.push(c);
+    }
+    return copies;
+  }
+
+  // What each kind of thing looks like and how it sits in the world.
+  //   scale   - how big, as a fraction of a map square
+  //   vOffset - how far down from eye level its middle sits.
+  //             +0.5 is the floor, -0.5 is the ceiling.
+  // Only the web is a flat picture now. Chests got promoted to real 3D,
+  // down in section 7d.
+  const SPRITE_KINDS = {
+    web: {
+      shades: makeShadedCopies(makeWebTexture()),
+      scale: 0.75,
+      vOffset: -0.5 + 0.75 / 2,    // hangs FROM the ceiling
+    },
+  };
+
+
+  // --- 7c. SCATTERING THEM AROUND --------------------------------------
+
+  const CHEST_COUNT = 5;
+  const WEB_COUNT = 12;
+
+  const sprites = [];
+
+  (function scatterThings() {
+    // Collect every open floor square in the whole cavern.
+    const spots = [];
+    for (let row = 0; row < MAP_H; row++) {
+      for (let col = 0; col < MAP_W; col++) {
+        // Skip rock, and skip the square you start on - finding a chest
+        // wedged in your face on frame one is a rubbish way to begin.
+        if (MAP[row][col] !== '.') continue;
+        if (col === 1 && row === 1) continue;
+        spots.push({ col: col, row: row });
+      }
+    }
+
+    // SHUFFLE. Walk backwards through the list and swap each square with
+    // a random earlier one. Deal the whole deck, then take from the top -
+    // that way nothing can ever get picked twice.
+    for (let i = spots.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      const keep = spots[i];
+      spots[i] = spots[j];
+      spots[j] = keep;
+    }
+
+    // Take from the top of the shuffled deck. The +0.5 puts each thing
+    // in the MIDDLE of its square instead of jammed in the corner.
+    let next = 0;
+    for (let i = 0; i < CHEST_COUNT && next < spots.length; i++, next++) {
+      sprites.push({ x: spots[next].col + 0.5, y: spots[next].row + 0.5, kind: 'chest' });
+    }
+    for (let i = 0; i < WEB_COUNT && next < spots.length; i++, next++) {
+      sprites.push({ x: spots[next].col + 0.5, y: spots[next].row + 0.5, kind: 'web' });
+    }
+  })();
+
+  // --- 7d. THE CHEST, IN ACTUAL 3D -------------------------------------
+  // A cobweb really is a flat thing, so a flat picture is honest.
+  // A chest isn't. So we build a real one.
+  //
+  // The idea: a box has eight corners. We know exactly where each corner
+  // sits in the cavern. Our camera can turn any spot in the cavern into a
+  // spot on your screen. So: turn all eight corners into eight screen
+  // spots, then fill in the flat panels stretched between them. That's
+  // real 3D - walk around it and different sides genuinely come into view.
+
+  // THE BODY: a plain box. Heights measured UP from the floor.
+  const CHEST_HALF = 0.200;    // how far it reaches out from its middle
+  const CHEST_TOP  = 0.30;     // how tall the body stands
+  const CHEST_WOOD = [126, 78, 40];
+
+  // The four walls of the body. Each one knows which way it faces, and
+  // which two bottom corners it stretches between.
+  const CHEST_SIDES = [
+    { nx:  0, ny: -1, from: [-1, -1], to: [ 1, -1] },
+    { nx:  1, ny:  0, from: [ 1, -1], to: [ 1,  1] },
+    { nx:  0, ny:  1, from: [ 1,  1], to: [-1,  1] },
+    { nx: -1, ny:  0, from: [-1,  1], to: [-1, -1] },
+  ];
+
+  // THE LID: not a box. Real treasure chests have a barrel-shaped lid,
+  // and that curve is most of what makes one look like treasure instead
+  // of like a crate.
+  //
+  // You can't build a real curve out of flat panels - so we cheat the way
+  // every 3D game cheats. We lay down a row of thin strips, each tilted a
+  // little more than the last, bending over the top. Use enough strips
+  // and your eye stops seeing the steps and just sees a curve.
+  const LID_HALF   = 0.235;    // slightly wider than the body: an overhang
+  const LID_BASE   = 0.30;     // sits right on top of the body
+  const LID_RISE   = 0.17;     // how high the curve humps up
+  const LID_STRIPS = 9;        // more strips = smoother. Try 2. Then 30.
+  const LID_WOOD   = [148, 96, 50];
+
+  // How far the shadow spreads on the floor underneath.
+  const CHEST_SHADOW = 0.30;
+
+  // WOOD GRAIN. A set of dark streaks running along the planks.
+  //
+  // These get rolled ONCE, right now, and then reused forever. If we
+  // rolled fresh ones every frame the grain would crawl and shimmer like
+  // the wood was alive. Randomness is great for BUILDING a thing and
+  // terrible for redrawing it - decide once, then keep your decision.
+  const WOOD_GRAIN = [];
+  (function growTheGrain() {
+    for (let i = 0; i < 16; i++) {
+      WOOD_GRAIN.push({
+        v: Math.random(),                        // how far up the plank
+        thick: 0.004 + Math.random() * 0.011,    // how fat the streak is
+        dark: 0.05 + Math.random() * 0.13,       // how strongly it shows
+        u0: Math.random() * 0.45,                // where it starts
+        u1: 0.55 + Math.random() * 0.45,         // where it peters out
+      });
+    }
+  })();
+
+  // Find any spot ON a panel, given how far across (u) and how far up (v).
+  // The four corners are our anchors: slide along the bottom edge by u,
+  // slide along the top edge by u, then slide between those two by v.
+  // This is what lets us stick iron bands and a lock onto a panel and
+  // have them lean and stretch correctly as you walk around.
+  function facePoint(quad, u, v) {
+    const bottomX = quad[0].sx + (quad[1].sx - quad[0].sx) * u;
+    const bottomY = quad[0].sy + (quad[1].sy - quad[0].sy) * u;
+    const topX    = quad[3].sx + (quad[2].sx - quad[3].sx) * u;
+    const topY    = quad[3].sy + (quad[2].sy - quad[3].sy) * u;
+    return { x: bottomX + (topX - bottomX) * v,
+             y: bottomY + (topY - bottomY) * v };
+  }
+
+  // Paint a rectangle that lives ON a panel - so it tilts with the panel.
+  function paintOnFace(quad, u0, u1, v0, v1, colour) {
+    const a = facePoint(quad, u0, v0);
+    const b = facePoint(quad, u1, v0);
+    const c = facePoint(quad, u1, v1);
+    const d = facePoint(quad, u0, v1);
+    ctx.fillStyle = colour;
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.lineTo(c.x, c.y);
+    ctx.lineTo(d.x, d.y);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // TORCHLIGHT IS ORANGE, NOT WHITE.
+  // So brightly lit parts of the chest warm up toward yellow, and parts
+  // sinking into shadow cool down toward blue. Real light does this and
+  // your eye quietly expects it. A shadow that's just "same colour but
+  // darker" is one of the biggest tells that a computer drew something.
+  function torchShade(colour, amount) {
+    if (amount > 1) amount = 1;
+    if (amount < 0) amount = 0;
+
+    // Lit -> warm and yellowy. Dark -> cool and blueish.
+    const warmR = 0.80 + 0.34 * amount;
+    const warmG = 0.86 + 0.16 * amount;
+    const warmB = 1.12 - 0.30 * amount;
+
+    let r = colour[0] * amount * warmR;
+    let g = colour[1] * amount * warmG;
+    let b = colour[2] * amount * warmB;
+    if (r > 255) r = 255;
+    if (g > 255) g = 255;
+    if (b > 255) b = 255;
+    return 'rgb(' + (r | 0) + ',' + (g | 0) + ',' + (b | 0) + ')';
+  }
+
+  function shadeOf(colour, amount) {
+    // Never let a colour run past full brightness - a red of 300 isn't a
+    // colour, it's a typo, and the browser just ignores the whole thing.
+    if (amount > 1) amount = 1;
+    if (amount < 0) amount = 0;
+    return 'rgb(' + ((colour[0] * amount) | 0) + ',' +
+                    ((colour[1] * amount) | 0) + ',' +
+                    ((colour[2] * amount) | 0) + ')';
+  }
+
+  function drawChest(thing, cam, depth) {
+    const W = canvas.width;
+    const H = canvas.height;
+
+    // Which direction are YOU from this chest? Panels turned toward you
+    // catch the torch; panels turned away sit in their own shadow.
+    // This is the whole reason it will look solid instead of painted.
+    let toMeX = state.x - thing.x;
+    let toMeY = state.y - thing.y;
+    const reach = Math.sqrt(toMeX * toMeX + toMeY * toMeY) || 1;
+    toMeX /= reach;
+    toMeY /= reach;
+
+    // How much torchlight reaches the chest as a whole. Used for the
+    // shadow, and for fading the fine detail away in the dark.
+    let torch = 1 - depth / TORCH_RANGE;
+    if (torch <= 0) return;          // pitch black - nothing to draw
+    if (torch > 1) torch = 1;
+
+    const bx = thing.x;
+    const by = thing.y;
+
+    // HOW BRIGHT IS ONE EXACT SPOT ON THE CHEST?
+    // It works out how far that spot is from you AND which way its
+    // surface is turned, both measured from where you're really standing.
+    //
+    // Doing this at every CORNER, instead of once for a whole panel, is
+    // the big one. You're carrying the torch - so the near edge of a
+    // panel is genuinely closer to the light than its far edge. One flat
+    // brightness per panel is exactly what makes things look like
+    // cardboard cut-outs.
+    function lightAt(wx, wy, nx, ny, upness) {
+      let dx = state.x - wx;
+      let dy = state.y - wy;
+      const away = Math.sqrt(dx * dx + dy * dy) || 1;
+      dx /= away;
+      dy /= away;
+
+      let facing = 0.26 + 0.74 * Math.max(0, nx * dx + ny * dy);
+
+      // Surfaces tilting skyward stop caring which way you're stood and
+      // settle into a steady glow instead.
+      if (upness > 0) facing = facing * (1 - upness) + 0.84 * upness;
+
+      let reach = 1 - away / TORCH_RANGE;
+      if (reach < 0) reach = 0;
+      return facing * reach;
+    }
+
+    const panels = [];
+    let ranOffScreen = false;
+
+    // Hand this a list of corners in the cavern and it works out where
+    // they land on screen, then files the finished panel away for later.
+    // litA and litB are the brightness at each END of the panel - the
+    // fill slides from one to the other.
+    function addPanel(worldCorners, opts) {
+      const pts = [];
+      let depthSum = 0;
+      for (const corner of worldCorners) {
+        // 0.5 is floor level, measured DOWN from your eyes.
+        const spot = cam.project(corner[0], corner[1], 0.5 - corner[2]);
+        if (spot === null) { ranOffScreen = true; return null; }
+        pts.push(spot);
+        depthSum += spot.depth;
+      }
+      const panel = {
+        pts: pts,
+        depth: depthSum / pts.length,
+        colour: opts.colour,
+        kind: opts.kind,
+        litA: opts.litA,
+        litB: opts.litB,
+        gradA: opts.gradA,
+        gradB: opts.gradB,
+      };
+      panels.push(panel);
+      return panel;
+    }
+
+    // ---- the four walls of the body ----
+    let frontPanel = null;
+    let frontFacing = -1;
+
+    for (const side of CHEST_SIDES) {
+      // BACKFACE CULLING. Are you actually stood on the outside of this
+      // wall? If not, you're looking at its back - which means the rest of
+      // the chest is in the way, so don't draw it at all. Every real 3D
+      // engine does this. It's faster, and it means a dark back panel can
+      // never accidentally land on top of the bits you're meant to see.
+      if (side.nx * (state.x - bx) + side.ny * (state.y - by) <= CHEST_HALF) {
+        continue;
+      }
+
+      const ax = bx + side.from[0] * CHEST_HALF;
+      const ay = by + side.from[1] * CHEST_HALF;
+      const cx = bx + side.to[0] * CHEST_HALF;
+      const cy = by + side.to[1] * CHEST_HALF;
+
+      // Light measured at BOTH ends of the wall, so brightness can slide
+      // across it instead of jumping from panel to panel.
+      const litA = lightAt(ax, ay, side.nx, side.ny, 0);
+      const litB = lightAt(cx, cy, side.nx, side.ny, 0);
+
+      // Corners go round: bottom-left, bottom-right, top-right, top-left.
+      const panel = addPanel(
+        [[ax, ay, 0], [cx, cy, 0], [cx, cy, CHEST_TOP], [ax, ay, CHEST_TOP]],
+        { colour: CHEST_WOOD, kind: 'side', litA: litA, litB: litB,
+          gradA: [0, 3], gradB: [1, 2] });
+      if (ranOffScreen) return;
+
+      // Remember whichever wall points most directly at you. That's the
+      // front, and that's where the lock belongs.
+      const facingMe = side.nx * toMeX + side.ny * toMeY;
+      if (facingMe > frontFacing) {
+        frontFacing = facingMe;
+        frontPanel = panel;
+      }
+    }
+
+    // ---- the curved lid, one strip at a time ----
+    for (let i = 0; i < LID_STRIPS; i++) {
+      // Sweep an angle from one side of the lid, up over the hump, and
+      // down the other side. Each strip covers a small slice of that turn.
+      const angleA = Math.PI * i / LID_STRIPS;
+      const angleB = Math.PI * (i + 1) / LID_STRIPS;
+
+      const yA = by - Math.cos(angleA) * LID_HALF;
+      const yB = by - Math.cos(angleB) * LID_HALF;
+      const hA = LID_BASE + Math.sin(angleA) * LID_RISE;
+      const hB = LID_BASE + Math.sin(angleB) * LID_RISE;
+
+      // Same backface test, but this strip can tilt UP as well as
+      // sideways - so we check the up-and-down direction too. Your eyes
+      // sit half a square off the floor, which is above the whole lid,
+      // so you're looking down on it.
+      const middle = (angleA + angleB) / 2;
+      const midY = by - Math.cos(middle) * LID_HALF;
+      const midH = LID_BASE + Math.sin(middle) * LID_RISE;
+      const outward = -Math.cos(middle) * (state.y - midY)
+                    +  Math.sin(middle) * (0.5 - midH);
+      if (outward <= 0) continue;
+
+      // Each EDGE of the strip gets its own brightness, worked out from
+      // the way the lid is tilted right at that edge. Because neighbouring
+      // strips share an edge, they agree on the brightness there - so the
+      // steps between them vanish and the dome shades like one smooth
+      // surface. This is the trick that makes the lid look truly round.
+      const litA = lightAt(bx, yA, 0, -Math.cos(angleA), Math.sin(angleA));
+      const litB = lightAt(bx, yB, 0, -Math.cos(angleB), Math.sin(angleB));
+
+      addPanel([[bx - LID_HALF, yA, hA], [bx + LID_HALF, yA, hA],
+                [bx + LID_HALF, yB, hB], [bx - LID_HALF, yB, hB]],
+               { colour: LID_WOOD, kind: 'lid', litA: litA, litB: litB,
+                 gradA: [0, 1], gradB: [3, 2] });
+      if (ranOffScreen) return;
+    }
+
+    // ---- the two flat ends of the lid, so it isn't a hollow tube ----
+    for (const end of [-1, 1]) {
+      // Only the near end of the lid is ever visible.
+      if (end * (state.x - bx) <= LID_HALF) continue;
+
+      const arc = [];
+      for (let i = 0; i <= LID_STRIPS; i++) {
+        const a = Math.PI * i / LID_STRIPS;
+        arc.push([bx + end * LID_HALF,
+                  by - Math.cos(a) * LID_HALF,
+                  LID_BASE + Math.sin(a) * LID_RISE]);
+      }
+      const lit = lightAt(bx + end * LID_HALF, by, end, 0, 0);
+      addPanel(arc, { colour: LID_WOOD, kind: 'cap', litA: lit, litB: lit });
+      if (ranOffScreen) return;
+    }
+
+    // ---- the shadow it casts on the floor ----
+    const shadow = [];
+    for (const corner of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+      const spot = cam.project(bx + corner[0] * CHEST_SHADOW,
+                               by + corner[1] * CHEST_SHADOW, 0.5);
+      if (spot === null) return;
+      shadow.push(spot);
+    }
+
+    // Which columns of the screen is this chest even allowed in? Only the
+    // ones where it's nearer than the wall behind it. We hand the canvas
+    // that list of columns as a stencil, and it refuses to paint outside.
+    let minX = Infinity, maxX = -Infinity;
+    for (const panel of panels) {
+      for (const point of panel.pts) {
+        if (point.sx < minX) minX = point.sx;
+        if (point.sx > maxX) maxX = point.sx;
+      }
+    }
+    const fromX = Math.max(0, Math.floor(minX));
+    const toX = Math.min(W - 1, Math.ceil(maxX));
+    if (toX < fromX) return;
+
+    ctx.save();
+    ctx.beginPath();
+    let runStart = -1;
+    for (let x = fromX; x <= toX + 1; x++) {
+      const visible = (x <= toX) && (depth < zBuffer[x]);
+      if (visible && runStart < 0) runStart = x;
+      if (!visible && runStart >= 0) {
+        ctx.rect(runStart, 0, x - runStart, H);
+        runStart = -1;
+      }
+    }
+    ctx.clip();
+
+    // Shadow goes down FIRST, because everything else sits on top of it.
+    // And a real shadow isn't a hard-edged shape - it's darkest right
+    // under the object and fades out toward its edges. That soft fade is
+    // doing a lot of quiet work. Your brain checks for it without ever
+    // telling you, and if it's missing, things look like they're hovering.
+    let shadowX = 0, shadowY = 0;
+    for (const point of shadow) { shadowX += point.sx; shadowY += point.sy; }
+    shadowX /= shadow.length;
+    shadowY /= shadow.length;
+
+    let shadowR = 1;
+    for (const point of shadow) {
+      const outX = point.sx - shadowX;
+      const outY = point.sy - shadowY;
+      const out = Math.sqrt(outX * outX + outY * outY);
+      if (out > shadowR) shadowR = out;
+    }
+
+    const shadowFade = ctx.createRadialGradient(shadowX, shadowY, 0,
+                                                shadowX, shadowY, shadowR);
+    shadowFade.addColorStop(0, 'rgba(0, 0, 0, ' + (0.7 * torch) + ')');
+    shadowFade.addColorStop(1, 'rgba(0, 0, 0, 0)');
+
+    ctx.beginPath();
+    ctx.moveTo(shadow[0].sx, shadow[0].sy);
+    for (let i = 1; i < shadow.length; i++) ctx.lineTo(shadow[i].sx, shadow[i].sy);
+    ctx.closePath();
+    ctx.fillStyle = shadowFade;
+    ctx.fill();
+
+    // Furthest panels first, nearer ones painted over the top. Same
+    // painter's trick as before, only now inside a single chest.
+    panels.sort((a, b) => b.depth - a.depth);
+
+    for (const panel of panels) {
+      const pts = panel.pts;
+
+      ctx.beginPath();
+      ctx.moveTo(pts[0].sx, pts[0].sy);
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].sx, pts[i].sy);
+      ctx.closePath();
+
+      // Fill with a slide from one edge's brightness to the other's,
+      // rather than one flat tone across the whole panel.
+      //
+      // THE TRAP: if a gradient's start and end land on the same spot,
+      // the canvas paints NOTHING AT ALL. Not black - nothing. And when
+      // the chest is far away and small, both ends round to the same
+      // pixel... so the whole chest turned into a chest-shaped hole with
+      // the dark cave showing through. That was the black chest.
+      // So: if the two ends are basically touching, just fill it flat.
+      let filled = false;
+      if (panel.gradA) {
+        const a0 = pts[panel.gradA[0]], a1 = pts[panel.gradA[1]];
+        const b0 = pts[panel.gradB[0]], b1 = pts[panel.gradB[1]];
+        const x0 = (a0.sx + a1.sx) / 2, y0 = (a0.sy + a1.sy) / 2;
+        const x1 = (b0.sx + b1.sx) / 2, y1 = (b0.sy + b1.sy) / 2;
+        const span = Math.abs(x1 - x0) + Math.abs(y1 - y0);
+
+        if (span > 0.75 && isFinite(span)) {
+          const slide = ctx.createLinearGradient(x0, y0, x1, y1);
+          slide.addColorStop(0, torchShade(panel.colour, panel.litA));
+          slide.addColorStop(1, torchShade(panel.colour, panel.litB));
+          ctx.fillStyle = slide;
+          filled = true;
+        }
+      }
+      if (!filled) {
+        ctx.fillStyle = torchShade(panel.colour,
+                                   (panel.litA + panel.litB) / 2);
+      }
+      ctx.fill();
+
+      // Outline the body and the lid ends - but NOT the lid strips. Lining
+      // every strip would draw a ladder of stripes up the curve and undo
+      // the whole illusion. The curve has to look seamless.
+      if (panel.kind !== 'lid') {
+        ctx.strokeStyle = 'rgba(0, 0, 0, ' + (0.5 * torch) + ')';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+
+      const lit = (panel.litA + panel.litB) / 2;
+
+      if (panel.kind === 'side') {
+        // The grain in the wood. Same streaks every frame - see the note
+        // up where WOOD_GRAIN gets made for why that matters.
+        for (const streak of WOOD_GRAIN) {
+          paintOnFace(pts, streak.u0, streak.u1,
+                      streak.v, streak.v + streak.thick,
+                      'rgba(54, 30, 12, ' + (streak.dark * torch) + ')');
+        }
+
+        // Seams between the planks. Thin, dark, and they lean with the
+        // wall - because they're stuck ON the wall, not painted over it.
+        const seam = 'rgba(0, 0, 0, ' + (0.34 * torch) + ')';
+        paintOnFace(pts, 0, 1, 0.335, 0.365, seam);
+        paintOnFace(pts, 0, 1, 0.665, 0.695, seam);
+
+        // Two iron bands strapped down the sides...
+        const iron = torchShade([148, 148, 160], lit);
+        paintOnFace(pts, 0.10, 0.21, 0, 1, iron);
+        paintOnFace(pts, 0.79, 0.90, 0, 1, iron);
+
+        // ...with a hard bright line down one edge of each. Metal catches
+        // light in a narrow glint like that, and wood doesn't. That single
+        // difference is most of what tells your eye "iron" instead of
+        // "grey paint" - shape and colour barely come into it.
+        const glint = torchShade([230, 230, 244], lit * 1.6);
+        paintOnFace(pts, 0.104, 0.129, 0, 1, glint);
+        paintOnFace(pts, 0.794, 0.819, 0, 1, glint);
+
+        // ...and the nail heads hammered through them.
+        const stud = torchShade([202, 202, 214], lit);
+        const studTop = torchShade([238, 238, 250], lit * 1.5);
+        for (const v of [0.13, 0.5, 0.87]) {
+          paintOnFace(pts, 0.132, 0.178, v - 0.035, v + 0.035, stud);
+          paintOnFace(pts, 0.822, 0.868, v - 0.035, v + 0.035, stud);
+          // A speck of light on top of each nail. Tiny. Worth it.
+          paintOnFace(pts, 0.140, 0.154, v - 0.022, v - 0.006, studTop);
+          paintOnFace(pts, 0.830, 0.844, v - 0.022, v - 0.006, studTop);
+        }
+      }
+    }
+
+    // The gold lock, on whichever wall is facing you most, up near the
+    // top where it would really meet the lid.
+    if (frontPanel) {
+      const lit = (frontPanel.litA + frontPanel.litB) / 2;
+      paintOnFace(frontPanel.pts, 0.42, 0.58, 0.68, 0.97,
+                  torchShade([226, 182, 44], lit));
+      // Gold is shiny, so it gets a glint too - along the top edge, where
+      // light would land on a plate standing proud of the wood.
+      paintOnFace(frontPanel.pts, 0.42, 0.58, 0.68, 0.72,
+                  torchShade([255, 226, 120], lit * 1.5));
+      // The keyhole.
+      paintOnFace(frontPanel.pts, 0.475, 0.525, 0.77, 0.90,
+                  torchShade([48, 34, 12], lit));
+    }
+
+    ctx.restore();
   }
 
 
-  // --- 6. THE GAME LOOP -----------------------------------------------
-  // Here's the trick behind every game you've ever played:
+  // THE DEPTH BUFFER. One slot per column of the screen, holding how far
+  // away the wall in that column turned out to be. The walls fill it in,
+  // then the chests and webs read it to find out whether they're standing
+  // in front of that wall or hidden behind it.
+  const zBuffer = new Float32Array(canvas.width);
+
+
+  // --- 7e. THINGS YOU CAN CARRY ----------------------------------------
+
+  const ICON_SIZE = 48;
+
+  function makeKnifeIcon() {
+    const c = document.createElement('canvas');
+    c.width = ICON_SIZE;
+    c.height = ICON_SIZE;
+    const t = c.getContext('2d');
+
+    // THE BLADE. Straight along the top (that's the spine, the blunt bit
+    // you can safely rest a thumb on) and curved along the bottom (that's
+    // the cutting edge). That difference in the shape is what makes a
+    // drawing read as "knife" rather than "grey triangle".
+    t.fillStyle = '#c3c8d3';
+    t.beginPath();
+    t.moveTo(24, 18.5);
+    t.lineTo(40, 20.5);
+    t.quadraticCurveTo(44, 23, 40.5, 25.5);   // the point
+    t.quadraticCurveTo(33, 28.5, 24, 28.5);   // back along the edge
+    t.closePath();
+    t.fill();
+
+    // A bright line along the cutting edge. A sharp edge catches light in
+    // a thin hard streak - same glint trick as the iron on the chests.
+    t.strokeStyle = 'rgba(245, 248, 255, 0.9)';
+    t.lineWidth = 1;
+    t.beginPath();
+    t.moveTo(25, 27.6);
+    t.quadraticCurveTo(33, 27.6, 40, 24.8);
+    t.stroke();
+
+    // THE HANDLE. A rectangle plus a circle at the end to round it off.
+    t.fillStyle = '#8e2b24';
+    t.fillRect(11, 17, 14, 13);
+    t.beginPath();
+    t.arc(11, 23.5, 6.5, 0, Math.PI * 2);
+    t.fill();
+
+    // A pale strip along the top of the handle, as if the torch is above
+    // you. Same idea as the chest panels: light from one direction.
+    t.fillStyle = 'rgba(255, 255, 255, 0.16)';
+    t.fillRect(6, 18, 19, 3);
+
+    // The metal collar where the blade meets the handle. Real folding
+    // knives have one, and leaving it out makes the blade look glued on.
+    t.fillStyle = '#9aa0ab';
+    t.fillRect(22, 17, 3.5, 13);
+
+    // Two rivets holding the handle together.
+    t.fillStyle = '#cfd4de';
+    for (const rx of [12, 18.5]) {
+      t.beginPath();
+      t.arc(rx, 23.5, 1.6, 0, Math.PI * 2);
+      t.fill();
+    }
+
+    // Dark outline round the handle so it doesn't melt into the dark.
+    t.strokeStyle = 'rgba(0, 0, 0, 0.55)';
+    t.lineWidth = 1.5;
+    t.beginPath();
+    t.arc(11, 23.5, 6.5, Math.PI / 2, -Math.PI / 2);
+    t.lineTo(25, 17);
+    t.lineTo(25, 30);
+    t.closePath();
+    t.stroke();
+
+    return c;
+  }
+
+  // Everything that can ever sit in your pockets. Add to this and the
+  // inventory bar picks it up automatically - it just reads this list.
+  const ITEMS = {
+    knife: { name: 'Pocket Knife', icon: makeKnifeIcon() },
+  };
+
+  const SLOT_COUNT = 5;
+
+
+  // --- 7f. YOUR HAND, IN ACTUAL 3D -------------------------------------
+  // Everything else in this game sits in the CAVERN, and we work out
+  // where it lands on screen from wherever you happen to be standing.
+  // Your hand is different. Your hand is attached to YOU. Walk, turn,
+  // spin in a circle - it stays parked in the same corner of the screen.
   //
+  // So it gets its own little camera, measuring from your eye:
+  //   right   - how far right of straight-ahead
+  //   down    - how far below straight-ahead
+  //   forward - how far out in front of your face
+  //
+  // Everything below is built out of boxes. A forearm, a palm, four
+  // curled fingers and a thumb. Boxes are enough - your eye fills in
+  // an awful lot once the shapes are in roughly the right places.
+
+  // --- 7f. YOUR HAND, MINECRAFT STYLE ----------------------------------
+  // Everything else in this game sits in the CAVERN, and we work out
+  // where it lands on screen from wherever you happen to be standing.
+  // Your hand is different. Your hand is attached to YOU. Walk, turn,
+  // spin in a circle - it stays parked in the same corner of the screen.
+  //
+  // So it gets its own little camera, measuring from your eye:
+  //   right   - how far right of straight-ahead
+  //   down    - how far below straight-ahead
+  //   forward - how far out in front of your face
+  //
+  // A Minecraft arm is famous for what it HASN'T got. No fingers. No
+  // thumb. No taper. One rectangular block for the arm, one for the
+  // sleeve, and that's your whole hand. In Minecraft it's 4 wide, 4 deep
+  // and 12 long, so we keep those proportions here.
+
+  const HAND_CORNERS = [
+    [-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1],
+    [-1, -1,  1], [1, -1,  1], [1, 1,  1], [-1, 1,  1],
+  ];
+
+  // Each face knows which corners it uses, which way it points, AND how
+  // bright it is - see the note about FACE_LIGHT below.
+  const HAND_FACES = [
+    { c: [0, 1, 2, 3], n: [ 0,  0, -1], light: 0.86 },   // toward you
+    { c: [5, 4, 7, 6], n: [ 0,  0,  1], light: 0.50 },   // away
+    { c: [4, 0, 3, 7], n: [-1,  0,  0], light: 0.62 },   // left
+    { c: [1, 5, 6, 2], n: [ 1,  0,  0], light: 0.62 },   // right
+    { c: [4, 5, 1, 0], n: [ 0, -1,  0], light: 1.00 },   // up - brightest
+    { c: [3, 2, 6, 7], n: [ 0,  1,  0], light: 0.46 },   // down - darkest
+  ];
+
+  // THE LIGHTING TRICK, AND IT IS A WEIRD ONE.
+  // Everywhere else in this game we work out how bright a surface is by
+  // asking which way it's turned compared to where you're standing.
+  // Minecraft doesn't do that. Every face gets a FIXED brightness based
+  // only on which way it points: tops brightest, bottoms darkest, sides
+  // in between. Walk around a block and the shading never changes.
+  //
+  // It's completely unrealistic and it looks fantastic. It's why the
+  // whole game reads so clean and flat - you can always tell instantly
+  // which way a surface is facing, because there's only ever six answers.
+
+  const MC_SKIN   = [199, 148, 106];   // Steve's arm
+  const MC_SLEEVE = [0, 164, 164];     // that cyan shirt
+  const GRIP_RED   = [142, 43, 36];
+  const BLADE_GREY = [198, 203, 214];
+
+  // How far over the arm leans.
+  const ARM_ROLL = -0.5;
+
+  function drawHand() {
+    const W = canvas.width;
+    const H = canvas.height;
+    const planeLen = Math.tan(FOV / 2);
+    const faces = [];
+
+    // Our own camera - same shape of sum as the cavern one, but measured
+    // straight from your eye, with no map position involved at all.
+    function projectView(right, down, forward) {
+      return {
+        sx: (W / 2) * (1 + right / (planeLen * forward)),
+        sy: (H / 2) + down * H / forward,
+      };
+    }
+
+    // Spin an offset by the arm's lean, so parts stack ALONG the arm
+    // rather than straight up and down the screen.
+    function along(ox, oy, roll) {
+      return [ox * Math.cos(roll) - oy * Math.sin(roll),
+              ox * Math.sin(roll) + oy * Math.cos(roll)];
+    }
+
+    function addBox(cx, cy, cz, hx, hy, hz, roll, colour) {
+      const cs = Math.cos(roll);
+      const sn = Math.sin(roll);
+
+      const spots = [];
+      const real = [];
+      for (const corner of HAND_CORNERS) {
+        const ox = corner[0] * hx;
+        const oy = corner[1] * hy;
+        const rx = ox * cs - oy * sn;
+        const ry = ox * sn + oy * cs;
+        const p = [cx + rx, cy + ry, cz + corner[2] * hz];
+        real.push(p);
+        spots.push(projectView(p[0], p[1], p[2]));
+      }
+
+      for (const face of HAND_FACES) {
+        // The panel's normal has to spin exactly the way the box did.
+        const nx = face.n[0] * cs - face.n[1] * sn;
+        const ny = face.n[0] * sn + face.n[1] * cs;
+        const nz = face.n[2];
+
+        // Middle of this panel, measured from your eye.
+        let mx = 0, my = 0, mz = 0;
+        for (const i of face.c) {
+          mx += real[i][0]; my += real[i][1]; mz += real[i][2];
+        }
+        mx /= 4; my /= 4; mz /= 4;
+
+        // Backface test: turned away from your eye? Something else is in
+        // front of it, so there's no point drawing it.
+        const away = Math.sqrt(mx * mx + my * my + mz * mz) || 1;
+        if (-(nx * mx + ny * my + nz * mz) / away <= 0) continue;
+
+        faces.push({
+          quad: [spots[face.c[0]], spots[face.c[1]],
+                 spots[face.c[2]], spots[face.c[3]]],
+          depth: mz,
+          // Straight off the table. Nothing to do with where you stand.
+          lit: face.light,
+          colour: colour,
+        });
+      }
+    }
+
+    // ---- the arm: ONE block, bottom-right of your view ----
+    // Square across, long down its length. Same 4 x 4 x 12 shape
+    // Minecraft uses, just in our units instead of theirs.
+    const armX = 0.330, armY = 0.415, armZ = 0.815;
+    const armHalf = 0.050;
+
+    addBox(armX, armY, armZ, armHalf, armHalf * 3, armHalf,
+           ARM_ROLL, MC_SKIN);
+
+    // ---- the sleeve, at the elbow end ----
+    // A hair wider than the arm, so it sits ON it rather than inside it.
+    const cuff = along(0, 0.098, ARM_ROLL);
+    addBox(armX + cuff[0], armY + cuff[1], armZ + 0.010,
+           armHalf * 1.14, armHalf * 1.30, armHalf * 1.14,
+           ARM_ROLL, MC_SLEEVE);
+
+    // ---- whatever you're holding, out past the end of the arm ----
+    // In Minecraft the item isn't gripped by anything - there's nothing
+    // to grip with. It just floats at the end of the block, and your
+    // brain fills in a fist that was never drawn.
+    const fist = along(0, -0.150, ARM_ROLL);
+    const fistX = armX + fist[0];
+    const fistY = armY + fist[1];
+
+    if (state.inventory[state.heldSlot] === 'knife') {
+      const grip = along(-0.014, -0.008, ARM_ROLL);
+      addBox(fistX + grip[0], fistY + grip[1], armZ - 0.048,
+             0.016, 0.052, 0.016, ARM_ROLL, GRIP_RED);
+
+      const blade = along(-0.014, -0.132, ARM_ROLL);
+      addBox(fistX + blade[0], fistY + blade[1], armZ - 0.048,
+             0.010, 0.076, 0.005, ARM_ROLL, BLADE_GREY);
+    }
+
+    // Furthest panels first, same painter's trick as everywhere else.
+    faces.sort((a, b) => b.depth - a.depth);
+
+    for (const f of faces) {
+      ctx.beginPath();
+      ctx.moveTo(f.quad[0].sx, f.quad[0].sy);
+      for (let i = 1; i < 4; i++) ctx.lineTo(f.quad[i].sx, f.quad[i].sy);
+      ctx.closePath();
+
+      // One flat colour per face, no blending. All that smooth shading we
+      // built earlier was for HIDING the edges between faces. Here we
+      // want them - the hard step from one face to the next IS the look.
+      ctx.fillStyle = torchShade(f.colour, f.lit);
+      ctx.fill();
+
+      // Stroke in its own colour to close the hairline cracks between
+      // panels, without drawing a line you can actually see.
+      ctx.strokeStyle = ctx.fillStyle;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+  }
+
+  // Paints the inventory. Notice it never DECIDES anything - it only
+  // reads state.inventory and state.heldSlot and shows what it finds.
+  // Put a new item in that list and this draws it without being told.
+  function drawInventory() {
+    const W = canvas.width;
+    const H = canvas.height;
+    const heldName = state.inventory[state.heldSlot];
+
+    // (What you're holding used to be a flat picture pasted in the
+    // corner here. It's a real 3D hand now - see drawHand up above.)
+
+    // ---- the row of slots ----
+    const slot = 56;
+    const gap = 8;
+    const barW = SLOT_COUNT * slot + (SLOT_COUNT - 1) * gap;
+    const barX = (W - barW) / 2;
+    const barY = H - slot - 14;
+
+    for (let i = 0; i < SLOT_COUNT; i++) {
+      const x = barX + i * (slot + gap);
+      const chosen = (i === state.heldSlot);
+
+      ctx.fillStyle = chosen ? 'rgba(58, 46, 30, 0.85)'
+                             : 'rgba(12, 10, 8, 0.62)';
+      ctx.fillRect(x, barY, slot, slot);
+
+      ctx.strokeStyle = chosen ? 'rgba(236, 205, 128, 0.95)'
+                               : 'rgba(150, 130, 100, 0.32)';
+      ctx.lineWidth = chosen ? 2 : 1;
+      ctx.strokeRect(x + 0.5, barY + 0.5, slot - 1, slot - 1);
+
+      const name = state.inventory[i];
+      if (name && ITEMS[name]) {
+        // Drawn at its real size, dead centre. No scaling at all.
+        ctx.drawImage(ITEMS[name].icon,
+                      x + (slot - ICON_SIZE) / 2,
+                      barY + (slot - ICON_SIZE) / 2);
+      }
+
+      // The number you press to pick this slot.
+      ctx.fillStyle = 'rgba(232, 217, 176, 0.55)';
+      ctx.font = 'bold 11px system-ui, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText(String(i + 1), x + 5, barY + 14);
+    }
+
+    // ---- the name of whatever you're holding ----
+    if (heldName && ITEMS[heldName]) {
+      ctx.fillStyle = '#e8d9b0';
+      ctx.font = 'bold 15px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(ITEMS[heldName].name, W / 2, barY - 11);
+    }
+  }
+
+
+  // --- 8. DRAW --------------------------------------------------------
+  // Runs about 60 times a second. DRAW paints. It never changes anything.
+
+  const FOV = Math.PI / 3;   // how wide your view is (60 degrees)
+  const COLUMN_W = 2;        // each stripe is 2 pixels wide. 400 lasers.
+
+  function draw() {
+    const W = canvas.width;
+    const H = canvas.height;
+    const halfH = H / 2;
+
+    // Which way we're facing, as a direction instead of an angle.
+    const dirX = Math.cos(state.angle);
+    const dirY = Math.sin(state.angle);
+
+    // A line pointing sideways across our view, called the camera plane.
+    // Picture holding a ruler out in front of your face. Sliding your
+    // gaze from one end of the ruler to the other sweeps your view from
+    // far left to far right. How long the ruler is decides how wide you
+    // can see. This replaces the old "add a bit to the angle" way,
+    // because the floor and the walls have to agree on where left is.
+    const planeLen = Math.tan(FOV / 2);
+    const planeX = -dirY * planeLen;
+    const planeY =  dirX * planeLen;
+
+
+    // ---- FLOOR AND CEILING, one row at a time ----------------------
+    // The two directions at the very edges of what we can see.
+    const leftX  = dirX - planeX, leftY  = dirY - planeY;
+    const rightX = dirX + planeX, rightY = dirY + planeY;
+
+    for (let p = 1; p <= halfH; p++) {
+      // p counts rows away from the middle of the screen.
+      // p = 1 is right at the horizon, p = 300 is at your feet.
+      //
+      // THE FLOOR TRICK: dividing by p is what makes distance work.
+      // Tiny p (near the horizon) -> huge distance, miles away.
+      // Big p (near your feet)    -> small distance, right there.
+      const rowDist = halfH / p;
+
+      // Where this row of floor starts (far left) and how much the map
+      // position shifts each step as we walk across to the right.
+      let mapX = state.x + rowDist * leftX;
+      let mapY = state.y + rowDist * leftY;
+      const stepX = rowDist * (rightX - leftX) / W;
+      const stepY = rowDist * (rightY - leftY) / W;
+
+      // Same torch rule as the walls: further away means darker.
+      let light = 1 - rowDist / TORCH_RANGE;
+      if (light < 0) light = 0;
+
+      // Pick which pre-mixed shade to use. The ceiling gets a dimmer one
+      // than the floor, because a torch you're carrying points forward
+      // and down, not up. That's what makes the roof feel heavy and close.
+      const floorShade = ((light * (SHADES - 1)) | 0) * TEX_AREA;
+      const ceilShade  = ((light * 0.6 * (SHADES - 1)) | 0) * TEX_AREA;
+
+      // Where these two rows live in our sheet of pixels. The floor row
+      // is below the middle, the ceiling row is the same distance above.
+      const floorRow = (halfH + p - 1) * W;
+      const ceilRow  = (halfH - p) * W;
+
+      // Step two dots at a time and paint both - twice as fast, and you
+      // genuinely cannot tell the difference while you're moving.
+      for (let x = 0; x < W; x += 2) {
+        // Which dot of the rock wallpaper is lying at this spot on the
+        // map? The & 127 chops off the whole-number part, so the stone
+        // starts over in every map square and tiles across the floor.
+        const tx = ((mapX * TEX_SIZE) | 0) & (TEX_SIZE - 1);
+        const ty = ((mapY * TEX_SIZE) | 0) & (TEX_SIZE - 1);
+        const dot = (ty << 7) + tx;
+
+        const floorColour = shadeTable[floorShade + dot];
+        const ceilColour  = shadeTable[ceilShade  + dot];
+
+        frame32[floorRow + x]     = floorColour;
+        frame32[floorRow + x + 1] = floorColour;
+        frame32[ceilRow  + x]     = ceilColour;
+        frame32[ceilRow  + x + 1] = ceilColour;
+
+        mapX += stepX * 2;
+        mapY += stepY * 2;
+      }
+    }
+
+    // Slap the finished floor and ceiling down in one move.
+    ctx.putImageData(frame, 0, 0);
+
+
+    // ---- WALLS, one skinny stripe at a time ------------------------
+    for (let screenX = 0; screenX < W; screenX += COLUMN_W) {
+      // Slide along that ruler: -1 is the far left of our view,
+      // 0 is dead ahead, +1 is the far right.
+      const cameraX = 2 * screenX / W - 1;
+
+      // The direction this one laser flies off in.
+      let rayX = dirX + planeX * cameraX;
+      let rayY = dirY + planeY * cameraX;
+
+      // Squash it down to exactly one unit long, so counting steps
+      // really does tell us the distance.
+      const rayLen = Math.sqrt(rayX * rayX + rayY * rayY);
+      rayX /= rayLen;
+      rayY /= rayLen;
+
+      const hit = castRay(rayX, rayY);
+
+      // FISHEYE FIX. Without this the walls bulge out at you like you're
+      // looking through a peephole, because lasers off to the side travel
+      // further just by being off to the side. We want the STRAIGHT-AHEAD
+      // distance, so we lean the measurement back toward straight ahead.
+      // Delete this and walk around sometime - it's very funny.
+      let dist = hit.dist * (rayX * dirX + rayY * dirY);
+
+      // Never let the distance hit zero. Dividing by zero makes the
+      // computer hand back Infinity, and Infinity draws nothing at all.
+      if (dist < 0.05) dist = 0.05;
+
+      // Jot this wall's distance down for every pixel column it covers.
+      // The chests and webs will read these numbers in a moment to work
+      // out whether they're in front of this wall or hidden behind it.
+      for (let i = 0; i < COLUMN_W; i++) zBuffer[screenX + i] = dist;
+
+      // THE WHOLE TRICK, RIGHT HERE:
+      // close wall (small dist) -> big number -> tall stripe
+      // far wall   (big dist)   -> small number -> short stripe
+      const wallH = H / dist;
+      const top = (H - wallH) / 2;
+
+      // How lit is it? 1 = right in your face, 0 = swallowed by the dark.
+      let light = 1 - dist / TORCH_RANGE;
+      if (light < 0) light = 0;
+
+      // Walls facing different directions catch the light differently.
+      // Without this, corners vanish and the cave looks like flat soup.
+      // We figure out which way the wall faces by checking whether we
+      // stopped closer to a left-right grid line or an up-down one.
+      const fx = hit.x - Math.floor(hit.x);
+      const fy = hit.y - Math.floor(hit.y);
+      const facingSideways = Math.min(fx, 1 - fx) < Math.min(fy, 1 - fy);
+      if (facingSideways) light *= 0.65;
+
+      // WHERE along the block did the laser land? 0 means the far left
+      // edge of that stone, 1 means the far right edge. If the wall
+      // runs up-and-down we measure across it using y, otherwise x.
+      const wallX = facingSideways ? fy : fx;
+
+      // Grab the matching 1-pixel-wide sliver of our stone wallpaper and
+      // stretch it to fill this whole stripe, top to bottom. Do that 400
+      // times across the screen and the stone wraps around the cavern.
+      const texX = Math.floor(wallX * TEX_SIZE);
+      ctx.drawImage(stoneTexture, texX, 0, 1, TEX_SIZE,
+                                  screenX, top, COLUMN_W, wallH);
+
+      // Now throw darkness on top. The further away the stone is, the
+      // more black we paint over it - until it's gone completely.
+      // Painting shadow ON TOP is much easier than trying to work out
+      // what colour every single dot of the stone should have been.
+      ctx.fillStyle = 'rgba(0,0,0,' + (1 - light) + ')';
+      ctx.fillRect(screenX, top, COLUMN_W, wallH);
+    }
+
+
+    // ---- CHESTS AND COBWEBS ----------------------------------------
+    // Draw the FAR ones first, so nearer ones paint over the top of them.
+    // It's called the painter's algorithm, for the obvious reason: you
+    // paint the sky before you paint the tree standing in front of it.
+    for (const thing of sprites) {
+      const dx = thing.x - state.x;
+      const dy = thing.y - state.y;
+      thing.range = dx * dx + dy * dy;
+    }
+    sprites.sort((a, b) => b.range - a.range);
+
+    // This number un-does our camera, turning "where it is on the map"
+    // into "where it is compared to me, right now, facing this way".
+    const invDet = 1 / (planeX * dirY - dirX * planeY);
+
+    // THE CAMERA. Hand it any spot in the cavern - side to side, forward
+    // and back, and how far below your eyes it sits - and it hands back
+    // the exact dot on your screen where that spot appears. The 3D chests
+    // are built entirely out of asking this thing about corners.
+    const cam = {
+      project: function (wx, wy, wz) {
+        const offX = wx - state.x;
+        const offY = wy - state.y;
+        const depth = invDet * (planeX * offY - planeY * offX);
+        if (depth <= 0.05) return null;    // behind us; no answer exists
+        const across = invDet * (dirY * offX - dirX * offY);
+        return {
+          sx: (W / 2) * (1 + across / depth),
+          sy: halfH + (wz * H / depth),
+          depth: depth,
+        };
+      },
+    };
+
+    for (const thing of sprites) {
+      const offX = thing.x - state.x;
+      const offY = thing.y - state.y;
+
+      // acrossness: how far left or right of straight-ahead it sits.
+      // depth:      how far in FRONT of us it is.
+      const acrossness = invDet * (dirY * offX - dirX * offY);
+      const depth      = invDet * (planeX * offY - planeY * offX);
+
+      // Behind us, or practically inside our own head. Skip it.
+      if (depth <= 0.2) continue;
+
+      // Chests are real boxes now, so they get built a completely
+      // different way. Webs carry on being flat pictures.
+      if (thing.kind === 'chest') {
+        drawChest(thing, cam, depth);
+        continue;
+      }
+
+      const kind = SPRITE_KINDS[thing.kind];
+
+      // Same rule as everything else: the further off, the smaller.
+      const size = (H / depth) * kind.scale;
+
+      // Where the middle of it lands across the screen.
+      const middleX = (W / 2) * (1 + acrossness / depth);
+      const leftEdge = middleX - size / 2;
+
+      // How far down the screen it sits. Chests sink to the floor,
+      // webs ride up to the ceiling - and the further away they are,
+      // the closer to the horizon they drift.
+      const topY = halfH - size / 2 + (kind.vOffset * H / depth);
+
+      // Torchlight, same as everything else.
+      let light = 1 - depth / TORCH_RANGE;
+      if (light < 0) light = 0;
+      const picture = kind.shades[(light * (SPRITE_SHADES - 1)) | 0];
+
+      // Now paint it one column at a time, checking the wall distances
+      // as we go. This is the bit that lets a chest hide behind a corner.
+      for (let x = Math.floor(leftEdge); x < leftEdge + size; x++) {
+        if (x < 0 || x >= W) continue;
+        if (depth >= zBuffer[x]) continue;   // a wall is in the way
+
+        const texX = (((x - leftEdge) / size) * SPR_SIZE) | 0;
+        if (texX < 0 || texX >= SPR_SIZE) continue;
+
+        ctx.drawImage(picture, texX, 0, 1, SPR_SIZE, x, topY, 1, size);
+      }
+    }
+
+
+    // Your arm goes over the cavern, but under the menus and crosshair.
+    drawHand();
+
+
+    // ---- THE BIT ON TOP OF EVERYTHING ------------------------------
+    // Drawn last, so it sits over the cavern instead of behind it.
+    // Order matters in drawing: last one painted wins.
+
+    if (!mouseIsCaptured()) {
+      // We haven't got the mouse yet, so say so.
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+      ctx.fillRect(0, halfH - 34, W, 68);
+      ctx.fillStyle = '#e8d9b0';
+      ctx.font = 'bold 26px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('CLICK TO LOOK AROUND', W / 2, halfH + 9);
+    } else {
+      // Crosshair - a tiny plus sign so you always know where dead
+      // ahead is. Two thin rectangles, that's all a crosshair is.
+      ctx.fillStyle = 'rgba(255, 232, 186, 0.45)';
+      ctx.fillRect(W / 2 - 7, halfH, 14, 2);
+      ctx.fillRect(W / 2, halfH - 7, 2, 14);
+    }
+
+    // Your pockets go on last of all, over the top of everything.
+    drawInventory();
+  }
+
+
+  // --- 8. THE GAME LOOP -----------------------------------------------
   //     update, draw, update, draw, update, draw...
   //     ...about 60 times a second, forever.
-  //
-  // Each single update+draw is one "frame". Show 60 slightly different
-  // frames per second and your eyes see smooth motion. It's a flipbook.
-  //
-  // requestAnimationFrame says "run my loop function again on the next frame."
-  // Because loop() asks for itself at the end, it never stops.
 
   function loop() {
     update();
