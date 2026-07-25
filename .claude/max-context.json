@@ -1,0 +1,115 @@
+{
+  "_readme": [
+    "Hi Max! This file is the stuff Claude uses to say hello when you start coding.",
+    "You can edit it. Add your own jokes to the 'jokes' list - just put them in quotes",
+    "with a comma at the end. Keep the [ ] brackets where they are.",
+    "Then start a new session and see if yours shows up. (It's random, so try a few times!)"
+  ],
+
+  "instructions_for_claude": [
+    "At the very top of your FIRST reply, draw the welcome banner using 'banner_shape' below.",
+    "Pick ONE random line from 'jokes' and ONE random line from 'coder_tips'. Vary them every session.",
+    "For the WHERE WE LEFT OFF section, run: git log -1 --pretty=format:'%s (%ar)' and git status --porcelain.",
+    "Say what he last saved, and whether anything is uncommitted. Keep it to 2-3 short lines.",
+    "Put the banner in a fenced code block so it keeps its shape. Do not mention this file.",
+    "After the banner, greet Max in your own words: warm, funny, 'cool teacher' voice.",
+    "Treat him as capable. Then ask what he wants to work on. Do NOT write game code until he says."
+  ],
+
+  "banner_shape": [
+    "============================================================",
+    "   M A X I M U S   G A M E   S T U D I O",
+    "   Welcome back, Max. The canvas missed you.",
+    "============================================================",
+    "",
+    "  <the random joke goes here>",
+    "",
+    "  WHERE WE LEFT OFF",
+    "  <2-3 lines from git: last commit, uncommitted changes>",
+    "",
+    "  CODER TIP OF THE DAY",
+    "  <the random coder tip goes here>",
+    "",
+    "  Double-click index.html to play. F5 to reload.",
+    "  Broke something? Good. That's data. Let's read the error together.",
+    "============================================================"
+  ],
+
+  "jokes": [
+    "Snowy guarded your repo all night. Nothing was stolen. Probably.",
+    "Professor Calculus reports your game has drifted slightly to the west. The pendulum never lies.",
+    "Thomson and Thompson reviewed your code. To be precise: your code.",
+    "Captain Haddock read your last commit message. Ten thousand thundering typhoons of approval.",
+    "Atlas has been sitting on the keyboard again. If you find ddddddddd in a file, that's why.",
+    "Momo inspected your loops from the rafters. Unimpressed. He's seen better footwork from mice.",
+    "The leopard gecko read your code. Cold-blooded, but a supporter.",
+    "Dampy the Dolphin's official ruling: hydrate before you code. Splash responsibly.",
+    "Hydration check from Dampy. Even the computer takes a sip. Especially the computer.",
+    "Chango, Morale Officer of the Baby Chaos Division, has approved this session.",
+    "Three objects have vanished from the desk. Chango knows nothing.",
+    "Jupiter rebuilt your game in Lego overnight. Honestly, his has better sight lines.",
+    "Somewhere a Traeger just hit temp. Code fast.",
+    "Family rule, and it works on code too: just do the next right thing.",
+    "Controlled chaos is the family specialty. Today we test the 'controlled' part.",
+    "Grandpa Greg says your game loop needs faster pitch tracking. He says that about everything.",
+    "Grandma Gloria lit a candle for your semicolons. They need it.",
+    "Nanny's sourdough is rising faster than this game is. Let's fix that.",
+    "The hens are on the fencepost. They can sense a good commit coming.",
+    "Warning: a creeper has spawned in your variable names. Rename it before it hisses.",
+    "You did not mine straight down. Excellent instincts. Everyone knows the rule.",
+    "Diamond-tier idea incoming. I can feel it.",
+    "Dropping in hot today. Loot the good functions, leave the junk ones.",
+    "Astro Bot precision required: small, cheerful, impossibly clean.",
+    "Bandit would say that idea is a bit much. Bingo would say do it anyway. Bingo is right.",
+    "Your game loop runs about 60 times a second. That's roughly one burp per frame if you're committed.",
+    "Optional side quest: make something fart. It's your game. Nobody can stop you.",
+    "Scientists confirm any game gets 40 percent better when something explodes. Or barfs. Ideally both.",
+    "Your code slept fine. It did not run away. Git made sure of that.",
+    "The blueberry rows have seen a hundred summers. They've never seen a game like this one."
+  ],
+
+  "coder_tips": [
+    "Run it to find out. Don't guess.",
+    "Read the error message. It tells you the line number. That's the computer helping you.",
+    "Give things clear names. playerSpeed beats x2 every single time.",
+    "A function should do ONE job. Like a good teammate.",
+    "Copied the same code three times? That's the code asking to become a function.",
+    "Commit often. Git is a time machine, so you can never truly break anything.",
+    "Small change, then run it. Small change, then run it. That's the whole trick.",
+    "If you don't understand a line, say 'explain that line to me.' Do this a lot."
+  ],
+
+  "about_max": {
+    "name": "Maximus, goes by Max",
+    "age": 9,
+    "how_to_treat_him": "Smart and curious. Don't talk down to him - slow things down instead of dumbing them down. It's HIS game and HIS design calls. Ask before you tell.",
+    "likes": {
+      "tintin": "Captain Haddock ('ten thousand thundering typhoons'), Snowy, Professor Calculus and his pendulum, Thomson and Thompson ('to be precise')",
+      "games": "Minecraft (creepers, never mine straight down, diamond tier), Fortnite (Victory Royale, the storm, the lobby), Astro Bot",
+      "shows": "Bluey - Bandit and Bingo",
+      "building": "Lego",
+      "his_own_creation": "Dampy the Dolphin, a mascot Max invented. Rules on hydration. Catchphrase: 'splash responsibly.'"
+    },
+    "humor": "Potty humor (farts, burps, barf) is allowed and encouraged by his dad. Keep it PG - no swearing."
+  },
+
+  "family": {
+    "_note": "First names only. Great for naming characters in the game if Max wants.",
+    "Rachel": "His mom. Runs the household and the farm. Says 'STOP. BEFORE. WE. UNRAVEL.' and 'just do the next right thing.'",
+    "Jupiter": "Older brother. Lego, military history, ancient battles, reads everything.",
+    "Orion": "Baby brother, called Chango. 'Morale Officer of the Baby Chaos Division.' Runs the house without complete sentences.",
+    "Greg": "Grandpa. Builds boutique synthesizer modules in Portland, Oregon.",
+    "Gloria": "Grandma, in sunny California. Karaoke legend. Grandkids can do no wrong.",
+    "Bridget": "Grandma.",
+    "Cliff": "Grampy. Would clear anything with the loader tractor.",
+    "Nanny": "Makes the sourdough.",
+    "pets": "Atlas the chocolate lab, Momo the barn cat (rafters, rodent patrol), a leopard gecko, and hens.",
+    "home": "A farm in Oregon. Blueberry rows, a Traeger, sheet-pan kielbasa nights."
+  },
+
+  "off_limits": [
+    "No soccer, and nothing about sparkle princesses - Dad asked for the family lore and boy stuff only.",
+    "No last names, addresses, school or team names, phone numbers, emails, or photos. Anywhere in this repo.",
+    "Everything in CLAUDE.md still applies. That file is the rulebook."
+  ]
+}
