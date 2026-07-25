@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Maximus Game</title>
+
+  <style>
+    /* ------------------------------------------------------------------
+       CSS is the part that decides how things LOOK.
+       JavaScript (down below) decides how things BEHAVE.
+       ------------------------------------------------------------------ */
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      background: #10101a;
+      color: #e8e8f0;
+      font-family: system-ui, sans-serif;
+    }
+
+    /* The canvas is our drawing rectangle. Everything in the game
+       gets painted onto this one element. */
+    canvas {
+      background: #1c1c2b;
+      border-radius: 12px;
+      box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
+      /* Keeps the canvas from overflowing on a small screen. */
+      max-width: 95vw;
+      height: auto;
+    }
+
+    p {
+      margin: 0;
+      opacity: 0.6;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- width and height here are the DRAWING size: 800 x 600 dots (pixels).
+       No matter how big the canvas looks on screen, we always draw as if
+       it's 800 wide and 600 tall. That makes the math easy. -->
+  <canvas id="screen" width="800" height="600"></canvas>
+
+  <p>Press any key &mdash; something should happen.</p>
+
+  <script>
+  // ====================================================================
+  //  MAXIMUS GAME
+  //  Nothing here yet! This is a skeleton: a canvas, a game loop,
+  //  and a way to know which keys are being held down.
+  //
+  //  That's the bones of literally every game ever made.
+  //  You and Claude get to build the rest.
+  // ====================================================================
+
+
+  // --- 1. GET THE CANVAS ----------------------------------------------
+  // Find the <canvas> up above, then ask it for a "2d context".
+  // Think of `ctx` as the paintbrush. Everything we draw goes through it.
+
+  const canvas = document.getElementById('screen');
+  const ctx = canvas.getContext('2d');
+
+
+  // --- 2. THE STATE ---------------------------------------------------
+  // "State" is a fancy word for: everything the game needs to remember.
+  // Right now it remembers one thing: how many frames have gone by.
+  // Later this is where the player, the score, the enemies all live.
+
+  const state = {
+    frame: 0,
+  };
+
+
+  // --- 3. THE KEYBOARD ------------------------------------------------
+  // `keys` remembers which keys are being held down RIGHT NOW.
+  // Press a key  -> we put it in the box (true).
+  // Let it go    -> we take it out (false).
+  //
+  // Then anywhere in the game we can ask:  if (keys['ArrowLeft']) { ... }
+
+  const keys = {};
+  window.addEventListener('keydown', (e) => { keys[e.key] = true; });
+  window.addEventListener('keyup',   (e) => { keys[e.key] = false; });
+
+
+  // --- 4. UPDATE ------------------------------------------------------
+  // This runs about 60 times every second.
+  // UPDATE is where things CHANGE: moving, jumping, scoring, colliding.
+  // Nothing gets drawn in here. Thinking only.
+
+  function update() {
+    state.frame++;
+
+    // TODO (Max): move a player around using `keys` up above.
+  }
+
+
+  // --- 5. DRAW --------------------------------------------------------
+  // This also runs about 60 times a second, right after update().
+  // DRAW is where things get PAINTED. Nothing changes in here. Painting only.
+  //
+  // Keeping "changing" and "painting" in separate functions is a real
+  // programming idea that grown-up game developers use too.
+
+  function draw() {
+    // Always wipe the screen first, or every frame smears on top of the last one.
+    // (Try deleting this line sometime. It looks amazing and is very broken.)
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // A title.
+    ctx.fillStyle = '#ffd93d';
+    ctx.font = 'bold 56px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('HI MAXIMUS!', canvas.width / 2, 240);
+
+    // A question.
+    ctx.fillStyle = '#e8e8f0';
+    ctx.font = '26px system-ui, sans-serif';
+    ctx.fillText('What should we build?', canvas.width / 2, 300);
+
+    // A blinking cursor, so you can see the loop really is running.
+    // Every 60 frames is about one second, so this blinks once per second.
+    if (state.frame % 60 < 30) {
+      ctx.fillStyle = '#6bd3ff';
+      ctx.fillRect(canvas.width / 2 - 8, 330, 16, 4);
+    }
+
+    // TODO (Max): draw your game here.
+  }
+
+
+  // --- 6. THE GAME LOOP -----------------------------------------------
+  // Here's the trick behind every game you've ever played:
+  //
+  //     update, draw, update, draw, update, draw...
+  //     ...about 60 times a second, forever.
+  //
+  // Each single update+draw is one "frame". Show 60 slightly different
+  // frames per second and your eyes see smooth motion. It's a flipbook.
+  //
+  // requestAnimationFrame says "run my loop function again on the next frame."
+  // Because loop() asks for itself at the end, it never stops.
+
+  function loop() {
+    update();
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  // And... go.
+  loop();
+
+  </script>
+</body>
+</html>
