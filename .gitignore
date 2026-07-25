@@ -1,6 +1,9 @@
 # Personal Claude Code settings — not shared, stays on this computer.
 .claude/settings.local.json
 
+# Temporary work areas Claude creates. Never belongs in the repo.
+.claude/worktrees/
+
 # Junk the operating system leaves lying around.
 Thumbs.db
 desktop.ini
