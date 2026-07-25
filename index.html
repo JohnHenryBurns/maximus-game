@@ -68,8 +68,9 @@
   <canvas id="screen" width="800" height="600"></canvas>
 
   <p>
-    Computer: click to look around, WASD or arrows to move, E to open, Esc to let go.<br>
-    Phone: left thumb walks, right thumb looks, tap OPEN. Turn it sideways.
+    Computer: click to look around, WASD or arrows to move, E to open,
+    click or Space to swing the knife, Esc to let go.<br>
+    Phone: left thumb walks, right thumb looks, tap OPEN and SLASH. Turn it sideways.
   </p>
 
   <script>
@@ -185,6 +186,29 @@
     // A line of text to flash up, and the frame it should vanish on.
     message: '',
     messageUntil: 0,
+
+    // YOUR HEALTH, counted in HALF hearts.
+    //
+    // Five hearts, so this starts at ten. Counting in halves instead of
+    // hearts means a half-heart hit is just "minus one" - no fractions
+    // anywhere. Fractions in a computer are fiddly and go slightly wrong
+    // in ways that are horrible to find. Whole numbers never do.
+    // If you ever want quarter-hearts, count in quarters. Same trick.
+    health: 10,
+
+    // Frames of mercy left after being hit. Without this, standing in
+    // something harmful drains all five hearts in about a sixth of a
+    // second and you never even see it happen.
+    mercy: 0,
+
+    // Frames of red flash left on screen.
+    hurtFlash: 0,
+
+    // Frames left in the current knife swing. 0 means your arm is
+    // resting. This is the ONLY thing that says a swing is happening -
+    // the animation reads it, and so does the "are you already mid-swing"
+    // check. One fact, one place, no way for them to disagree.
+    swing: 0,
   };
 
   // How fast you walk and turn, per frame. Small numbers! This runs 60
@@ -220,6 +244,13 @@
     // E opens a chest. Also a one-shot: holding E down shouldn't open
     // the same chest sixty times a second.
     if (e.key.toLowerCase() === 'e') openChest();
+
+    // Space swings. preventDefault stops the page scrolling down a
+    // screenful every single time you attack, which it otherwise would.
+    if (e.key === ' ') {
+      e.preventDefault();
+      swingKnife();
+    }
   });
   window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
 
@@ -251,7 +282,14 @@
   const PITCH_LIMIT = 260;
 
   canvas.addEventListener('click', () => {
-    canvas.requestPointerLock();
+    // The first click is asking for the mouse. Every click after that is
+    // a swing. Same button, different job depending on where you are -
+    // which is why we ask the browser what state we're in first.
+    if (document.pointerLockElement !== canvas) {
+      canvas.requestPointerLock();
+    } else {
+      swingKnife();
+    }
   });
 
   document.addEventListener('mousemove', (e) => {
@@ -299,8 +337,9 @@
   const TOUCH_TURN  = 0.0052;   // how fast dragging turns you
   const TOUCH_PITCH = 1.5;      // how fast dragging looks up and down
 
-  // The round OPEN button, bottom right.
+  // The round buttons, bottom right, stacked so a thumb can reach both.
   const ACTION = { x: 716, y: 402, r: 46 };
+  const SLASH  = { x: 716, y: 292, r: 44 };
 
   // WHERE A FINGER IS ON THE CANVAS.
   // A touch arrives measured in screen dots, but the canvas is usually
@@ -315,10 +354,13 @@
     };
   }
 
-  function inAction(p) {
-    const dx = p.x - ACTION.x;
-    const dy = p.y - ACTION.y;
-    return dx * dx + dy * dy <= ACTION.r * ACTION.r;
+  // Is this finger inside that round button? Compares the distance to
+  // the radius - and squares both sides so we skip the square root,
+  // which we'd only be doing to throw away.
+  function inButton(p, btn) {
+    const dx = p.x - btn.x;
+    const dy = p.y - btn.y;
+    return dx * dx + dy * dy <= btn.r * btn.r;
   }
 
   canvas.addEventListener('touchstart', function (e) {
@@ -330,7 +372,8 @@
       const p = touchSpot(t);
 
       // Buttons get first refusal - they beat steering and looking.
-      if (inAction(p)) { openChest(); continue; }
+      if (inButton(p, ACTION)) { openChest(); continue; }
+      if (inButton(p, SLASH)) { swingKnife(); continue; }
 
       let hitSlot = false;
       for (let i = 0; i < SLOT_COUNT; i++) {
@@ -446,7 +489,14 @@
     }
 
     state.frame++;
+
+    // Tick the two countdowns down toward zero.
+    if (state.mercy > 0) state.mercy--;
+    if (state.hurtFlash > 0) state.hurtFlash--;
+    if (state.swing > 0) state.swing--;
+
     checkPickups();
+    checkHazards();
   }
 
 
@@ -503,6 +553,98 @@
     });
 
     say('The chest creaks open...');
+  }
+
+  // --- 5b2. SWINGING THE KNIFE -----------------------------------------
+
+  const SWING_FRAMES = 16;    // how long one swing lasts, about a quarter second
+  const CUT_REACH = 0.95;     // how far the blade reaches
+  const CUT_AIM = 0.35;       // how squarely you must be facing it
+
+  function swingKnife() {
+    // Already mid-swing? Ignore it. Without this you can hammer the
+    // button and the arm never actually gets to move.
+    if (state.swing > 0) return;
+    state.swing = SWING_FRAMES;
+
+    // The swing happens whatever you're holding - swiping at nothing is
+    // half the fun. But only a blade cuts anything.
+    if (state.inventory[state.heldSlot] !== 'knife') return;
+
+    const dirX = Math.cos(state.angle);
+    const dirY = Math.sin(state.angle);
+    let cut = 0;
+
+    // Backwards through the list again, because we're removing things
+    // as we go - same trap as picking up loot.
+    for (let i = sprites.length - 1; i >= 0; i--) {
+      const thing = sprites[i];
+      if (thing.kind !== 'web') continue;
+
+      const dx = thing.x - state.x;
+      const dy = thing.y - state.y;
+      const gap = Math.sqrt(dx * dx + dy * dy);
+      if (gap > CUT_REACH) continue;
+
+      // AND you have to be facing it. This sum asks "how much is the web
+      // in the direction I'm looking?" - 1 means dead ahead, 0 means off
+      // to the side, minus means it's behind you. Without this check you
+      // could clear a whole room by spinning on the spot with the button
+      // held down, which is funny once and then ruins the game.
+      if (gap > 0.01 && ((dx / gap) * dirX + (dy / gap) * dirY) < CUT_AIM) {
+        continue;
+      }
+
+      sprites.splice(i, 1);
+      cut++;
+    }
+
+    if (cut > 0) say(cut > 1 ? 'You slash through the webs!'
+                             : 'The web comes apart.');
+  }
+
+
+  // --- 5c. GETTING HURT ------------------------------------------------
+
+  const MAX_HEARTS = 5;
+  const MERCY_FRAMES = 50;    // immunity after a hit, about 0.8 seconds
+  const WEB_BITE = 1;         // half a heart
+  const WEB_REACH = 0.42;     // how close before a web gets you
+
+  function hurt(halfHearts) {
+    // Still counting down from the last hit? Then nothing touches you.
+    if (state.mercy > 0) return;
+
+    state.health -= halfHearts;
+    state.mercy = MERCY_FRAMES;
+    state.hurtFlash = 16;
+
+    if (state.health <= 0) {
+      state.health = MAX_HEARTS * 2;
+      state.mercy = MERCY_FRAMES * 2;
+      state.x = 1.5;
+      state.y = 1.5;
+      say('The cavern spits you back out. Try again.');
+    } else {
+      say('Something bites!');
+    }
+  }
+
+  // Anything in the cavern that can hurt you. Right now that's the webs -
+  // they're already scattered everywhere and a cursed cave's webs having
+  // a bite to them fits. Swap this out for whatever you like.
+  function checkHazards() {
+    if (state.mercy > 0) return;
+
+    for (const thing of sprites) {
+      if (thing.kind !== 'web') continue;
+      const dx = thing.x - state.x;
+      const dy = thing.y - state.y;
+      if (dx * dx + dy * dy < WEB_REACH * WEB_REACH) {
+        hurt(WEB_BITE);
+        return;
+      }
+    }
   }
 
   // Walk over dropped loot and it goes in your pocket.
@@ -1799,35 +1941,54 @@
     // ---- the arm: ONE block, bottom-right of your view ----
     // Square across, long down its length. Same 4 x 4 x 12 shape
     // Minecraft uses, just in our units instead of theirs.
-    const armX = 0.330, armY = 0.415, armZ = 0.815;
+    // HOW FAR THROUGH A SWING ARE WE?
+    //
+    // state.swing counts DOWN from 16 to 0, so we flip it round to get
+    // 0 -> 1 as the swing plays. Then Math.sin turns that straight line
+    // into a smooth 0 -> 1 -> 0 arch: the arm rises, peaks, and settles
+    // back exactly where it started. No jolt at either end, and we never
+    // had to write down where "back where it started" was - the maths
+    // returns there on its own.
+    let arc = 0;
+    if (state.swing > 0) {
+      const through = 1 - (state.swing / SWING_FRAMES);
+      arc = Math.sin(through * Math.PI);
+    }
+
+    // Everything below is nudged by `arc`. At rest it's 0 and these are
+    // exactly the numbers they always were.
+    const roll = ARM_ROLL - arc * 0.85;
+    const armX = 0.330 - arc * 0.045;
+    const armY = 0.415 - arc * 0.115;
+    const armZ = 0.815 - arc * 0.070;
     const armHalf = 0.050;
 
     addBox(armX, armY, armZ, armHalf, armHalf * 3, armHalf,
-           ARM_ROLL, MC_SKIN);
+           roll, MC_SKIN);
 
     // ---- the sleeve, at the elbow end ----
     // A hair wider than the arm, so it sits ON it rather than inside it.
-    const cuff = along(0, 0.098, ARM_ROLL);
+    const cuff = along(0, 0.098, roll);
     addBox(armX + cuff[0], armY + cuff[1], armZ + 0.010,
            armHalf * 1.14, armHalf * 1.30, armHalf * 1.14,
-           ARM_ROLL, MC_SLEEVE);
+           roll, MC_SLEEVE);
 
     // ---- whatever you're holding, out past the end of the arm ----
     // In Minecraft the item isn't gripped by anything - there's nothing
     // to grip with. It just floats at the end of the block, and your
     // brain fills in a fist that was never drawn.
-    const fist = along(0, -0.150, ARM_ROLL);
+    const fist = along(0, -0.150, roll);
     const fistX = armX + fist[0];
     const fistY = armY + fist[1];
 
     if (state.inventory[state.heldSlot] === 'knife') {
-      const grip = along(-0.014, -0.008, ARM_ROLL);
+      const grip = along(-0.014, -0.008, roll);
       addBox(fistX + grip[0], fistY + grip[1], armZ - 0.048,
-             0.016, 0.052, 0.016, ARM_ROLL, GRIP_RED);
+             0.016, 0.052, 0.016, roll, GRIP_RED);
 
-      const blade = along(-0.014, -0.132, ARM_ROLL);
+      const blade = along(-0.014, -0.132, roll);
       addBox(fistX + blade[0], fistY + blade[1], armZ - 0.048,
-             0.010, 0.076, 0.005, ARM_ROLL, BLADE_GREY);
+             0.010, 0.076, 0.005, roll, BLADE_GREY);
     }
 
     // Furthest panels first, same painter's trick as everywhere else.
@@ -1852,6 +2013,90 @@
       ctx.stroke();
     }
   }
+
+  // --- 7g. THE HEART BAR ------------------------------------------------
+
+  const HEART_SIZE = 30;
+  const HEART_GAP = 6;
+
+  // A heart is two round humps and a point at the bottom. Four curved
+  // strokes get you there. Only the shape lives here - nothing is filled
+  // in, so the same outline can be used as a red heart, an empty socket,
+  // or a black outline drawn over the top. Describe the shape once, then
+  // use it three different ways.
+  function heartShape(x, y, s) {
+    ctx.beginPath();
+    ctx.moveTo(x + s * 0.50, y + s * 0.30);
+    ctx.bezierCurveTo(x + s * 0.50, y + s * 0.02, x,          y + s * 0.02,
+                      x,           y + s * 0.34);
+    ctx.bezierCurveTo(x,           y + s * 0.64, x + s * 0.50, y + s * 0.84,
+                      x + s * 0.50, y + s);
+    ctx.bezierCurveTo(x + s * 0.50, y + s * 0.84, x + s,       y + s * 0.64,
+                      x + s,        y + s * 0.34);
+    ctx.bezierCurveTo(x + s,        y + s * 0.02, x + s * 0.50, y + s * 0.02,
+                      x + s * 0.50, y + s * 0.30);
+    ctx.closePath();
+  }
+
+  function drawHearts() {
+    // Blink while you're in mercy time, so you can SEE that you're
+    // briefly untouchable. Otherwise it's a rule that exists but that
+    // nobody watching the screen could ever work out.
+    const blink = state.mercy > 0 && (Math.floor(state.frame / 4) % 2 === 0);
+
+    for (let i = 0; i < MAX_HEARTS; i++) {
+      const x = 18 + i * (HEART_SIZE + HEART_GAP);
+      const y = 16;
+
+      // How much of THIS heart survives: 2 = full, 1 = half, 0 = gone.
+      // Heart 0 uses health 1-2, heart 1 uses 3-4, and so on.
+      let left = state.health - i * 2;
+      if (left < 0) left = 0;
+      if (left > 2) left = 2;
+
+      // The empty socket underneath. Always drawn, so you can see how
+      // much you've LOST as well as how much you've got.
+      heartShape(x, y, HEART_SIZE);
+      ctx.fillStyle = 'rgba(30, 16, 16, 0.78)';
+      ctx.fill();
+
+      if (left > 0 && !blink) {
+        ctx.save();
+
+        // HALF A HEART. We don't draw a different shape - we draw the
+        // whole heart and hide the right-hand side of it. Clipping like
+        // this means a half heart is guaranteed to line up perfectly
+        // with a full one, because it IS one, just covered up.
+        if (left === 1) {
+          ctx.beginPath();
+          ctx.rect(x, y, HEART_SIZE / 2, HEART_SIZE);
+          ctx.clip();
+        }
+
+        heartShape(x, y, HEART_SIZE);
+        ctx.fillStyle = '#d8353f';
+        ctx.fill();
+
+        // A shine, up on the left hump, where a light would catch it.
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.42)';
+        ctx.beginPath();
+        ctx.ellipse(x + HEART_SIZE * 0.31, y + HEART_SIZE * 0.31,
+                    HEART_SIZE * 0.10, HEART_SIZE * 0.07,
+                    -0.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.restore();
+      }
+
+      // Outline last of all, over the top, so a full heart and an empty
+      // one are exactly the same size and sit in exactly the same place.
+      heartShape(x, y, HEART_SIZE);
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.62)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+  }
+
 
   // Draws the thumb controls. Only ever called once somebody has
   // actually touched the screen - there's no point cluttering up a
@@ -1883,27 +2128,36 @@
       ctx.fill();
     }
 
-    // ---- the OPEN button ----
-    // It lights up when there's actually a chest in front of you. A
-    // button that looks the same whether or not it'll do anything just
-    // teaches you to ignore it.
-    const ready = chestInReach() !== null;
+    // ---- the two round buttons ----
+    // Each lights up only when it would actually DO something. A button
+    // that looks the same whether or not it works just teaches you to
+    // stop trusting it.
+    drawButton(ACTION, 'OPEN', chestInReach() !== null,
+               [122, 94, 34], [255, 226, 140]);
 
-    ctx.fillStyle = ready ? 'rgba(122, 94, 34, 0.75)'
-                          : 'rgba(20, 18, 14, 0.45)';
+    drawButton(SLASH, 'SLASH',
+               state.inventory[state.heldSlot] === 'knife',
+               [104, 40, 36], [255, 190, 175]);
+  }
+
+  function drawButton(btn, label, ready, onColour, edgeColour) {
+    ctx.fillStyle = ready
+      ? 'rgba(' + onColour[0] + ',' + onColour[1] + ',' + onColour[2] + ', 0.75)'
+      : 'rgba(20, 18, 14, 0.45)';
     ctx.beginPath();
-    ctx.arc(ACTION.x, ACTION.y, ACTION.r, 0, Math.PI * 2);
+    ctx.arc(btn.x, btn.y, btn.r, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.strokeStyle = ready ? 'rgba(255, 226, 140, 0.95)'
-                            : 'rgba(180, 160, 120, 0.30)';
+    ctx.strokeStyle = ready
+      ? 'rgba(' + edgeColour[0] + ',' + edgeColour[1] + ',' + edgeColour[2] + ', 0.95)'
+      : 'rgba(180, 160, 120, 0.30)';
     ctx.lineWidth = ready ? 3 : 2;
     ctx.stroke();
 
     ctx.fillStyle = ready ? '#fff2ce' : 'rgba(220, 208, 180, 0.45)';
     ctx.font = 'bold 15px system-ui, sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('OPEN', ACTION.x, ACTION.y + 5);
+    ctx.fillText(label, btn.x, btn.y + 5);
   }
 
 
@@ -2267,6 +2521,15 @@
     // Your arm goes over the cavern, but under the menus and crosshair.
     drawHand();
 
+    // A red wash over EVERYTHING the moment you're hit - the cave, your
+    // arm, the lot. Numbers going down in a corner is information. The
+    // whole screen flinching is a feeling, and you notice it without
+    // having to look at anything.
+    if (state.hurtFlash > 0) {
+      ctx.fillStyle = 'rgba(196, 22, 32, ' + (state.hurtFlash / 16 * 0.45) + ')';
+      ctx.fillRect(0, 0, W, H);
+    }
+
 
     // ---- THE BIT ON TOP OF EVERYTHING ------------------------------
     // Drawn last, so it sits over the cavern instead of behind it.
@@ -2326,7 +2589,8 @@
       ctx.fillText(state.message, W / 2, 62);
     }
 
-    // Thumb controls, then your pockets, over the top of everything.
+    // Hearts, thumb controls, then your pockets - over the top of all.
+    drawHearts();
     if (touchMode) drawTouchControls();
     drawInventory();
   }
