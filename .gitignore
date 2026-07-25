@@ -1,0 +1,7 @@
+# Personal Claude Code settings — not shared, stays on this computer.
+.claude/settings.local.json
+
+# Junk the operating system leaves lying around.
+Thumbs.db
+desktop.ini
+.DS_Store
