@@ -225,7 +225,13 @@
     // anywhere. Fractions in a computer are fiddly and go slightly wrong
     // in ways that are horrible to find. Whole numbers never do.
     // If you ever want quarter-hearts, count in quarters. Same trick.
-    health: 10,
+    //
+    // TEN hearts, so this is 20. This number and MAX_HEARTS have to
+    // agree with each other - set one without the other and you'd start
+    // with a row of empty hearts, or with more health than the bar can
+    // possibly draw. Two numbers that must match is a small trap, and
+    // it's why they both say so in a comment.
+    health: 20,
 
     // Frames of mercy left after being hit. Without this, standing in
     // something harmful drains all five hearts in about a sixth of a
@@ -1014,7 +1020,9 @@
 
   // --- 5c. GETTING HURT ------------------------------------------------
 
-  const MAX_HEARTS = 5;
+  // Must match state.health up in the state block: health is MAX_HEARTS
+  // times two, because everything is counted in HALF hearts.
+  const MAX_HEARTS = 10;
   const MERCY_FRAMES = 50;    // immunity after a hit, about 0.8 seconds
   const WEB_BITE = 1;         // half a heart
   const WEB_REACH = 0.42;     // how close before a web gets you
