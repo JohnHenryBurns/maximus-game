@@ -69,8 +69,8 @@
 
   <p>
     Computer: click to look around, WASD or arrows to move, E to open,
-    click or Space to swing the knife, Esc to let go.<br>
-    Phone: left thumb walks, right thumb looks, tap OPEN and SLASH. Turn it sideways.
+    click or Space to swing, Q to drop, 1&ndash;5 to pick a pocket, Esc to let go.<br>
+    Phone: left thumb walks, right thumb looks, tap the buttons. Turn it sideways.
   </p>
 
   <script>
@@ -251,6 +251,9 @@
       e.preventDefault();
       swingKnife();
     }
+
+    // Q drops whatever's in your hand.
+    if (e.key.toLowerCase() === 'q') dropItem();
   });
   window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
 
@@ -340,6 +343,7 @@
   // The round buttons, bottom right, stacked so a thumb can reach both.
   const ACTION = { x: 716, y: 402, r: 46 };
   const SLASH  = { x: 716, y: 292, r: 44 };
+  const DROP   = { x: 716, y: 196, r: 38 };
 
   // WHERE A FINGER IS ON THE CANVAS.
   // A touch arrives measured in screen dots, but the canvas is usually
@@ -374,6 +378,7 @@
       // Buttons get first refusal - they beat steering and looking.
       if (inButton(p, ACTION)) { openChest(); continue; }
       if (inButton(p, SLASH)) { swingKnife(); continue; }
+      if (inButton(p, DROP)) { dropItem(); continue; }
 
       let hitSlot = false;
       for (let i = 0; i < SLOT_COUNT; i++) {
@@ -647,6 +652,54 @@
     }
   }
 
+  // --- 5b3. DROPPING THINGS --------------------------------------------
+
+  const DROP_DISTANCE = 0.75;   // how far in front of you it lands
+  const DROP_DELAY = 40;        // frames before you can pick it back up
+
+  function dropItem() {
+    const name = state.inventory[state.heldSlot];
+    if (!name) { say('That pocket is empty.'); return; }
+
+    // It lands a step in front of you - unless that step is solid rock,
+    // in which case it lands at your feet instead. Without this check you
+    // could post your only knife straight through a wall and never see it
+    // again, because nothing outside the cavern is reachable.
+    let dropX = state.x + Math.cos(state.angle) * DROP_DISTANCE;
+    let dropY = state.y + Math.sin(state.angle) * DROP_DISTANCE;
+    if (isWall(dropX, dropY)) {
+      dropX = state.x;
+      dropY = state.y;
+    }
+
+    sprites.push({
+      x: dropX,
+      y: dropY,
+      kind: 'loot',
+      item: name,
+      bob: Math.random() * Math.PI * 2,
+
+      // THE SECOND TRAP. Without this, the thing you just dropped is
+      // lying within arm's reach, so the very next frame you pick it
+      // straight back up. It would look like the drop button was broken.
+      // So a dropped thing ignores you for about two thirds of a second.
+      readyAt: state.frame + DROP_DELAY,
+    });
+
+    // Out of your pockets. splice closes the gap, so everything after it
+    // shuffles down a slot - your bar never ends up with a hole in it.
+    state.inventory.splice(state.heldSlot, 1);
+
+    // If you were holding the last slot, it doesn't exist any more.
+    // Step back onto one that does.
+    if (state.heldSlot >= state.inventory.length) {
+      state.heldSlot = Math.max(0, state.inventory.length - 1);
+    }
+
+    say('Dropped: ' + ITEMS[name].name);
+  }
+
+
   // Walk over dropped loot and it goes in your pocket.
   function checkPickups() {
     // Counting BACKWARDS through the list. We're removing things as we
@@ -656,6 +709,9 @@
     for (let i = sprites.length - 1; i >= 0; i--) {
       const thing = sprites[i];
       if (thing.kind !== 'loot') continue;
+
+      // Just dropped? Then it isn't ready to be picked up yet.
+      if (thing.readyAt && state.frame < thing.readyAt) continue;
 
       const dx = thing.x - state.x;
       const dy = thing.y - state.y;
@@ -2138,6 +2194,10 @@
     drawButton(SLASH, 'SLASH',
                state.inventory[state.heldSlot] === 'knife',
                [104, 40, 36], [255, 190, 175]);
+
+    drawButton(DROP, 'DROP',
+               state.inventory[state.heldSlot] !== undefined,
+               [46, 62, 96], [176, 206, 255]);
   }
 
   function drawButton(btn, label, ready, onColour, edgeColour) {
