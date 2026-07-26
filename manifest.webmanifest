@@ -1,13 +1,14 @@
 {
-  "name": "Escape the Cursed Cavern",
-  "short_name": "Cursed Cavern",
-  "description": "A first-person 3D cavern built from scratch by Maximus. No game engine, no downloaded pictures - every wall, chest and cobweb is drawn by code.",
+  "name": "Max's Arcade",
+  "short_name": "Max's Arcade",
+  "description": "Games built from scratch by Maximus. No game engine, no downloaded pictures - every wall, spider and lava wave is drawn by code.",
 
   "start_url": "./",
   "scope": "./",
 
   "display": "fullscreen",
-  "orientation": "landscape",
+  "// orientation": "The cavern wants the phone sideways, the gnome wants it upright. Two games can't share one lock, so we let the phone turn freely.",
+  "orientation": "any",
 
   "background_color": "#07060a",
   "theme_color": "#07060a",

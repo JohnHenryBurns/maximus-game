@@ -1,0 +1,4025 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <!-- maximum-scale stops the page zooming when you double-tap. In a
+       normal web page that would be rude. In a game where you're jabbing
+       at the screen with both thumbs, an accidental zoom ruins it. -->
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Escape the Cursed Cavern</title>
+
+  <!-- ==================================================================
+       THE BIT THAT MAKES THIS AN APP.
+
+       A phone will happily add any website to your home screen, but it
+       shows up as a bookmark - browser bar, address bar, the lot.
+       manifest.webmanifest tells the phone something different: here's a
+       proper name, here's an icon, open me FULLSCREEN with no browser
+       around the edges, and hold me sideways.
+
+       All the paths below are relative - "icon-192.png", not "/icon...".
+       The site lives in a folder called maximus-game, so a path starting
+       with / would go hunting at the top of the whole domain and find
+       nothing. Relative paths just look next door, which is where the
+       files actually are.
+       ================================================================== -->
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="theme-color" content="#07060a">
+
+  <!-- iPhones ignore the manifest and want to be told separately. -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="Cursed Cavern">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="icon" href="icon-192.png">
+
+  <style>
+    /* ------------------------------------------------------------------
+       CSS is the part that decides how things LOOK.
+       JavaScript (down below) decides how things BEHAVE.
+       ------------------------------------------------------------------ */
+
+    body {
+      margin: 0;
+      /* Stops the whole page bouncing when you drag past the edge. */
+      overscroll-behavior: none;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      background: #07060a;
+      color: #e8e8f0;
+      font-family: system-ui, sans-serif;
+    }
+
+    /* The canvas is our drawing rectangle. Everything in the game
+       gets painted onto this one element. */
+    canvas {
+      background: #000;
+      border-radius: 12px;
+      box-shadow: 0 8px 40px rgba(0, 0, 0, 0.8);
+      /* Keeps the canvas from overflowing on a small screen. Adding
+         max-height too means it fits a phone held sideways, which is how
+         you'd actually want to play this. */
+      max-width: 98vw;
+      max-height: 92vh;
+      height: auto;
+
+      /* touch-action: none tells the browser "I am handling touches
+         myself, stop trying to scroll and zoom the page." Without it,
+         dragging to look around just scrolls the website instead, which
+         is baffling until you know about this one line. */
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    p {
+      margin: 0;
+      opacity: 0.6;
+      font-size: 14px;
+      text-align: center;
+    }
+
+    /* WHEN THE PAGE GOES FULLSCREEN.
+       The instructions get out of the way and the canvas takes the lot.
+       Two spellings of the same rule, because browsers didn't agree on
+       what to call this for years and older phones still use the old one.
+       They have to be separate rules - put them in one list and a browser
+       that doesn't recognise one will throw away BOTH. */
+    :fullscreen p { display: none; }
+    :-webkit-full-screen p { display: none; }
+
+    :fullscreen canvas {
+      max-width: 100vw;
+      max-height: 100vh;
+      border-radius: 0;
+    }
+    :-webkit-full-screen canvas {
+      max-width: 100vw;
+      max-height: 100vh;
+      border-radius: 0;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- A way back to the arcade menu. "index.html" is a relative path -
+       it just means "the file next door", so it works on the website too. -->
+  <a href="index.html"
+     style="position:fixed;top:8px;left:10px;color:#9ad2ff;
+            background:rgba(0,0,0,0.45);padding:6px 11px;border-radius:8px;
+            text-decoration:none;font-size:14px;z-index:10;">&larr; Arcade</a>
+
+  <!-- width and height here are the DRAWING size: 800 x 600 dots (pixels).
+       No matter how big the canvas looks on screen, we always draw as if
+       it's 800 wide and 600 tall. That makes the math easy. -->
+  <canvas id="screen" width="800" height="600"></canvas>
+
+  <p>
+    Computer: click to look around, WASD or arrows to move, E to open,
+    click or Space to shoot or swing, Q to drop, 1&ndash;5 to pick a pocket, Esc to let go.<br>
+    Phone: left thumb walks, right thumb looks, tap the buttons. Turn it sideways.<br>
+    Slot 1 is the pistol &mdash; it kills spiders. Slot 2 is the knife &mdash; it cuts webs.<br>
+    A shotgun and a machine gun are hidden in the chests.
+    M turns the music off, F goes fullscreen.
+  </p>
+
+  <script>
+  // ====================================================================
+  //  ESCAPE THE CURSED CAVERN
+  //  A first-person 3D game, built by Maximus.
+  //
+  //  The 3D here is a magic trick called RAYCASTING - the same trick
+  //  the original DOOM used back in 1993. There's no real 3D in here
+  //  at all. We're drawing tall skinny rectangles, really fast, and
+  //  your eyes do the rest.
+  // ====================================================================
+
+
+  // --- 1. GET THE CANVAS ----------------------------------------------
+  // Find the <canvas> up above, then ask it for a "2d context".
+  // Think of `ctx` as the paintbrush. Everything we draw goes through it.
+
+  const canvas = document.getElementById('screen');
+  const ctx = canvas.getContext('2d');
+
+
+  // --- 2. THE MAP -----------------------------------------------------
+  // This is the cavern, seen from above, like a treasure map.
+  //
+  //     #  = solid rock (you cannot walk through it)
+  //     .  = open floor (you can)
+  //
+  // THIS IS YOURS TO MESS WITH, MAX. Change a # into a . and you just
+  // smashed a hole in a wall. Change a . into a # and you just built one.
+  // Every row has to stay the same length as the others, though!
+
+  const MAP = [
+    '####################',
+    '#........#.........#',
+    '#.######.#.#######.#',
+    '#.#....#.#.......#.#',
+    '#.#.##.#.#######.#.#',
+    '#...##.......#...#.#',
+    '###.#######..#.###.#',
+    '#...#.....#..#...#.#',
+    '#.###.###.#..###.#.#',
+    '#.....#...#....#.#.#',
+    '#######.###.##.#.#.#',
+    '#.......#...##...#.#',
+    '#.#####.#.#######.##',
+    '#.#...#.#.#.......##',
+    '#.#.#.#.#.#.######.#',
+    '#...#...#...#....#.#',
+    '#####.#####.#.##.#.#',
+    '#.....#.....#.##...#',
+    '#.#####.#####.######',
+    '####################',
+  ];
+
+  // How wide and tall the map is, counted from the rows above.
+  const MAP_W = MAP[0].length;
+  const MAP_H = MAP.length;
+
+  // Ask the map "is this spot solid rock?"
+  // Anything outside the map counts as rock, so you can never fall out
+  // of the world. That's a guard rail - a tiny bit of code whose only
+  // job is to stop something impossible from happening.
+  function isWall(x, y) {
+    const col = Math.floor(x);
+    const row = Math.floor(y);
+    if (col < 0 || col >= MAP_W || row < 0 || row >= MAP_H) return true;
+    return MAP[row][col] === '#';
+  }
+
+
+  // --- 3. THE STATE ---------------------------------------------------
+  // "State" is a fancy word for: everything the game needs to remember.
+  // Right now that's where you are and which way you're facing.
+
+  const state = {
+    // Where you're standing. These are NOT pixels - they're map squares.
+    // x: 1.5 means "halfway across square number 1". Starting you in a
+    // corner of open floor.
+    x: 1.5,
+    y: 1.5,
+
+    // Which way you're looking, measured in radians (a way of counting
+    // angles that computers prefer over degrees). 0 points to the right
+    // on the map. This starts you looking down and to the right.
+    angle: 0.7,
+
+    // WHAT YOU'RE CARRYING. Just a list of names - that's all an
+    // inventory really is. The bar you see at the bottom of the screen
+    // isn't the inventory, it's a PICTURE of this list. Keeping those two
+    // apart matters: change this list and the picture updates itself,
+    // because the picture only ever reads from here.
+    // Pistol in slot 1, knife in slot 2. Press 1 and 2 to swap between
+    // them - the pistol drops spiders, the knife cuts webs, and neither
+    // one does the other's job.
+    inventory: ['pistol', 'knife'],
+
+    // Which slot is in your hand. 0 means the first one.
+    heldSlot: 0,
+
+    // LOOKING UP AND DOWN, measured in screen dots.
+    //
+    // Turning left and right really does turn you - it changes which way
+    // your lasers fly. Looking up and down does NOT. We cheat: we slide
+    // the horizon up or down the screen and let everything follow it.
+    //
+    // That's why you can't look straight up in games built this way -
+    // DOOM couldn't either. Nothing is actually tilting. But slide the
+    // horizon far enough and your brain is completely convinced.
+    pitch: 0,
+
+    // Counts frames since the game started. Handy for anything that
+    // needs to know how much time has gone by - bobbing, timers.
+    frame: 0,
+
+    // A line of text to flash up, and the frame it should vanish on.
+    message: '',
+    messageUntil: 0,
+
+    // YOUR HEALTH, counted in HALF hearts.
+    //
+    // Five hearts, so this starts at ten. Counting in halves instead of
+    // hearts means a half-heart hit is just "minus one" - no fractions
+    // anywhere. Fractions in a computer are fiddly and go slightly wrong
+    // in ways that are horrible to find. Whole numbers never do.
+    // If you ever want quarter-hearts, count in quarters. Same trick.
+    //
+    // TEN hearts, so this is 20. This number and MAX_HEARTS have to
+    // agree with each other - set one without the other and you'd start
+    // with a row of empty hearts, or with more health than the bar can
+    // possibly draw. Two numbers that must match is a small trap, and
+    // it's why they both say so in a comment.
+    health: 20,
+
+    // Frames of mercy left after being hit. Without this, standing in
+    // something harmful drains all five hearts in about a sixth of a
+    // second and you never even see it happen.
+    mercy: 0,
+
+    // Frames of red flash left on screen.
+    hurtFlash: 0,
+
+    // ...and frames of green flash, for when you get some back.
+    healFlash: 0,
+
+    // Frames left in the current knife swing. 0 means your arm is
+    // resting. This is the ONLY thing that says a swing is happening -
+    // the animation reads it, and so does the "are you already mid-swing"
+    // check. One fact, one place, no way for them to disagree.
+    swing: 0,
+
+    // Which weapons are still reloading, and the frame each one is next
+    // allowed to fire. Keyed by name, so adding a slow weapon later
+    // needs no new code here at all.
+    cooldowns: {},
+  };
+
+  // How fast you walk and turn, per frame. Small numbers! This runs 60
+  // times a second, so 0.05 per frame is really 3 squares per second.
+  const MOVE_SPEED = 0.045;
+  const TURN_SPEED = 0.035;
+
+  // How far your torch reaches before everything goes pitch black.
+  // THIS is the dial that controls how scary the cavern feels.
+  // Make it 20 and it's a well-lit tunnel. Make it 4 and it's terrifying.
+  // Dimmed from 9. Everything reads this - walls, floor, ceiling, chests,
+  // spiders, dropped loot - so turning it down darkens the entire cavern
+  // at once. That's what you get for having ONE number for brightness
+  // instead of a different one buried in each piece of drawing code.
+  //
+  // At 6 the dark starts about where a spider notices you (6.5), so
+  // things now arrive out of blackness instead of walking up in view.
+  const TORCH_RANGE = 6;
+
+
+  // --- 4. THE KEYBOARD ------------------------------------------------
+  // `keys` remembers which keys are being held down RIGHT NOW.
+  // Press a key  -> we put it in the box (true).
+  // Let it go    -> we take it out (false).
+
+  const keys = {};
+  window.addEventListener('keydown', (e) => {
+    keys[e.key.toLowerCase()] = true;
+    // Stop the arrow keys from scrolling the page while you play.
+    if (e.key.startsWith('Arrow')) e.preventDefault();
+
+    // Number keys pick which slot you're holding. This one is NOT in the
+    // held-down list on purpose - picking a slot happens ONCE when you
+    // press the key. Walking happens over and over while you hold it.
+    // Those are genuinely different things, so they're handled differently.
+    if (e.key >= '1' && e.key <= '5') {
+      state.heldSlot = Number(e.key) - 1;
+    }
+
+    // E opens a chest. Also a one-shot: holding E down shouldn't open
+    // the same chest sixty times a second.
+    if (e.key.toLowerCase() === 'e') openChest();
+
+    // Space swings. preventDefault stops the page scrolling down a
+    // screenful every single time you attack, which it otherwise would.
+    if (e.key === ' ') {
+      e.preventDefault();
+      attack();
+    }
+
+    // Q drops whatever's in your hand.
+    if (e.key.toLowerCase() === 'q') dropItem();
+
+    // M turns the music off. Any game that plays sound has to have this.
+    if (e.key.toLowerCase() === 'm') toggleMute();
+
+    // F goes fullscreen, for people playing on a computer.
+    if (e.key.toLowerCase() === 'f') toggleFullscreen();
+  });
+  window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+
+  // Little helper so both the arrow keys AND WASD work. Some people
+  // reach for one, some for the other. Why pick a side?
+  function held(a, b) {
+    return keys[a] || keys[b];
+  }
+
+
+  // --- 4b. THE MOUSE --------------------------------------------------
+  // POINTER LOCK. The browser hides the mouse pointer and stops telling
+  // us where it IS. Instead it only tells us how far it MOVED. That's
+  // the difference between a mouse that hits the edge of your screen and
+  // one you can spin with forever.
+  //
+  // The browser only allows this after you click, on purpose - a page
+  // that could grab your mouse uninvited would be a menace. Esc undoes it.
+
+  // How twitchy the mouse is. Bigger = spins faster. This is the one
+  // number everybody tweaks until it feels right, and "right" is
+  // different for every single person. Yours to pick.
+  const MOUSE_SENSITIVITY = 0.0022;
+
+  // How far the horizon slides for each dot the mouse moves up or down.
+  const PITCH_SENSITIVITY = 1.6;
+
+  // How far up or down you're allowed to look, in screen dots.
+  const PITCH_LIMIT = 260;
+
+  canvas.addEventListener('click', () => {
+    startAudio();   // first click is also what lets the music begin
+    // The first click is asking for the mouse. Every click after that is
+    // a swing. Same button, different job depending on where you are -
+    // which is why we ask the browser what state we're in first.
+    if (document.pointerLockElement !== canvas) {
+      canvas.requestPointerLock();
+    } else {
+      attack();
+    }
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    // Ignore the mouse unless we've actually captured it.
+    if (document.pointerLockElement !== canvas) return;
+
+    // movementX is how far it shifted since last time, not where it sits.
+    // Shove the mouse right, turn right. That really is the whole thing.
+    state.angle += e.movementX * MOUSE_SENSITIVITY;
+
+    // Push the mouse DOWN and the horizon slides UP, which fills the
+    // screen with floor - and that reads as looking down. Minus sign,
+    // because moving down the screen means a BIGGER movementY but a
+    // SMALLER horizon. Flip it to + if you want inverted look.
+    state.pitch -= e.movementY * PITCH_SENSITIVITY;
+
+    // Stop before the horizon slides off the screen entirely, which
+    // would leave us with nothing to draw and looks broken.
+    if (state.pitch > PITCH_LIMIT) state.pitch = PITCH_LIMIT;
+    if (state.pitch < -PITCH_LIMIT) state.pitch = -PITCH_LIMIT;
+  });
+
+  function mouseIsCaptured() {
+    return document.pointerLockElement === canvas;
+  }
+
+  // IS THE FIRE BUTTON BEING HELD DOWN RIGHT NOW?
+  //
+  // Every weapon so far only needed "was it just pressed". A machine gun
+  // needs "is it still down", which is a different question and has to
+  // be tracked separately for each way of playing: a mouse button, the
+  // space bar, and a thumb resting on the FIRE circle.
+  let mouseHeld = false;
+  const slashTouch = { id: null };
+
+  canvas.addEventListener('mousedown', () => {
+    if (mouseIsCaptured()) mouseHeld = true;
+  });
+  // On the WINDOW, not the canvas - let go outside the game and we still
+  // want to know, otherwise the gun jams on and never stops.
+  window.addEventListener('mouseup', () => { mouseHeld = false; });
+  window.addEventListener('blur', () => { mouseHeld = false; });
+
+  function fireHeld() {
+    return mouseHeld || keys[' '] === true || slashTouch.id !== null;
+  }
+
+
+  // --- 4c. TOUCH, FOR PHONES AND TABLETS -------------------------------
+  // No mouse to lock, no keyboard to press. The screen has to be the
+  // controls. Every phone shooter uses the same layout, because it's the
+  // only one that works: LEFT THUMB DRIVES, RIGHT THUMB LOOKS. Neither
+  // thumb ever has to leave the glass or go hunting for a button.
+  //
+  // The tricky part is that a phone tracks SEVERAL fingers at once, and
+  // gives each one an id number. We have to remember which id is steering
+  // and which id is looking - otherwise the second you use both thumbs
+  // together they fight over the same controls and it all goes haywire.
+
+  let touchMode = false;        // has anybody touched the screen yet?
+
+  const drive = { id: null, homeX: 0, homeY: 0, x: 0, y: 0 };
+  const look  = { id: null, lastX: 0, lastY: 0 };
+
+  const JOY_RADIUS  = 62;       // how far the stick can be shoved
+  const TOUCH_TURN  = 0.0052;   // how fast dragging turns you
+  const TOUCH_PITCH = 1.5;      // how fast dragging looks up and down
+
+  // The round buttons, bottom right, stacked so a thumb can reach both.
+  // Stacked bottom-right, all three inside an easy thumb sweep. The one
+  // you press most is nearest the corner. DROP used to sit right up at
+  // the top of the screen, where it existed but nobody ever found it -
+  // and a button nobody finds may as well not be there at all.
+  const ACTION = { x: 722, y: 448, r: 46 };
+  const SLASH  = { x: 722, y: 344, r: 43 };
+  const DROP   = { x: 722, y: 246, r: 40 };
+  const MUTE   = { x: 754, y: 46,  r: 30 };   // tucked up out of the way
+  const FULL   = { x: 686, y: 46,  r: 30 };
+
+
+  // FULLSCREEN.
+  // Browsers spent years disagreeing about what to call this, so there
+  // are two spellings of every single part and we try whichever exists.
+  // And a phone is allowed to just say no - so every step checks first
+  // instead of assuming, because a crash here would take the game with it.
+  function isFullscreen() {
+    return !!(document.fullscreenElement || document.webkitFullscreenElement);
+  }
+
+  function toggleFullscreen() {
+    if (!isFullscreen()) {
+      const page = document.documentElement;
+      const go = page.requestFullscreen || page.webkitRequestFullscreen;
+      if (!go) { say('Fullscreen is not available here.'); return; }
+
+      const asked = go.call(page);
+      // Newer browsers hand back a promise, older ones hand back nothing.
+      if (asked && asked.catch) asked.catch(function () {
+        say('The browser said no.');
+      });
+
+      // Ask for landscape while we're at it. Most phones refuse unless
+      // the game is installed to the home screen, and that's fine -
+      // we ask politely and carry on either way.
+      if (screen.orientation && screen.orientation.lock) {
+        try {
+          const turned = screen.orientation.lock('landscape');
+          if (turned && turned.catch) turned.catch(function () {});
+        } catch (e) { /* older phone. Never mind. */ }
+      }
+    } else {
+      const stop = document.exitFullscreen || document.webkitExitFullscreen;
+      if (stop) stop.call(document);
+    }
+  }
+
+  // WHERE A FINGER IS ON THE CANVAS.
+  // A touch arrives measured in screen dots, but the canvas is usually
+  // shown bigger or smaller than its real 800 x 600 - squeezed onto a
+  // phone, say. So we scale the numbers across. Skip this and every tap
+  // lands somewhere near, but wrong, and it's maddening to work out why.
+  function touchSpot(t) {
+    const box = canvas.getBoundingClientRect();
+    return {
+      x: (t.clientX - box.left) * (canvas.width / box.width),
+      y: (t.clientY - box.top) * (canvas.height / box.height),
+    };
+  }
+
+  // Is this finger inside that round button? Compares the distance to
+  // the radius - and squares both sides so we skip the square root,
+  // which we'd only be doing to throw away.
+  function inButton(p, btn) {
+    const dx = p.x - btn.x;
+    const dy = p.y - btn.y;
+    return dx * dx + dy * dy <= btn.r * btn.r;
+  }
+
+  canvas.addEventListener('touchstart', function (e) {
+    touchMode = true;
+    startAudio();
+    e.preventDefault();
+
+    for (let n = 0; n < e.changedTouches.length; n++) {
+      const t = e.changedTouches[n];
+      const p = touchSpot(t);
+
+      // Buttons get first refusal - they beat steering and looking.
+      if (inButton(p, ACTION)) { openChest(); continue; }
+      if (inButton(p, SLASH)) {
+        // Remember WHICH finger this is, so we know when it lifts off.
+        slashTouch.id = t.identifier;
+        attack();
+        continue;
+      }
+      if (inButton(p, DROP)) { dropItem(); continue; }
+      if (inButton(p, MUTE)) { toggleMute(); continue; }
+      if (inButton(p, FULL)) { toggleFullscreen(); continue; }
+
+      let hitSlot = false;
+      for (let i = 0; i < SLOT_COUNT; i++) {
+        const r = slotRect(i);
+        if (p.x >= r.x && p.x <= r.x + r.w &&
+            p.y >= r.y && p.y <= r.y + r.h) {
+          state.heldSlot = i;
+          hitSlot = true;
+          break;
+        }
+      }
+      if (hitSlot) continue;
+
+      if (p.x < canvas.width / 2 && drive.id === null) {
+        // The stick appears WHERE YOU PUT YOUR THUMB, not in some fixed
+        // corner you'd have to aim for. You never look down to find it.
+        drive.id = t.identifier;
+        drive.homeX = p.x; drive.homeY = p.y;
+        drive.x = p.x;     drive.y = p.y;
+      } else if (look.id === null) {
+        look.id = t.identifier;
+        look.lastX = p.x; look.lastY = p.y;
+      }
+    }
+  }, { passive: false });
+
+  canvas.addEventListener('touchmove', function (e) {
+    e.preventDefault();
+
+    for (let n = 0; n < e.changedTouches.length; n++) {
+      const t = e.changedTouches[n];
+      const p = touchSpot(t);
+
+      if (t.identifier === drive.id) {
+        drive.x = p.x;
+        drive.y = p.y;
+      } else if (t.identifier === look.id) {
+        state.angle += (p.x - look.lastX) * TOUCH_TURN;
+        state.pitch -= (p.y - look.lastY) * TOUCH_PITCH;
+        if (state.pitch > PITCH_LIMIT) state.pitch = PITCH_LIMIT;
+        if (state.pitch < -PITCH_LIMIT) state.pitch = -PITCH_LIMIT;
+        look.lastX = p.x;
+        look.lastY = p.y;
+      }
+    }
+  }, { passive: false });
+
+  // Lift a finger and whatever it was doing stops. touchcancel fires when
+  // the phone snatches the touch away - a notification sliding in, say -
+  // and if we ignored it you'd carry on walking forever.
+  function endTouch(e) {
+    for (let n = 0; n < e.changedTouches.length; n++) {
+      const id = e.changedTouches[n].identifier;
+      if (id === drive.id) drive.id = null;
+      if (id === look.id) look.id = null;
+      if (id === slashTouch.id) slashTouch.id = null;
+    }
+  }
+  canvas.addEventListener('touchend', endTouch, { passive: false });
+  canvas.addEventListener('touchcancel', endTouch, { passive: false });
+
+
+  // --- 4d. SOUND ---------------------------------------------------------
+  // We can't download a song - nothing in this project reaches out to
+  // another website. So we MAKE one, the same way we made the rock and
+  // the chests: out of maths.
+  //
+  // The whole thing is three low notes held forever, squashed through a
+  // filter, plus a heartbeat thump. That's it. It sounds like a horror
+  // film because of two tricks:
+  //   - the notes are deliberately slightly OUT of tune with each other,
+  //     which makes a slow wobble your ear reads as dread
+  //   - it gets brighter, louder and faster as a spider closes in
+  //
+  // That second one matters most. Music that reacts is the difference
+  // between a soundtrack and a warning.
+
+  const audio = {
+    ctx: null,
+    on: false,
+    muted: false,
+    master: null,
+    filter: null,
+    nextThump: 0,
+  };
+
+  // Browsers refuse to make noise until you've clicked something. That's
+  // deliberate - imagine if any page could start blaring at you. So we
+  // wait, and start the music the first time you touch the game.
+  function startAudio() {
+    if (audio.on || audio.muted) return;
+    const Maker = window.AudioContext || window.webkitAudioContext;
+    if (!Maker) return;   // very old browser: no music, game still works
+
+    audio.ctx = new Maker();
+    audio.on = true;
+
+    audio.master = audio.ctx.createGain();
+    audio.master.gain.value = 0.0001;
+    audio.master.connect(audio.ctx.destination);
+
+    // A lowpass filter throws away the bright part of a sound. Wind it
+    // down and everything sounds muffled and far away; open it up and
+    // the same notes turn harsh. We'll open it as danger gets closer.
+    audio.filter = audio.ctx.createBiquadFilter();
+    audio.filter.type = 'lowpass';
+    audio.filter.frequency.value = 190;
+    audio.filter.Q.value = 5;
+    audio.filter.connect(audio.master);
+
+    const drone = audio.ctx.createGain();
+    drone.gain.value = 0.30;
+    drone.connect(audio.filter);
+
+    // Two saw waves on the SAME note, but pulled a few cents apart. Play
+    // them together and they drift in and out of step, which makes a
+    // slow uneasy throb. Set both detunes to 0 and it goes flat and dead.
+    for (const detune of [-8, 6]) {
+      const osc = audio.ctx.createOscillator();
+      osc.type = 'sawtooth';
+      osc.frequency.value = 55;          // a very low A
+      osc.detune.value = detune;
+      osc.connect(drone);
+      osc.start();
+    }
+
+    // A quieter note a fifth above. Fifths sound hollow and cold rather
+    // than happy - which is exactly what we want down here.
+    const fifth = audio.ctx.createOscillator();
+    fifth.type = 'sawtooth';
+    fifth.frequency.value = 82.4;
+    const fifthGain = audio.ctx.createGain();
+    fifthGain.gain.value = 0.13;
+    fifth.connect(fifthGain);
+    fifthGain.connect(audio.filter);
+    fifth.start();
+
+    // Creep the volume up rather than slamming it on.
+    audio.master.gain.setTargetAtTime(0.17, audio.ctx.currentTime, 1.6);
+  }
+
+  // One heartbeat thump: a low note that drops in pitch as it fades.
+  function thump(power) {
+    if (!audio.on) return;
+    const t = audio.ctx.currentTime;
+
+    const osc = audio.ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(72, t);
+    osc.frequency.exponentialRampToValueAtTime(36, t + 0.18);
+
+    const g = audio.ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.55 * power, t + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.32);
+
+    osc.connect(g);
+    g.connect(audio.master);
+    osc.start(t);
+    osc.stop(t + 0.36);
+  }
+
+  // A gunshot. Pure random noise, faded out sharply, pushed through a
+  // filter. Randomness sounds like a hiss - shape how it fades and it
+  // turns into a bang. No recording involved.
+  function bang(power) {
+    if (!audio.on) return;
+    const t = audio.ctx.currentTime;
+
+    const frames = Math.floor(audio.ctx.sampleRate * 0.25);
+    const buffer = audio.ctx.createBuffer(1, frames, audio.ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < frames; i++) {
+      const fade = 1 - i / frames;
+      data[i] = (Math.random() * 2 - 1) * fade * fade * fade;
+    }
+
+    const src = audio.ctx.createBufferSource();
+    src.buffer = buffer;
+
+    const f = audio.ctx.createBiquadFilter();
+    f.type = 'lowpass';
+    f.frequency.value = 700 + power * 900;
+
+    const g = audio.ctx.createGain();
+    g.gain.value = 0.45 * power;
+
+    src.connect(f);
+    f.connect(g);
+    g.connect(audio.ctx.destination);   // straight out, ignores the mood filter
+    src.start(t);
+  }
+
+  // A short rising note, for when something good happens. Rising means
+  // good and falling means bad, in basically every piece of music ever
+  // written, and your ear knows it without being told.
+  function chime() {
+    if (!audio.on) return;
+    const t = audio.ctx.currentTime;
+
+    const osc = audio.ctx.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(520, t);
+    osc.frequency.exponentialRampToValueAtTime(880, t + 0.13);
+
+    const g = audio.ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.20, t + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.36);
+
+    osc.connect(g);
+    g.connect(audio.ctx.destination);
+    osc.start(t);
+    osc.stop(t + 0.40);
+  }
+
+  // A machine gun round. Same noise trick as `bang`, but a tenth as
+  // long and squeezed through a bandpass filter so only the crack in the
+  // middle survives. Twelve full-fat bangs a second would be a wall of
+  // mush - this stays sharp and separate.
+  function rattle() {
+    if (!audio.on) return;
+    const t = audio.ctx.currentTime;
+
+    const frames = Math.floor(audio.ctx.sampleRate * 0.09);
+    const buffer = audio.ctx.createBuffer(1, frames, audio.ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < frames; i++) {
+      const fade = 1 - i / frames;
+      data[i] = (Math.random() * 2 - 1) * fade * fade;
+    }
+
+    const src = audio.ctx.createBufferSource();
+    src.buffer = buffer;
+
+    const f = audio.ctx.createBiquadFilter();
+    f.type = 'bandpass';
+    f.frequency.value = 1500;
+    f.Q.value = 0.9;
+
+    const g = audio.ctx.createGain();
+    g.gain.value = 0.26;
+
+    src.connect(f);
+    f.connect(g);
+    g.connect(audio.ctx.destination);
+    src.start(t);
+  }
+
+  const MUSIC_RANGE = 8;    // how close a spider has to be to stir it up
+
+  function updateMusic() {
+    if (!audio.on) return;
+
+    // How close is the NEAREST spider? That one number drives everything.
+    let closest = Infinity;
+    for (const thing of sprites) {
+      if (thing.kind !== 'spider') continue;
+      const dx = thing.x - state.x;
+      const dy = thing.y - state.y;
+      const gap = Math.sqrt(dx * dx + dy * dy);
+      if (gap < closest) closest = gap;
+    }
+
+    let heat = 0;
+    if (closest < MUSIC_RANGE) heat = 1 - closest / MUSIC_RANGE;
+
+    const t = audio.ctx.currentTime;
+
+    // Open the filter and lift the volume as they close in. setTargetAtTime
+    // slides there smoothly instead of jumping, so it swells rather than
+    // clicking - and you feel it building before you notice it happening.
+    audio.filter.frequency.setTargetAtTime(180 + heat * heat * 1100, t, 0.35);
+    audio.master.gain.setTargetAtTime(0.14 + heat * 0.20, t, 0.6);
+
+    // And the heartbeat speeds up. Calm is a thump every 1.7 seconds.
+    // Something right behind you is nearly three a second.
+    const gapFrames = 100 - heat * 78;
+    if (state.frame >= audio.nextThump) {
+      audio.nextThump = state.frame + gapFrames;
+      thump(0.3 + heat * 0.8);
+    }
+  }
+
+  function toggleMute() {
+    audio.muted = !audio.muted;
+    if (!audio.on) { if (!audio.muted) startAudio(); return; }
+    audio.master.gain.setTargetAtTime(
+      audio.muted ? 0.0001 : 0.17, audio.ctx.currentTime, 0.2);
+    say(audio.muted ? 'Sound off' : 'Sound on');
+  }
+
+
+  // --- 5. MOVING AROUND -----------------------------------------------
+  // Try to walk to a new spot - but only if it isn't solid rock.
+  //
+  // The sneaky part: we check the new x and the new y SEPARATELY.
+  // That means when you scrape along a wall at an angle, you slide
+  // along it instead of getting stuck. Games that skip this feel awful.
+
+  function tryMove(newX, newY) {
+    if (!isWall(newX, state.y)) state.x = newX;
+    if (!isWall(state.x, newY)) state.y = newY;
+  }
+
+  function update() {
+    // Turning just changes the angle you're facing. You don't move.
+    if (held('arrowleft',  'a')) state.angle -= TURN_SPEED;
+    if (held('arrowright', 'd')) state.angle += TURN_SPEED;
+
+    // Walking forward means moving a little bit in the direction you face.
+    // Math.cos gives the x part of that direction, Math.sin gives the y
+    // part. That pair is how you turn "an angle" into "a direction".
+    const stepX = Math.cos(state.angle) * MOVE_SPEED;
+    const stepY = Math.sin(state.angle) * MOVE_SPEED;
+
+    if (held('arrowup',   'w')) tryMove(state.x + stepX, state.y + stepY);
+    if (held('arrowdown', 's')) tryMove(state.x - stepX, state.y - stepY);
+
+    // ---- and the same again, but from your left thumb ----
+    if (drive.id !== null) {
+      let pushX = drive.x - drive.homeX;
+      let pushY = drive.y - drive.homeY;
+      const shove = Math.sqrt(pushX * pushX + pushY * pushY);
+
+      if (shove > 2) {
+        // However far you shove, you never go faster than a key press.
+        // A stick that goes quicker the harder you push it FEELS good for
+        // about a minute and then you can't control it at all.
+        const strength = Math.min(1, shove / JOY_RADIUS);
+        pushX = (pushX / shove) * strength;
+        pushY = (pushY / shove) * strength;
+
+        // Up on the stick walks forward. Sideways SLIDES you along
+        // without turning - that's called strafing, and on a phone you
+        // need it, because your other thumb is busy doing the turning.
+        const forward = -pushY;
+        const sideways = pushX;
+        const goX = (Math.cos(state.angle) * forward
+                   - Math.sin(state.angle) * sideways) * MOVE_SPEED;
+        const goY = (Math.sin(state.angle) * forward
+                   + Math.cos(state.angle) * sideways) * MOVE_SPEED;
+        tryMove(state.x + goX, state.y + goY);
+      }
+    }
+
+    // AUTO-FIRE. Some weapons keep going for as long as you hold the
+    // button. attack() already rate-limits itself, so calling it every
+    // single frame is safe - it simply refuses until it's ready again.
+    if (AUTO_FIRE[state.inventory[state.heldSlot]] && fireHeld()) attack();
+
+    state.frame++;
+
+    // Tick the two countdowns down toward zero.
+    if (state.mercy > 0) state.mercy--;
+    if (state.hurtFlash > 0) state.hurtFlash--;
+    if (state.healFlash > 0) state.healFlash--;
+    if (state.swing > 0) state.swing--;
+
+    updateSpiders();
+    updateMusic();
+    checkPickups();
+    checkHazards();
+  }
+
+
+  // --- 5b. CHESTS, LOOT, AND YOUR POCKETS ------------------------------
+  // The first bit of this game that isn't drawing. Everything up to here
+  // has been "show what's there". This part CHANGES what's there.
+
+  const OPEN_REACH = 1.4;    // how close you must be to open a chest
+  const GRAB_REACH = 0.55;   // how close before loot jumps into a pocket
+
+  // Flash a line of text up on screen for a couple of seconds.
+  function say(text) {
+    state.message = text;
+    state.messageUntil = state.frame + 140;
+  }
+
+  // The nearest shut chest you're close enough to open, or null.
+  // Used twice: once to actually open one, and once to decide whether to
+  // show the "press E" hint. Same question, so it's the same function -
+  // if you'd written it twice you'd eventually fix a bug in only one.
+  function chestInReach() {
+    let best = null;
+    let bestDist = OPEN_REACH * OPEN_REACH;
+    for (const thing of sprites) {
+      if (thing.kind !== 'chest' || thing.opened) continue;
+      const dx = thing.x - state.x;
+      const dy = thing.y - state.y;
+      const gap = dx * dx + dy * dy;
+      if (gap < bestDist) { bestDist = gap; best = thing; }
+    }
+    return best;
+  }
+
+  function openChest() {
+    const chest = chestInReach();
+    if (!chest) return;
+
+    chest.opened = true;
+
+    // Spill the loot out onto the floor between you and the chest, so it
+    // lands somewhere you can actually walk to.
+    let awayX = state.x - chest.x;
+    let awayY = state.y - chest.y;
+    const gap = Math.sqrt(awayX * awayX + awayY * awayY) || 1;
+
+    sprites.push({
+      x: chest.x + (awayX / gap) * 0.5,
+      y: chest.y + (awayY / gap) * 0.5,
+      kind: 'loot',
+      item: chest.loot,
+      // Each dropped thing bobs on its own rhythm. If they all bobbed
+      // together it would look like one machine instead of loose objects.
+      bob: Math.random() * Math.PI * 2,
+    });
+
+    say('The chest creaks open...');
+  }
+
+  // --- 5b2. SWINGING THE KNIFE -----------------------------------------
+
+  const SWING_FRAMES = 16;    // how long one swing lasts, about a quarter second
+  const CUT_REACH = 0.95;     // how far the blade reaches
+  const CUT_AIM = 0.35;       // how squarely you must be facing it
+
+  const PISTOL_RANGE = 9;       // about as far as your torch reaches
+  const PISTOL_SPREAD = 0.42;   // how far off your aim line still counts
+  const PISTOL_DAMAGE = 2;      // a whole heart's worth - twice the knife
+
+  // One button, and it does whatever the thing in your hand does. The
+  // arm moves no matter what you're holding, because swiping at nothing
+  // is half the fun - but only a real weapon actually does anything.
+  const SHOTGUN_RANGE = 5;        // short - it's a close-up weapon
+  const SHOTGUN_SPREAD = 0.95;    // a WIDE cone, not a line
+  const SHOTGUN_DAMAGE = 3;       // kills a spider outright
+  const SHOTGUN_COOLDOWN = 600;   // 600 frames at 60 a second = 10 seconds
+
+  const MG_RANGE = 8;
+  const MG_SPREAD = 0.45;
+  const MG_DAMAGE = 1;        // half a heart - three rounds kills a spider
+  const MG_RATE = 5;          // a shot every 5 frames = 12 a second
+  const MG_SCATTER = 0.07;    // how much each round wanders off your aim
+
+  // How long each weapon has to wait, by name. Anything not in here
+  // fires as fast as you can press the button.
+  const COOLDOWNS = { shotgun: SHOTGUN_COOLDOWN, machinegun: MG_RATE };
+
+  // Weapons that keep firing while you HOLD the button rather than
+  // needing a fresh press each time.
+  const AUTO_FIRE = { machinegun: true };
+
+  // How long the arm animation runs. A machine gun barely twitches - it
+  // has to be ready again in five frames, so a big sixteen-frame swing
+  // would block the next shot before it happened.
+  const SWING_LENGTH = { machinegun: 4 };
+
+  function attack() {
+    // Already mid-swing? Ignore it. Without this you can hammer the
+    // button and the arm never actually gets to move.
+    if (state.swing > 0) return;
+
+    const held = state.inventory[state.heldSlot];
+
+    // COOLDOWN, checked BEFORE the arm moves. Get this the wrong way
+    // round and you'd see the shotgun fire with no bang and no damage,
+    // which looks far more broken than nothing happening at all.
+    const wait = COOLDOWNS[held];
+    if (wait) {
+      const readyAt = state.cooldowns[held] || 0;
+      if (state.frame < readyAt) {
+        // Only announce a wait that's actually worth announcing. A
+        // machine gun pauses five frames between rounds - saying
+        // "reloading" for a twelfth of a second would be nonsense.
+        if (wait > 60) {
+          const secondsLeft = Math.ceil((readyAt - state.frame) / 60);
+          say('Reloading... ' + secondsLeft + 's');
+        }
+        return;
+      }
+      state.cooldowns[held] = state.frame + wait;
+    }
+
+    state.swing = SWING_LENGTH[held] || SWING_FRAMES;
+
+    if (held === 'pistol') shoot();
+    else if (held === 'shotgun') blast();
+    else if (held === 'machinegun') spray();
+    else if (held === 'knife') slash();
+  }
+
+  // ONE MACHINE GUN ROUND.
+  // Nearly the pistol, with two differences that change everything: it
+  // does half the damage, and every round wanders slightly off your aim.
+  // That wander is why it isn't just a better pistol - hold it down and
+  // you'll hit something eventually, but you can't pick your shot.
+  function spray() {
+    rattle();
+
+    const aim = state.angle + (Math.random() - 0.5) * MG_SCATTER;
+    const dirX = Math.cos(aim);
+    const dirY = Math.sin(aim);
+    const wall = castRay(dirX, dirY);
+
+    let target = null;
+    let targetIndex = -1;
+    let nearest = MG_RANGE;
+
+    for (let i = 0; i < sprites.length; i++) {
+      const thing = sprites[i];
+      if (thing.kind !== 'spider') continue;
+
+      const dx = thing.x - state.x;
+      const dy = thing.y - state.y;
+
+      const along = dx * dirX + dy * dirY;
+      if (along <= 0 || along > nearest) continue;
+
+      const missX = dx - dirX * along;
+      const missY = dy - dirY * along;
+      if (Math.sqrt(missX * missX + missY * missY) > MG_SPREAD) continue;
+      if (along > wall.dist) continue;
+
+      nearest = along;
+      target = thing;
+      targetIndex = i;
+    }
+
+    if (!target) return;   // no message - it would be spamming twelve a second
+
+    target.health -= MG_DAMAGE;
+    target.hurtUntil = state.frame + 6;
+
+    if (target.health <= 0) {
+      sprites.splice(targetIndex, 1);
+      const gained = heal(HEART_PER_KILL);
+      say('Spider down.' + (gained ? '  ' + heartWord(gained) : ''));
+    }
+  }
+
+  // THE SHOTGUN. A pistol fires down a line. A shotgun throws a CONE -
+  // and the cone gets wider the further out you go, which is why it's
+  // devastating up close and useless across a room. That widening is the
+  // whole character of the weapon, and it's one multiply.
+  function blast() {
+    bang(1);
+
+    const dirX = Math.cos(state.angle);
+    const dirY = Math.sin(state.angle);
+    const wall = castRay(dirX, dirY);
+
+    let hit = 0;
+    let killed = 0;
+    let gained = 0;
+
+    // Backwards, because we remove as we go.
+    for (let i = sprites.length - 1; i >= 0; i--) {
+      const thing = sprites[i];
+      if (thing.kind !== 'spider') continue;
+
+      const dx = thing.x - state.x;
+      const dy = thing.y - state.y;
+
+      const along = dx * dirX + dy * dirY;
+      if (along <= 0 || along > SHOTGUN_RANGE) continue;
+
+      const missX = dx - dirX * along;
+      const missY = dy - dirY * along;
+
+      // HERE's the cone: how far off the line you're allowed to be grows
+      // with distance. Right in front of you it's tight; out at the edge
+      // of its range it's nearly a metre wide.
+      const allowed = SHOTGUN_SPREAD * (0.30 + along / SHOTGUN_RANGE);
+      if (Math.sqrt(missX * missX + missY * missY) > allowed) continue;
+
+      if (along > wall.dist) continue;   // rock in the way
+
+      // No "nearest only" here. A shotgun hits EVERYTHING in the cone,
+      // and that's exactly the point of carrying one.
+      thing.health -= SHOTGUN_DAMAGE;
+      thing.hurtUntil = state.frame + 14;
+
+      if (thing.health <= 0) {
+        sprites.splice(i, 1);
+        killed++;
+        gained += heal(HEART_PER_KILL);
+      } else {
+        thing.nextBite = state.frame + 45;
+        hit++;
+      }
+    }
+
+    const bonus = gained ? '  ' + heartWord(gained) : '';
+    if (killed > 1) say('BOOM! ' + killed + ' of them!' + bonus);
+    else if (killed === 1) say('BOOM! Spider down.' + bonus);
+    else if (hit > 0) say('BOOM! Hit.');
+    else say('BOOM! Nothing but rock.');
+  }
+
+  // FIRING. A knife asks "is it close enough?". A bullet can't - it
+  // travels in a straight line and either meets something or doesn't.
+  //
+  // So for every spider we work out two things: how far ALONG your aim
+  // line it sits, and how far OFF that line it is. The second one is the
+  // miss distance. Small miss, you hit it. That's how nearly every game
+  // in the world works out whether a shot landed.
+  function shoot() {
+    bang(0.55);   // sharper and quieter than the shotgun
+
+    const dirX = Math.cos(state.angle);
+    const dirY = Math.sin(state.angle);
+
+    // How far the bullet gets before it buries itself in rock.
+    const wall = castRay(dirX, dirY);
+
+    let target = null;
+    let targetIndex = -1;
+    let nearest = PISTOL_RANGE;
+
+    for (let i = 0; i < sprites.length; i++) {
+      const thing = sprites[i];
+      if (thing.kind !== 'spider') continue;
+
+      const dx = thing.x - state.x;
+      const dy = thing.y - state.y;
+
+      // How far along the line of fire. Negative means behind you.
+      const along = dx * dirX + dy * dirY;
+      if (along <= 0 || along > nearest) continue;
+
+      // What's left over is the sideways miss.
+      const missX = dx - dirX * along;
+      const missY = dy - dirY * along;
+      if (Math.sqrt(missX * missX + missY * missY) > PISTOL_SPREAD) continue;
+
+      // Rock in the way? Then you shot the wall.
+      if (along > wall.dist) continue;
+
+      // Keep only the NEAREST one on the line - a bullet stops at the
+      // first thing it meets, it doesn't carry on through.
+      nearest = along;
+      target = thing;
+      targetIndex = i;
+    }
+
+    if (!target) { say('BANG! Missed.'); return; }
+
+    target.health -= PISTOL_DAMAGE;
+    target.hurtUntil = state.frame + 10;
+
+    if (target.health <= 0) {
+      sprites.splice(targetIndex, 1);
+      const gained = heal(HEART_PER_KILL);
+      say('BANG! Spider down.' + (gained ? '  ' + heartWord(gained) : ''));
+    } else {
+      target.nextBite = state.frame + 30;
+      say('BANG! Hit.');
+    }
+  }
+
+  function slash() {
+    const dirX = Math.cos(state.angle);
+    const dirY = Math.sin(state.angle);
+    let cut = 0;
+    let stabbed = 0;
+    let killed = 0;
+    let gained = 0;
+
+    // Backwards through the list again, because we're removing things
+    // as we go - same trap as picking up loot.
+    for (let i = sprites.length - 1; i >= 0; i--) {
+      const thing = sprites[i];
+      if (thing.kind !== 'web' && thing.kind !== 'spider') continue;
+
+      const dx = thing.x - state.x;
+      const dy = thing.y - state.y;
+      const gap = Math.sqrt(dx * dx + dy * dy);
+      if (gap > CUT_REACH) continue;
+
+      // AND you have to be facing it. This sum asks "how much is it in
+      // the direction I'm looking?" - 1 means dead ahead, 0 means off to
+      // the side, minus means it's behind you. Without this check you
+      // could clear a whole room by spinning on the spot with the button
+      // held down, which is funny once and then ruins the game.
+      if (gap > 0.01 && ((dx / gap) * dirX + (dy / gap) * dirY) < CUT_AIM) {
+        continue;
+      }
+
+      if (thing.kind === 'web') {
+        sprites.splice(i, 1);
+        cut++;
+        continue;
+      }
+
+      // ---- it's a spider ----
+      thing.health--;
+      thing.hurtUntil = state.frame + 10;
+
+      if (thing.health <= 0) {
+        sprites.splice(i, 1);
+        killed++;
+        gained += heal(HEART_PER_KILL);
+      } else {
+        // Knock it back, so three hits don't all land in the same
+        // instant. It has to walk back in, and that gap is what turns a
+        // fight into something with a rhythm instead of a button-mash.
+        const shoveX = (thing.x - state.x) / gap * 0.45;
+        const shoveY = (thing.y - state.y) / gap * 0.45;
+        if (!isWall(thing.x + shoveX, thing.y)) thing.x += shoveX;
+        if (!isWall(thing.x, thing.y + shoveY)) thing.y += shoveY;
+        thing.nextBite = state.frame + 30;   // stunned briefly
+        stabbed++;
+      }
+    }
+
+    if (killed > 0) {
+      const bonus = gained ? '  ' + heartWord(gained) : '';
+      say((killed > 1 ? 'Spiders down!' : 'The spider curls up.') + bonus);
+    }
+    else if (stabbed > 0) say('You hit the spider!');
+    else if (cut > 0) say(cut > 1 ? 'You slash through the webs!'
+                                  : 'The web comes apart.');
+  }
+
+
+  // --- 5c. GETTING HURT ------------------------------------------------
+
+  // Must match state.health up in the state block: health is MAX_HEARTS
+  // times two, because everything is counted in HALF hearts.
+  const MAX_HEARTS = 10;
+  const MERCY_FRAMES = 50;    // immunity after a hit, about 0.8 seconds
+  const WEB_BITE = 1;         // half a heart
+  const WEB_REACH = 0.42;     // how close before a web gets you
+
+  function hurt(halfHearts) {
+    // Still counting down from the last hit? Then nothing touches you.
+    if (state.mercy > 0) return;
+
+    state.health -= halfHearts;
+    state.mercy = MERCY_FRAMES;
+    state.hurtFlash = 16;
+
+    if (state.health <= 0) {
+      state.health = MAX_HEARTS * 2;
+      state.mercy = MERCY_FRAMES * 2;
+      state.x = 1.5;
+      state.y = 1.5;
+      say('The cavern spits you back out. Try again.');
+    } else {
+      say('Something bites!');
+    }
+  }
+
+  const HEART_PER_KILL = 2;   // 2 half-hearts = one whole heart
+
+  // Puts health back, but never more than the bar can hold. It returns
+  // how much ACTUALLY landed, not how much you asked for - so on a full
+  // bar it hands back 0, and the message can be honest about it.
+  function heal(halfHearts) {
+    const before = state.health;
+    const most = MAX_HEARTS * 2;
+
+    state.health += halfHearts;
+    if (state.health > most) state.health = most;
+
+    const gained = state.health - before;
+    if (gained > 0) {
+      state.healFlash = 14;
+      chime();
+    }
+    return gained;
+  }
+
+  // Turns 2 into "+1 heart" and 3 into "+1.5 hearts".
+  function heartWord(halfHearts) {
+    const hearts = halfHearts / 2;
+    return '+' + hearts + (hearts === 1 ? ' heart' : ' hearts');
+  }
+
+  // Anything in the cavern that can hurt you. Right now that's the webs -
+  // they're already scattered everywhere and a cursed cave's webs having
+  // a bite to them fits. Swap this out for whatever you like.
+  function checkHazards() {
+    if (state.mercy > 0) return;
+
+    for (const thing of sprites) {
+      if (thing.kind !== 'web') continue;
+      const dx = thing.x - state.x;
+      const dy = thing.y - state.y;
+      if (dx * dx + dy * dy < WEB_REACH * WEB_REACH) {
+        hurt(WEB_BITE);
+        return;
+      }
+    }
+  }
+
+  // --- 5b3. DROPPING THINGS --------------------------------------------
+
+  const DROP_DISTANCE = 0.75;   // how far in front of you it lands
+  const DROP_DELAY = 40;        // frames before you can pick it back up
+
+  function dropItem() {
+    const name = state.inventory[state.heldSlot];
+    if (!name) { say('That pocket is empty.'); return; }
+
+    // It lands a step in front of you - unless that step is solid rock,
+    // in which case it lands at your feet instead. Without this check you
+    // could post your only knife straight through a wall and never see it
+    // again, because nothing outside the cavern is reachable.
+    let dropX = state.x + Math.cos(state.angle) * DROP_DISTANCE;
+    let dropY = state.y + Math.sin(state.angle) * DROP_DISTANCE;
+    if (isWall(dropX, dropY)) {
+      dropX = state.x;
+      dropY = state.y;
+    }
+
+    sprites.push({
+      x: dropX,
+      y: dropY,
+      kind: 'loot',
+      item: name,
+      bob: Math.random() * Math.PI * 2,
+
+      // THE SECOND TRAP. Without this, the thing you just dropped is
+      // lying within arm's reach, so the very next frame you pick it
+      // straight back up. It would look like the drop button was broken.
+      // So a dropped thing ignores you for about two thirds of a second.
+      readyAt: state.frame + DROP_DELAY,
+    });
+
+    // Out of your pockets. splice closes the gap, so everything after it
+    // shuffles down a slot - your bar never ends up with a hole in it.
+    state.inventory.splice(state.heldSlot, 1);
+
+    // If you were holding the last slot, it doesn't exist any more.
+    // Step back onto one that does.
+    if (state.heldSlot >= state.inventory.length) {
+      state.heldSlot = Math.max(0, state.inventory.length - 1);
+    }
+
+    say('Dropped: ' + ITEMS[name].name);
+  }
+
+
+  // --- 5d. THE SPIDER ---------------------------------------------------
+  // The first thing in this cavern that does anything on its own. Chests
+  // wait to be opened. Webs sit there. A spider decides.
+  //
+  // It's not clever - it walks straight at you and bites when it arrives.
+  // But that's genuinely all most game monsters do, and it's plenty,
+  // because YOU'RE the one who has to work out what to do about it.
+
+  const SPIDER_HEALTH = 3;       // three knife hits
+  const SPIDER_SPEED = 0.021;    // half your speed - you can always run
+  const SPIDER_WANDER = 0.008;   // a slow mooch when it hasn't seen you
+  const SPIDER_SIGHT = 6.5;      // how far off it notices you
+  const SPIDER_REACH = 0.8;      // how close before it can bite
+  const SPIDER_BITE = 1;         // half a heart
+  const SPIDER_GAP = 75;         // frames between bites, about 1.2 seconds
+
+  function updateSpiders() {
+    for (const thing of sprites) {
+      if (thing.kind !== 'spider') continue;
+
+      const dx = state.x - thing.x;
+      const dy = state.y - thing.y;
+      const gap = Math.sqrt(dx * dx + dy * dy);
+
+      // ---- hasn't noticed you: WANDER ----
+      // It picks a direction, ambles that way for a second or two, then
+      // picks another. Bump a wall and it re-picks straight away.
+      //
+      // No cleverness at all - no plan, no memory, no map. But an animal
+      // that mooches about looks alive, and one that stands frozen until
+      // you walk into its bubble looks like a statue that woke up.
+      if (gap > SPIDER_SIGHT || gap < 0.001) {
+        if (state.frame >= thing.wanderUntil) {
+          thing.wanderDir = Math.random() * Math.PI * 2;
+          thing.wanderUntil = state.frame + 50 + Math.floor(Math.random() * 130);
+        }
+
+        const wx = Math.cos(thing.wanderDir) * SPIDER_WANDER;
+        const wy = Math.sin(thing.wanderDir) * SPIDER_WANDER;
+        let shifted = false;
+
+        if (!isWall(thing.x + wx, thing.y)) { thing.x += wx; shifted = true; }
+        else thing.wanderUntil = 0;          // nose to the rock: turn now
+
+        if (!isWall(thing.x, thing.y + wy)) { thing.y += wy; shifted = true; }
+        else thing.wanderUntil = 0;
+
+        if (shifted) {
+          thing.step += SPIDER_WANDER;
+          thing.facing = thing.wanderDir;
+        }
+        continue;
+      }
+
+      // ---- it has seen you ----
+      thing.facing = Math.atan2(dy, dx);
+
+      if (gap > SPIDER_REACH) {
+        // Walk straight at you - and slide along walls exactly the way
+        // you do, by trying the two directions separately. Without that
+        // it wedges itself on a corner and gives up forever.
+        const stepX = (dx / gap) * SPIDER_SPEED;
+        const stepY = (dy / gap) * SPIDER_SPEED;
+        if (!isWall(thing.x + stepX, thing.y)) thing.x += stepX;
+        if (!isWall(thing.x, thing.y + stepY)) thing.y += stepY;
+
+        // Only counts up while it's actually moving, so a spider that
+        // has stopped stops scuttling too.
+        thing.step += SPIDER_SPEED;
+
+      } else if (state.frame >= thing.nextBite) {
+        hurt(SPIDER_BITE);
+        thing.nextBite = state.frame + SPIDER_GAP;
+      }
+    }
+  }
+
+  // Walk over dropped loot and it goes in your pocket.
+  function checkPickups() {
+    // Counting BACKWARDS through the list. We're removing things as we
+    // go, and removing item 3 shuffles everything after it down a slot -
+    // so going forwards would make us skip whatever landed in slot 3.
+    // Going backwards, the things we've yet to reach never move.
+    for (let i = sprites.length - 1; i >= 0; i--) {
+      const thing = sprites[i];
+      if (thing.kind !== 'loot') continue;
+
+      // Just dropped? Then it isn't ready to be picked up yet.
+      if (thing.readyAt && state.frame < thing.readyAt) continue;
+
+      const dx = thing.x - state.x;
+      const dy = thing.y - state.y;
+      if (dx * dx + dy * dy > GRAB_REACH * GRAB_REACH) continue;
+
+      if (state.inventory.length >= SLOT_COUNT) {
+        say('Your pockets are full!');
+        continue;
+      }
+
+      state.inventory.push(thing.item);
+      sprites.splice(i, 1);
+      say('Picked up: ' + ITEMS[thing.item].name);
+    }
+  }
+
+
+  // --- 6. THE RAYCASTER (this is the magic trick) ----------------------
+  // Fire one laser and find out how far away the wall is.
+  //
+  // We do it by crawling forward in tiny steps until we bump into rock.
+  // Not clever. Just stubborn. And stubborn is fast enough.
+
+  const STEP = 0.02;      // how far the laser crawls each check
+  const MAX_DIST = 22;    // give up after this far - nothing out there
+
+  // Takes the DIRECTION to fire in (already exactly one unit long),
+  // rather than an angle. That way "number of steps" really does mean
+  // "distance travelled" - and the floor code needs directions too, so
+  // this way both of them speak the same language.
+  function castRay(dirX, dirY) {
+    const dx = dirX * STEP;
+    const dy = dirY * STEP;
+
+    let x = state.x;
+    let y = state.y;
+
+    for (let dist = 0; dist < MAX_DIST; dist += STEP) {
+      x += dx;
+      y += dy;
+      if (isWall(x, y)) return { dist: dist, x: x, y: y };
+    }
+    return { dist: MAX_DIST, x: x, y: y };
+  }
+
+
+  // --- 7. PAINTING THE STONE ------------------------------------------
+  // We have no picture of a rock wall, so we're going to draw one.
+  //
+  // This paints onto a tiny 64x64 canvas that never gets shown on screen.
+  // Think of it as a scrap of wallpaper we design once, then repeat over
+  // every wall in the cavern. It runs ONE time when the game starts -
+  // not 60 times a second - so it can afford to be fussy.
+
+  // Bigger than before: more dots means room for finer roughness.
+  const TEX_SIZE = 128;
+
+  // SMOOTH RANDOMNESS, step 1: scatter random numbers on a small grid.
+  // A 4x4 grid gives big fat blobs. A 32x32 grid gives tiny ones.
+  function makeNoiseGrid(size) {
+    const grid = new Float32Array(size * size);
+    for (let i = 0; i < grid.length; i++) grid[i] = Math.random();
+    return grid;
+  }
+
+  // SMOOTH RANDOMNESS, step 2: ask "what's the value at this exact spot?"
+  // The spot usually falls BETWEEN four of our random dots, so we blend
+  // all four together. Nearby spots blend almost the same four dots, so
+  // they come out almost the same - and THAT is what makes it smooth
+  // instead of static.
+  function noiseAt(grid, size, x, y) {
+    const fx = x * size;
+    const fy = y * size;
+    const x0 = Math.floor(fx);
+    const y0 = Math.floor(fy);
+
+    // How far between the dots are we? 0 = on the left one, 1 = the right.
+    let tx = fx - x0;
+    let ty = fy - y0;
+
+    // This curve makes the blend ease in and out instead of blending in
+    // a straight line. Straight-line blending leaves visible diamond
+    // shapes. This one line is the difference between "rock" and "quilt".
+    tx = tx * tx * (3 - 2 * tx);
+    ty = ty * ty * (3 - 2 * ty);
+
+    // Wrap around the edges, so the texture tiles seamlessly. Without
+    // this you'd see a hard seam every time the wallpaper repeated.
+    function corner(cx, cy) {
+      const wx = ((cx % size) + size) % size;
+      const wy = ((cy % size) + size) % size;
+      return grid[wy * size + wx];
+    }
+
+    const a = corner(x0,     y0);
+    const b = corner(x0 + 1, y0);
+    const c = corner(x0,     y0 + 1);
+    const d = corner(x0 + 1, y0 + 1);
+
+    const topEdge = a + (b - a) * tx;
+    const botEdge = c + (d - c) * tx;
+    return topEdge + (botEdge - topEdge) * ty;
+  }
+
+  // SMOOTH RANDOMNESS, step 3: stack layers. Big blobs for the boulder
+  // shapes, then half-size blobs at half the strength, then smaller
+  // again. Each layer adds finer detail. This stacking trick is how
+  // games make mountains, clouds, fire and caves - all from this.
+  // More weight down at the small sizes than before. Fine layers are
+  // where BUMPS come from - big soft blobs alone just look like clouds.
+  const ROCK_LAYERS = [
+    { grid: makeNoiseGrid(4),  size: 4,  weight: 0.34 },
+    { grid: makeNoiseGrid(8),  size: 8,  weight: 0.26 },
+    { grid: makeNoiseGrid(16), size: 16, weight: 0.20 },
+    { grid: makeNoiseGrid(32), size: 32, weight: 0.13 },
+    { grid: makeNoiseGrid(64), size: 64, weight: 0.07 },
+  ];
+
+  // Which way the pretend torch shines from, for the bump shading.
+  // Bigger number = deeper, chunkier bumps. This is the BUMPY dial.
+  const BUMP_STRENGTH = 5.0;
+
+  // One dot's worth of distance across the texture. We use this to peek
+  // at the neighbouring dot and work out which way the rock is tilted.
+  const ONE_DOT = 1 / TEX_SIZE;
+
+  function stackedNoise(layers, x, y) {
+    let total = 0;
+    for (const layer of layers) {
+      total += noiseAt(layer.grid, layer.size, x, y) * layer.weight;
+    }
+    return total;   // comes out somewhere around 0 to 1
+  }
+
+  function makeStoneTexture() {
+    const c = document.createElement('canvas');
+    c.width = TEX_SIZE;
+    c.height = TEX_SIZE;
+    const t = c.getContext('2d');
+
+    // We're deciding the colour of every single dot ourselves, one at a
+    // time, so we skip the paintbrush and write straight into the pixels.
+    const img = t.createImageData(TEX_SIZE, TEX_SIZE);
+
+    for (let py = 0; py < TEX_SIZE; py++) {
+      for (let px = 0; px < TEX_SIZE; px++) {
+        const u = px / TEX_SIZE;
+        const v = py / TEX_SIZE;
+
+        // How high the rock stands at this dot, and at the two dots
+        // just to the LEFT and just ABOVE it.
+        const here  = stackedNoise(ROCK_LAYERS, u, v);
+        const left  = stackedNoise(ROCK_LAYERS, u - ONE_DOT, v);
+        const above = stackedNoise(ROCK_LAYERS, u, v - ONE_DOT);
+
+        // THE BUMPY TRICK:
+        // If this dot is higher than its neighbours, we're on the side
+        // of a bump that faces the torch - brighten it. If it's lower,
+        // we're on the far side, in the bump's own little shadow - darken it.
+        // Bright-next-to-dark is the entire reason your eyes see a lump.
+        const tilt = (here - left) + (here - above);
+
+        // Start at medium grey, then let the tilt push it light or dark.
+        let n = 0.52 + tilt * BUMP_STRENGTH;
+
+        // Mix in a little of the plain height too, so big areas of the
+        // wall still read as generally lighter or darker. Without this
+        // the rock is bumpy but weirdly flat overall.
+        n += (here - 0.5) * 0.30;
+
+        // Grit on top: tiny per-dot speckle, the sand and dust.
+        n += Math.random() * 0.10 - 0.05;
+
+        if (n < 0) n = 0;
+        if (n > 1) n = 1;
+
+        // Turn that one number into a damp brown-grey cave colour.
+        const bright = 40 + n * 135;
+        const i = (py * TEX_SIZE + px) * 4;
+        img.data[i]     = bright;          // red
+        img.data[i + 1] = bright * 0.87;   // green
+        img.data[i + 2] = bright * 0.74;   // blue
+        img.data[i + 3] = 255;             // fully solid
+      }
+    }
+
+    t.putImageData(img, 0, 0);
+    return c;
+  }
+
+  const stoneTexture = makeStoneTexture();
+
+  // Keep the stone crisp and blocky when it gets stretched, instead of
+  // letting the browser smear it into mush. Also: faster.
+  ctx.imageSmoothingEnabled = false;
+
+  const TEX_AREA = TEX_SIZE * TEX_SIZE;
+
+  // PRE-MIXING THE PAINT.
+  // The floor needs a colour for every single dot on screen, 60 times a
+  // second. Working out "this rock, but 37% darker" that many times would
+  // be way too slow. So instead we do it ONCE, right now: we mix up 32
+  // ready-made copies of the rock, from fully lit down to pitch black.
+  // Then during the game we just grab the one we need. Doing slow work
+  // early so you don't have to do it later is called a lookup table, and
+  // it's one of the oldest tricks in games.
+  const SHADES = 32;
+  const shadeTable = new Uint32Array(SHADES * TEX_AREA);
+
+  (function mixTheShades() {
+    const raw = stoneTexture.getContext('2d')
+                            .getImageData(0, 0, TEX_SIZE, TEX_SIZE).data;
+
+    for (let s = 0; s < SHADES; s++) {
+      const light = s / (SHADES - 1);       // 0 = black, 1 = full brightness
+      const offset = s * TEX_AREA;
+
+      for (let i = 0; i < TEX_AREA; i++) {
+        const r = (raw[i * 4]     * light) | 0;
+        const g = (raw[i * 4 + 1] * light) | 0;
+        const b = (raw[i * 4 + 2] * light) | 0;
+        // Squashed into one number: alpha, blue, green, red.
+        shadeTable[offset + i] = (255 << 24) | (b << 16) | (g << 8) | r;
+      }
+    }
+  })();
+
+  // Our own private sheet of pixels. We paint the floor and ceiling into
+  // this by hand, dot by dot, then slap the whole thing onto the canvas
+  // in one go. Much faster than asking the canvas to draw 480,000 times.
+  const frame = ctx.createImageData(canvas.width, canvas.height);
+  const frame32 = new Uint32Array(frame.data.buffer);
+  frame32.fill(0xFF000000);   // start it all opaque black
+
+
+  // --- 7b. THINGS IN THE CAVERN ---------------------------------------
+  // Chests and cobwebs. Same idea as the stone: no picture files, we
+  // draw them ourselves when the game starts.
+
+  const SPR_SIZE = 64;
+
+  // A blank see-through square to draw a thing onto. Anywhere we don't
+  // paint stays transparent, so you see the cavern behind it.
+  function blankSprite() {
+    const c = document.createElement('canvas');
+    c.width = SPR_SIZE;
+    c.height = SPR_SIZE;
+    return c;
+  }
+
+  function makeWebTexture() {
+    const c = blankSprite();
+    const t = c.getContext('2d');
+    t.strokeStyle = 'rgba(226, 231, 240, 0.7)';
+    t.lineWidth = 1;
+
+    // The web hangs from a single point up top and fans out downward.
+    const ANCHOR_X = SPR_SIZE / 2;
+    const ANCHOR_Y = 1;
+    const SPOKES = 9;
+    const REACH = SPR_SIZE * 1.15;
+
+    // The straight threads, fanning from right, round through down, to left.
+    const angles = [];
+    for (let i = 0; i < SPOKES; i++) {
+      angles.push(Math.PI * (0.08 + 0.84 * (i / (SPOKES - 1))));
+    }
+    for (const a of angles) {
+      t.beginPath();
+      t.moveTo(ANCHOR_X, ANCHOR_Y);
+      t.lineTo(ANCHOR_X + Math.cos(a) * REACH, ANCHOR_Y + Math.sin(a) * REACH);
+      t.stroke();
+    }
+
+    // The threads strung ACROSS the spokes, going round in rings. Each
+    // one wobbles in and out a bit at random - a perfectly even web looks
+    // machine-made, and spiders are not machines.
+    for (let ring = 9; ring < REACH; ring += 8) {
+      t.beginPath();
+      for (let i = 0; i < SPOKES; i++) {
+        const wobble = ring * (0.88 + Math.random() * 0.24);
+        const x = ANCHOR_X + Math.cos(angles[i]) * wobble;
+        const y = ANCHOR_Y + Math.sin(angles[i]) * wobble;
+        if (i === 0) t.moveTo(x, y); else t.lineTo(x, y);
+      }
+      t.stroke();
+    }
+
+    return c;
+  }
+
+  // Same pre-mixing idea as the floor, but these have see-through bits,
+  // so we can't just splash black over the top - that would darken the
+  // holes too. 'source-atop' means "only paint where there's already
+  // something", which leaves the see-through parts alone.
+  const SPRITE_SHADES = 16;
+
+  function makeShadedCopies(source) {
+    const copies = [];
+    for (let s = 0; s < SPRITE_SHADES; s++) {
+      const light = s / (SPRITE_SHADES - 1);
+      // Match whatever size we were handed, instead of always assuming
+      // 64. Cobwebs are 64, but item pictures are 48, and this same
+      // function now has to shade both.
+      const c = document.createElement('canvas');
+      c.width = source.width;
+      c.height = source.height;
+      const t = c.getContext('2d');
+      t.drawImage(source, 0, 0);
+      t.globalCompositeOperation = 'source-atop';
+      t.fillStyle = 'rgba(0, 0, 0, ' + (1 - light) + ')';
+      t.fillRect(0, 0, c.width, c.height);
+      copies.push(c);
+    }
+    return copies;
+  }
+
+  // What each kind of thing looks like and how it sits in the world.
+  //   scale   - how big, as a fraction of a map square
+  //   vOffset - how far down from eye level its middle sits.
+  //             +0.5 is the floor, -0.5 is the ceiling.
+  // Only the web is a flat picture now. Chests got promoted to real 3D,
+  // down in section 7d.
+  const SPRITE_KINDS = {
+    web: {
+      shades: makeShadedCopies(makeWebTexture()),
+      scale: 0.75,
+      vOffset: -0.5 + 0.75 / 2,    // hangs FROM the ceiling
+    },
+  };
+
+  // (The spider used to be two flat pictures here. It's real 3D now -
+  // see section 7d2 - so the pictures have gone.)
+
+
+  // --- 7c. SCATTERING THEM AROUND --------------------------------------
+
+  const CHEST_COUNT = 5;
+  const WEB_COUNT = 12;
+  const SPIDER_COUNT = 5;
+
+  // What a chest can be hiding. Add a word here and chests can drop it -
+  // as long as there's a picture for it over in ITEMS.
+  // The knife is in here now instead of in your pockets at the start.
+  // You begin with a pistol, and the pistol kills spiders but does
+  // nothing to webs - so until you find a knife in a chest, there are
+  // tunnels you simply can't clear. Two tools, two jobs.
+  // The shotgun lives in here rather than in your pockets at the start.
+  // It kills anything in one go, so finding one has to be a moment -
+  // and something you're given for free stops being exciting instantly.
+  const LOOT_TYPES = ['shotgun', 'machinegun', 'knife', 'flashlight', 'gem', 'bone'];
+
+  const sprites = [];
+
+  (function scatterThings() {
+    // Collect every open floor square in the whole cavern.
+    const spots = [];
+    for (let row = 0; row < MAP_H; row++) {
+      for (let col = 0; col < MAP_W; col++) {
+        // Skip rock, and skip the square you start on - finding a chest
+        // wedged in your face on frame one is a rubbish way to begin.
+        if (MAP[row][col] !== '.') continue;
+        if (col === 1 && row === 1) continue;
+        spots.push({ col: col, row: row });
+      }
+    }
+
+    // SHUFFLE. Walk backwards through the list and swap each square with
+    // a random earlier one. Deal the whole deck, then take from the top -
+    // that way nothing can ever get picked twice.
+    for (let i = spots.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      const keep = spots[i];
+      spots[i] = spots[j];
+      spots[j] = keep;
+    }
+
+    // Take from the top of the shuffled deck. The +0.5 puts each thing
+    // in the MIDDLE of its square instead of jammed in the corner.
+    let next = 0;
+    for (let i = 0; i < CHEST_COUNT && next < spots.length; i++, next++) {
+      // Every chest gets TWO new things it didn't have before: whether
+      // it's been opened, and what's hiding inside. The loot is decided
+      // right now, at the start - not at the moment you open it. Same
+      // result either way, but this means the cavern is already
+      // completely decided before you take a single step. It's not
+      // making things up as you go along; you're finding out.
+      sprites.push({
+        x: spots[next].col + 0.5,
+        y: spots[next].row + 0.5,
+        kind: 'chest',
+        opened: false,
+        loot: LOOT_TYPES[Math.floor(Math.random() * LOOT_TYPES.length)],
+      });
+    }
+    for (let i = 0; i < WEB_COUNT && next < spots.length; i++, next++) {
+      sprites.push({ x: spots[next].col + 0.5, y: spots[next].row + 0.5, kind: 'web' });
+    }
+
+    // Spiders, but never anywhere near where you start. Being bitten
+    // before you've worked out which way is forward isn't difficulty,
+    // it's just unfair - and unfair is the one thing a game can't be.
+    for (let i = 0; i < SPIDER_COUNT; i++) {
+      while (next < spots.length) {
+        const sx = spots[next].col + 0.5 - 1.5;
+        const sy = spots[next].row + 0.5 - 1.5;
+        if (sx * sx + sy * sy > 30) break;    // at least ~5 squares off
+        next++;
+      }
+      if (next >= spots.length) break;
+
+      sprites.push({
+        // Nudged off the middle of its square, so three spiders never
+        // line up in a suspiciously tidy way.
+        x: spots[next].col + 0.5 + (Math.random() - 0.5) * 0.5,
+        y: spots[next].row + 0.5 + (Math.random() - 0.5) * 0.5,
+        kind: 'spider',
+        health: SPIDER_HEALTH,
+        nextBite: 0,      // the frame it's allowed to bite again
+        hurtUntil: 0,     // frame its white flash ends
+        step: Math.random() * 10,           // where it is in its scuttle
+        facing: Math.random() * Math.PI * 2,
+        wanderDir: Math.random() * Math.PI * 2,
+        wanderUntil: 0,
+      });
+      next++;
+    }
+  })();
+
+  // --- 7d. THE CHEST, IN ACTUAL 3D -------------------------------------
+  // A cobweb really is a flat thing, so a flat picture is honest.
+  // A chest isn't. So we build a real one.
+  //
+  // The idea: a box has eight corners. We know exactly where each corner
+  // sits in the cavern. Our camera can turn any spot in the cavern into a
+  // spot on your screen. So: turn all eight corners into eight screen
+  // spots, then fill in the flat panels stretched between them. That's
+  // real 3D - walk around it and different sides genuinely come into view.
+
+  // THE BODY: a plain box. Heights measured UP from the floor.
+  const CHEST_HALF = 0.200;    // how far it reaches out from its middle
+  const CHEST_TOP  = 0.30;     // how tall the body stands
+  const CHEST_WOOD = [126, 78, 40];
+
+  // The four walls of the body. Each one knows which way it faces, and
+  // which two bottom corners it stretches between.
+  const CHEST_SIDES = [
+    { nx:  0, ny: -1, from: [-1, -1], to: [ 1, -1] },
+    { nx:  1, ny:  0, from: [ 1, -1], to: [ 1,  1] },
+    { nx:  0, ny:  1, from: [ 1,  1], to: [-1,  1] },
+    { nx: -1, ny:  0, from: [-1,  1], to: [-1, -1] },
+  ];
+
+  // THE LID: not a box. Real treasure chests have a barrel-shaped lid,
+  // and that curve is most of what makes one look like treasure instead
+  // of like a crate.
+  //
+  // You can't build a real curve out of flat panels - so we cheat the way
+  // every 3D game cheats. We lay down a row of thin strips, each tilted a
+  // little more than the last, bending over the top. Use enough strips
+  // and your eye stops seeing the steps and just sees a curve.
+  const LID_HALF   = 0.235;    // slightly wider than the body: an overhang
+  const LID_BASE   = 0.30;     // sits right on top of the body
+  const LID_RISE   = 0.17;     // how high the curve humps up
+  const LID_STRIPS = 9;        // more strips = smoother. Try 2. Then 30.
+  const LID_WOOD   = [148, 96, 50];
+
+  // How far the shadow spreads on the floor underneath.
+  const CHEST_SHADOW = 0.30;
+
+  // How far the lid swings when the chest is opened, in radians.
+  // About -1.9 is a bit past straight up, so it tips back and rests.
+  const LID_OPEN = -1.9;
+
+  // WOOD GRAIN. A set of dark streaks running along the planks.
+  //
+  // These get rolled ONCE, right now, and then reused forever. If we
+  // rolled fresh ones every frame the grain would crawl and shimmer like
+  // the wood was alive. Randomness is great for BUILDING a thing and
+  // terrible for redrawing it - decide once, then keep your decision.
+  const WOOD_GRAIN = [];
+  (function growTheGrain() {
+    for (let i = 0; i < 16; i++) {
+      WOOD_GRAIN.push({
+        v: Math.random(),                        // how far up the plank
+        thick: 0.004 + Math.random() * 0.011,    // how fat the streak is
+        dark: 0.05 + Math.random() * 0.13,       // how strongly it shows
+        u0: Math.random() * 0.45,                // where it starts
+        u1: 0.55 + Math.random() * 0.45,         // where it peters out
+      });
+    }
+  })();
+
+  // Find any spot ON a panel, given how far across (u) and how far up (v).
+  // The four corners are our anchors: slide along the bottom edge by u,
+  // slide along the top edge by u, then slide between those two by v.
+  // This is what lets us stick iron bands and a lock onto a panel and
+  // have them lean and stretch correctly as you walk around.
+  function facePoint(quad, u, v) {
+    const bottomX = quad[0].sx + (quad[1].sx - quad[0].sx) * u;
+    const bottomY = quad[0].sy + (quad[1].sy - quad[0].sy) * u;
+    const topX    = quad[3].sx + (quad[2].sx - quad[3].sx) * u;
+    const topY    = quad[3].sy + (quad[2].sy - quad[3].sy) * u;
+    return { x: bottomX + (topX - bottomX) * v,
+             y: bottomY + (topY - bottomY) * v };
+  }
+
+  // Paint a rectangle that lives ON a panel - so it tilts with the panel.
+  function paintOnFace(quad, u0, u1, v0, v1, colour) {
+    const a = facePoint(quad, u0, v0);
+    const b = facePoint(quad, u1, v0);
+    const c = facePoint(quad, u1, v1);
+    const d = facePoint(quad, u0, v1);
+    ctx.fillStyle = colour;
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.lineTo(c.x, c.y);
+    ctx.lineTo(d.x, d.y);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // TORCHLIGHT IS ORANGE, NOT WHITE.
+  // So brightly lit parts of the chest warm up toward yellow, and parts
+  // sinking into shadow cool down toward blue. Real light does this and
+  // your eye quietly expects it. A shadow that's just "same colour but
+  // darker" is one of the biggest tells that a computer drew something.
+  function torchShade(colour, amount) {
+    if (amount > 1) amount = 1;
+    if (amount < 0) amount = 0;
+
+    // Lit -> warm and yellowy. Dark -> cool and blueish.
+    const warmR = 0.80 + 0.34 * amount;
+    const warmG = 0.86 + 0.16 * amount;
+    const warmB = 1.12 - 0.30 * amount;
+
+    let r = colour[0] * amount * warmR;
+    let g = colour[1] * amount * warmG;
+    let b = colour[2] * amount * warmB;
+    if (r > 255) r = 255;
+    if (g > 255) g = 255;
+    if (b > 255) b = 255;
+    return 'rgb(' + (r | 0) + ',' + (g | 0) + ',' + (b | 0) + ')';
+  }
+
+  function shadeOf(colour, amount) {
+    // Never let a colour run past full brightness - a red of 300 isn't a
+    // colour, it's a typo, and the browser just ignores the whole thing.
+    if (amount > 1) amount = 1;
+    if (amount < 0) amount = 0;
+    return 'rgb(' + ((colour[0] * amount) | 0) + ',' +
+                    ((colour[1] * amount) | 0) + ',' +
+                    ((colour[2] * amount) | 0) + ')';
+  }
+
+  function drawChest(thing, cam, depth) {
+    const W = canvas.width;
+    const H = canvas.height;
+
+    // Which direction are YOU from this chest? Panels turned toward you
+    // catch the torch; panels turned away sit in their own shadow.
+    // This is the whole reason it will look solid instead of painted.
+    let toMeX = state.x - thing.x;
+    let toMeY = state.y - thing.y;
+    const reach = Math.sqrt(toMeX * toMeX + toMeY * toMeY) || 1;
+    toMeX /= reach;
+    toMeY /= reach;
+
+    // How much torchlight reaches the chest as a whole. Used for the
+    // shadow, and for fading the fine detail away in the dark.
+    let torch = 1 - depth / TORCH_RANGE;
+    if (torch <= 0) return;          // pitch black - nothing to draw
+    if (torch > 1) torch = 1;
+
+    const bx = thing.x;
+    const by = thing.y;
+
+    // HOW BRIGHT IS ONE EXACT SPOT ON THE CHEST?
+    // It works out how far that spot is from you AND which way its
+    // surface is turned, both measured from where you're really standing.
+    //
+    // Doing this at every CORNER, instead of once for a whole panel, is
+    // the big one. You're carrying the torch - so the near edge of a
+    // panel is genuinely closer to the light than its far edge. One flat
+    // brightness per panel is exactly what makes things look like
+    // cardboard cut-outs.
+    function lightAt(wx, wy, nx, ny, upness) {
+      let dx = state.x - wx;
+      let dy = state.y - wy;
+      const away = Math.sqrt(dx * dx + dy * dy) || 1;
+      dx /= away;
+      dy /= away;
+
+      let facing = 0.26 + 0.74 * Math.max(0, nx * dx + ny * dy);
+
+      // Surfaces tilting skyward stop caring which way you're stood and
+      // settle into a steady glow instead.
+      if (upness > 0) facing = facing * (1 - upness) + 0.84 * upness;
+
+      let reach = 1 - away / TORCH_RANGE;
+      if (reach < 0) reach = 0;
+      return facing * reach;
+    }
+
+    const panels = [];
+    let ranOffScreen = false;
+
+    // Hand this a list of corners in the cavern and it works out where
+    // they land on screen, then files the finished panel away for later.
+    // litA and litB are the brightness at each END of the panel - the
+    // fill slides from one to the other.
+    function addPanel(worldCorners, opts) {
+      const pts = [];
+      let depthSum = 0;
+      for (const corner of worldCorners) {
+        // 0.5 is floor level, measured DOWN from your eyes.
+        const spot = cam.project(corner[0], corner[1], 0.5 - corner[2]);
+        if (spot === null) { ranOffScreen = true; return null; }
+        pts.push(spot);
+        depthSum += spot.depth;
+      }
+      const panel = {
+        pts: pts,
+        depth: depthSum / pts.length,
+        colour: opts.colour,
+        kind: opts.kind,
+        litA: opts.litA,
+        litB: opts.litB,
+        gradA: opts.gradA,
+        gradB: opts.gradB,
+      };
+      panels.push(panel);
+      return panel;
+    }
+
+    // ---- the four walls of the body ----
+    let frontPanel = null;
+    let frontFacing = -1;
+
+    for (const side of CHEST_SIDES) {
+      // BACKFACE CULLING. Are you actually stood on the outside of this
+      // wall? If not, you're looking at its back - which means the rest of
+      // the chest is in the way, so don't draw it at all. Every real 3D
+      // engine does this. It's faster, and it means a dark back panel can
+      // never accidentally land on top of the bits you're meant to see.
+      if (side.nx * (state.x - bx) + side.ny * (state.y - by) <= CHEST_HALF) {
+        continue;
+      }
+
+      const ax = bx + side.from[0] * CHEST_HALF;
+      const ay = by + side.from[1] * CHEST_HALF;
+      const cx = bx + side.to[0] * CHEST_HALF;
+      const cy = by + side.to[1] * CHEST_HALF;
+
+      // Light measured at BOTH ends of the wall, so brightness can slide
+      // across it instead of jumping from panel to panel.
+      const litA = lightAt(ax, ay, side.nx, side.ny, 0);
+      const litB = lightAt(cx, cy, side.nx, side.ny, 0);
+
+      // Corners go round: bottom-left, bottom-right, top-right, top-left.
+      const panel = addPanel(
+        [[ax, ay, 0], [cx, cy, 0], [cx, cy, CHEST_TOP], [ax, ay, CHEST_TOP]],
+        { colour: CHEST_WOOD, kind: 'side', litA: litA, litB: litB,
+          gradA: [0, 3], gradB: [1, 2] });
+      if (ranOffScreen) return;
+
+      // Remember whichever wall points most directly at you. That's the
+      // front, and that's where the lock belongs.
+      const facingMe = side.nx * toMeX + side.ny * toMeY;
+      if (facingMe > frontFacing) {
+        frontFacing = facingMe;
+        frontPanel = panel;
+      }
+    }
+
+    // THE HINGE. A real lid doesn't lift straight up - it swings round a
+    // rod along its back edge. So to open it we spin every point of the
+    // lid around that one line. Points near the hinge barely move; the
+    // front edge swings up and right over the top. That's what a hinge IS,
+    // written down as sums.
+    const hingeY = by + LID_HALF;
+    const swingCos = Math.cos(LID_OPEN);
+    const swingSin = Math.sin(LID_OPEN);
+
+    function swingY(y, h) {
+      if (!thing.opened) return y;
+      return hingeY + (y - hingeY) * swingCos - (h - LID_BASE) * swingSin;
+    }
+    function swingH(y, h) {
+      if (!thing.opened) return h;
+      return LID_BASE + (y - hingeY) * swingSin + (h - LID_BASE) * swingCos;
+    }
+
+    // ---- the curved lid, one strip at a time ----
+    for (let i = 0; i < LID_STRIPS; i++) {
+      // Sweep an angle from one side of the lid, up over the hump, and
+      // down the other side. Each strip covers a small slice of that turn.
+      const angleA = Math.PI * i / LID_STRIPS;
+      const angleB = Math.PI * (i + 1) / LID_STRIPS;
+
+      const shutYA = by - Math.cos(angleA) * LID_HALF;
+      const shutYB = by - Math.cos(angleB) * LID_HALF;
+      const shutHA = LID_BASE + Math.sin(angleA) * LID_RISE;
+      const shutHB = LID_BASE + Math.sin(angleB) * LID_RISE;
+
+      const yA = swingY(shutYA, shutHA), hA = swingH(shutYA, shutHA);
+      const yB = swingY(shutYB, shutHB), hB = swingH(shutYB, shutHB);
+
+      // Same backface test, but this strip can tilt UP as well as
+      // sideways - so we check the up-and-down direction too. Your eyes
+      // sit half a square off the floor, which is above the whole lid,
+      // so you're looking down on it.
+      //
+      // Skipped entirely once the lid is open: a thrown-back lid is a
+      // thin shell and you can genuinely see BOTH sides of it, so hiding
+      // the back would just punch holes in it.
+      if (!thing.opened) {
+        const middle = (angleA + angleB) / 2;
+        const midY = by - Math.cos(middle) * LID_HALF;
+        const midH = LID_BASE + Math.sin(middle) * LID_RISE;
+        const outward = -Math.cos(middle) * (state.y - midY)
+                      +  Math.sin(middle) * (0.5 - midH);
+        if (outward <= 0) continue;
+      }
+
+      // Each EDGE of the strip gets its own brightness, worked out from
+      // the way the lid is tilted right at that edge. Because neighbouring
+      // strips share an edge, they agree on the brightness there - so the
+      // steps between them vanish and the dome shades like one smooth
+      // surface. This is the trick that makes the lid look truly round.
+      const litA = lightAt(bx, yA, 0, -Math.cos(angleA), Math.sin(angleA));
+      const litB = lightAt(bx, yB, 0, -Math.cos(angleB), Math.sin(angleB));
+
+      addPanel([[bx - LID_HALF, yA, hA], [bx + LID_HALF, yA, hA],
+                [bx + LID_HALF, yB, hB], [bx - LID_HALF, yB, hB]],
+               { colour: LID_WOOD, kind: 'lid', litA: litA, litB: litB,
+                 gradA: [0, 1], gradB: [3, 2] });
+      if (ranOffScreen) return;
+    }
+
+    // ---- once it's open you can see down inside it ----
+    if (thing.opened) {
+      addPanel([[bx - CHEST_HALF, by - CHEST_HALF, CHEST_TOP],
+                [bx + CHEST_HALF, by - CHEST_HALF, CHEST_TOP],
+                [bx + CHEST_HALF, by + CHEST_HALF, CHEST_TOP],
+                [bx - CHEST_HALF, by + CHEST_HALF, CHEST_TOP]],
+               { colour: [46, 30, 18], kind: 'inside',
+                 litA: 0.55, litB: 0.55 });
+      if (ranOffScreen) return;
+    }
+
+    // ---- the two flat ends of the lid, so it isn't a hollow tube ----
+    for (const end of [-1, 1]) {
+      // Only the near end of the lid is ever visible.
+      if (end * (state.x - bx) <= LID_HALF) continue;
+
+      const arc = [];
+      for (let i = 0; i <= LID_STRIPS; i++) {
+        const a = Math.PI * i / LID_STRIPS;
+        const shutY = by - Math.cos(a) * LID_HALF;
+        const shutH = LID_BASE + Math.sin(a) * LID_RISE;
+        // The ends swing on the same hinge as the rest of the lid.
+        arc.push([bx + end * LID_HALF,
+                  swingY(shutY, shutH),
+                  swingH(shutY, shutH)]);
+      }
+      const lit = lightAt(bx + end * LID_HALF, by, end, 0, 0);
+      addPanel(arc, { colour: LID_WOOD, kind: 'cap', litA: lit, litB: lit });
+      if (ranOffScreen) return;
+    }
+
+    // ---- the shadow it casts on the floor ----
+    const shadow = [];
+    for (const corner of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+      const spot = cam.project(bx + corner[0] * CHEST_SHADOW,
+                               by + corner[1] * CHEST_SHADOW, 0.5);
+      if (spot === null) return;
+      shadow.push(spot);
+    }
+
+    // Which columns of the screen is this chest even allowed in? Only the
+    // ones where it's nearer than the wall behind it. We hand the canvas
+    // that list of columns as a stencil, and it refuses to paint outside.
+    let minX = Infinity, maxX = -Infinity;
+    for (const panel of panels) {
+      for (const point of panel.pts) {
+        if (point.sx < minX) minX = point.sx;
+        if (point.sx > maxX) maxX = point.sx;
+      }
+    }
+    const fromX = Math.max(0, Math.floor(minX));
+    const toX = Math.min(W - 1, Math.ceil(maxX));
+    if (toX < fromX) return;
+
+    ctx.save();
+    ctx.beginPath();
+    let runStart = -1;
+    for (let x = fromX; x <= toX + 1; x++) {
+      const visible = (x <= toX) && (depth < zBuffer[x]);
+      if (visible && runStart < 0) runStart = x;
+      if (!visible && runStart >= 0) {
+        ctx.rect(runStart, 0, x - runStart, H);
+        runStart = -1;
+      }
+    }
+    ctx.clip();
+
+    // Shadow goes down FIRST, because everything else sits on top of it.
+    // And a real shadow isn't a hard-edged shape - it's darkest right
+    // under the object and fades out toward its edges. That soft fade is
+    // doing a lot of quiet work. Your brain checks for it without ever
+    // telling you, and if it's missing, things look like they're hovering.
+    let shadowX = 0, shadowY = 0;
+    for (const point of shadow) { shadowX += point.sx; shadowY += point.sy; }
+    shadowX /= shadow.length;
+    shadowY /= shadow.length;
+
+    let shadowR = 1;
+    for (const point of shadow) {
+      const outX = point.sx - shadowX;
+      const outY = point.sy - shadowY;
+      const out = Math.sqrt(outX * outX + outY * outY);
+      if (out > shadowR) shadowR = out;
+    }
+
+    const shadowFade = ctx.createRadialGradient(shadowX, shadowY, 0,
+                                                shadowX, shadowY, shadowR);
+    shadowFade.addColorStop(0, 'rgba(0, 0, 0, ' + (0.7 * torch) + ')');
+    shadowFade.addColorStop(1, 'rgba(0, 0, 0, 0)');
+
+    ctx.beginPath();
+    ctx.moveTo(shadow[0].sx, shadow[0].sy);
+    for (let i = 1; i < shadow.length; i++) ctx.lineTo(shadow[i].sx, shadow[i].sy);
+    ctx.closePath();
+    ctx.fillStyle = shadowFade;
+    ctx.fill();
+
+    // Furthest panels first, nearer ones painted over the top. Same
+    // painter's trick as before, only now inside a single chest.
+    panels.sort((a, b) => b.depth - a.depth);
+
+    for (const panel of panels) {
+      const pts = panel.pts;
+
+      ctx.beginPath();
+      ctx.moveTo(pts[0].sx, pts[0].sy);
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].sx, pts[i].sy);
+      ctx.closePath();
+
+      // Fill with a slide from one edge's brightness to the other's,
+      // rather than one flat tone across the whole panel.
+      //
+      // THE TRAP: if a gradient's start and end land on the same spot,
+      // the canvas paints NOTHING AT ALL. Not black - nothing. And when
+      // the chest is far away and small, both ends round to the same
+      // pixel... so the whole chest turned into a chest-shaped hole with
+      // the dark cave showing through. That was the black chest.
+      // So: if the two ends are basically touching, just fill it flat.
+      let filled = false;
+      if (panel.gradA) {
+        const a0 = pts[panel.gradA[0]], a1 = pts[panel.gradA[1]];
+        const b0 = pts[panel.gradB[0]], b1 = pts[panel.gradB[1]];
+        const x0 = (a0.sx + a1.sx) / 2, y0 = (a0.sy + a1.sy) / 2;
+        const x1 = (b0.sx + b1.sx) / 2, y1 = (b0.sy + b1.sy) / 2;
+        const span = Math.abs(x1 - x0) + Math.abs(y1 - y0);
+
+        if (span > 0.75 && isFinite(span)) {
+          const slide = ctx.createLinearGradient(x0, y0, x1, y1);
+          slide.addColorStop(0, torchShade(panel.colour, panel.litA));
+          slide.addColorStop(1, torchShade(panel.colour, panel.litB));
+          ctx.fillStyle = slide;
+          filled = true;
+        }
+      }
+      if (!filled) {
+        ctx.fillStyle = torchShade(panel.colour,
+                                   (panel.litA + panel.litB) / 2);
+      }
+      ctx.fill();
+
+      // Outline the body and the lid ends - but NOT the lid strips. Lining
+      // every strip would draw a ladder of stripes up the curve and undo
+      // the whole illusion. The curve has to look seamless.
+      if (panel.kind !== 'lid') {
+        ctx.strokeStyle = 'rgba(0, 0, 0, ' + (0.5 * torch) + ')';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+
+      const lit = (panel.litA + panel.litB) / 2;
+
+      if (panel.kind === 'side') {
+        // The grain in the wood. Same streaks every frame - see the note
+        // up where WOOD_GRAIN gets made for why that matters.
+        for (const streak of WOOD_GRAIN) {
+          paintOnFace(pts, streak.u0, streak.u1,
+                      streak.v, streak.v + streak.thick,
+                      'rgba(54, 30, 12, ' + (streak.dark * torch) + ')');
+        }
+
+        // Seams between the planks. Thin, dark, and they lean with the
+        // wall - because they're stuck ON the wall, not painted over it.
+        const seam = 'rgba(0, 0, 0, ' + (0.34 * torch) + ')';
+        paintOnFace(pts, 0, 1, 0.335, 0.365, seam);
+        paintOnFace(pts, 0, 1, 0.665, 0.695, seam);
+
+        // Two iron bands strapped down the sides...
+        const iron = torchShade([148, 148, 160], lit);
+        paintOnFace(pts, 0.10, 0.21, 0, 1, iron);
+        paintOnFace(pts, 0.79, 0.90, 0, 1, iron);
+
+        // ...with a hard bright line down one edge of each. Metal catches
+        // light in a narrow glint like that, and wood doesn't. That single
+        // difference is most of what tells your eye "iron" instead of
+        // "grey paint" - shape and colour barely come into it.
+        const glint = torchShade([230, 230, 244], lit * 1.6);
+        paintOnFace(pts, 0.104, 0.129, 0, 1, glint);
+        paintOnFace(pts, 0.794, 0.819, 0, 1, glint);
+
+        // ...and the nail heads hammered through them.
+        const stud = torchShade([202, 202, 214], lit);
+        const studTop = torchShade([238, 238, 250], lit * 1.5);
+        for (const v of [0.13, 0.5, 0.87]) {
+          paintOnFace(pts, 0.132, 0.178, v - 0.035, v + 0.035, stud);
+          paintOnFace(pts, 0.822, 0.868, v - 0.035, v + 0.035, stud);
+          // A speck of light on top of each nail. Tiny. Worth it.
+          paintOnFace(pts, 0.140, 0.154, v - 0.022, v - 0.006, studTop);
+          paintOnFace(pts, 0.830, 0.844, v - 0.022, v - 0.006, studTop);
+        }
+      }
+    }
+
+    // The gold lock, on whichever wall is facing you most, up near the
+    // top where it would really meet the lid.
+    if (frontPanel) {
+      const lit = (frontPanel.litA + frontPanel.litB) / 2;
+      paintOnFace(frontPanel.pts, 0.42, 0.58, 0.68, 0.97,
+                  torchShade([226, 182, 44], lit));
+      // Gold is shiny, so it gets a glint too - along the top edge, where
+      // light would land on a plate standing proud of the wood.
+      paintOnFace(frontPanel.pts, 0.42, 0.58, 0.68, 0.72,
+                  torchShade([255, 226, 120], lit * 1.5));
+      // The keyhole.
+      paintOnFace(frontPanel.pts, 0.475, 0.525, 0.77, 0.90,
+                  torchShade([48, 34, 12], lit));
+    }
+
+    ctx.restore();
+  }
+
+
+  // --- 7d2. THE SPIDER, IN ACTUAL 3D ------------------------------------
+  // It used to be a flat picture that spun to face you. A cobweb can get
+  // away with that, because a cobweb really is flat. A spider absolutely
+  // cannot - it has a fat body, a head, and eight legs arching up and out,
+  // and every one of those changes shape as it turns.
+  //
+  // So it's built out of TUBES now: a tapered tube from one point in the
+  // cavern to another. Body, head, sixteen leg segments, eyes. Same idea
+  // as the hand, except these live in the world instead of on your face.
+
+  const SPIDER_SIZE = 1.15;      // overall size. Crank it. It's horrible.
+
+  const SPIDER_BODY = [40, 30, 36];
+  const SPIDER_HEAD = [54, 40, 47];
+  const SPIDER_LEG  = [28, 21, 26];
+  const SPIDER_EYE  = [255, 74, 74];
+
+  function drawSpider(thing, cam, depth) {
+    const W = canvas.width;
+    const H = canvas.height;
+
+    let torch = 1 - depth / TORCH_RANGE;
+    if (torch <= 0) return;        // too far off to see at all
+    if (torch > 1) torch = 1;
+
+    const flashing = state.frame < thing.hurtUntil;
+    const panels = [];
+    let ranOffScreen = false;
+
+    // Which way it's pointing, and which way is sideways from that.
+    const faceX = Math.cos(thing.facing);
+    const faceY = Math.sin(thing.facing);
+    const sideX = -faceY;
+    const sideY = faceX;
+
+    // Turn "this far forward, this far to the side, this high off the
+    // floor" into a real spot in the cavern. Everything below is written
+    // in the spider's OWN directions - so when it turns, the whole animal
+    // turns with it and not one number down there has to change.
+    function at(fwd, side, high) {
+      return [thing.x + faceX * fwd + sideX * side,
+              thing.y + faceY * fwd + sideY * side,
+              high];
+    }
+
+    // ONE TAPERED TUBE, from a to b, in full 3D.
+    //
+    // A leg points out AND down at the same time, so unlike the hand we
+    // can't just work sideways in a flat plane. We need two directions
+    // that are both square-on to the tube. The cross product hands you
+    // one: give it two directions and it points at right angles to both.
+    // Do it twice and you've got a proper ring to build the tube around.
+    function addTube(a, b, ra, rb, colour, sides) {
+      let ax = b[0] - a[0], ay = b[1] - a[1], az = b[2] - a[2];
+      const len = Math.sqrt(ax * ax + ay * ay + az * az) || 1;
+      ax /= len; ay /= len; az /= len;
+
+      // Any direction that isn't along the tube. Straight up works,
+      // unless the tube itself is pointing straight up - then use across.
+      let ux = 0, uy = 0, uz = 1;
+      if (Math.abs(az) > 0.9) { ux = 1; uz = 0; }
+
+      let q1x = ay * uz - az * uy;
+      let q1y = az * ux - ax * uz;
+      let q1z = ax * uy - ay * ux;
+      const q1len = Math.sqrt(q1x * q1x + q1y * q1y + q1z * q1z) || 1;
+      q1x /= q1len; q1y /= q1len; q1z /= q1len;
+
+      const q2x = ay * q1z - az * q1y;
+      const q2y = az * q1x - ax * q1z;
+      const q2z = ax * q1y - ay * q1x;
+
+      const ringA = [], ringB = [], outward = [];
+      for (let k = 0; k < sides; k++) {
+        const turn = (Math.PI * 2 * k) / sides;
+        const c = Math.cos(turn), s = Math.sin(turn);
+        const nx = q1x * c + q2x * s;
+        const ny = q1y * c + q2y * s;
+        const nz = q1z * c + q2z * s;
+        outward.push([nx, ny]);
+        ringA.push([a[0] + nx * ra, a[1] + ny * ra, a[2] + nz * ra]);
+        ringB.push([b[0] + nx * rb, b[1] + ny * rb, b[2] + nz * rb]);
+      }
+
+      for (let k = 0; k < sides; k++) {
+        const k2 = (k + 1) % sides;
+        const corners = [ringA[k], ringA[k2], ringB[k2], ringB[k]];
+
+        const pts = [];
+        let depthSum = 0;
+        for (const corner of corners) {
+          // 0.5 is floor level, measured DOWN from your eyes - so a
+          // height ABOVE the floor has to be taken off it.
+          const spot = cam.project(corner[0], corner[1], 0.5 - corner[2]);
+          if (spot === null) { ranOffScreen = true; return; }
+          pts.push(spot);
+          depthSum += spot.depth;
+        }
+
+        // Your torch is at your eye, so panels turned toward you are lit.
+        const midX = (corners[0][0] + corners[2][0]) / 2;
+        const midY = (corners[0][1] + corners[2][1]) / 2;
+        let toMeX = state.x - midX;
+        let toMeY = state.y - midY;
+        const away = Math.sqrt(toMeX * toMeX + toMeY * toMeY) || 1;
+        toMeX /= away; toMeY /= away;
+
+        const nx = (outward[k][0] + outward[k2][0]) / 2;
+        const ny = (outward[k][1] + outward[k2][1]) / 2;
+        const facing = Math.max(0, nx * toMeX + ny * toMeY);
+
+        panels.push({
+          pts: pts,
+          depth: depthSum / 4,
+          lit: (0.28 + 0.72 * facing) * torch,
+          colour: colour,
+        });
+      }
+    }
+
+    const S = SPIDER_SIZE;
+
+    // ---- the fat back end and the head ----
+    addTube(at(-0.27 * S, 0, 0.20 * S), at(-0.03 * S, 0, 0.22 * S),
+            0.135 * S, 0.100 * S, SPIDER_BODY, 6);
+    if (ranOffScreen) return;
+
+    addTube(at(-0.03 * S, 0, 0.22 * S), at(0.16 * S, 0, 0.19 * S),
+            0.100 * S, 0.070 * S, SPIDER_HEAD, 6);
+    if (ranOffScreen) return;
+
+    // ---- eight legs, arching UP from the body then down to the floor ----
+    // That arch is the whole silhouette of a spider. A leg that goes
+    // straight out sideways looks like a crab.
+    for (let side = -1; side <= 1; side += 2) {
+      for (let i = 0; i < 4; i++) {
+        // Alternate legs lift, and the two sides are out of step with
+        // each other - which is how eight legs walk without tangling.
+        const beat = ((i + (side > 0 ? 1 : 0)) % 2) ? 0 : Math.PI;
+        const lift = Math.sin(thing.step * 8 + beat) * 0.055 * S;
+
+        const hipFwd = 0.10 * S - i * 0.075 * S;
+
+        const hip  = at(hipFwd, side * 0.09 * S, 0.20 * S);
+        const knee = at(hipFwd + 0.05 * S, side * 0.27 * S, 0.35 * S + lift);
+        const foot = at(hipFwd - 0.03 * S, side * 0.42 * S,
+                        0.02 * S + Math.max(0, lift) * 1.6);
+
+        addTube(hip, knee, 0.030 * S, 0.024 * S, SPIDER_LEG, 4);
+        if (ranOffScreen) return;
+        addTube(knee, foot, 0.024 * S, 0.011 * S, SPIDER_LEG, 4);
+        if (ranOffScreen) return;
+      }
+    }
+
+    // ---- eyes, poking out the front of the head ----
+    for (const eye of [[-0.052, 0.055], [0, 0.068], [0.052, 0.055],
+                       [-0.030, 0.020], [0.030, 0.020]]) {
+      const base = at(0.155 * S, eye[0] * S, (0.19 + eye[1]) * S);
+      const tip = [base[0] + faceX * 0.020 * S,
+                   base[1] + faceY * 0.020 * S,
+                   base[2]];
+      addTube(base, tip, 0.017 * S, 0.014 * S, SPIDER_EYE, 4);
+      if (ranOffScreen) return;
+    }
+
+    // Which columns is it allowed in? Only the ones where it's nearer
+    // than the wall - same stencil trick as the chests.
+    let minX = Infinity, maxX = -Infinity;
+    for (const panel of panels) {
+      for (const point of panel.pts) {
+        if (point.sx < minX) minX = point.sx;
+        if (point.sx > maxX) maxX = point.sx;
+      }
+    }
+    const fromX = Math.max(0, Math.floor(minX));
+    const toX = Math.min(W - 1, Math.ceil(maxX));
+    if (toX < fromX) return;
+
+    ctx.save();
+    ctx.beginPath();
+    let runStart = -1;
+    for (let x = fromX; x <= toX + 1; x++) {
+      const visible = (x <= toX) && (depth < zBuffer[x]);
+      if (visible && runStart < 0) runStart = x;
+      if (!visible && runStart >= 0) {
+        ctx.rect(runStart, 0, x - runStart, H);
+        runStart = -1;
+      }
+    }
+    ctx.clip();
+
+    panels.sort((a, b) => b.depth - a.depth);
+
+    for (const panel of panels) {
+      const pts = panel.pts;
+      ctx.beginPath();
+      ctx.moveTo(pts[0].sx, pts[0].sy);
+      for (let i = 1; i < 4; i++) ctx.lineTo(pts[i].sx, pts[i].sy);
+      ctx.closePath();
+
+      // Just been stabbed? Every panel goes white for a few frames.
+      ctx.fillStyle = flashing ? '#ffffff'
+                               : torchShade(panel.colour, panel.lit);
+      ctx.fill();
+      ctx.strokeStyle = ctx.fillStyle;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
+
+  // THE DEPTH BUFFER. One slot per column of the screen, holding how far
+  // away the wall in that column turned out to be. The walls fill it in,
+  // then the chests and webs read it to find out whether they're standing
+  // in front of that wall or hidden behind it.
+  const zBuffer = new Float32Array(canvas.width);
+
+
+  // --- 7e. THINGS YOU CAN CARRY ----------------------------------------
+
+  const ICON_SIZE = 48;
+
+  function makeKnifeIcon() {
+    const c = document.createElement('canvas');
+    c.width = ICON_SIZE;
+    c.height = ICON_SIZE;
+    const t = c.getContext('2d');
+
+    // THE BLADE. Straight along the top (that's the spine, the blunt bit
+    // you can safely rest a thumb on) and curved along the bottom (that's
+    // the cutting edge). That difference in the shape is what makes a
+    // drawing read as "knife" rather than "grey triangle".
+    t.fillStyle = '#c3c8d3';
+    t.beginPath();
+    t.moveTo(24, 18.5);
+    t.lineTo(40, 20.5);
+    t.quadraticCurveTo(44, 23, 40.5, 25.5);   // the point
+    t.quadraticCurveTo(33, 28.5, 24, 28.5);   // back along the edge
+    t.closePath();
+    t.fill();
+
+    // A bright line along the cutting edge. A sharp edge catches light in
+    // a thin hard streak - same glint trick as the iron on the chests.
+    t.strokeStyle = 'rgba(245, 248, 255, 0.9)';
+    t.lineWidth = 1;
+    t.beginPath();
+    t.moveTo(25, 27.6);
+    t.quadraticCurveTo(33, 27.6, 40, 24.8);
+    t.stroke();
+
+    // THE HANDLE. A rectangle plus a circle at the end to round it off.
+    t.fillStyle = '#8e2b24';
+    t.fillRect(11, 17, 14, 13);
+    t.beginPath();
+    t.arc(11, 23.5, 6.5, 0, Math.PI * 2);
+    t.fill();
+
+    // A pale strip along the top of the handle, as if the torch is above
+    // you. Same idea as the chest panels: light from one direction.
+    t.fillStyle = 'rgba(255, 255, 255, 0.16)';
+    t.fillRect(6, 18, 19, 3);
+
+    // The metal collar where the blade meets the handle. Real folding
+    // knives have one, and leaving it out makes the blade look glued on.
+    t.fillStyle = '#9aa0ab';
+    t.fillRect(22, 17, 3.5, 13);
+
+    // Two rivets holding the handle together.
+    t.fillStyle = '#cfd4de';
+    for (const rx of [12, 18.5]) {
+      t.beginPath();
+      t.arc(rx, 23.5, 1.6, 0, Math.PI * 2);
+      t.fill();
+    }
+
+    // Dark outline round the handle so it doesn't melt into the dark.
+    t.strokeStyle = 'rgba(0, 0, 0, 0.55)';
+    t.lineWidth = 1.5;
+    t.beginPath();
+    t.arc(11, 23.5, 6.5, Math.PI / 2, -Math.PI / 2);
+    t.lineTo(25, 17);
+    t.lineTo(25, 30);
+    t.closePath();
+    t.stroke();
+
+    return c;
+  }
+
+  function makeFlashlightIcon() {
+    const c = document.createElement('canvas');
+    c.width = ICON_SIZE;
+    c.height = ICON_SIZE;
+    const t = c.getContext('2d');
+
+    // The barrel.
+    t.fillStyle = '#3a3f46';
+    t.fillRect(13, 19, 23, 11);
+
+    // Grip ridges, so it doesn't read as a plain grey box.
+    t.fillStyle = 'rgba(0, 0, 0, 0.34)';
+    for (let x = 17; x < 34; x += 4) t.fillRect(x, 19, 1.5, 11);
+
+    // The head flares out toward the lens.
+    t.fillStyle = '#4c525b';
+    t.beginPath();
+    t.moveTo(36, 17);
+    t.lineTo(42, 13);
+    t.lineTo(42, 36);
+    t.lineTo(36, 32);
+    t.closePath();
+    t.fill();
+
+    // The lens, and the light spilling out of it. The spill is the bit
+    // that makes it read as a TORCH and not a grey tube.
+    t.fillStyle = '#ffd76b';
+    t.fillRect(40, 14, 3, 21);
+    t.fillStyle = 'rgba(255, 221, 130, 0.32)';
+    t.beginPath();
+    t.moveTo(43, 14);
+    t.lineTo(48, 8);
+    t.lineTo(48, 41);
+    t.lineTo(43, 35);
+    t.closePath();
+    t.fill();
+
+    // End cap.
+    t.fillStyle = '#23272c';
+    t.fillRect(10, 20, 4, 9);
+
+    t.strokeStyle = 'rgba(0, 0, 0, 0.55)';
+    t.lineWidth = 1.5;
+    t.strokeRect(13, 19, 23, 11);
+
+    return c;
+  }
+
+  function makeGemIcon() {
+    const c = document.createElement('canvas');
+    c.width = ICON_SIZE;
+    c.height = ICON_SIZE;
+    const t = c.getContext('2d');
+
+    // A gem is really just one diamond shape cut into a few flat patches
+    // of different brightness. Nothing is round, nothing is see-through -
+    // your eye does all the sparkling for you.
+    t.fillStyle = '#2f9fc4';
+    t.beginPath();
+    t.moveTo(24, 7); t.lineTo(38, 20); t.lineTo(24, 41); t.lineTo(10, 20);
+    t.closePath();
+    t.fill();
+
+    // Left side catches more light.
+    t.fillStyle = '#63d3ea';
+    t.beginPath();
+    t.moveTo(24, 7); t.lineTo(24, 41); t.lineTo(10, 20);
+    t.closePath();
+    t.fill();
+
+    // The flat top face, brightest of all.
+    t.fillStyle = '#aeeefa';
+    t.beginPath();
+    t.moveTo(24, 7); t.lineTo(38, 20); t.lineTo(24, 24); t.lineTo(10, 20);
+    t.closePath();
+    t.fill();
+
+    // One hard white speck. That's the whole sparkle.
+    t.fillStyle = 'rgba(255, 255, 255, 0.9)';
+    t.fillRect(18, 13, 3, 3);
+
+    t.strokeStyle = 'rgba(8, 46, 66, 0.65)';
+    t.lineWidth = 1.5;
+    t.beginPath();
+    t.moveTo(24, 7); t.lineTo(38, 20); t.lineTo(24, 41); t.lineTo(10, 20);
+    t.closePath();
+    t.stroke();
+
+    return c;
+  }
+
+  function makeBoneIcon() {
+    const c = document.createElement('canvas');
+    c.width = ICON_SIZE;
+    c.height = ICON_SIZE;
+    const t = c.getContext('2d');
+
+    // Four knobs and a shaft. Draw the knobs FIRST and the shaft over
+    // the top, so the outlines round the knobs don't cut across it.
+    t.fillStyle = '#e9e3d1';
+    t.strokeStyle = 'rgba(68, 60, 46, 0.55)';
+    t.lineWidth = 1.5;
+    for (const knob of [[15, 19], [15, 29], [33, 19], [33, 29]]) {
+      t.beginPath();
+      t.arc(knob[0], knob[1], 5.6, 0, Math.PI * 2);
+      t.fill();
+      t.stroke();
+    }
+
+    t.fillStyle = '#e9e3d1';
+    t.fillRect(15, 20.5, 18, 7);
+
+    // Top and bottom edges, plus a soft shadow underneath so it looks
+    // round instead of like a plank.
+    t.fillStyle = 'rgba(68, 60, 46, 0.5)';
+    t.fillRect(15, 19.8, 18, 1.2);
+    t.fillRect(15, 27, 18, 1.2);
+    t.fillStyle = 'rgba(152, 142, 116, 0.38)';
+    t.fillRect(15, 25.2, 18, 1.8);
+
+    return c;
+  }
+
+  function makePistolIcon() {
+    const c = document.createElement('canvas');
+    c.width = ICON_SIZE;
+    c.height = ICON_SIZE;
+    const t = c.getContext('2d');
+
+    // The grip, leaning back the way a pistol grip does.
+    t.fillStyle = '#3b3f46';
+    t.beginPath();
+    t.moveTo(14, 24);
+    t.lineTo(23, 24);
+    t.lineTo(21, 41);
+    t.lineTo(11, 41);
+    t.closePath();
+    t.fill();
+
+    // Checkering on the grip, so it isn't a plain grey wedge.
+    t.fillStyle = 'rgba(0, 0, 0, 0.32)';
+    for (let y = 27; y < 40; y += 3) t.fillRect(12, y, 9, 1.2);
+
+    // The body, and the barrel poking out the front.
+    t.fillStyle = '#4a4f58';
+    t.fillRect(10, 15, 30, 10);
+    t.fillStyle = '#3a3e45';
+    t.fillRect(38, 17, 7, 6);
+
+    // Front and back sights - tiny, and they're most of what makes a
+    // grey box read as a gun rather than a stapler.
+    t.fillStyle = '#606670';
+    t.fillRect(35, 12, 3, 3);
+    t.fillRect(12, 12, 3, 3);
+
+    // Trigger guard.
+    t.strokeStyle = '#3b3f46';
+    t.lineWidth = 2.5;
+    t.beginPath();
+    t.arc(25, 27, 5, 0, Math.PI);
+    t.stroke();
+
+    // A hard highlight along the top, where a light would catch metal.
+    t.fillStyle = 'rgba(255, 255, 255, 0.16)';
+    t.fillRect(10, 15, 30, 2.5);
+
+    t.strokeStyle = 'rgba(0, 0, 0, 0.55)';
+    t.lineWidth = 1.5;
+    t.strokeRect(10, 15, 30, 10);
+
+    return c;
+  }
+
+  function makeShotgunIcon() {
+    const c = document.createElement('canvas');
+    c.width = ICON_SIZE;
+    c.height = ICON_SIZE;
+    const t = c.getContext('2d');
+
+    // Wooden stock, pushed right back to the edge - a shotgun's whole
+    // silhouette is "long", and it has to run off the side of the box.
+    t.fillStyle = '#7a4a24';
+    t.beginPath();
+    t.moveTo(2, 21);
+    t.lineTo(15, 18);
+    t.lineTo(15, 31);
+    t.lineTo(4, 35);
+    t.closePath();
+    t.fill();
+
+    // Barrel and the magazine tube underneath it.
+    t.fillStyle = '#3d434b';  t.fillRect(14, 17, 31, 7);
+    t.fillStyle = '#31373e';  t.fillRect(14, 24, 27, 4);
+
+    // Body and trigger housing.
+    t.fillStyle = '#333940';  t.fillRect(15, 23, 7, 9);
+
+    // The pump grip - the bit you rack. Wood, so it stands out.
+    t.fillStyle = '#8d5729';  t.fillRect(24, 27, 11, 5);
+
+    t.fillStyle = '#5d656f';  t.fillRect(43, 16, 3, 9);
+
+    t.fillStyle = 'rgba(255, 255, 255, 0.15)';
+    t.fillRect(14, 17, 31, 2);
+
+    t.strokeStyle = 'rgba(0, 0, 0, 0.5)';
+    t.lineWidth = 1.4;
+    t.strokeRect(14, 17, 31, 7);
+
+    return c;
+  }
+
+  function makeMachineGunIcon() {
+    const c = document.createElement('canvas');
+    c.width = ICON_SIZE;
+    c.height = ICON_SIZE;
+    const t = c.getContext('2d');
+
+    // The body - boxy and squat.
+    t.fillStyle = '#43484f';
+    t.fillRect(12, 16, 26, 9);
+
+    // A long thin barrel with a vented shroud. Those little slots are
+    // the giveaway: barrels get hot when you fire that fast, so real
+    // ones have holes to let the heat out.
+    t.fillStyle = '#373c43';
+    t.fillRect(37, 18, 9, 5);
+    t.fillStyle = 'rgba(0, 0, 0, 0.45)';
+    for (let x = 38; x < 46; x += 3) t.fillRect(x, 19, 1.4, 3);
+
+    // The magazine, hanging underneath. Nothing else in the game has
+    // one, so it reads as "this holds a LOT of bullets" straight away.
+    t.fillStyle = '#3a3f46';
+    t.beginPath();
+    t.moveTo(20, 25);
+    t.lineTo(28, 25);
+    t.lineTo(27, 40);
+    t.lineTo(19, 40);
+    t.closePath();
+    t.fill();
+
+    // Pistol grip, and a folding stock behind.
+    t.fillStyle = '#33383e';
+    t.beginPath();
+    t.moveTo(30, 25);
+    t.lineTo(37, 25);
+    t.lineTo(35, 36);
+    t.lineTo(29, 36);
+    t.closePath();
+    t.fill();
+
+    t.fillStyle = '#4d535b';
+    t.fillRect(3, 18, 10, 4);
+    t.fillRect(3, 18, 3, 9);
+
+    // Sight on top.
+    t.fillStyle = '#5f666f';
+    t.fillRect(31, 13, 3, 4);
+
+    t.fillStyle = 'rgba(255, 255, 255, 0.14)';
+    t.fillRect(12, 16, 26, 2.4);
+
+    t.strokeStyle = 'rgba(0, 0, 0, 0.5)';
+    t.lineWidth = 1.4;
+    t.strokeRect(12, 16, 26, 9);
+
+    return c;
+  }
+
+  // Everything that can ever sit in your pockets. Add to this and the
+  // inventory bar picks it up automatically - it just reads this list.
+  //
+  // `shades` is the same picture pre-darkened 16 ways, for when the item
+  // is lying on the cavern floor and the torchlight has to reach it.
+  const ITEMS = {
+    pistol:     { name: 'Pistol',       icon: makePistolIcon() },
+    shotgun:    { name: 'Shotgun',      icon: makeShotgunIcon() },
+    machinegun: { name: 'Machine Gun',  icon: makeMachineGunIcon() },
+    knife:      { name: 'Pocket Knife', icon: makeKnifeIcon() },
+    flashlight: { name: 'Flashlight',   icon: makeFlashlightIcon() },
+    gem:        { name: 'Glowing Gem',  icon: makeGemIcon() },
+    bone:       { name: 'Old Bone',     icon: makeBoneIcon() },
+  };
+
+  for (const name in ITEMS) {
+    ITEMS[name].shades = makeShadedCopies(ITEMS[name].icon);
+  }
+
+  const SLOT_COUNT = 5;
+  const SLOT_SIZE = 56;
+  const SLOT_GAP = 8;
+
+  // Where slot number i sits on screen. TWO different bits of code need
+  // this: the one that draws the slots, and the one that works out which
+  // slot you just tapped. If they each did their own sums, they'd agree
+  // right up until somebody nudged one of them - and then taps would land
+  // on the wrong slot and it'd look like magic. One answer, one place.
+  function slotRect(i) {
+    const barW = SLOT_COUNT * SLOT_SIZE + (SLOT_COUNT - 1) * SLOT_GAP;
+    const barX = (canvas.width - barW) / 2;
+    return {
+      x: barX + i * (SLOT_SIZE + SLOT_GAP),
+      y: canvas.height - SLOT_SIZE - 14,
+      w: SLOT_SIZE,
+      h: SLOT_SIZE,
+    };
+  }
+
+
+  // --- 7f. YOUR HAND, IN ACTUAL 3D -------------------------------------
+  // Everything else in this game sits in the CAVERN, and we work out
+  // where it lands on screen from wherever you happen to be standing.
+  // Your hand is different. Your hand is attached to YOU. Walk, turn,
+  // spin in a circle - it stays parked in the same corner of the screen.
+  //
+  // So it gets its own little camera, measuring from your eye:
+  //   right   - how far right of straight-ahead
+  //   down    - how far below straight-ahead
+  //   forward - how far out in front of your face
+  //
+  // Everything below is built out of boxes. A forearm, a palm, four
+  // curled fingers and a thumb. Boxes are enough - your eye fills in
+  // an awful lot once the shapes are in roughly the right places.
+
+  // --- 7f. YOUR HAND, MINECRAFT STYLE ----------------------------------
+  // Everything else in this game sits in the CAVERN, and we work out
+  // where it lands on screen from wherever you happen to be standing.
+  // Your hand is different. Your hand is attached to YOU. Walk, turn,
+  // spin in a circle - it stays parked in the same corner of the screen.
+  //
+  // So it gets its own little camera, measuring from your eye:
+  //   right   - how far right of straight-ahead
+  //   down    - how far below straight-ahead
+  //   forward - how far out in front of your face
+  //
+  // A Minecraft arm is famous for what it HASN'T got. No fingers. No
+  // thumb. No taper. One rectangular block for the arm, one for the
+  // sleeve, and that's your whole hand. In Minecraft it's 4 wide, 4 deep
+  // and 12 long, so we keep those proportions here.
+
+  const HAND_CORNERS = [
+    [-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1],
+    [-1, -1,  1], [1, -1,  1], [1, 1,  1], [-1, 1,  1],
+  ];
+
+  // Each face knows which corners it uses, which way it points, AND how
+  // bright it is - see the note about FACE_LIGHT below.
+  const HAND_FACES = [
+    { c: [0, 1, 2, 3], n: [ 0,  0, -1], light: 0.86 },   // toward you
+    { c: [5, 4, 7, 6], n: [ 0,  0,  1], light: 0.50 },   // away
+    { c: [4, 0, 3, 7], n: [-1,  0,  0], light: 0.62 },   // left
+    { c: [1, 5, 6, 2], n: [ 1,  0,  0], light: 0.62 },   // right
+    { c: [4, 5, 1, 0], n: [ 0, -1,  0], light: 1.00 },   // up - brightest
+    { c: [3, 2, 6, 7], n: [ 0,  1,  0], light: 0.46 },   // down - darkest
+  ];
+
+  // THE LIGHTING TRICK, AND IT IS A WEIRD ONE.
+  // Everywhere else in this game we work out how bright a surface is by
+  // asking which way it's turned compared to where you're standing.
+  // Minecraft doesn't do that. Every face gets a FIXED brightness based
+  // only on which way it points: tops brightest, bottoms darkest, sides
+  // in between. Walk around a block and the shading never changes.
+  //
+  // It's completely unrealistic and it looks fantastic. It's why the
+  // whole game reads so clean and flat - you can always tell instantly
+  // which way a surface is facing, because there's only ever six answers.
+
+  const MC_SKIN   = [199, 148, 106];   // Steve's arm
+  const MC_SLEEVE = [0, 164, 164];     // that cyan shirt
+  const GRIP_RED   = [142, 43, 36];
+  const BLADE_GREY = [198, 203, 214];
+
+  const GUN_DARK     = [62, 67, 75];
+  const GUN_GRIP     = [48, 42, 38];
+  const GUN_METAL    = [116, 122, 132];
+  const STOCK_WOOD   = [122, 74, 36];
+  const MUZZLE_FLASH = [255, 238, 158];
+
+  // How far over the arm leans.
+  const ARM_ROLL = -0.5;
+
+  function drawHand() {
+    const W = canvas.width;
+    const H = canvas.height;
+    const planeLen = Math.tan(FOV / 2);
+    const faces = [];
+
+    // Our own camera - same shape of sum as the cavern one, but measured
+    // straight from your eye, with no map position involved at all.
+    function projectView(right, down, forward) {
+      return {
+        sx: (W / 2) * (1 + right / (planeLen * forward)),
+        sy: (H / 2) + down * H / forward,
+      };
+    }
+
+    // Spin an offset by the arm's lean, so parts stack ALONG the arm
+    // rather than straight up and down the screen.
+    function along(ox, oy, roll) {
+      return [ox * Math.cos(roll) - oy * Math.sin(roll),
+              ox * Math.sin(roll) + oy * Math.cos(roll)];
+    }
+
+    function addBox(cx, cy, cz, hx, hy, hz, roll, colour) {
+      const cs = Math.cos(roll);
+      const sn = Math.sin(roll);
+
+      const spots = [];
+      const real = [];
+      for (const corner of HAND_CORNERS) {
+        const ox = corner[0] * hx;
+        const oy = corner[1] * hy;
+        const rx = ox * cs - oy * sn;
+        const ry = ox * sn + oy * cs;
+        const p = [cx + rx, cy + ry, cz + corner[2] * hz];
+        real.push(p);
+        spots.push(projectView(p[0], p[1], p[2]));
+      }
+
+      for (const face of HAND_FACES) {
+        // The panel's normal has to spin exactly the way the box did.
+        const nx = face.n[0] * cs - face.n[1] * sn;
+        const ny = face.n[0] * sn + face.n[1] * cs;
+        const nz = face.n[2];
+
+        // Middle of this panel, measured from your eye.
+        let mx = 0, my = 0, mz = 0;
+        for (const i of face.c) {
+          mx += real[i][0]; my += real[i][1]; mz += real[i][2];
+        }
+        mx /= 4; my /= 4; mz /= 4;
+
+        // Backface test: turned away from your eye? Something else is in
+        // front of it, so there's no point drawing it.
+        const away = Math.sqrt(mx * mx + my * my + mz * mz) || 1;
+        if (-(nx * mx + ny * my + nz * mz) / away <= 0) continue;
+
+        faces.push({
+          quad: [spots[face.c[0]], spots[face.c[1]],
+                 spots[face.c[2]], spots[face.c[3]]],
+          depth: mz,
+          // Straight off the table. Nothing to do with where you stand.
+          lit: face.light,
+          colour: colour,
+        });
+      }
+    }
+
+    // ---- the arm: ONE block, bottom-right of your view ----
+    // Square across, long down its length. Same 4 x 4 x 12 shape
+    // Minecraft uses, just in our units instead of theirs.
+    // HOW FAR THROUGH A SWING ARE WE?
+    //
+    // state.swing counts DOWN from 16 to 0, so we flip it round to get
+    // 0 -> 1 as the swing plays. Then Math.sin turns that straight line
+    // into a smooth 0 -> 1 -> 0 arch: the arm rises, peaks, and settles
+    // back exactly where it started. No jolt at either end, and we never
+    // had to write down where "back where it started" was - the maths
+    // returns there on its own.
+    let arc = 0;
+    if (state.swing > 0) {
+      const through = 1 - (state.swing / SWING_FRAMES);
+      arc = Math.sin(through * Math.PI);
+    }
+
+    // A KNIFE AND A GUN DO NOT MOVE THE SAME WAY.
+    // A knife swings across in a big arc. A gun barely moves at all -
+    // it kicks straight up and back and settles. Same countdown, same
+    // curve, completely different numbers, and that alone is enough for
+    // the two to feel like different objects in your hand.
+    const holding = state.inventory[state.heldSlot];
+    const shooting = (holding === 'pistol' || holding === 'shotgun' ||
+                      holding === 'machinegun');
+
+    // A shotgun kicks HARD. A machine gun barely twitches, but it does
+    // it twelve times a second - and the buzz of a tiny movement
+    // repeating fast is exactly what a machine gun feels like.
+    let kick = 1;
+    if (holding === 'shotgun') kick = 2.1;
+    else if (holding === 'machinegun') kick = 0.55;
+
+    const roll = ARM_ROLL - arc * (shooting ? 0.26 * kick : 0.85);
+    const armX = 0.330 - arc * (shooting ? 0.008 * kick : 0.045);
+    const armY = 0.415 - arc * (shooting ? 0.055 * kick : 0.115);
+    const armZ = 0.815 - arc * (shooting ? 0.028 * kick : 0.070);
+    const armHalf = 0.050;
+
+    addBox(armX, armY, armZ, armHalf, armHalf * 3, armHalf,
+           roll, MC_SKIN);
+
+    // ---- the sleeve, at the elbow end ----
+    // A hair wider than the arm, so it sits ON it rather than inside it.
+    const cuff = along(0, 0.098, roll);
+    addBox(armX + cuff[0], armY + cuff[1], armZ + 0.010,
+           armHalf * 1.14, armHalf * 1.30, armHalf * 1.14,
+           roll, MC_SLEEVE);
+
+    // ---- whatever you're holding, out past the end of the arm ----
+    // In Minecraft the item isn't gripped by anything - there's nothing
+    // to grip with. It just floats at the end of the block, and your
+    // brain fills in a fist that was never drawn.
+    const fist = along(0, -0.150, roll);
+    const fistX = armX + fist[0];
+    const fistY = armY + fist[1];
+
+    if (holding === 'knife') {
+      const grip = along(-0.014, -0.008, roll);
+      addBox(fistX + grip[0], fistY + grip[1], armZ - 0.048,
+             0.016, 0.052, 0.016, roll, GRIP_RED);
+
+      const blade = along(-0.014, -0.132, roll);
+      addBox(fistX + blade[0], fistY + blade[1], armZ - 0.048,
+             0.010, 0.076, 0.005, roll, BLADE_GREY);
+
+    } else if (holding === 'pistol') {
+      // A knife points up out of your fist. A gun points AWAY FROM YOU,
+      // into the cave - which means it stretches along the third
+      // direction, the one that goes into the screen. Bigger numbers
+      // there are further off, so the barrel gets the bigger ones.
+      const gunUp = along(0, -0.030, roll);
+      const gripAt = along(-0.004, 0.014, roll);
+      const sightAt = along(0, -0.052, roll);
+
+      // The grip, wrapped in your fist.
+      addBox(fistX + gripAt[0], fistY + gripAt[1], armZ - 0.006,
+             0.021, 0.040, 0.024, roll, GUN_GRIP);
+
+      // The body, running away from you down the barrel.
+      addBox(fistX + gunUp[0], fistY + gunUp[1], armZ + 0.050,
+             0.022, 0.025, 0.072, roll, GUN_DARK);
+
+      // The muzzle, out at the far end.
+      addBox(fistX + gunUp[0], fistY + gunUp[1], armZ + 0.128,
+             0.012, 0.012, 0.017, roll, GUN_METAL);
+
+      // The little sight on top. Tiny, and it does an unreasonable
+      // amount of the work of making this read as a gun.
+      addBox(fistX + sightAt[0], fistY + sightAt[1], armZ + 0.010,
+             0.006, 0.008, 0.008, roll, GUN_METAL);
+
+      // MUZZLE FLASH - only for the first few frames of the shot. A
+      // flash that hangs around isn't a flash, it's a lamp.
+      if (state.swing > SWING_FRAMES - 5) {
+        addBox(fistX + gunUp[0], fistY + gunUp[1], armZ + 0.158,
+               0.032, 0.032, 0.022, roll, MUZZLE_FLASH);
+      }
+
+    } else if (holding === 'shotgun') {
+      // Same parts as the pistol, but everything is LONGER. That's the
+      // entire difference, and it's enough - a long gun and a short gun
+      // read completely differently even built from the same boxes.
+      const gunUp = along(0, -0.034, roll);
+      const gripAt = along(-0.004, 0.018, roll);
+      const stockAt = along(0, 0.052, roll);
+
+      // Wooden stock, tucked back toward your shoulder.
+      addBox(fistX + stockAt[0], fistY + stockAt[1], armZ - 0.052,
+             0.025, 0.042, 0.030, roll, STOCK_WOOD);
+
+      // Grip.
+      addBox(fistX + gripAt[0], fistY + gripAt[1], armZ - 0.010,
+             0.023, 0.038, 0.026, roll, GUN_GRIP);
+
+      // The long barrel. More than twice the pistol's.
+      addBox(fistX + gunUp[0], fistY + gunUp[1], armZ + 0.090,
+             0.024, 0.028, 0.150, roll, GUN_DARK);
+
+      // The wooden pump, sat under the barrel.
+      const pumpAt = along(0, -0.008, roll);
+      addBox(fistX + pumpAt[0], fistY + pumpAt[1], armZ + 0.080,
+             0.021, 0.020, 0.048, roll, STOCK_WOOD);
+
+      addBox(fistX + gunUp[0], fistY + gunUp[1], armZ + 0.246,
+             0.015, 0.015, 0.020, roll, GUN_METAL);
+
+      // A much bigger flash. It's a much bigger gun.
+      if (state.swing > SWING_FRAMES - 6) {
+        addBox(fistX + gunUp[0], fistY + gunUp[1], armZ + 0.292,
+               0.055, 0.055, 0.036, roll, MUZZLE_FLASH);
+      }
+
+    } else if (holding === 'machinegun') {
+      const gunUp = along(0, -0.032, roll);
+      const gripAt = along(-0.004, 0.016, roll);
+      const magAt = along(0, 0.030, roll);
+      const stockAt = along(0, 0.056, roll);
+
+      // Folding stock behind, thin and skeletal.
+      addBox(fistX + stockAt[0], fistY + stockAt[1], armZ - 0.056,
+             0.012, 0.032, 0.014, roll, GUN_METAL);
+
+      addBox(fistX + gripAt[0], fistY + gripAt[1], armZ - 0.014,
+             0.021, 0.036, 0.024, roll, GUN_GRIP);
+
+      // The magazine, hanging down in front of the grip. It's the one
+      // part no other gun here has, and it's what makes this readable
+      // as an automatic at a glance.
+      addBox(fistX + magAt[0], fistY + magAt[1], armZ + 0.028,
+             0.017, 0.048, 0.020, roll, GUN_GRIP);
+
+      // Boxy body, then a long thin barrel out the front.
+      addBox(fistX + gunUp[0], fistY + gunUp[1], armZ + 0.048,
+             0.026, 0.026, 0.078, roll, GUN_DARK);
+
+      addBox(fistX + gunUp[0], fistY + gunUp[1], armZ + 0.166,
+             0.011, 0.011, 0.048, roll, GUN_METAL);
+
+      // A small, fast flash - it's a small, fast gun.
+      if (state.swing > 1) {
+        addBox(fistX + gunUp[0], fistY + gunUp[1], armZ + 0.226,
+               0.030, 0.030, 0.020, roll, MUZZLE_FLASH);
+      }
+    }
+
+    // Furthest panels first, same painter's trick as everywhere else.
+    faces.sort((a, b) => b.depth - a.depth);
+
+    for (const f of faces) {
+      ctx.beginPath();
+      ctx.moveTo(f.quad[0].sx, f.quad[0].sy);
+      for (let i = 1; i < 4; i++) ctx.lineTo(f.quad[i].sx, f.quad[i].sy);
+      ctx.closePath();
+
+      // One flat colour per face, no blending. All that smooth shading we
+      // built earlier was for HIDING the edges between faces. Here we
+      // want them - the hard step from one face to the next IS the look.
+      ctx.fillStyle = torchShade(f.colour, f.lit);
+      ctx.fill();
+
+      // Stroke in its own colour to close the hairline cracks between
+      // panels, without drawing a line you can actually see.
+      ctx.strokeStyle = ctx.fillStyle;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+  }
+
+  // --- 7g. THE HEART BAR ------------------------------------------------
+
+  const HEART_SIZE = 30;
+  const HEART_GAP = 6;
+
+  // A heart is two round humps and a point at the bottom. Four curved
+  // strokes get you there. Only the shape lives here - nothing is filled
+  // in, so the same outline can be used as a red heart, an empty socket,
+  // or a black outline drawn over the top. Describe the shape once, then
+  // use it three different ways.
+  function heartShape(x, y, s) {
+    ctx.beginPath();
+    ctx.moveTo(x + s * 0.50, y + s * 0.30);
+    ctx.bezierCurveTo(x + s * 0.50, y + s * 0.02, x,          y + s * 0.02,
+                      x,           y + s * 0.34);
+    ctx.bezierCurveTo(x,           y + s * 0.64, x + s * 0.50, y + s * 0.84,
+                      x + s * 0.50, y + s);
+    ctx.bezierCurveTo(x + s * 0.50, y + s * 0.84, x + s,       y + s * 0.64,
+                      x + s,        y + s * 0.34);
+    ctx.bezierCurveTo(x + s,        y + s * 0.02, x + s * 0.50, y + s * 0.02,
+                      x + s * 0.50, y + s * 0.30);
+    ctx.closePath();
+  }
+
+  function drawHearts() {
+    // Blink while you're in mercy time, so you can SEE that you're
+    // briefly untouchable. Otherwise it's a rule that exists but that
+    // nobody watching the screen could ever work out.
+    const blink = state.mercy > 0 && (Math.floor(state.frame / 4) % 2 === 0);
+
+    for (let i = 0; i < MAX_HEARTS; i++) {
+      const x = 18 + i * (HEART_SIZE + HEART_GAP);
+      const y = 16;
+
+      // How much of THIS heart survives: 2 = full, 1 = half, 0 = gone.
+      // Heart 0 uses health 1-2, heart 1 uses 3-4, and so on.
+      let left = state.health - i * 2;
+      if (left < 0) left = 0;
+      if (left > 2) left = 2;
+
+      // The empty socket underneath. Always drawn, so you can see how
+      // much you've LOST as well as how much you've got.
+      heartShape(x, y, HEART_SIZE);
+      ctx.fillStyle = 'rgba(30, 16, 16, 0.78)';
+      ctx.fill();
+
+      if (left > 0 && !blink) {
+        ctx.save();
+
+        // HALF A HEART. We don't draw a different shape - we draw the
+        // whole heart and hide the right-hand side of it. Clipping like
+        // this means a half heart is guaranteed to line up perfectly
+        // with a full one, because it IS one, just covered up.
+        if (left === 1) {
+          ctx.beginPath();
+          ctx.rect(x, y, HEART_SIZE / 2, HEART_SIZE);
+          ctx.clip();
+        }
+
+        heartShape(x, y, HEART_SIZE);
+        ctx.fillStyle = '#d8353f';
+        ctx.fill();
+
+        // A shine, up on the left hump, where a light would catch it.
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.42)';
+        ctx.beginPath();
+        ctx.ellipse(x + HEART_SIZE * 0.31, y + HEART_SIZE * 0.31,
+                    HEART_SIZE * 0.10, HEART_SIZE * 0.07,
+                    -0.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.restore();
+      }
+
+      // Outline last of all, over the top, so a full heart and an empty
+      // one are exactly the same size and sit in exactly the same place.
+      heartShape(x, y, HEART_SIZE);
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.62)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+  }
+
+
+  // Draws the thumb controls. Only ever called once somebody has
+  // actually touched the screen - there's no point cluttering up a
+  // desktop screen with buttons nobody can press.
+  function drawTouchControls() {
+    // ---- the driving stick, wherever your thumb landed ----
+    if (drive.id !== null) {
+      ctx.strokeStyle = 'rgba(236, 214, 160, 0.32)';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(drive.homeX, drive.homeY, JOY_RADIUS, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // The knob. It stops at the edge of the ring however far you shove,
+      // which is the picture matching what the movement code already
+      // does - it caps your speed at the same point. If the knob kept
+      // sliding out past the ring it would be lying to you.
+      let knobX = drive.x - drive.homeX;
+      let knobY = drive.y - drive.homeY;
+      const shove = Math.sqrt(knobX * knobX + knobY * knobY);
+      if (shove > JOY_RADIUS) {
+        knobX = (knobX / shove) * JOY_RADIUS;
+        knobY = (knobY / shove) * JOY_RADIUS;
+      }
+
+      ctx.fillStyle = 'rgba(236, 214, 160, 0.40)';
+      ctx.beginPath();
+      ctx.arc(drive.homeX + knobX, drive.homeY + knobY, 26, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // ---- the two round buttons ----
+    // Each lights up only when it would actually DO something. A button
+    // that looks the same whether or not it works just teaches you to
+    // stop trusting it.
+    drawButton(ACTION, 'OPEN', chestInReach() !== null,
+               [122, 94, 34], [255, 226, 140]);
+
+    // The button says what the thing in your hand actually does, and
+    // goes dark while a slow weapon is still reloading.
+    const weapon = state.inventory[state.heldSlot];
+    const waiting = COOLDOWNS[weapon] &&
+                    state.frame < (state.cooldowns[weapon] || 0);
+    let label = 'SLASH';
+    if (weapon === 'pistol') label = 'SHOOT';
+    else if (weapon === 'machinegun') label = 'FIRE';
+    else if (weapon === 'shotgun') label = waiting ? 'WAIT' : 'BOOM';
+
+    drawButton(SLASH, label,
+               !waiting && (weapon === 'pistol' || weapon === 'knife' ||
+                            weapon === 'shotgun' || weapon === 'machinegun'),
+               [104, 40, 36], [255, 190, 175]);
+
+    // A little speaker button, so the music can be turned off.
+    drawButton(MUTE, audio.muted ? 'OFF' : 'MUSIC', !audio.muted,
+               [40, 52, 74], [168, 196, 255]);
+
+    // Fullscreen. Lit while it's off, because that's when pressing it
+    // does the useful thing.
+    drawButton(FULL, isFullscreen() ? 'EXIT' : 'FULL', !isFullscreen(),
+               [34, 64, 54], [150, 240, 200]);
+
+    // The DROP button shows a little picture of whatever you're actually
+    // holding. Now it isn't "a button called DROP" that you have to
+    // remember the meaning of - it's "the button with my gem on it".
+    // Showing the thing beats naming the thing, every time.
+    const held = state.inventory[state.heldSlot];
+    drawButton(DROP, 'DROP', held !== undefined,
+               [46, 62, 96], [176, 206, 255],
+               held ? ITEMS[held].icon : null);
+  }
+
+  function drawButton(btn, label, ready, onColour, edgeColour, icon) {
+    ctx.fillStyle = ready
+      ? 'rgba(' + onColour[0] + ',' + onColour[1] + ',' + onColour[2] + ', 0.75)'
+      : 'rgba(20, 18, 14, 0.45)';
+    ctx.beginPath();
+    ctx.arc(btn.x, btn.y, btn.r, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = ready
+      ? 'rgba(' + edgeColour[0] + ',' + edgeColour[1] + ',' + edgeColour[2] + ', 0.95)'
+      : 'rgba(180, 160, 120, 0.30)';
+    ctx.lineWidth = ready ? 3 : 2;
+    ctx.stroke();
+
+    ctx.fillStyle = ready ? '#fff2ce' : 'rgba(220, 208, 180, 0.45)';
+    ctx.textAlign = 'center';
+
+    if (icon) {
+      // Picture on top, small label underneath.
+      const size = btn.r * 0.95;
+      ctx.drawImage(icon, btn.x - size / 2, btn.y - size / 2 - 7, size, size);
+      ctx.font = 'bold 12px system-ui, sans-serif';
+      ctx.fillText(label, btn.x, btn.y + btn.r * 0.66);
+    } else {
+      ctx.font = 'bold 15px system-ui, sans-serif';
+      ctx.fillText(label, btn.x, btn.y + 5);
+    }
+  }
+
+
+  // Paints the inventory. Notice it never DECIDES anything - it only
+  // reads state.inventory and state.heldSlot and shows what it finds.
+  // Put a new item in that list and this draws it without being told.
+  function drawInventory() {
+    const W = canvas.width;
+    const H = canvas.height;
+    const heldName = state.inventory[state.heldSlot];
+
+    // (What you're holding used to be a flat picture pasted in the
+    // corner here. It's a real 3D hand now - see drawHand up above.)
+
+    // ---- the row of slots ----
+    // Asks slotRect where every slot lives, exactly like the tap-handler
+    // does. Neither one owns the answer, so they can't drift apart.
+    for (let i = 0; i < SLOT_COUNT; i++) {
+      const r = slotRect(i);
+      const chosen = (i === state.heldSlot);
+
+      ctx.fillStyle = chosen ? 'rgba(58, 46, 30, 0.85)'
+                             : 'rgba(12, 10, 8, 0.62)';
+      ctx.fillRect(r.x, r.y, r.w, r.h);
+
+      ctx.strokeStyle = chosen ? 'rgba(236, 205, 128, 0.95)'
+                               : 'rgba(150, 130, 100, 0.32)';
+      ctx.lineWidth = chosen ? 2 : 1;
+      ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
+
+      const name = state.inventory[i];
+      if (name && ITEMS[name]) {
+        // Drawn at its real size, dead centre. No scaling at all.
+        ctx.drawImage(ITEMS[name].icon,
+                      r.x + (r.w - ICON_SIZE) / 2,
+                      r.y + (r.h - ICON_SIZE) / 2);
+      }
+
+      // RELOADING. A dark shutter over the slot that drains away as the
+      // wait runs down. Ten seconds is a long time to stand in the dark
+      // wondering whether the button is broken - so we show it going.
+      // Only for genuinely slow weapons. A five-frame wait would just
+      // strobe the slot and look broken.
+      if (name && COOLDOWNS[name] > 60) {
+        const readyAt = state.cooldowns[name] || 0;
+        if (state.frame < readyAt) {
+          const left = (readyAt - state.frame) / COOLDOWNS[name];
+          ctx.fillStyle = 'rgba(4, 6, 12, 0.72)';
+          ctx.fillRect(r.x, r.y, r.w, r.h * left);
+          ctx.fillStyle = 'rgba(255, 210, 140, 0.85)';
+          ctx.font = 'bold 18px system-ui, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText(Math.ceil((readyAt - state.frame) / 60),
+                       r.x + r.w / 2, r.y + r.h / 2 + 6);
+        }
+      }
+
+      // The number you press to pick this slot. (Or just tap it.)
+      ctx.fillStyle = 'rgba(232, 217, 176, 0.55)';
+      ctx.font = 'bold 11px system-ui, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText(String(i + 1), r.x + 5, r.y + 14);
+    }
+
+    // ---- the name of whatever you're holding ----
+    if (heldName && ITEMS[heldName]) {
+      ctx.fillStyle = '#e8d9b0';
+      ctx.font = 'bold 15px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(ITEMS[heldName].name, W / 2, slotRect(0).y - 11);
+    }
+  }
+
+
+  // --- 8. DRAW --------------------------------------------------------
+  // Runs about 60 times a second. DRAW paints. It never changes anything.
+
+  const FOV = Math.PI / 3;   // how wide your view is (60 degrees)
+  const COLUMN_W = 2;        // each stripe is 2 pixels wide. 400 lasers.
+
+  function draw() {
+    const W = canvas.width;
+    const H = canvas.height;
+    const halfH = H / 2;
+
+    // WHERE THE HORIZON IS RIGHT NOW.
+    // It used to always be the middle of the screen. Now it slides when
+    // you look up or down, and EVERYTHING that gets drawn has to follow
+    // it - floor, ceiling, walls, chests, webs. Anything still measuring
+    // from the middle would just detach and float.
+    const horizon = Math.round(halfH + state.pitch);
+
+    // Which way we're facing, as a direction instead of an angle.
+    const dirX = Math.cos(state.angle);
+    const dirY = Math.sin(state.angle);
+
+    // A line pointing sideways across our view, called the camera plane.
+    // Picture holding a ruler out in front of your face. Sliding your
+    // gaze from one end of the ruler to the other sweeps your view from
+    // far left to far right. How long the ruler is decides how wide you
+    // can see. This replaces the old "add a bit to the angle" way,
+    // because the floor and the walls have to agree on where left is.
+    const planeLen = Math.tan(FOV / 2);
+    const planeX = -dirY * planeLen;
+    const planeY =  dirX * planeLen;
+
+
+    // ---- FLOOR AND CEILING, one row at a time ----------------------
+    // The two directions at the very edges of what we can see.
+    const leftX  = dirX - planeX, leftY  = dirY - planeY;
+    const rightX = dirX + planeX, rightY = dirY + planeY;
+
+    // How far we have to count out from the horizon to fill the screen.
+    // When you look down, the horizon rides up and there's a LOT of floor
+    // below it, so we need to count further than we used to.
+    const reachRows = Math.max(horizon + 1, H - horizon);
+
+    for (let p = 1; p <= reachRows; p++) {
+      // p counts rows away from the HORIZON now, not from the middle.
+      // p = 1 is right at the horizon, big p is right at your feet.
+      //
+      // THE FLOOR TRICK: dividing by p is what makes distance work.
+      // Tiny p (near the horizon) -> huge distance, miles away.
+      // Big p (near your feet)    -> small distance, right there.
+      //
+      // It stays halfH on top of the divide, NOT horizon. That number is
+      // how high your eyes are off the floor, and looking down doesn't
+      // change your height - only where you're pointing.
+      const rowDist = halfH / p;
+
+      // Which two rows of the screen is this? One below the horizon for
+      // floor, one the same distance above it for ceiling. With the
+      // horizon slid off-centre, one of them can fall off the screen -
+      // so we check each before writing anything.
+      const floorY = horizon + p - 1;
+      const ceilY  = horizon - p;
+      const doFloor = (floorY >= 0 && floorY < H);
+      const doCeil  = (ceilY  >= 0 && ceilY  < H);
+      if (!doFloor && !doCeil) continue;
+
+      // Where this row of floor starts (far left) and how much the map
+      // position shifts each step as we walk across to the right.
+      let mapX = state.x + rowDist * leftX;
+      let mapY = state.y + rowDist * leftY;
+      const stepX = rowDist * (rightX - leftX) / W;
+      const stepY = rowDist * (rightY - leftY) / W;
+
+      // Same torch rule as the walls: further away means darker.
+      let light = 1 - rowDist / TORCH_RANGE;
+      if (light < 0) light = 0;
+
+      // Pick which pre-mixed shade to use. The ceiling gets a dimmer one
+      // than the floor, because a torch you're carrying points forward
+      // and down, not up. That's what makes the roof feel heavy and close.
+      const floorShade = ((light * (SHADES - 1)) | 0) * TEX_AREA;
+      const ceilShade  = ((light * 0.6 * (SHADES - 1)) | 0) * TEX_AREA;
+
+      // Where these two rows live in our sheet of pixels.
+      const floorRow = floorY * W;
+      const ceilRow  = ceilY * W;
+
+      // Step two dots at a time and paint both - twice as fast, and you
+      // genuinely cannot tell the difference while you're moving.
+      for (let x = 0; x < W; x += 2) {
+        // Which dot of the rock wallpaper is lying at this spot on the
+        // map? The & 127 chops off the whole-number part, so the stone
+        // starts over in every map square and tiles across the floor.
+        const tx = ((mapX * TEX_SIZE) | 0) & (TEX_SIZE - 1);
+        const ty = ((mapY * TEX_SIZE) | 0) & (TEX_SIZE - 1);
+        const dot = (ty << 7) + tx;
+
+        if (doFloor) {
+          const floorColour = shadeTable[floorShade + dot];
+          frame32[floorRow + x]     = floorColour;
+          frame32[floorRow + x + 1] = floorColour;
+        }
+        if (doCeil) {
+          const ceilColour = shadeTable[ceilShade + dot];
+          frame32[ceilRow + x]     = ceilColour;
+          frame32[ceilRow + x + 1] = ceilColour;
+        }
+
+        mapX += stepX * 2;
+        mapY += stepY * 2;
+      }
+    }
+
+    // Slap the finished floor and ceiling down in one move.
+    ctx.putImageData(frame, 0, 0);
+
+
+    // ---- WALLS, one skinny stripe at a time ------------------------
+    for (let screenX = 0; screenX < W; screenX += COLUMN_W) {
+      // Slide along that ruler: -1 is the far left of our view,
+      // 0 is dead ahead, +1 is the far right.
+      const cameraX = 2 * screenX / W - 1;
+
+      // The direction this one laser flies off in.
+      let rayX = dirX + planeX * cameraX;
+      let rayY = dirY + planeY * cameraX;
+
+      // Squash it down to exactly one unit long, so counting steps
+      // really does tell us the distance.
+      const rayLen = Math.sqrt(rayX * rayX + rayY * rayY);
+      rayX /= rayLen;
+      rayY /= rayLen;
+
+      const hit = castRay(rayX, rayY);
+
+      // FISHEYE FIX. Without this the walls bulge out at you like you're
+      // looking through a peephole, because lasers off to the side travel
+      // further just by being off to the side. We want the STRAIGHT-AHEAD
+      // distance, so we lean the measurement back toward straight ahead.
+      // Delete this and walk around sometime - it's very funny.
+      let dist = hit.dist * (rayX * dirX + rayY * dirY);
+
+      // Never let the distance hit zero. Dividing by zero makes the
+      // computer hand back Infinity, and Infinity draws nothing at all.
+      if (dist < 0.05) dist = 0.05;
+
+      // Jot this wall's distance down for every pixel column it covers.
+      // The chests and webs will read these numbers in a moment to work
+      // out whether they're in front of this wall or hidden behind it.
+      for (let i = 0; i < COLUMN_W; i++) zBuffer[screenX + i] = dist;
+
+      // THE WHOLE TRICK, RIGHT HERE:
+      // close wall (small dist) -> big number -> tall stripe
+      // far wall   (big dist)   -> small number -> short stripe
+      const wallH = H / dist;
+      // Centred on the HORIZON, not on the middle of the screen. Leave
+      // this as (H - wallH) / 2 and the walls stay put while the floor
+      // slides away from them - which looks completely broken, and is
+      // worth doing once just to see.
+      const top = horizon - wallH / 2;
+
+      // How lit is it? 1 = right in your face, 0 = swallowed by the dark.
+      let light = 1 - dist / TORCH_RANGE;
+      if (light < 0) light = 0;
+
+      // Walls facing different directions catch the light differently.
+      // Without this, corners vanish and the cave looks like flat soup.
+      // We figure out which way the wall faces by checking whether we
+      // stopped closer to a left-right grid line or an up-down one.
+      const fx = hit.x - Math.floor(hit.x);
+      const fy = hit.y - Math.floor(hit.y);
+      const facingSideways = Math.min(fx, 1 - fx) < Math.min(fy, 1 - fy);
+      if (facingSideways) light *= 0.65;
+
+      // WHERE along the block did the laser land? 0 means the far left
+      // edge of that stone, 1 means the far right edge. If the wall
+      // runs up-and-down we measure across it using y, otherwise x.
+      const wallX = facingSideways ? fy : fx;
+
+      // Grab the matching 1-pixel-wide sliver of our stone wallpaper and
+      // stretch it to fill this whole stripe, top to bottom. Do that 400
+      // times across the screen and the stone wraps around the cavern.
+      const texX = Math.floor(wallX * TEX_SIZE);
+      ctx.drawImage(stoneTexture, texX, 0, 1, TEX_SIZE,
+                                  screenX, top, COLUMN_W, wallH);
+
+      // Now throw darkness on top. The further away the stone is, the
+      // more black we paint over it - until it's gone completely.
+      // Painting shadow ON TOP is much easier than trying to work out
+      // what colour every single dot of the stone should have been.
+      ctx.fillStyle = 'rgba(0,0,0,' + (1 - light) + ')';
+      ctx.fillRect(screenX, top, COLUMN_W, wallH);
+    }
+
+
+    // ---- CHESTS AND COBWEBS ----------------------------------------
+    // Draw the FAR ones first, so nearer ones paint over the top of them.
+    // It's called the painter's algorithm, for the obvious reason: you
+    // paint the sky before you paint the tree standing in front of it.
+    for (const thing of sprites) {
+      const dx = thing.x - state.x;
+      const dy = thing.y - state.y;
+      thing.range = dx * dx + dy * dy;
+    }
+    sprites.sort((a, b) => b.range - a.range);
+
+    // This number un-does our camera, turning "where it is on the map"
+    // into "where it is compared to me, right now, facing this way".
+    const invDet = 1 / (planeX * dirY - dirX * planeY);
+
+    // THE CAMERA. Hand it any spot in the cavern - side to side, forward
+    // and back, and how far below your eyes it sits - and it hands back
+    // the exact dot on your screen where that spot appears. The 3D chests
+    // are built entirely out of asking this thing about corners.
+    const cam = {
+      project: function (wx, wy, wz) {
+        const offX = wx - state.x;
+        const offY = wy - state.y;
+        const depth = invDet * (planeX * offY - planeY * offX);
+        if (depth <= 0.05) return null;    // behind us; no answer exists
+        const across = invDet * (dirY * offX - dirX * offY);
+        return {
+          sx: (W / 2) * (1 + across / depth),
+          sy: horizon + (wz * H / depth),
+          depth: depth,
+        };
+      },
+    };
+
+    for (const thing of sprites) {
+      const offX = thing.x - state.x;
+      const offY = thing.y - state.y;
+
+      // acrossness: how far left or right of straight-ahead it sits.
+      // depth:      how far in FRONT of us it is.
+      const acrossness = invDet * (dirY * offX - dirX * offY);
+      const depth      = invDet * (planeX * offY - planeY * offX);
+
+      // Behind us, or practically inside our own head. Skip it.
+      if (depth <= 0.2) continue;
+
+      // Chests are real boxes now, so they get built a completely
+      // different way. Webs carry on being flat pictures.
+      // Chests and spiders are real 3D things now, built out of corners
+      // in the cavern. Only webs and dropped loot are still flat.
+      if (thing.kind === 'chest') {
+        drawChest(thing, cam, depth);
+        continue;
+      }
+      if (thing.kind === 'spider') {
+        drawSpider(thing, cam, depth);
+        continue;
+      }
+
+      // Cobwebs and dropped loot are both flat pictures, but they come
+      // from different places and sit at different heights, so work out
+      // which picture and where it hangs before drawing either.
+      let shades, scale, vOffset;
+
+      if (thing.kind === 'loot') {
+        shades = ITEMS[thing.item].shades;
+        scale = 0.34;
+        // Just above the floor, bobbing gently. Every dropped thing gets
+        // its own starting point in the bob (that's thing.bob), so they
+        // don't all rise and fall in step like one machine.
+        const float = Math.sin(state.frame * 0.05 + thing.bob) * 0.030;
+        vOffset = 0.5 - scale / 2 - 0.05 + float;
+      } else {
+        const kind = SPRITE_KINDS[thing.kind];
+        shades = kind.shades;
+        scale = kind.scale;
+        vOffset = kind.vOffset;
+      }
+
+      // Same rule as everything else: the further off, the smaller.
+      const size = (H / depth) * scale;
+
+      // Where the middle of it lands across the screen.
+      const middleX = (W / 2) * (1 + acrossness / depth);
+      const leftEdge = middleX - size / 2;
+
+      // How far down the screen it sits. Chests sink to the floor,
+      // webs ride up to the ceiling - and the further away they are,
+      // the closer to the horizon they drift.
+      const topY = horizon - size / 2 + (vOffset * H / depth);
+
+      // Torchlight, same as everything else.
+      let light = 1 - depth / TORCH_RANGE;
+      if (light < 0) light = 0;
+
+      const picture = shades[(light * (SPRITE_SHADES - 1)) | 0];
+
+      // Ask the picture how big it is rather than assuming. Cobwebs are
+      // 64 dots across, item pictures are 48, and this same loop draws
+      // both now.
+      const picW = picture.width;
+      const picH = picture.height;
+
+      // Now paint it one column at a time, checking the wall distances
+      // as we go. This is the bit that lets a chest hide behind a corner.
+      for (let x = Math.floor(leftEdge); x < leftEdge + size; x++) {
+        if (x < 0 || x >= W) continue;
+        if (depth >= zBuffer[x]) continue;   // a wall is in the way
+
+        const texX = (((x - leftEdge) / size) * picW) | 0;
+        if (texX < 0 || texX >= picW) continue;
+
+        ctx.drawImage(picture, texX, 0, 1, picH, x, topY, 1, size);
+      }
+    }
+
+
+    // Your arm goes over the cavern, but under the menus and crosshair.
+    drawHand();
+
+    // A red wash over EVERYTHING the moment you're hit - the cave, your
+    // arm, the lot. Numbers going down in a corner is information. The
+    // whole screen flinching is a feeling, and you notice it without
+    // having to look at anything.
+    if (state.hurtFlash > 0) {
+      ctx.fillStyle = 'rgba(196, 22, 32, ' + (state.hurtFlash / 16 * 0.45) + ')';
+      ctx.fillRect(0, 0, W, H);
+    }
+
+    // And a green one when you get health back. Same idea, opposite
+    // colour - and gentler, because being healed shouldn't punch you in
+    // the eye the way being bitten does.
+    if (state.healFlash > 0) {
+      ctx.fillStyle = 'rgba(58, 216, 118, ' + (state.healFlash / 14 * 0.26) + ')';
+      ctx.fillRect(0, 0, W, H);
+    }
+
+
+    // ---- THE BIT ON TOP OF EVERYTHING ------------------------------
+    // Drawn last, so it sits over the cavern instead of behind it.
+    // Order matters in drawing: last one painted wins.
+
+    // On a phone you're already playing the moment you touch the screen -
+    // there's no mouse to capture, so there's nothing to ask for.
+    const playing = mouseIsCaptured() || touchMode;
+
+    if (!playing) {
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+      ctx.fillRect(0, halfH - 34, W, 68);
+      ctx.fillStyle = '#e8d9b0';
+      ctx.font = 'bold 24px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('CLICK OR TOUCH TO PLAY', W / 2, halfH + 9);
+    } else {
+      // Crosshair - a tiny plus sign so you always know where dead
+      // ahead is. Two thin rectangles, that's all a crosshair is.
+      ctx.fillStyle = 'rgba(255, 232, 186, 0.45)';
+      // DEAD CENTRE OF THE SCREEN, always - not on the horizon.
+      //
+      // There are two different "straight aheads" now and it's worth
+      // knowing the difference. The HORIZON is where eye-level lands.
+      // The MIDDLE OF THE SCREEN is where you're actually looking. Before
+      // you could tilt your view they were the same spot, so it never
+      // came up. Now they're not.
+      //
+      // Your aim goes with your eyes. Put it on the horizon instead and
+      // looking down sends the crosshair UP toward the ceiling while
+      // you're staring at the floor, which is exactly backwards.
+      ctx.fillRect(W / 2 - 7, halfH, 14, 2);
+      ctx.fillRect(W / 2, halfH - 7, 2, 14);
+    }
+
+    // "Press E" - but only when there's actually a chest to open. A hint
+    // that's always on screen stops being a hint and becomes wallpaper.
+    // On a phone the OPEN button lights up instead, so we don't need to
+    // tell you to press a key you haven't got.
+    if (mouseIsCaptured() && !touchMode && chestInReach()) {
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+      ctx.fillRect(W / 2 - 110, halfH + 46, 220, 32);
+      ctx.fillStyle = '#ffe9a8';
+      ctx.font = 'bold 17px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('Press E to open', W / 2, halfH + 68);
+    }
+
+    // Whatever just happened, said out loud for a couple of seconds.
+    if (state.frame < state.messageUntil) {
+      // Fade it out over the last half second instead of snapping off.
+      const left = state.messageUntil - state.frame;
+      const fade = left < 30 ? left / 30 : 1;
+      ctx.fillStyle = 'rgba(255, 240, 205, ' + fade + ')';
+      ctx.font = 'bold 20px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(state.message, W / 2, 62);
+    }
+
+    // Hearts, thumb controls, then your pockets - over the top of all.
+    drawHearts();
+    if (touchMode) drawTouchControls();
+    drawInventory();
+  }
+
+
+  // --- 8. THE GAME LOOP -----------------------------------------------
+  //     update, draw, update, draw, update, draw...
+  //     ...about 60 times a second, forever.
+
+  function loop() {
+    update();
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  // And... go.
+  loop();
+
+  </script>
+</body>
+</html>
