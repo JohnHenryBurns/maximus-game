@@ -83,6 +83,27 @@
       margin: 0;
       opacity: 0.6;
       font-size: 14px;
+      text-align: center;
+    }
+
+    /* WHEN THE PAGE GOES FULLSCREEN.
+       The instructions get out of the way and the canvas takes the lot.
+       Two spellings of the same rule, because browsers didn't agree on
+       what to call this for years and older phones still use the old one.
+       They have to be separate rules - put them in one list and a browser
+       that doesn't recognise one will throw away BOTH. */
+    :fullscreen p { display: none; }
+    :-webkit-full-screen p { display: none; }
+
+    :fullscreen canvas {
+      max-width: 100vw;
+      max-height: 100vh;
+      border-radius: 0;
+    }
+    :-webkit-full-screen canvas {
+      max-width: 100vw;
+      max-height: 100vh;
+      border-radius: 0;
     }
   </style>
 </head>
@@ -98,7 +119,8 @@
     click or Space to shoot or swing, Q to drop, 1&ndash;5 to pick a pocket, Esc to let go.<br>
     Phone: left thumb walks, right thumb looks, tap the buttons. Turn it sideways.<br>
     Slot 1 is the pistol &mdash; it kills spiders. Slot 2 is the knife &mdash; it cuts webs.<br>
-    There's a shotgun hidden in one of the chests. M turns the music off.
+    A shotgun and a machine gun are hidden in the chests.
+    M turns the music off, F goes fullscreen.
   </p>
 
   <script>
@@ -309,6 +331,9 @@
 
     // M turns the music off. Any game that plays sound has to have this.
     if (e.key.toLowerCase() === 'm') toggleMute();
+
+    // F goes fullscreen, for people playing on a computer.
+    if (e.key.toLowerCase() === 'f') toggleFullscreen();
   });
   window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
 
@@ -426,6 +451,44 @@
   const SLASH  = { x: 722, y: 344, r: 43 };
   const DROP   = { x: 722, y: 246, r: 40 };
   const MUTE   = { x: 754, y: 46,  r: 30 };   // tucked up out of the way
+  const FULL   = { x: 686, y: 46,  r: 30 };
+
+
+  // FULLSCREEN.
+  // Browsers spent years disagreeing about what to call this, so there
+  // are two spellings of every single part and we try whichever exists.
+  // And a phone is allowed to just say no - so every step checks first
+  // instead of assuming, because a crash here would take the game with it.
+  function isFullscreen() {
+    return !!(document.fullscreenElement || document.webkitFullscreenElement);
+  }
+
+  function toggleFullscreen() {
+    if (!isFullscreen()) {
+      const page = document.documentElement;
+      const go = page.requestFullscreen || page.webkitRequestFullscreen;
+      if (!go) { say('Fullscreen is not available here.'); return; }
+
+      const asked = go.call(page);
+      // Newer browsers hand back a promise, older ones hand back nothing.
+      if (asked && asked.catch) asked.catch(function () {
+        say('The browser said no.');
+      });
+
+      // Ask for landscape while we're at it. Most phones refuse unless
+      // the game is installed to the home screen, and that's fine -
+      // we ask politely and carry on either way.
+      if (screen.orientation && screen.orientation.lock) {
+        try {
+          const turned = screen.orientation.lock('landscape');
+          if (turned && turned.catch) turned.catch(function () {});
+        } catch (e) { /* older phone. Never mind. */ }
+      }
+    } else {
+      const stop = document.exitFullscreen || document.webkitExitFullscreen;
+      if (stop) stop.call(document);
+    }
+  }
 
   // WHERE A FINGER IS ON THE CANVAS.
   // A touch arrives measured in screen dots, but the canvas is usually
@@ -468,6 +531,7 @@
       }
       if (inButton(p, DROP)) { dropItem(); continue; }
       if (inButton(p, MUTE)) { toggleMute(); continue; }
+      if (inButton(p, FULL)) { toggleFullscreen(); continue; }
 
       let hitSlot = false;
       for (let i = 0; i < SLOT_COUNT; i++) {
@@ -3421,6 +3485,11 @@
     // A little speaker button, so the music can be turned off.
     drawButton(MUTE, audio.muted ? 'OFF' : 'MUSIC', !audio.muted,
                [40, 52, 74], [168, 196, 255]);
+
+    // Fullscreen. Lit while it's off, because that's when pressing it
+    // does the useful thing.
+    drawButton(FULL, isFullscreen() ? 'EXIT' : 'FULL', !isFullscreen(),
+               [34, 64, 54], [150, 240, 200]);
 
     // The DROP button shows a little picture of whatever you're actually
     // holding. Now it isn't "a button called DROP" that you have to
