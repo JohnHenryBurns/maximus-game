@@ -95,8 +95,9 @@
 
   <p>
     Computer: click to look around, WASD or arrows to move, E to open,
-    click or Space to swing, Q to drop, 1&ndash;5 to pick a pocket, Esc to let go.<br>
-    Phone: left thumb walks, right thumb looks, tap the buttons. Turn it sideways.
+    click or Space to shoot or swing, Q to drop, 1&ndash;5 to pick a pocket, Esc to let go.<br>
+    Phone: left thumb walks, right thumb looks, tap the buttons. Turn it sideways.<br>
+    The pistol kills spiders. Only a knife cuts webs &mdash; find one in a chest.
   </p>
 
   <script>
@@ -189,7 +190,7 @@
     // isn't the inventory, it's a PICTURE of this list. Keeping those two
     // apart matters: change this list and the picture updates itself,
     // because the picture only ever reads from here.
-    inventory: ['knife'],
+    inventory: ['pistol'],
 
     // Which slot is in your hand. 0 means the first one.
     heldSlot: 0,
@@ -275,7 +276,7 @@
     // screenful every single time you attack, which it otherwise would.
     if (e.key === ' ') {
       e.preventDefault();
-      swingKnife();
+      attack();
     }
 
     // Q drops whatever's in your hand.
@@ -317,7 +318,7 @@
     if (document.pointerLockElement !== canvas) {
       canvas.requestPointerLock();
     } else {
-      swingKnife();
+      attack();
     }
   });
 
@@ -407,7 +408,7 @@
 
       // Buttons get first refusal - they beat steering and looking.
       if (inButton(p, ACTION)) { openChest(); continue; }
-      if (inButton(p, SLASH)) { swingKnife(); continue; }
+      if (inButton(p, SLASH)) { attack(); continue; }
       if (inButton(p, DROP)) { dropItem(); continue; }
 
       let hitSlot = false;
@@ -597,16 +598,83 @@
   const CUT_REACH = 0.95;     // how far the blade reaches
   const CUT_AIM = 0.35;       // how squarely you must be facing it
 
-  function swingKnife() {
+  const PISTOL_RANGE = 9;       // about as far as your torch reaches
+  const PISTOL_SPREAD = 0.42;   // how far off your aim line still counts
+  const PISTOL_DAMAGE = 2;      // a whole heart's worth - twice the knife
+
+  // One button, and it does whatever the thing in your hand does. The
+  // arm moves no matter what you're holding, because swiping at nothing
+  // is half the fun - but only a real weapon actually does anything.
+  function attack() {
     // Already mid-swing? Ignore it. Without this you can hammer the
     // button and the arm never actually gets to move.
     if (state.swing > 0) return;
     state.swing = SWING_FRAMES;
 
-    // The swing happens whatever you're holding - swiping at nothing is
-    // half the fun. But only a blade cuts anything.
-    if (state.inventory[state.heldSlot] !== 'knife') return;
+    const held = state.inventory[state.heldSlot];
+    if (held === 'pistol') shoot();
+    else if (held === 'knife') slash();
+  }
 
+  // FIRING. A knife asks "is it close enough?". A bullet can't - it
+  // travels in a straight line and either meets something or doesn't.
+  //
+  // So for every spider we work out two things: how far ALONG your aim
+  // line it sits, and how far OFF that line it is. The second one is the
+  // miss distance. Small miss, you hit it. That's how nearly every game
+  // in the world works out whether a shot landed.
+  function shoot() {
+    const dirX = Math.cos(state.angle);
+    const dirY = Math.sin(state.angle);
+
+    // How far the bullet gets before it buries itself in rock.
+    const wall = castRay(dirX, dirY);
+
+    let target = null;
+    let targetIndex = -1;
+    let nearest = PISTOL_RANGE;
+
+    for (let i = 0; i < sprites.length; i++) {
+      const thing = sprites[i];
+      if (thing.kind !== 'spider') continue;
+
+      const dx = thing.x - state.x;
+      const dy = thing.y - state.y;
+
+      // How far along the line of fire. Negative means behind you.
+      const along = dx * dirX + dy * dirY;
+      if (along <= 0 || along > nearest) continue;
+
+      // What's left over is the sideways miss.
+      const missX = dx - dirX * along;
+      const missY = dy - dirY * along;
+      if (Math.sqrt(missX * missX + missY * missY) > PISTOL_SPREAD) continue;
+
+      // Rock in the way? Then you shot the wall.
+      if (along > wall.dist) continue;
+
+      // Keep only the NEAREST one on the line - a bullet stops at the
+      // first thing it meets, it doesn't carry on through.
+      nearest = along;
+      target = thing;
+      targetIndex = i;
+    }
+
+    if (!target) { say('BANG! Missed.'); return; }
+
+    target.health -= PISTOL_DAMAGE;
+    target.hurtUntil = state.frame + 10;
+
+    if (target.health <= 0) {
+      sprites.splice(targetIndex, 1);
+      say('BANG! The spider curls up.');
+    } else {
+      target.nextBite = state.frame + 30;
+      say('BANG! Hit.');
+    }
+  }
+
+  function slash() {
     const dirX = Math.cos(state.angle);
     const dirY = Math.sin(state.angle);
     let cut = 0;
@@ -1189,7 +1257,11 @@
 
   // What a chest can be hiding. Add a word here and chests can drop it -
   // as long as there's a picture for it over in ITEMS.
-  const LOOT_TYPES = ['flashlight', 'gem', 'bone'];
+  // The knife is in here now instead of in your pockets at the start.
+  // You begin with a pistol, and the pistol kills spiders but does
+  // nothing to webs - so until you find a knife in a chest, there are
+  // tunnels you simply can't clear. Two tools, two jobs.
+  const LOOT_TYPES = ['knife', 'flashlight', 'gem', 'bone'];
 
   const sprites = [];
 
@@ -2205,12 +2277,63 @@
     return c;
   }
 
+  function makePistolIcon() {
+    const c = document.createElement('canvas');
+    c.width = ICON_SIZE;
+    c.height = ICON_SIZE;
+    const t = c.getContext('2d');
+
+    // The grip, leaning back the way a pistol grip does.
+    t.fillStyle = '#3b3f46';
+    t.beginPath();
+    t.moveTo(14, 24);
+    t.lineTo(23, 24);
+    t.lineTo(21, 41);
+    t.lineTo(11, 41);
+    t.closePath();
+    t.fill();
+
+    // Checkering on the grip, so it isn't a plain grey wedge.
+    t.fillStyle = 'rgba(0, 0, 0, 0.32)';
+    for (let y = 27; y < 40; y += 3) t.fillRect(12, y, 9, 1.2);
+
+    // The body, and the barrel poking out the front.
+    t.fillStyle = '#4a4f58';
+    t.fillRect(10, 15, 30, 10);
+    t.fillStyle = '#3a3e45';
+    t.fillRect(38, 17, 7, 6);
+
+    // Front and back sights - tiny, and they're most of what makes a
+    // grey box read as a gun rather than a stapler.
+    t.fillStyle = '#606670';
+    t.fillRect(35, 12, 3, 3);
+    t.fillRect(12, 12, 3, 3);
+
+    // Trigger guard.
+    t.strokeStyle = '#3b3f46';
+    t.lineWidth = 2.5;
+    t.beginPath();
+    t.arc(25, 27, 5, 0, Math.PI);
+    t.stroke();
+
+    // A hard highlight along the top, where a light would catch metal.
+    t.fillStyle = 'rgba(255, 255, 255, 0.16)';
+    t.fillRect(10, 15, 30, 2.5);
+
+    t.strokeStyle = 'rgba(0, 0, 0, 0.55)';
+    t.lineWidth = 1.5;
+    t.strokeRect(10, 15, 30, 10);
+
+    return c;
+  }
+
   // Everything that can ever sit in your pockets. Add to this and the
   // inventory bar picks it up automatically - it just reads this list.
   //
   // `shades` is the same picture pre-darkened 16 ways, for when the item
   // is lying on the cavern floor and the torchlight has to reach it.
   const ITEMS = {
+    pistol:     { name: 'Pistol',       icon: makePistolIcon() },
     knife:      { name: 'Pocket Knife', icon: makeKnifeIcon() },
     flashlight: { name: 'Flashlight',   icon: makeFlashlightIcon() },
     gem:        { name: 'Glowing Gem',  icon: makeGemIcon() },
@@ -2305,6 +2428,11 @@
   const GRIP_RED   = [142, 43, 36];
   const BLADE_GREY = [198, 203, 214];
 
+  const GUN_DARK     = [62, 67, 75];
+  const GUN_GRIP     = [48, 42, 38];
+  const GUN_METAL    = [116, 122, 132];
+  const MUZZLE_FLASH = [255, 238, 158];
+
   // How far over the arm leans.
   const ARM_ROLL = -0.5;
 
@@ -2392,12 +2520,18 @@
       arc = Math.sin(through * Math.PI);
     }
 
-    // Everything below is nudged by `arc`. At rest it's 0 and these are
-    // exactly the numbers they always were.
-    const roll = ARM_ROLL - arc * 0.85;
-    const armX = 0.330 - arc * 0.045;
-    const armY = 0.415 - arc * 0.115;
-    const armZ = 0.815 - arc * 0.070;
+    // A KNIFE AND A GUN DO NOT MOVE THE SAME WAY.
+    // A knife swings across in a big arc. A gun barely moves at all -
+    // it kicks straight up and back and settles. Same countdown, same
+    // curve, completely different numbers, and that alone is enough for
+    // the two to feel like different objects in your hand.
+    const holding = state.inventory[state.heldSlot];
+    const shooting = (holding === 'pistol');
+
+    const roll = ARM_ROLL - arc * (shooting ? 0.26 : 0.85);
+    const armX = 0.330 - arc * (shooting ? 0.008 : 0.045);
+    const armY = 0.415 - arc * (shooting ? 0.055 : 0.115);
+    const armZ = 0.815 - arc * (shooting ? 0.028 : 0.070);
     const armHalf = 0.050;
 
     addBox(armX, armY, armZ, armHalf, armHalf * 3, armHalf,
@@ -2418,7 +2552,7 @@
     const fistX = armX + fist[0];
     const fistY = armY + fist[1];
 
-    if (state.inventory[state.heldSlot] === 'knife') {
+    if (holding === 'knife') {
       const grip = along(-0.014, -0.008, roll);
       addBox(fistX + grip[0], fistY + grip[1], armZ - 0.048,
              0.016, 0.052, 0.016, roll, GRIP_RED);
@@ -2426,6 +2560,39 @@
       const blade = along(-0.014, -0.132, roll);
       addBox(fistX + blade[0], fistY + blade[1], armZ - 0.048,
              0.010, 0.076, 0.005, roll, BLADE_GREY);
+
+    } else if (holding === 'pistol') {
+      // A knife points up out of your fist. A gun points AWAY FROM YOU,
+      // into the cave - which means it stretches along the third
+      // direction, the one that goes into the screen. Bigger numbers
+      // there are further off, so the barrel gets the bigger ones.
+      const gunUp = along(0, -0.030, roll);
+      const gripAt = along(-0.004, 0.014, roll);
+      const sightAt = along(0, -0.052, roll);
+
+      // The grip, wrapped in your fist.
+      addBox(fistX + gripAt[0], fistY + gripAt[1], armZ - 0.006,
+             0.021, 0.040, 0.024, roll, GUN_GRIP);
+
+      // The body, running away from you down the barrel.
+      addBox(fistX + gunUp[0], fistY + gunUp[1], armZ + 0.050,
+             0.022, 0.025, 0.072, roll, GUN_DARK);
+
+      // The muzzle, out at the far end.
+      addBox(fistX + gunUp[0], fistY + gunUp[1], armZ + 0.128,
+             0.012, 0.012, 0.017, roll, GUN_METAL);
+
+      // The little sight on top. Tiny, and it does an unreasonable
+      // amount of the work of making this read as a gun.
+      addBox(fistX + sightAt[0], fistY + sightAt[1], armZ + 0.010,
+             0.006, 0.008, 0.008, roll, GUN_METAL);
+
+      // MUZZLE FLASH - only for the first few frames of the shot. A
+      // flash that hangs around isn't a flash, it's a lamp.
+      if (state.swing > SWING_FRAMES - 5) {
+        addBox(fistX + gunUp[0], fistY + gunUp[1], armZ + 0.158,
+               0.032, 0.032, 0.022, roll, MUZZLE_FLASH);
+      }
     }
 
     // Furthest panels first, same painter's trick as everywhere else.
@@ -2572,8 +2739,11 @@
     drawButton(ACTION, 'OPEN', chestInReach() !== null,
                [122, 94, 34], [255, 226, 140]);
 
-    drawButton(SLASH, 'SLASH',
-               state.inventory[state.heldSlot] === 'knife',
+    // The button says what the thing in your hand actually does.
+    const weapon = state.inventory[state.heldSlot];
+    drawButton(SLASH,
+               weapon === 'pistol' ? 'SHOOT' : 'SLASH',
+               weapon === 'pistol' || weapon === 'knife',
                [104, 40, 36], [255, 190, 175]);
 
     // The DROP button shows a little picture of whatever you're actually
