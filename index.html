@@ -530,6 +530,7 @@
     if (state.hurtFlash > 0) state.hurtFlash--;
     if (state.swing > 0) state.swing--;
 
+    updateSpiders();
     checkPickups();
     checkHazards();
   }
@@ -609,33 +610,59 @@
     const dirX = Math.cos(state.angle);
     const dirY = Math.sin(state.angle);
     let cut = 0;
+    let stabbed = 0;
+    let killed = 0;
 
     // Backwards through the list again, because we're removing things
     // as we go - same trap as picking up loot.
     for (let i = sprites.length - 1; i >= 0; i--) {
       const thing = sprites[i];
-      if (thing.kind !== 'web') continue;
+      if (thing.kind !== 'web' && thing.kind !== 'spider') continue;
 
       const dx = thing.x - state.x;
       const dy = thing.y - state.y;
       const gap = Math.sqrt(dx * dx + dy * dy);
       if (gap > CUT_REACH) continue;
 
-      // AND you have to be facing it. This sum asks "how much is the web
-      // in the direction I'm looking?" - 1 means dead ahead, 0 means off
-      // to the side, minus means it's behind you. Without this check you
+      // AND you have to be facing it. This sum asks "how much is it in
+      // the direction I'm looking?" - 1 means dead ahead, 0 means off to
+      // the side, minus means it's behind you. Without this check you
       // could clear a whole room by spinning on the spot with the button
       // held down, which is funny once and then ruins the game.
       if (gap > 0.01 && ((dx / gap) * dirX + (dy / gap) * dirY) < CUT_AIM) {
         continue;
       }
 
-      sprites.splice(i, 1);
-      cut++;
+      if (thing.kind === 'web') {
+        sprites.splice(i, 1);
+        cut++;
+        continue;
+      }
+
+      // ---- it's a spider ----
+      thing.health--;
+      thing.hurtUntil = state.frame + 10;
+
+      if (thing.health <= 0) {
+        sprites.splice(i, 1);
+        killed++;
+      } else {
+        // Knock it back, so three hits don't all land in the same
+        // instant. It has to walk back in, and that gap is what turns a
+        // fight into something with a rhythm instead of a button-mash.
+        const shoveX = (thing.x - state.x) / gap * 0.45;
+        const shoveY = (thing.y - state.y) / gap * 0.45;
+        if (!isWall(thing.x + shoveX, thing.y)) thing.x += shoveX;
+        if (!isWall(thing.x, thing.y + shoveY)) thing.y += shoveY;
+        thing.nextBite = state.frame + 30;   // stunned briefly
+        stabbed++;
+      }
     }
 
-    if (cut > 0) say(cut > 1 ? 'You slash through the webs!'
-                             : 'The web comes apart.');
+    if (killed > 0) say(killed > 1 ? 'Spiders down!' : 'The spider curls up.');
+    else if (stabbed > 0) say('You hit the spider!');
+    else if (cut > 0) say(cut > 1 ? 'You slash through the webs!'
+                                  : 'The web comes apart.');
   }
 
 
@@ -729,6 +756,52 @@
     say('Dropped: ' + ITEMS[name].name);
   }
 
+
+  // --- 5d. THE SPIDER ---------------------------------------------------
+  // The first thing in this cavern that does anything on its own. Chests
+  // wait to be opened. Webs sit there. A spider decides.
+  //
+  // It's not clever - it walks straight at you and bites when it arrives.
+  // But that's genuinely all most game monsters do, and it's plenty,
+  // because YOU'RE the one who has to work out what to do about it.
+
+  const SPIDER_HEALTH = 3;       // three knife hits
+  const SPIDER_SPEED = 0.021;    // half your speed - you can always run
+  const SPIDER_SIGHT = 6.5;      // how far off it notices you
+  const SPIDER_REACH = 0.8;      // how close before it can bite
+  const SPIDER_BITE = 1;         // half a heart
+  const SPIDER_GAP = 75;         // frames between bites, about 1.2 seconds
+
+  function updateSpiders() {
+    for (const thing of sprites) {
+      if (thing.kind !== 'spider') continue;
+
+      const dx = state.x - thing.x;
+      const dy = state.y - thing.y;
+      const gap = Math.sqrt(dx * dx + dy * dy);
+
+      // Too far off to have noticed you. It just sits there.
+      if (gap > SPIDER_SIGHT || gap < 0.001) continue;
+
+      if (gap > SPIDER_REACH) {
+        // Walk straight at you - and slide along walls exactly the way
+        // you do, by trying the two directions separately. Without that
+        // it wedges itself on a corner and gives up forever.
+        const stepX = (dx / gap) * SPIDER_SPEED;
+        const stepY = (dy / gap) * SPIDER_SPEED;
+        if (!isWall(thing.x + stepX, thing.y)) thing.x += stepX;
+        if (!isWall(thing.x, thing.y + stepY)) thing.y += stepY;
+
+        // Only counts up while it's actually moving, so a spider that
+        // has stopped stops scuttling too.
+        thing.step += SPIDER_SPEED;
+
+      } else if (state.frame >= thing.nextBite) {
+        hurt(SPIDER_BITE);
+        thing.nextBite = state.frame + SPIDER_GAP;
+      }
+    }
+  }
 
   // Walk over dropped loot and it goes in your pocket.
   function checkPickups() {
@@ -1033,6 +1106,76 @@
     return c;
   }
 
+  // A spider. `lift` is either +1 or -1, and it shifts which legs are up
+  // and which are down. Draw it twice with the two values and you get two
+  // frames - flick between them as it walks and it scuttles.
+  //
+  // TWO frames. That's all. Not eight, not a smooth animation. Two.
+  // Your eye fills in an enormous amount of movement from almost nothing,
+  // as long as the timing is right.
+  function makeSpiderTexture(lift) {
+    const c = blankSprite();
+    const t = c.getContext('2d');
+    const cx = 32;
+    const cy = 34;
+
+    // Legs first, so the body covers where they join on.
+    t.strokeStyle = '#191317';
+    t.lineWidth = 3;
+    t.lineCap = 'round';
+
+    for (let side = -1; side <= 1; side += 2) {
+      for (let i = 0; i < 4; i++) {
+        // Every leg points out at a slightly different angle, and every
+        // other leg is raised. Real spiders move alternate legs - that's
+        // what stops them falling over, and it's what makes this read as
+        // walking rather than sliding.
+        const spread = 0.50 + i * 0.44;
+        const raised = (i % 2 === 0) ? lift : -lift;
+
+        const kneeX = cx + side * Math.cos(spread) * 16;
+        const kneeY = cy - Math.sin(spread) * 10 - raised * 4;
+        const footX = cx + side * Math.cos(spread) * 28;
+        const footY = cy + 13 + i * 1.6 + raised * 3;
+
+        t.beginPath();
+        t.moveTo(cx + side * 6, cy);
+        t.quadraticCurveTo(kneeX, kneeY, footX, footY);
+        t.stroke();
+      }
+    }
+
+    // Fat back end.
+    t.fillStyle = '#241a20';
+    t.beginPath();
+    t.ellipse(cx, cy + 6, 13, 11, 0, 0, Math.PI * 2);
+    t.fill();
+
+    // A dark red marking, so it isn't just a black blob.
+    t.fillStyle = '#5c2032';
+    t.beginPath();
+    t.ellipse(cx, cy + 7, 5, 6.5, 0, 0, Math.PI * 2);
+    t.fill();
+
+    // Head end.
+    t.fillStyle = '#302229';
+    t.beginPath();
+    t.ellipse(cx, cy - 8, 9, 7, 0, 0, Math.PI * 2);
+    t.fill();
+
+    // EYES. Five little red dots, and they do more work than everything
+    // else put together. A dark shape with legs is a shape. A dark shape
+    // with legs and eyes is looking at you.
+    t.fillStyle = '#ff4646';
+    for (const eye of [[-4.5, -10], [0, -11.5], [4.5, -10], [-2, -7], [2, -7]]) {
+      t.beginPath();
+      t.arc(cx + eye[0], cy + eye[1], 1.6, 0, Math.PI * 2);
+      t.fill();
+    }
+
+    return c;
+  }
+
   // Same pre-mixing idea as the floor, but these have see-through bits,
   // so we can't just splash black over the top - that would darken the
   // holes too. 'source-atop' means "only paint where there's already
@@ -1073,11 +1216,18 @@
     },
   };
 
+  // The two scuttle frames, each pre-darkened 16 ways like everything else.
+  const SPIDER_FRAMES = [
+    makeShadedCopies(makeSpiderTexture(1)),
+    makeShadedCopies(makeSpiderTexture(-1)),
+  ];
+
 
   // --- 7c. SCATTERING THEM AROUND --------------------------------------
 
   const CHEST_COUNT = 5;
   const WEB_COUNT = 12;
+  const SPIDER_COUNT = 3;
 
   // What a chest can be hiding. Add a word here and chests can drop it -
   // as long as there's a picture for it over in ITEMS.
@@ -1128,6 +1278,30 @@
     }
     for (let i = 0; i < WEB_COUNT && next < spots.length; i++, next++) {
       sprites.push({ x: spots[next].col + 0.5, y: spots[next].row + 0.5, kind: 'web' });
+    }
+
+    // Spiders, but never anywhere near where you start. Being bitten
+    // before you've worked out which way is forward isn't difficulty,
+    // it's just unfair - and unfair is the one thing a game can't be.
+    for (let i = 0; i < SPIDER_COUNT; i++) {
+      while (next < spots.length) {
+        const sx = spots[next].col + 0.5 - 1.5;
+        const sy = spots[next].row + 0.5 - 1.5;
+        if (sx * sx + sy * sy > 30) break;    // at least ~5 squares off
+        next++;
+      }
+      if (next >= spots.length) break;
+
+      sprites.push({
+        x: spots[next].col + 0.5,
+        y: spots[next].row + 0.5,
+        kind: 'spider',
+        health: SPIDER_HEALTH,
+        nextBite: 0,      // the frame it's allowed to bite again
+        hurtUntil: 0,     // frame its white flash ends
+        step: Math.random() * 10,   // where it is in its scuttle
+      });
+      next++;
     }
   })();
 
@@ -2569,8 +2743,20 @@
       // from different places and sit at different heights, so work out
       // which picture and where it hangs before drawing either.
       let shades, scale, vOffset;
+      let flashing = false;
 
-      if (thing.kind === 'loot') {
+      if (thing.kind === 'spider') {
+        // Flick between the two leg frames as it walks. thing.step only
+        // grows while it's actually moving, so a spider stood still
+        // stands still - the animation is tied to the walking, not to
+        // the clock. That one detail is most of what sells it as alive.
+        const frame = (Math.floor(thing.step * 7) % 2 === 0) ? 0 : 1;
+        shades = SPIDER_FRAMES[frame];
+        scale = 0.55;
+        vOffset = 0.5 - scale / 2;    // stood on the floor
+        flashing = state.frame < thing.hurtUntil;
+
+      } else if (thing.kind === 'loot') {
         shades = ITEMS[thing.item].shades;
         scale = 0.34;
         // Just above the floor, bobbing gently. Every dropped thing gets
@@ -2600,7 +2786,13 @@
       // Torchlight, same as everything else.
       let light = 1 - depth / TORCH_RANGE;
       if (light < 0) light = 0;
-      const picture = shades[(light * (SPRITE_SHADES - 1)) | 0];
+
+      // Just been stabbed? Draw it at full brightness for a few frames.
+      // It goes bright in the dark, which is unmissable - and you need to
+      // know a hit landed, otherwise you're swinging on faith.
+      const picture = flashing
+        ? shades[SPRITE_SHADES - 1]
+        : shades[(light * (SPRITE_SHADES - 1)) | 0];
 
       // Ask the picture how big it is rather than assuming. Cobwebs are
       // 64 dots across, item pictures are 48, and this same loop draws
