@@ -97,7 +97,7 @@
     Computer: click to look around, WASD or arrows to move, E to open,
     click or Space to shoot or swing, Q to drop, 1&ndash;5 to pick a pocket, Esc to let go.<br>
     Phone: left thumb walks, right thumb looks, tap the buttons. Turn it sideways.<br>
-    The pistol kills spiders. Only a knife cuts webs &mdash; find one in a chest.
+    Slot 1 is the pistol &mdash; it kills spiders. Slot 2 is the knife &mdash; it cuts webs.
   </p>
 
   <script>
@@ -190,7 +190,10 @@
     // isn't the inventory, it's a PICTURE of this list. Keeping those two
     // apart matters: change this list and the picture updates itself,
     // because the picture only ever reads from here.
-    inventory: ['pistol'],
+    // Pistol in slot 1, knife in slot 2. Press 1 and 2 to swap between
+    // them - the pistol drops spiders, the knife cuts webs, and neither
+    // one does the other's job.
+    inventory: ['pistol', 'knife'],
 
     // Which slot is in your hand. 0 means the first one.
     heldSlot: 0,
@@ -1253,7 +1256,7 @@
 
   const CHEST_COUNT = 5;
   const WEB_COUNT = 12;
-  const SPIDER_COUNT = 3;
+  const SPIDER_COUNT = 5;
 
   // What a chest can be hiding. Add a word here and chests can drop it -
   // as long as there's a picture for it over in ITEMS.
