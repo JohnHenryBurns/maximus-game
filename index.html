@@ -241,6 +241,9 @@
     // Frames of red flash left on screen.
     hurtFlash: 0,
 
+    // ...and frames of green flash, for when you get some back.
+    healFlash: 0,
+
     // Frames left in the current knife swing. 0 means your arm is
     // resting. This is the ONLY thing that says a swing is happening -
     // the animation reads it, and so does the "are you already mid-swing"
@@ -372,6 +375,27 @@
     return document.pointerLockElement === canvas;
   }
 
+  // IS THE FIRE BUTTON BEING HELD DOWN RIGHT NOW?
+  //
+  // Every weapon so far only needed "was it just pressed". A machine gun
+  // needs "is it still down", which is a different question and has to
+  // be tracked separately for each way of playing: a mouse button, the
+  // space bar, and a thumb resting on the FIRE circle.
+  let mouseHeld = false;
+  const slashTouch = { id: null };
+
+  canvas.addEventListener('mousedown', () => {
+    if (mouseIsCaptured()) mouseHeld = true;
+  });
+  // On the WINDOW, not the canvas - let go outside the game and we still
+  // want to know, otherwise the gun jams on and never stops.
+  window.addEventListener('mouseup', () => { mouseHeld = false; });
+  window.addEventListener('blur', () => { mouseHeld = false; });
+
+  function fireHeld() {
+    return mouseHeld || keys[' '] === true || slashTouch.id !== null;
+  }
+
 
   // --- 4c. TOUCH, FOR PHONES AND TABLETS -------------------------------
   // No mouse to lock, no keyboard to press. The screen has to be the
@@ -436,7 +460,12 @@
 
       // Buttons get first refusal - they beat steering and looking.
       if (inButton(p, ACTION)) { openChest(); continue; }
-      if (inButton(p, SLASH)) { attack(); continue; }
+      if (inButton(p, SLASH)) {
+        // Remember WHICH finger this is, so we know when it lifts off.
+        slashTouch.id = t.identifier;
+        attack();
+        continue;
+      }
       if (inButton(p, DROP)) { dropItem(); continue; }
       if (inButton(p, MUTE)) { toggleMute(); continue; }
 
@@ -494,6 +523,7 @@
       const id = e.changedTouches[n].identifier;
       if (id === drive.id) drive.id = null;
       if (id === look.id) look.id = null;
+      if (id === slashTouch.id) slashTouch.id = null;
     }
   }
   canvas.addEventListener('touchend', endTouch, { passive: false });
@@ -631,6 +661,62 @@
     src.start(t);
   }
 
+  // A short rising note, for when something good happens. Rising means
+  // good and falling means bad, in basically every piece of music ever
+  // written, and your ear knows it without being told.
+  function chime() {
+    if (!audio.on) return;
+    const t = audio.ctx.currentTime;
+
+    const osc = audio.ctx.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(520, t);
+    osc.frequency.exponentialRampToValueAtTime(880, t + 0.13);
+
+    const g = audio.ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.20, t + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.36);
+
+    osc.connect(g);
+    g.connect(audio.ctx.destination);
+    osc.start(t);
+    osc.stop(t + 0.40);
+  }
+
+  // A machine gun round. Same noise trick as `bang`, but a tenth as
+  // long and squeezed through a bandpass filter so only the crack in the
+  // middle survives. Twelve full-fat bangs a second would be a wall of
+  // mush - this stays sharp and separate.
+  function rattle() {
+    if (!audio.on) return;
+    const t = audio.ctx.currentTime;
+
+    const frames = Math.floor(audio.ctx.sampleRate * 0.09);
+    const buffer = audio.ctx.createBuffer(1, frames, audio.ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < frames; i++) {
+      const fade = 1 - i / frames;
+      data[i] = (Math.random() * 2 - 1) * fade * fade;
+    }
+
+    const src = audio.ctx.createBufferSource();
+    src.buffer = buffer;
+
+    const f = audio.ctx.createBiquadFilter();
+    f.type = 'bandpass';
+    f.frequency.value = 1500;
+    f.Q.value = 0.9;
+
+    const g = audio.ctx.createGain();
+    g.gain.value = 0.26;
+
+    src.connect(f);
+    f.connect(g);
+    g.connect(audio.ctx.destination);
+    src.start(t);
+  }
+
   const MUSIC_RANGE = 8;    // how close a spider has to be to stir it up
 
   function updateMusic() {
@@ -728,11 +814,17 @@
       }
     }
 
+    // AUTO-FIRE. Some weapons keep going for as long as you hold the
+    // button. attack() already rate-limits itself, so calling it every
+    // single frame is safe - it simply refuses until it's ready again.
+    if (AUTO_FIRE[state.inventory[state.heldSlot]] && fireHeld()) attack();
+
     state.frame++;
 
     // Tick the two countdowns down toward zero.
     if (state.mercy > 0) state.mercy--;
     if (state.hurtFlash > 0) state.hurtFlash--;
+    if (state.healFlash > 0) state.healFlash--;
     if (state.swing > 0) state.swing--;
 
     updateSpiders();
@@ -815,9 +907,24 @@
   const SHOTGUN_DAMAGE = 3;       // kills a spider outright
   const SHOTGUN_COOLDOWN = 600;   // 600 frames at 60 a second = 10 seconds
 
+  const MG_RANGE = 8;
+  const MG_SPREAD = 0.45;
+  const MG_DAMAGE = 1;        // half a heart - three rounds kills a spider
+  const MG_RATE = 5;          // a shot every 5 frames = 12 a second
+  const MG_SCATTER = 0.07;    // how much each round wanders off your aim
+
   // How long each weapon has to wait, by name. Anything not in here
   // fires as fast as you can press the button.
-  const COOLDOWNS = { shotgun: SHOTGUN_COOLDOWN };
+  const COOLDOWNS = { shotgun: SHOTGUN_COOLDOWN, machinegun: MG_RATE };
+
+  // Weapons that keep firing while you HOLD the button rather than
+  // needing a fresh press each time.
+  const AUTO_FIRE = { machinegun: true };
+
+  // How long the arm animation runs. A machine gun barely twitches - it
+  // has to be ready again in five frames, so a big sixteen-frame swing
+  // would block the next shot before it happened.
+  const SWING_LENGTH = { machinegun: 4 };
 
   function attack() {
     // Already mid-swing? Ignore it. Without this you can hammer the
@@ -833,18 +940,73 @@
     if (wait) {
       const readyAt = state.cooldowns[held] || 0;
       if (state.frame < readyAt) {
-        const secondsLeft = Math.ceil((readyAt - state.frame) / 60);
-        say('Reloading... ' + secondsLeft + 's');
+        // Only announce a wait that's actually worth announcing. A
+        // machine gun pauses five frames between rounds - saying
+        // "reloading" for a twelfth of a second would be nonsense.
+        if (wait > 60) {
+          const secondsLeft = Math.ceil((readyAt - state.frame) / 60);
+          say('Reloading... ' + secondsLeft + 's');
+        }
         return;
       }
       state.cooldowns[held] = state.frame + wait;
     }
 
-    state.swing = SWING_FRAMES;
+    state.swing = SWING_LENGTH[held] || SWING_FRAMES;
 
     if (held === 'pistol') shoot();
     else if (held === 'shotgun') blast();
+    else if (held === 'machinegun') spray();
     else if (held === 'knife') slash();
+  }
+
+  // ONE MACHINE GUN ROUND.
+  // Nearly the pistol, with two differences that change everything: it
+  // does half the damage, and every round wanders slightly off your aim.
+  // That wander is why it isn't just a better pistol - hold it down and
+  // you'll hit something eventually, but you can't pick your shot.
+  function spray() {
+    rattle();
+
+    const aim = state.angle + (Math.random() - 0.5) * MG_SCATTER;
+    const dirX = Math.cos(aim);
+    const dirY = Math.sin(aim);
+    const wall = castRay(dirX, dirY);
+
+    let target = null;
+    let targetIndex = -1;
+    let nearest = MG_RANGE;
+
+    for (let i = 0; i < sprites.length; i++) {
+      const thing = sprites[i];
+      if (thing.kind !== 'spider') continue;
+
+      const dx = thing.x - state.x;
+      const dy = thing.y - state.y;
+
+      const along = dx * dirX + dy * dirY;
+      if (along <= 0 || along > nearest) continue;
+
+      const missX = dx - dirX * along;
+      const missY = dy - dirY * along;
+      if (Math.sqrt(missX * missX + missY * missY) > MG_SPREAD) continue;
+      if (along > wall.dist) continue;
+
+      nearest = along;
+      target = thing;
+      targetIndex = i;
+    }
+
+    if (!target) return;   // no message - it would be spamming twelve a second
+
+    target.health -= MG_DAMAGE;
+    target.hurtUntil = state.frame + 6;
+
+    if (target.health <= 0) {
+      sprites.splice(targetIndex, 1);
+      const gained = heal(HEART_PER_KILL);
+      say('Spider down.' + (gained ? '  ' + heartWord(gained) : ''));
+    }
   }
 
   // THE SHOTGUN. A pistol fires down a line. A shotgun throws a CONE -
@@ -860,6 +1022,7 @@
 
     let hit = 0;
     let killed = 0;
+    let gained = 0;
 
     // Backwards, because we remove as we go.
     for (let i = sprites.length - 1; i >= 0; i--) {
@@ -888,12 +1051,19 @@
       thing.health -= SHOTGUN_DAMAGE;
       thing.hurtUntil = state.frame + 14;
 
-      if (thing.health <= 0) { sprites.splice(i, 1); killed++; }
-      else { thing.nextBite = state.frame + 45; hit++; }
+      if (thing.health <= 0) {
+        sprites.splice(i, 1);
+        killed++;
+        gained += heal(HEART_PER_KILL);
+      } else {
+        thing.nextBite = state.frame + 45;
+        hit++;
+      }
     }
 
-    if (killed > 1) say('BOOM! ' + killed + ' of them!');
-    else if (killed === 1) say('BOOM! Spider down.');
+    const bonus = gained ? '  ' + heartWord(gained) : '';
+    if (killed > 1) say('BOOM! ' + killed + ' of them!' + bonus);
+    else if (killed === 1) say('BOOM! Spider down.' + bonus);
     else if (hit > 0) say('BOOM! Hit.');
     else say('BOOM! Nothing but rock.');
   }
@@ -951,7 +1121,8 @@
 
     if (target.health <= 0) {
       sprites.splice(targetIndex, 1);
-      say('BANG! The spider curls up.');
+      const gained = heal(HEART_PER_KILL);
+      say('BANG! Spider down.' + (gained ? '  ' + heartWord(gained) : ''));
     } else {
       target.nextBite = state.frame + 30;
       say('BANG! Hit.');
@@ -964,6 +1135,7 @@
     let cut = 0;
     let stabbed = 0;
     let killed = 0;
+    let gained = 0;
 
     // Backwards through the list again, because we're removing things
     // as we go - same trap as picking up loot.
@@ -998,6 +1170,7 @@
       if (thing.health <= 0) {
         sprites.splice(i, 1);
         killed++;
+        gained += heal(HEART_PER_KILL);
       } else {
         // Knock it back, so three hits don't all land in the same
         // instant. It has to walk back in, and that gap is what turns a
@@ -1011,7 +1184,10 @@
       }
     }
 
-    if (killed > 0) say(killed > 1 ? 'Spiders down!' : 'The spider curls up.');
+    if (killed > 0) {
+      const bonus = gained ? '  ' + heartWord(gained) : '';
+      say((killed > 1 ? 'Spiders down!' : 'The spider curls up.') + bonus);
+    }
     else if (stabbed > 0) say('You hit the spider!');
     else if (cut > 0) say(cut > 1 ? 'You slash through the webs!'
                                   : 'The web comes apart.');
@@ -1044,6 +1220,32 @@
     } else {
       say('Something bites!');
     }
+  }
+
+  const HEART_PER_KILL = 2;   // 2 half-hearts = one whole heart
+
+  // Puts health back, but never more than the bar can hold. It returns
+  // how much ACTUALLY landed, not how much you asked for - so on a full
+  // bar it hands back 0, and the message can be honest about it.
+  function heal(halfHearts) {
+    const before = state.health;
+    const most = MAX_HEARTS * 2;
+
+    state.health += halfHearts;
+    if (state.health > most) state.health = most;
+
+    const gained = state.health - before;
+    if (gained > 0) {
+      state.healFlash = 14;
+      chime();
+    }
+    return gained;
+  }
+
+  // Turns 2 into "+1 heart" and 3 into "+1.5 hearts".
+  function heartWord(halfHearts) {
+    const hearts = halfHearts / 2;
+    return '+' + hearts + (hearts === 1 ? ' heart' : ' hearts');
   }
 
   // Anything in the cavern that can hurt you. Right now that's the webs -
@@ -1550,7 +1752,7 @@
   // The shotgun lives in here rather than in your pockets at the start.
   // It kills anything in one go, so finding one has to be a moment -
   // and something you're given for free stops being exciting instantly.
-  const LOOT_TYPES = ['shotgun', 'knife', 'flashlight', 'gem', 'bone'];
+  const LOOT_TYPES = ['shotgun', 'machinegun', 'knife', 'flashlight', 'gem', 'bone'];
 
   const sprites = [];
 
@@ -2655,6 +2857,63 @@
     return c;
   }
 
+  function makeMachineGunIcon() {
+    const c = document.createElement('canvas');
+    c.width = ICON_SIZE;
+    c.height = ICON_SIZE;
+    const t = c.getContext('2d');
+
+    // The body - boxy and squat.
+    t.fillStyle = '#43484f';
+    t.fillRect(12, 16, 26, 9);
+
+    // A long thin barrel with a vented shroud. Those little slots are
+    // the giveaway: barrels get hot when you fire that fast, so real
+    // ones have holes to let the heat out.
+    t.fillStyle = '#373c43';
+    t.fillRect(37, 18, 9, 5);
+    t.fillStyle = 'rgba(0, 0, 0, 0.45)';
+    for (let x = 38; x < 46; x += 3) t.fillRect(x, 19, 1.4, 3);
+
+    // The magazine, hanging underneath. Nothing else in the game has
+    // one, so it reads as "this holds a LOT of bullets" straight away.
+    t.fillStyle = '#3a3f46';
+    t.beginPath();
+    t.moveTo(20, 25);
+    t.lineTo(28, 25);
+    t.lineTo(27, 40);
+    t.lineTo(19, 40);
+    t.closePath();
+    t.fill();
+
+    // Pistol grip, and a folding stock behind.
+    t.fillStyle = '#33383e';
+    t.beginPath();
+    t.moveTo(30, 25);
+    t.lineTo(37, 25);
+    t.lineTo(35, 36);
+    t.lineTo(29, 36);
+    t.closePath();
+    t.fill();
+
+    t.fillStyle = '#4d535b';
+    t.fillRect(3, 18, 10, 4);
+    t.fillRect(3, 18, 3, 9);
+
+    // Sight on top.
+    t.fillStyle = '#5f666f';
+    t.fillRect(31, 13, 3, 4);
+
+    t.fillStyle = 'rgba(255, 255, 255, 0.14)';
+    t.fillRect(12, 16, 26, 2.4);
+
+    t.strokeStyle = 'rgba(0, 0, 0, 0.5)';
+    t.lineWidth = 1.4;
+    t.strokeRect(12, 16, 26, 9);
+
+    return c;
+  }
+
   // Everything that can ever sit in your pockets. Add to this and the
   // inventory bar picks it up automatically - it just reads this list.
   //
@@ -2663,6 +2922,7 @@
   const ITEMS = {
     pistol:     { name: 'Pistol',       icon: makePistolIcon() },
     shotgun:    { name: 'Shotgun',      icon: makeShotgunIcon() },
+    machinegun: { name: 'Machine Gun',  icon: makeMachineGunIcon() },
     knife:      { name: 'Pocket Knife', icon: makeKnifeIcon() },
     flashlight: { name: 'Flashlight',   icon: makeFlashlightIcon() },
     gem:        { name: 'Glowing Gem',  icon: makeGemIcon() },
@@ -2856,11 +3116,15 @@
     // curve, completely different numbers, and that alone is enough for
     // the two to feel like different objects in your hand.
     const holding = state.inventory[state.heldSlot];
-    const shooting = (holding === 'pistol' || holding === 'shotgun');
+    const shooting = (holding === 'pistol' || holding === 'shotgun' ||
+                      holding === 'machinegun');
 
-    // A shotgun kicks HARD. Same curve, bigger numbers - which is the
-    // only thing telling your hands it's a heavier weapon.
-    const kick = (holding === 'shotgun') ? 2.1 : 1;
+    // A shotgun kicks HARD. A machine gun barely twitches, but it does
+    // it twelve times a second - and the buzz of a tiny movement
+    // repeating fast is exactly what a machine gun feels like.
+    let kick = 1;
+    if (holding === 'shotgun') kick = 2.1;
+    else if (holding === 'machinegun') kick = 0.55;
 
     const roll = ARM_ROLL - arc * (shooting ? 0.26 * kick : 0.85);
     const armX = 0.330 - arc * (shooting ? 0.008 * kick : 0.045);
@@ -2960,6 +3224,38 @@
       if (state.swing > SWING_FRAMES - 6) {
         addBox(fistX + gunUp[0], fistY + gunUp[1], armZ + 0.292,
                0.055, 0.055, 0.036, roll, MUZZLE_FLASH);
+      }
+
+    } else if (holding === 'machinegun') {
+      const gunUp = along(0, -0.032, roll);
+      const gripAt = along(-0.004, 0.016, roll);
+      const magAt = along(0, 0.030, roll);
+      const stockAt = along(0, 0.056, roll);
+
+      // Folding stock behind, thin and skeletal.
+      addBox(fistX + stockAt[0], fistY + stockAt[1], armZ - 0.056,
+             0.012, 0.032, 0.014, roll, GUN_METAL);
+
+      addBox(fistX + gripAt[0], fistY + gripAt[1], armZ - 0.014,
+             0.021, 0.036, 0.024, roll, GUN_GRIP);
+
+      // The magazine, hanging down in front of the grip. It's the one
+      // part no other gun here has, and it's what makes this readable
+      // as an automatic at a glance.
+      addBox(fistX + magAt[0], fistY + magAt[1], armZ + 0.028,
+             0.017, 0.048, 0.020, roll, GUN_GRIP);
+
+      // Boxy body, then a long thin barrel out the front.
+      addBox(fistX + gunUp[0], fistY + gunUp[1], armZ + 0.048,
+             0.026, 0.026, 0.078, roll, GUN_DARK);
+
+      addBox(fistX + gunUp[0], fistY + gunUp[1], armZ + 0.166,
+             0.011, 0.011, 0.048, roll, GUN_METAL);
+
+      // A small, fast flash - it's a small, fast gun.
+      if (state.swing > 1) {
+        addBox(fistX + gunUp[0], fistY + gunUp[1], armZ + 0.226,
+               0.030, 0.030, 0.020, roll, MUZZLE_FLASH);
       }
     }
 
@@ -3114,11 +3410,12 @@
                     state.frame < (state.cooldowns[weapon] || 0);
     let label = 'SLASH';
     if (weapon === 'pistol') label = 'SHOOT';
+    else if (weapon === 'machinegun') label = 'FIRE';
     else if (weapon === 'shotgun') label = waiting ? 'WAIT' : 'BOOM';
 
     drawButton(SLASH, label,
                !waiting && (weapon === 'pistol' || weapon === 'knife' ||
-                            weapon === 'shotgun'),
+                            weapon === 'shotgun' || weapon === 'machinegun'),
                [104, 40, 36], [255, 190, 175]);
 
     // A little speaker button, so the music can be turned off.
@@ -3203,7 +3500,9 @@
       // RELOADING. A dark shutter over the slot that drains away as the
       // wait runs down. Ten seconds is a long time to stand in the dark
       // wondering whether the button is broken - so we show it going.
-      if (name && COOLDOWNS[name]) {
+      // Only for genuinely slow weapons. A five-frame wait would just
+      // strobe the slot and look broken.
+      if (name && COOLDOWNS[name] > 60) {
         const readyAt = state.cooldowns[name] || 0;
         if (state.frame < readyAt) {
           const left = (readyAt - state.frame) / COOLDOWNS[name];
@@ -3555,6 +3854,14 @@
     // having to look at anything.
     if (state.hurtFlash > 0) {
       ctx.fillStyle = 'rgba(196, 22, 32, ' + (state.hurtFlash / 16 * 0.45) + ')';
+      ctx.fillRect(0, 0, W, H);
+    }
+
+    // And a green one when you get health back. Same idea, opposite
+    // colour - and gentler, because being healed shouldn't punch you in
+    // the eye the way being bitten does.
+    if (state.healFlash > 0) {
+      ctx.fillStyle = 'rgba(58, 216, 118, ' + (state.healFlash / 14 * 0.26) + ')';
       ctx.fillRect(0, 0, W, H);
     }
 
