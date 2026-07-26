@@ -52,6 +52,86 @@
       touch-action: none;
     }
 
+    #startScreen {
+      position: fixed;
+      inset: 0;
+      background: rgba(9, 4, 2, 0.94);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 22px;
+      z-index: 50;
+      text-align: center;
+      padding: 16px;
+      color: #e8e8f0;
+    }
+
+    #startScreen h2 {
+      margin: 0;
+      font-size: clamp(24px, 7vw, 40px);
+      letter-spacing: 3px;
+      color: #ffe9c4;
+      text-shadow: 0 0 18px #ff5e00;
+    }
+
+    #levelButtons {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      width: min(340px, 88vw);
+    }
+
+    .lvl {
+      padding: 15px 16px;
+      border: 2px solid #4a3a30;
+      border-radius: 12px;
+      background: #1a1010;
+      color: #e8e8f0;
+      font-family: inherit;
+      font-size: 14px;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
+    }
+    .lvl b { font-size: 21px; letter-spacing: 2px; }
+    .lvl span { color: #a89a8e; line-height: 1.4; }
+    .lvl:hover, .lvl:active { transform: scale(1.04); }
+
+    .lvl-easy b { color: #8fe0b4; }
+    .lvl-easy:hover, .lvl-easy:active {
+      border-color: #8fe0b4; box-shadow: 0 0 24px rgba(143,224,180,0.4);
+    }
+    .lvl-normal b { color: #ffc46b; }
+    .lvl-normal:hover, .lvl-normal:active {
+      border-color: #ffc46b; box-shadow: 0 0 24px rgba(255,196,107,0.4);
+    }
+    .lvl-hard b { color: #ff5a3c; }
+    .lvl-hard:hover, .lvl-hard:active {
+      border-color: #ff5a3c; box-shadow: 0 0 28px rgba(255,90,60,0.55);
+    }
+    .lvl-apocalypse b { color: #ff3ba7; }
+    .lvl-apocalypse:hover, .lvl-apocalypse:active {
+      border-color: #ff3ba7; box-shadow: 0 0 34px rgba(255,59,167,0.7);
+    }
+
+    #again {
+      position: fixed;
+      top: 8px;
+      right: 10px;
+      color: #ffb27a;
+      background: rgba(0,0,0,0.45);
+      border: none;
+      font-family: inherit;
+      font-size: 14px;
+      padding: 6px 11px;
+      border-radius: 8px;
+      cursor: pointer;
+      z-index: 10;
+    }
+
     /* A little "back to the menu" link, parked in the corner. */
     #back {
       position: fixed;
@@ -70,6 +150,16 @@
 <body>
 
   <a id="back" href="index.html">&larr; Arcade</a>
+  <button id="again">&#8635; Level</button>
+
+  <!-- The buttons aren't written out here - JavaScript builds them from
+       the LEVELS list, so that list is the only place that decides what
+       levels exist. -->
+  <div id="startScreen">
+    <h2>HOW BAD IS IT?</h2>
+    <div id="levelButtons"></div>
+  </div>
+
   <canvas id="screen" width="460" height="760"></canvas>
 
 <script>
@@ -102,22 +192,89 @@ const POLE_WIDTH    = 92;    // how fat the stone pole is
 const GAP           = 84;    // vertical space between platforms
 const LEDGE_LEN     = 118;   // how far a ledge sticks out from the pole
 
-const LAVA_START    = 0.30;  // how fast the pole sinks at the beginning
-const LAVA_SPEEDUP  = 0.000035; // how much nastier it gets every frame
-
-// HOW LONG A LEDGE HOLDS YOU. 60 frames is one second.
-// Stand on one longer than this and it gives way. You cannot camp.
-const CRUMBLE_TIME  = 60;
-// It starts shaking this many frames before it goes, so you get a
+// It starts shaking this many frames before a ledge goes, so you get a
 // warning. A trap with no warning isn't difficulty, it's just a surprise.
 const WOBBLE_WARNING = 26;
 
-// And how long until it builds itself back. Another second.
-// This is what turns the whole thing from a punishment into a RHYTHM:
-// nothing is ever lost for good, so a ledge you missed is just a ledge
-// you have to wait for. Set it to 9999 and the pole slowly destroys
-// itself and the game becomes horrible. Try it once.
-const REGROW_TIME = 60;
+// --- THE THREE LEVELS -------------------------------------------------
+//
+// Exactly the same trick as the cavern's CHOOSE YOUR DOOM screen: not
+// different code, just different numbers going into the same machine.
+// HARD is the game as you'd been playing it - those were the numbers.
+//
+//   lavaStart   - how fast the pole sinks at the beginning
+//   lavaSpeedup - how much nastier that gets every single frame
+//   crumble     - frames you can stand on a ledge. 60 = one second
+//   regrow      - frames until a fallen ledge rebuilds itself
+//   every       - one monster per this many ledges
+//   monsterHp   - shots to kill one
+
+const LEVELS = {
+  easy: {
+    label: 'STROLL',
+    blurb: 'Slow lava, patient ledges, and the odd sleepy monster.',
+    lavaStart: 0.15, lavaSpeedup: 0.000014,
+    crumble: 115, regrow: 38,
+    every: 9, monsterHp: 1,
+  },
+  normal: {
+    label: 'CLIMB',
+    blurb: 'A fair fight. You will still cook eventually.',
+    lavaStart: 0.22, lavaSpeedup: 0.000024,
+    crumble: 82, regrow: 50,
+    every: 7, monsterHp: 2,
+  },
+  hard: {
+    label: 'MELTDOWN',
+    blurb: 'The pole is falling apart and so are you.',
+    lavaStart: 0.30, lavaSpeedup: 0.000035,
+    crumble: 60, regrow: 60,
+    every: 5, monsterHp: 2,
+  },
+  apocalypse: {
+    label: 'APOCALYPSE',
+    blurb: 'They fly. The ledges last half a second. The lava is coming.',
+    lavaStart: 0.72, lavaSpeedup: 0.000090,   // more than twice MELTDOWN
+    crumble: 30,      // half a second and it's gone
+    regrow: 80,       // and it takes its time coming back
+    every: 4,
+    monsterHp: 2,
+    fly: true,        // this one changes how monsters BEHAVE, not just how many
+  },
+};
+
+// `let`, because these get swapped when you pick a level. They start on
+// the HARD numbers, but nothing plays until you've chosen anyway.
+let LAVA_START = 0.30;
+let LAVA_SPEEDUP = 0.000035;
+let CRUMBLE_TIME = 60;
+let REGROW_TIME = 60;
+let MONSTER_EVERY = 5;
+let MONSTER_HEALTH = 2;
+let MONSTER_FLY = false;      // do they leave their ledge and come for you?
+
+// How fast a flying one drifts at you. Deliberately well under your
+// RUN_SPEED of 3.7 - it should feel like being hunted, not like being
+// caught. A monster you cannot outrun isn't scary, it's just the end.
+const MONSTER_FLY_SPEED = 1.15;
+
+let level = 'hard';     // which one you picked
+let started = false;    // has anything been picked yet?
+
+function applyLevel(name) {
+  const d = LEVELS[name];
+  level = name;
+
+  LAVA_START     = d.lavaStart;
+  LAVA_SPEEDUP   = d.lavaSpeedup;
+  CRUMBLE_TIME   = d.crumble;
+  REGROW_TIME    = d.regrow;
+  MONSTER_EVERY  = d.every;
+  MONSTER_HEALTH = d.monsterHp;
+  // Most levels don't mention `fly` at all, and undefined isn't false -
+  // it's just missing. The !! turns "missing" into a proper no.
+  MONSTER_FLY    = !!d.fly;
+}
 
 // --- THE PISTOL ---
 const BULLET_SPEED = 10;    // how fast a shot flies
@@ -125,13 +282,12 @@ const BULLET_LIFE  = 60;    // frames before it fizzles out. Stops it
                             // travelling forever and eating memory.
 const FIRE_GAP     = 11;    // frames between shots. Smaller = machine gun.
 
-// --- LAVA MONSTERS ---
-const MONSTER_HEALTH   = 2;      // shots to kill
-const MONSTER_WALK     = 0.62;   // how fast they patrol their ledge
-const MONSTER_FIRST    = 150;    // frames before the very first one
-const MONSTER_GAP      = 130;    // frames between them at the start
-const MONSTER_GAP_MIN  = 34;     // ...and the fastest they ever come
-const MONSTER_SPEEDUP  = 1.6;    // frames knocked off the gap each spawn
+// MONSTER_EVERY, up in LEVELS, used to be a timer - a monster every so
+// many seconds. Counting LEDGES instead is better, and not just tidier:
+// it means the danger is built into the pole rather than into how long
+// you've been alive. Climb fast and you meet more of them sooner, which
+// is exactly right. Sit still and no new ones appear, because you
+// haven't gone anywhere.
 
 const POLE_LEFT  = W / 2 - POLE_WIDTH / 2;
 const POLE_RIGHT = W / 2 + POLE_WIDTH / 2;
@@ -142,7 +298,11 @@ const POLE_RIGHT = W / 2 + POLE_WIDTH / 2;
 //     Instead of gnomeX, gnomeY, gnomeSpeed... we keep them in one bag.
 
 let gnome, platforms, lavaY, lavaSpeed, cameraY, best, dead, deadTimer;
-let bullets, monsters, tick, nextShotAt, nextMonsterAt, monsterGap, kills;
+let bullets, monsters, tick, nextShotAt, kills;
+
+// How many ledges have been built this game. Drives the every-fifth
+// monster, and nothing else.
+let ledgeCount = 0;
 
 // The height of the highest ledge built so far. Kept as its own number
 // rather than read off the end of the list, because ledges that give way
@@ -168,6 +328,20 @@ function newGame() {
     recoil: 0      // frames left of the pistol kicking back
   };
 
+  // EMPTY THE LISTS FIRST. This has to happen before any ledges are
+  // built, because building a ledge can now put a monster on it - and a
+  // monster needs somewhere to go.
+  //
+  // This was a real bug: these three lines used to sit BELOW the ledge
+  // building, which was fine right up until ledges started spawning
+  // monsters. Then the very first addLedge() reached for a list that
+  // didn't exist yet, and the whole game died before drawing one frame.
+  //
+  // Nothing wrong with the monsters, or the ledges. Just the ORDER.
+  bullets  = [];
+  monsters = [];
+  kills    = 0;
+
   // The starting ledge, so you don't begin the game falling into lava.
   // This one NEVER crumbles - `safe` exempts it. Spawning onto a floor
   // that's already counting down would mean losing before you'd worked
@@ -176,11 +350,14 @@ function newGame() {
   base.safe = true;
   platforms = [ base ];
 
-  // Build the first stack of ledges going up.
+  // Build the first stack of ledges going up. ledgeCount has to be zeroed
+  // BEFORE this runs, or a new game would carry on counting from the last
+  // one and your first monster would turn up in the wrong place.
+  ledgeCount = 0;
   topLedgeY = 40;
   for (let i = 0; i < 14; i++) {
     topLedgeY -= GAP;
-    platforms.push(makeLedge(topLedgeY));
+    addLedge(topLedgeY);
   }
 
   lavaY     = 260;      // lava starts below the first ledge...
@@ -190,18 +367,12 @@ function newGame() {
   deadTimer = 0;
   best      = 0;
 
-  bullets  = [];
-  monsters = [];
-  kills    = 0;
-
   // `tick` counts frames of ACTUAL PLAY. It stops while you're dead,
   // which is what you want for anything that should feel like game time:
   // reload speed, how often monsters arrive. shakeClock is the other
   // kind - it never stops, so wobbles keep wobbling on the death screen.
   tick = 0;
   nextShotAt = 0;
-  nextMonsterAt = MONSTER_FIRST;
-  monsterGap = MONSTER_GAP;
 }
 
 // --- 3. MAKING LEDGES --------------------------------------------------
@@ -407,46 +578,56 @@ addEventListener("blur", () => { mouseShooting = false; });
 // would sometimes land right on your face, and sometimes miles away
 // where you'd never meet it. Neither is a game.
 
-function spawnMonsterOnLedge() {
-  // Which ledges already have one? A Set gives us a fast "is this in
-  // here?" - and we can put the ledge OBJECTS straight in it, no ids or
-  // numbering needed, because two names for the same object match.
-  const taken = new Set();
-  for (const m of monsters) taken.add(m.ledge);
-
-  const options = platforms.filter(p =>
-    !p.safe &&                    // never the starting ledge
-    !p.falling &&                 // not one that's mid-collapse
-    !taken.has(p) &&              // one monster per ledge
-    p.w > 45 &&                   // needs room to pace about
-    p.y < gnome.y - 70 &&         // ABOVE you - in your way, not on you
-    p.y > cameraY - 620);         // but close enough that you'll meet it
-
-  // Nothing suitable right now? Do nothing at all, and try again on the
-  // next go round. Much better than forcing one somewhere silly.
-  if (options.length === 0) return;
-
-  const ledge = options[Math.floor(Math.random() * options.length)];
-
+function putMonsterOn(ledge) {
   monsters.push({
     // We keep the LEDGE ITSELF, not its position or its number in the
     // list. Positions go stale the moment anything moves, and list
     // numbers go wrong the moment anything is removed. A direct hold on
     // the thing can't drift out of date.
     ledge: ledge,
-    x: ledge.x + ledge.w / 2,
+    x: ledge.x + ledge.w / 2,     // planted in the middle
     y: ledge.y,
-    dir: Math.random() < 0.5 ? -1 : 1,
     health: MONSTER_HEALTH,
     hurtUntil: 0,
     wobble: Math.random() * 6,    // so they don't all pulse in time
+
+    // The monster remembers this for ITSELF, rather than asking the
+    // level every frame. It means one that's already in the air keeps
+    // flying even if you switch levels underneath it - and more
+    // usefully, it leaves room to have both kinds at once one day.
+    flying: MONSTER_FLY,
+    flap: Math.random() * 6,
   });
+}
+
+// THE ONLY PLACE A LEDGE GETS BUILT.
+//
+// Both the opening stack and the endless climb go through here, so the
+// every-fifth counting can't get out of step between them. Two places
+// pushing ledges would mean two counters, and two counters always drift.
+function addLedge(y) {
+  const ledge = makeLedge(y);
+  platforms.push(ledge);
+  ledgeCount++;
+
+  // Every fifth one gets a guard - but never the first few, or you'd be
+  // shot at before you'd worked out which key jumps.
+  if (ledgeCount >= MONSTER_EVERY && ledgeCount % MONSTER_EVERY === 0) {
+    putMonsterOn(ledge);
+  }
+
+  return ledge;
 }
 
 // --- 5. UPDATE: the rules of the world ---------------------------------
 //     This runs about 60 times a second. Everything that MOVES, moves here.
 
 function update() {
+
+  // Nothing moves until you've chosen a level. One return at the top of
+  // update() freezes the whole world - lava, ledges, monsters, all of it -
+  // because update() IS the game.
+  if (!started) return;
 
   if (dead) { deadTimer++; return; }
 
@@ -562,35 +743,41 @@ function update() {
     b.life--;
   }
 
-  // --- new monsters crawl onto the ledges above you ---
-  if (tick >= nextMonsterAt) {
-    // They come faster and faster, but never faster than MONSTER_GAP_MIN.
-    // A limit like that matters: without one, the gap eventually goes
-    // NEGATIVE and you get a monster every single frame, forever.
-    monsterGap = Math.max(MONSTER_GAP_MIN, monsterGap - MONSTER_SPEEDUP);
-    nextMonsterAt = tick + monsterGap;
-    spawnMonsterOnLedge();
-  }
-
   // --- monsters ---
+  // They don't go anywhere. They sit on their ledge and seethe. All this
+  // does is keep them level with it, and tick the wobble along so they
+  // still breathe rather than looking like painted-on scenery.
   for (const m of monsters) {
-    const ledge = m.ledge;
     m.wobble += 0.11;
 
-    // It stands on its ledge, so its height is simply the ledge's height.
-    // We don't give the monster its own gravity or its own falling code -
-    // it just reads where the ledge is, every frame. Which means when
-    // that ledge crumbles away, the monster rides it down into the lava
-    // without a single extra line. Things that follow something else are
-    // far less trouble than things that work it out for themselves.
-    m.y = ledge.y;
+    if (m.flying) {
+      m.flap += 0.34;
 
-    if (!ledge.falling) {
-      // Patrol back and forth, turning round at the ends.
-      m.x += m.dir * MONSTER_WALK;
-      if (m.x < ledge.x + 15)             { m.x = ledge.x + 15; m.dir = 1; }
-      if (m.x > ledge.x + ledge.w - 15)   { m.x = ledge.x + ledge.w - 15; m.dir = -1; }
+      // Head straight for the gnome. Work out the arrow from here to
+      // him, shrink that arrow to length 1, then step along it. Same
+      // maths as the gnome's diagonal running - and the same reason:
+      // without the shrinking, a monster coming at you diagonally would
+      // travel faster than one coming straight on.
+      const dx = gnome.x - m.x;
+      const dy = (gnome.y - 17) - (m.y - 14);
+      const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+
+      m.x += (dx / dist) * MONSTER_FLY_SPEED;
+      m.y += (dy / dist) * MONSTER_FLY_SPEED;
+
+      // A flutter on top, so it bobs through the air instead of gliding
+      // along an obviously straight line at you.
+      m.y += Math.sin(m.flap) * 0.7;
+      continue;
     }
+
+    // Not flying: its height is simply its ledge's height. We don't give
+    // the monster its own gravity or its own falling code - it just
+    // reads where the ledge is, every frame. Which means when that ledge
+    // crumbles away, the monster rides it down into the lava without a
+    // single extra line. Things that follow something else are far less
+    // trouble than things that work it out for themselves.
+    m.y = m.ledge.y;
   }
 
   // --- bullets hitting monsters ---
@@ -627,12 +814,19 @@ function update() {
   // how you end up skipping every other one.
   bullets = bullets.filter(b => b.life > 0 && b.x > -30 && b.x < W + 30);
 
-  // A monster goes when it's shot, when its ledge carries it into the
-  // lava, or when its ledge is swallowed for good. That middle one is
-  // free - we never wrote any code for it. It falls out of the fact that
-  // the monster's height IS its ledge's height.
+  // A monster goes when it's shot, or when it ends up in the lava. A
+  // SITTING one also goes when its ledge is swallowed for good.
+  //
+  // That last check must NOT apply to a flying one. It left its ledge
+  // behind ages ago, but it's still holding on to it - so the ledge's
+  // old home eventually sinks under the lava and the monster would
+  // vanish in mid-air, right in front of you, for no reason you could
+  // possibly see.
   monsters = monsters.filter(m =>
-    m.health > 0 && m.y < lavaY && m.ledge.homeY < lavaY + 200);
+    m.health > 0 &&
+    m.y < lavaY &&
+    m.y > cameraY - 500 &&                            // lost you completely
+    (m.flying || m.ledge.homeY < lavaY + 200));
 
   // --- the pole sinks ---
   // Really the lava climbs, which is the same thing from where you're
@@ -654,7 +848,7 @@ function update() {
   // --- build more pole above you, forever ---
   while (topLedgeY > cameraY - 200) {
     topLedgeY -= GAP;
-    platforms.push(makeLedge(topLedgeY));
+    addLedge(topLedgeY);
   }
 
   // --- throw away ledges that have sunk into the lava ---
@@ -868,6 +1062,22 @@ function drawMonster(m, screenY) {
   ctx.fillStyle = glow;
   ctx.fillRect(m.x - 36, cy - 36, 72, 72);
 
+  // WINGS. Drawn before the body so they sit behind it, and flapping by
+  // squashing them flat and back again - the same squash-and-stretch as
+  // the body, just used on a different shape.
+  if (m.flying) {
+    const beat = Math.abs(Math.sin(m.flap));      // 0 = flat out, 1 = up high
+    ctx.fillStyle = flashing ? "#ffffff" : "rgba(60, 18, 8, 0.92)";
+    for (const side of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(m.x + side * 8, cy - 2);
+      ctx.lineTo(m.x + side * 30, cy - 6 - beat * 15);
+      ctx.lineTo(m.x + side * 24, cy + 8 - beat * 5);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+
   ctx.save();
   ctx.translate(m.x, cy);
   ctx.scale(stretch, squash);
@@ -1064,6 +1274,34 @@ function loop() {
   requestAnimationFrame(loop);
 }
 
+// --- 8. THE START SCREEN -----------------------------------------------
+
+function startLevel(name) {
+  applyLevel(name);    // 1. swap the numbers
+  newGame();           // 2. THEN build the pole, using them
+  started = true;
+  document.getElementById("startScreen").style.display = "none";
+}
+
+// One button per entry in LEVELS. Add a fourth up there and a fourth
+// button turns up here on its own.
+for (const name of Object.keys(LEVELS)) {
+  const d = LEVELS[name];
+  const btn = document.createElement("button");
+  btn.className = "lvl lvl-" + name;
+  btn.innerHTML = "<b>" + d.label + "</b><span>" + d.blurb + "</span>";
+  btn.onclick = () => startLevel(name);
+  document.getElementById("levelButtons").appendChild(btn);
+}
+
+document.getElementById("again").onclick = () => {
+  started = false;
+  document.getElementById("startScreen").style.display = "flex";
+};
+
+// Build a pole so there's something behind the start screen to look at,
+// then start the loop. update() refuses to do anything until you've
+// picked, so nothing sinks and nothing moves while you're reading.
 newGame();
 loop();
 
