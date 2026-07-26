@@ -9,6 +9,32 @@
         content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
   <title>Escape the Cursed Cavern</title>
 
+  <!-- ==================================================================
+       THE BIT THAT MAKES THIS AN APP.
+
+       A phone will happily add any website to your home screen, but it
+       shows up as a bookmark - browser bar, address bar, the lot.
+       manifest.webmanifest tells the phone something different: here's a
+       proper name, here's an icon, open me FULLSCREEN with no browser
+       around the edges, and hold me sideways.
+
+       All the paths below are relative - "icon-192.png", not "/icon...".
+       The site lives in a folder called maximus-game, so a path starting
+       with / would go hunting at the top of the whole domain and find
+       nothing. Relative paths just look next door, which is where the
+       files actually are.
+       ================================================================== -->
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="theme-color" content="#07060a">
+
+  <!-- iPhones ignore the manifest and want to be told separately. -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="Cursed Cavern">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="icon" href="icon-192.png">
+
   <style>
     /* ------------------------------------------------------------------
        CSS is the part that decides how things LOOK.
@@ -341,9 +367,13 @@
   const TOUCH_PITCH = 1.5;      // how fast dragging looks up and down
 
   // The round buttons, bottom right, stacked so a thumb can reach both.
-  const ACTION = { x: 716, y: 402, r: 46 };
-  const SLASH  = { x: 716, y: 292, r: 44 };
-  const DROP   = { x: 716, y: 196, r: 38 };
+  // Stacked bottom-right, all three inside an easy thumb sweep. The one
+  // you press most is nearest the corner. DROP used to sit right up at
+  // the top of the screen, where it existed but nobody ever found it -
+  // and a button nobody finds may as well not be there at all.
+  const ACTION = { x: 722, y: 448, r: 46 };
+  const SLASH  = { x: 722, y: 344, r: 43 };
+  const DROP   = { x: 722, y: 246, r: 40 };
 
   // WHERE A FINGER IS ON THE CANVAS.
   // A touch arrives measured in screen dots, but the canvas is usually
@@ -2195,12 +2225,17 @@
                state.inventory[state.heldSlot] === 'knife',
                [104, 40, 36], [255, 190, 175]);
 
-    drawButton(DROP, 'DROP',
-               state.inventory[state.heldSlot] !== undefined,
-               [46, 62, 96], [176, 206, 255]);
+    // The DROP button shows a little picture of whatever you're actually
+    // holding. Now it isn't "a button called DROP" that you have to
+    // remember the meaning of - it's "the button with my gem on it".
+    // Showing the thing beats naming the thing, every time.
+    const held = state.inventory[state.heldSlot];
+    drawButton(DROP, 'DROP', held !== undefined,
+               [46, 62, 96], [176, 206, 255],
+               held ? ITEMS[held].icon : null);
   }
 
-  function drawButton(btn, label, ready, onColour, edgeColour) {
+  function drawButton(btn, label, ready, onColour, edgeColour, icon) {
     ctx.fillStyle = ready
       ? 'rgba(' + onColour[0] + ',' + onColour[1] + ',' + onColour[2] + ', 0.75)'
       : 'rgba(20, 18, 14, 0.45)';
@@ -2215,9 +2250,18 @@
     ctx.stroke();
 
     ctx.fillStyle = ready ? '#fff2ce' : 'rgba(220, 208, 180, 0.45)';
-    ctx.font = 'bold 15px system-ui, sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText(label, btn.x, btn.y + 5);
+
+    if (icon) {
+      // Picture on top, small label underneath.
+      const size = btn.r * 0.95;
+      ctx.drawImage(icon, btn.x - size / 2, btn.y - size / 2 - 7, size, size);
+      ctx.font = 'bold 12px system-ui, sans-serif';
+      ctx.fillText(label, btn.x, btn.y + btn.r * 0.66);
+    } else {
+      ctx.font = 'bold 15px system-ui, sans-serif';
+      ctx.fillText(label, btn.x, btn.y + 5);
+    }
   }
 
 
