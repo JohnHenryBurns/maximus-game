@@ -568,9 +568,34 @@ canvas.addEventListener("mousedown", e => {
   mouseShooting = true;
 });
 addEventListener("mouseup", () => { mouseShooting = false; });
-// Let go outside the window and we'd never hear about it otherwise, and
-// the gun would jam on forever.
-addEventListener("blur", () => { mouseShooting = false; });
+
+// LETTING GO OF EVERYTHING.
+//
+// This is what stops the gnome running off on his own.
+//
+// `keys` finds out a key has been released from the keyup event. But if
+// you switch away while still holding D - alt-tab, swap apps, phone
+// locks - that keyup lands somewhere else and we never hear it. So
+// keys["d"] stays true forever and he keeps running.
+//
+// Same for a finger: if the phone takes the screen away mid-drag, the
+// touchend never arrives and that finger is still "on" the button.
+function forgetAllInput() {
+  for (const key of Object.keys(keys)) keys[key] = false;
+  fingers.clear();
+  touchShooting = false;
+  mouseShooting = false;
+  jumpBuffer = 0;
+}
+
+addEventListener("blur", forgetAllInput);
+
+// blur covers switching windows. This covers switching TABS, and a phone
+// being locked or sent home - which on a phone is much more likely, and
+// doesn't always fire blur.
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) forgetAllInput();
+});
 
 
 // --- 4d. SOUND ---------------------------------------------------------

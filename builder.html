@@ -116,13 +116,15 @@
     <button id="toolStart"  aria-pressed="false">Start &starf;</button>
     <button id="toolChest"  aria-pressed="false">Chest</button>
     <button id="toolSpider" aria-pressed="false">Spider</button>
+    <button id="toolSpawner" aria-pressed="false">Nest</button>
   </div>
 
   <canvas id="grid" width="600" height="600"></canvas>
 
   <p class="hint">
     Drag to draw. The outside ring is always wall &mdash; it holds the cave in.<br>
-    Chest and Spider drop one on a square; click the same square again to take it back.<br>
+    Chest, Spider and Nest drop one on a square; click it again to take it back.<br>
+    A Nest hatches four spiders, a few seconds apart, then it's spent.<br>
     Place none and the cavern scatters its own, like normal.<br>
     Then Save, and pick <b>MY LEVEL</b> on the cavern's start screen.
   </p>
@@ -182,6 +184,24 @@ let tool = "wall";
 // combination.
 let chests = [];
 let spiders = [];
+let spawners = [];
+
+// Which list does a tool put things into?
+//
+// This used to be `tool === "chest" ? chests : spiders` - fine for two,
+// already awkward at three, and hopeless at five. A function that ANSWERS
+// the question beats a chain of guesses, and adding a fourth kind is now
+// one line here instead of an edit in four places.
+//
+// It looks them up fresh each time on purpose: loading a saved level
+// replaces these lists entirely, and anything holding the old ones would
+// quietly carry on filling up a list nobody can see any more.
+function listFor(name) {
+  if (name === "chest")   return chests;
+  if (name === "spider")  return spiders;
+  if (name === "spawner") return spawners;
+  return null;                       // wall, floor and start aren't things
+}
 
 // Is there one of these at this square? Hands back its position in the
 // list, or -1 for "nothing here" - which is also how we know whether a
@@ -197,15 +217,17 @@ function indexAt(list, col, row) {
 // top of it - a chest inside solid rock is unreachable forever, and the
 // game would give you no clue why.
 function clearItemsAt(col, row) {
-  const c = indexAt(chests, col, row);
-  if (c >= 0) chests.splice(c, 1);
-  const s = indexAt(spiders, col, row);
-  if (s >= 0) spiders.splice(s, 1);
+  for (const name of ["chest", "spider", "spawner"]) {
+    const list = listFor(name);
+    const i = indexAt(list, col, row);
+    if (i >= 0) list.splice(i, 1);
+  }
 }
 
 function blankLevel(solid) {
   chests = [];
   spiders = [];
+  spawners = [];
   grid = [];
   for (let row = 0; row < ROWS; row++) {
     const line = [];
@@ -312,6 +334,25 @@ function draw() {
     ctx.fill();
   }
 
+  // Nests: a lumpy pale sac with dark specks inside it.
+  for (const n of spawners) {
+    const cx = n.col * CELL + CELL / 2;
+    const cy = n.row * CELL + CELL / 2;
+
+    ctx.fillStyle = "#d8d2c0";
+    for (const off of [[-5, 1], [5, 2], [0, -4], [0, 4]]) {
+      ctx.beginPath();
+      ctx.arc(cx + off[0] * CELL / 30, cy + off[1] * CELL / 30, CELL * 0.19, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.fillStyle = "#4a3a4a";
+    for (const off of [[-3, 0], [3, 2], [1, -3]]) {
+      ctx.beginPath();
+      ctx.arc(cx + off[0] * CELL / 22, cy + off[1] * CELL / 22, CELL * 0.055, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
   // Where you'll be standing when the cavern loads.
   const sx = startCol * CELL + CELL / 2;
   const sy = startRow * CELL + CELL / 2;
@@ -365,8 +406,9 @@ function paint(e) {
 
   if (edge) return;
 
-  // ---- chests and spiders ----
-  if (tool === "chest" || tool === "spider") {
+  // ---- things that stand on the floor ----
+  const list = listFor(tool);
+  if (list) {
     if (grid[at.row][at.col] === "#") {
       status("Dig that out first - nothing lives in solid rock.");
       return;
@@ -376,7 +418,6 @@ function paint(e) {
       return;
     }
 
-    const list = (tool === "chest") ? chests : spiders;
     const here = indexAt(list, at.col, at.row);
 
     // Click once to put one down, click the same square again to take it
@@ -391,7 +432,9 @@ function paint(e) {
       // inside the other. Whichever you place second wins.
       clearItemsAt(at.col, at.row);
       list.push({ col: at.col, row: at.row });
-      status(tool === "chest" ? "Chest placed." : "Spider placed.");
+      status(tool === "chest" ? "Chest placed."
+           : tool === "spider" ? "Spider placed."
+           : "Nest placed. It hatches four spiders, then it's spent.");
     }
     draw();
     return;
@@ -434,8 +477,9 @@ const toolButtons = {
   wall:   document.getElementById("toolWall"),
   floor:  document.getElementById("toolFloor"),
   start:  document.getElementById("toolStart"),
-  chest:  document.getElementById("toolChest"),
-  spider: document.getElementById("toolSpider"),
+  chest:   document.getElementById("toolChest"),
+  spider:  document.getElementById("toolSpider"),
+  spawner: document.getElementById("toolSpawner"),
 };
 
 function pickTool(name) {
@@ -478,6 +522,7 @@ function save() {
     map: toRows(),
     chests: chests,
     spiders: spiders,
+    spawners: spawners,
   };
 
   // localStorage only holds TEXT, so the whole thing gets turned into a
@@ -512,8 +557,9 @@ function load() {
     // Levels saved before chests and spiders existed simply won't have
     // these. Default them to empty rather than falling over - old saves
     // should still open, or you'd lose work every time we add a feature.
-    chests  = Array.isArray(level.chests)  ? level.chests  : [];
-    spiders = Array.isArray(level.spiders) ? level.spiders : [];
+    chests   = Array.isArray(level.chests)   ? level.chests   : [];
+    spiders  = Array.isArray(level.spiders)  ? level.spiders  : [];
+    spawners = Array.isArray(level.spawners) ? level.spawners : [];
 
     sealTheEdges();
     draw();
