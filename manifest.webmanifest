@@ -1,0 +1,29 @@
+{
+  "name": "Escape the Cursed Cavern",
+  "short_name": "Cursed Cavern",
+  "description": "A first-person 3D cavern built from scratch by Maximus. No game engine, no downloaded pictures - every wall, chest and cobweb is drawn by code.",
+
+  "start_url": "./",
+  "scope": "./",
+
+  "display": "fullscreen",
+  "orientation": "landscape",
+
+  "background_color": "#07060a",
+  "theme_color": "#07060a",
+
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
