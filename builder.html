@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Cavern Builder</title>
+
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="theme-color" content="#07060a">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="icon" href="icon-192.png">
+
+  <style>
+    body {
+      margin: 0;
+      overscroll-behavior: none;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 10px 30px;
+      background: #07060a;
+      color: #e8e8f0;
+      font-family: system-ui, sans-serif;
+      -webkit-user-select: none;
+      user-select: none;
+      touch-action: none;
+    }
+
+    h1 { margin: 4px 0 0; font-size: 22px; letter-spacing: 3px; color: #ffd6a8; }
+    .hint { font-size: 13px; color: #8d8aa2; text-align: center; line-height: 1.5; }
+
+    canvas {
+      background: #0d0b12;
+      border: 2px solid #35354a;
+      border-radius: 8px;
+      touch-action: none;
+      max-width: 96vw;
+      height: auto;
+      /* Keeps the squares square however wide the screen is. */
+      aspect-ratio: 1 / 1;
+    }
+
+    .row { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+
+    button, .link {
+      font-family: inherit;
+      font-size: 14px;
+      padding: 9px 14px;
+      border-radius: 8px;
+      border: 2px solid #43405a;
+      background: #16121e;
+      color: #e8e8f0;
+      cursor: pointer;
+      text-decoration: none;
+    }
+    button:active { transform: scale(0.97); }
+
+    /* The currently chosen tool. `aria-pressed` is a real HTML attribute
+       that says "this button is switched on" - screen readers announce it,
+       and we can style from it, so we don't need a second way to track it. */
+    button[aria-pressed="true"] {
+      border-color: #ffb27a;
+      background: #33241a;
+      color: #ffd6a8;
+    }
+
+    .danger { border-color: #7a3030; }
+    .go { border-color: #4f9f72; background: #16281e; color: #b7f0cf; }
+    #status { font-size: 13px; min-height: 18px; color: #9ae3c0; }
+  </style>
+</head>
+<body>
+
+  <div class="row">
+    <a class="link" href="index.html">&larr; Arcade</a>
+    <a class="link" href="cavern.html">Cavern &rarr;</a>
+  </div>
+
+  <h1>CAVERN BUILDER</h1>
+
+  <div class="row">
+    <button id="toolWall"   aria-pressed="true">Wall</button>
+    <button id="toolFloor"  aria-pressed="false">Floor</button>
+    <button id="toolStart"  aria-pressed="false">Start &starf;</button>
+    <button id="toolChest"  aria-pressed="false">Chest</button>
+    <button id="toolSpider" aria-pressed="false">Spider</button>
+  </div>
+
+  <canvas id="grid" width="600" height="600"></canvas>
+
+  <p class="hint">
+    Drag to draw. The outside ring is always wall &mdash; it holds the cave in.<br>
+    Chest and Spider drop one on a square; click the same square again to take it back.<br>
+    Place none and the cavern scatters its own, like normal.<br>
+    Then Save, and pick <b>MY LEVEL</b> on the cavern's start screen.
+  </p>
+
+  <div class="row">
+    <button id="clear">Clear</button>
+    <button id="fill">Fill solid</button>
+    <button id="maze">Random maze</button>
+    <button id="load" class="danger">Reload saved</button>
+  </div>
+
+  <div class="row">
+    <button id="save" class="go">Save level</button>
+    <button id="play" class="go">Save &amp; play it</button>
+  </div>
+
+  <div id="status"></div>
+
+<script>
+"use strict";
+
+// ======================================================================
+// CAVERN BUILDER
+// Draw a map here, save it, and the cursed cavern will build itself
+// out of your drawing instead of the one that came with the game.
+// ======================================================================
+
+// These MUST match the cavern's map size. If they ever disagree, the
+// cavern refuses to load the level rather than half-loading it.
+const COLS = 20;
+const ROWS = 20;
+
+// The name we file the level under in the browser's little storage box.
+// The cavern reads this exact same name. One spelling mistake in either
+// place and they'd never find each other, and nothing would look broken.
+const SAVE_KEY = "maximus-cavern-level";
+
+const canvas = document.getElementById("grid");
+const ctx = canvas.getContext("2d");
+const CELL = canvas.width / COLS;      // 30 pixels per square
+
+// --- 1. THE LEVEL ------------------------------------------------------
+// A list of lists: grid[row][col] is '#' for rock or '.' for floor.
+// Exactly the shape the cavern already uses, on purpose - so no
+// translating has to happen at either end.
+
+let grid = [];
+let startCol = 1, startRow = 1;
+let tool = "wall";
+
+// The things standing ON the floor. Kept as separate lists rather than
+// as more letters in the grid, because a square can be floor AND have a
+// chest on it - those are two different facts about the same spot, and
+// squashing them into one letter would mean inventing a letter for every
+// combination.
+let chests = [];
+let spiders = [];
+
+// Is there one of these at this square? Hands back its position in the
+// list, or -1 for "nothing here" - which is also how we know whether a
+// click should ADD one or take one away.
+function indexAt(list, col, row) {
+  for (let i = 0; i < list.length; i++) {
+    if (list[i].col === col && list[i].row === row) return i;
+  }
+  return -1;
+}
+
+// Take anything standing on this square. Used when you drop a wall on
+// top of it - a chest inside solid rock is unreachable forever, and the
+// game would give you no clue why.
+function clearItemsAt(col, row) {
+  const c = indexAt(chests, col, row);
+  if (c >= 0) chests.splice(c, 1);
+  const s = indexAt(spiders, col, row);
+  if (s >= 0) spiders.splice(s, 1);
+}
+
+function blankLevel(solid) {
+  chests = [];
+  spiders = [];
+  grid = [];
+  for (let row = 0; row < ROWS; row++) {
+    const line = [];
+    for (let col = 0; col < COLS; col++) line.push(solid ? "#" : ".");
+    grid.push(line);
+  }
+  sealTheEdges();
+}
+
+// The outside ring is ALWAYS wall. The cavern's raycaster crawls forward
+// until it hits rock - leave a hole in the outside and it crawls off the
+// edge of the world looking for rock that isn't there.
+//
+// We don't ask the builder to remember this rule. We just enforce it
+// after every single change. A rule the computer keeps for you is a rule
+// you can't break by accident.
+function sealTheEdges() {
+  for (let col = 0; col < COLS; col++) {
+    grid[0][col] = "#";
+    grid[ROWS - 1][col] = "#";
+  }
+  for (let row = 0; row < ROWS; row++) {
+    grid[row][0] = "#";
+    grid[row][COLS - 1] = "#";
+  }
+}
+
+// --- 2. A RANDOM MAZE --------------------------------------------------
+// Not essential, but staring at a blank grid is the hardest way to start
+// anything. This gives you something to chop up.
+
+function randomMaze() {
+  blankLevel(true);                    // start with everything solid
+
+  // Carve corridors on the ODD rows and columns only, leaving the even
+  // ones as the walls between them. That's the trick that stops a maze
+  // turning into one big open room.
+  for (let row = 1; row < ROWS - 1; row += 2) {
+    for (let col = 1; col < COLS - 1; col += 2) {
+      grid[row][col] = ".";
+
+      // Knock through to a neighbour, so the corridors join up.
+      if (Math.random() < 0.5 && col + 2 < COLS - 1) grid[row][col + 1] = ".";
+      else if (row + 2 < ROWS - 1) grid[row + 1][col] = ".";
+    }
+  }
+
+  startCol = 1; startRow = 1;
+  sealTheEdges();
+  draw();
+  status("A maze. Now chop it about.");
+}
+
+// --- 3. DRAWING THE GRID -----------------------------------------------
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  for (let row = 0; row < ROWS; row++) {
+    for (let col = 0; col < COLS; col++) {
+      const x = col * CELL;
+      const y = row * CELL;
+      const solid = grid[row][col] === "#";
+
+      // The outside ring is drawn darker, to show it's locked.
+      const edge = row === 0 || col === 0 || row === ROWS - 1 || col === COLS - 1;
+
+      ctx.fillStyle = solid ? (edge ? "#2a2733" : "#4c4760") : "#12101a";
+      ctx.fillRect(x, y, CELL, CELL);
+
+      ctx.strokeStyle = "rgba(0,0,0,0.45)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x + 0.5, y + 0.5, CELL - 1, CELL - 1);
+    }
+  }
+
+  // ---- the things standing on the floor ----
+  for (const c of chests) {
+    const x = c.col * CELL, y = c.row * CELL;
+    ctx.fillStyle = "#9b6a34";
+    ctx.fillRect(x + CELL * 0.2, y + CELL * 0.3, CELL * 0.6, CELL * 0.42);
+    ctx.fillStyle = "#c99a58";
+    ctx.fillRect(x + CELL * 0.2, y + CELL * 0.24, CELL * 0.6, CELL * 0.12);
+    ctx.fillStyle = "#4a3418";
+    ctx.fillRect(x + CELL * 0.44, y + CELL * 0.36, CELL * 0.12, CELL * 0.12);
+  }
+
+  for (const s of spiders) {
+    const cx = s.col * CELL + CELL / 2;
+    const cy = s.row * CELL + CELL / 2;
+
+    ctx.strokeStyle = "#c58ad0";
+    ctx.lineWidth = 1.6;
+    // Four strokes straight through the middle gives eight legs.
+    for (const a of [0.4, 1.2, 2.0, 2.75]) {
+      ctx.beginPath();
+      ctx.moveTo(cx - Math.cos(a) * CELL * 0.34, cy - Math.sin(a) * CELL * 0.26);
+      ctx.lineTo(cx + Math.cos(a) * CELL * 0.34, cy + Math.sin(a) * CELL * 0.26);
+      ctx.stroke();
+    }
+    ctx.fillStyle = "#e0a8ea";
+    ctx.beginPath();
+    ctx.arc(cx, cy, CELL * 0.17, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Where you'll be standing when the cavern loads.
+  const sx = startCol * CELL + CELL / 2;
+  const sy = startRow * CELL + CELL / 2;
+  ctx.fillStyle = "#ffd166";
+  ctx.beginPath();
+  for (let i = 0; i < 10; i++) {
+    // A five-pointed star: ten points around a circle, every other one
+    // pulled in close. Long, short, long, short.
+    const angle = -Math.PI / 2 + i * Math.PI / 5;
+    const reach = (i % 2 === 0) ? CELL * 0.46 : CELL * 0.19;
+    const px = sx + Math.cos(angle) * reach;
+    const py = sy + Math.sin(angle) * reach;
+    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  ctx.fill();
+}
+
+// --- 4. PAINTING WITH A FINGER OR A MOUSE ------------------------------
+// Pointer events cover mouse, finger and stylus with one set of code
+// instead of three. Older games had to write it all twice.
+
+let painting = false;
+
+function cellAt(e) {
+  const box = canvas.getBoundingClientRect();
+  const col = Math.floor((e.clientX - box.left) / box.width * COLS);
+  const row = Math.floor((e.clientY - box.top) / box.height * ROWS);
+  if (col < 0 || row < 0 || col >= COLS || row >= ROWS) return null;
+  return { col: col, row: row };
+}
+
+function paint(e) {
+  const at = cellAt(e);
+  if (!at) return;
+
+  // The outside ring is not yours to edit.
+  const edge = at.row === 0 || at.col === 0 ||
+               at.row === ROWS - 1 || at.col === COLS - 1;
+
+  if (tool === "start") {
+    if (edge || grid[at.row][at.col] === "#") {
+      status("You can't start inside solid rock.");
+      return;
+    }
+    startCol = at.col;
+    startRow = at.row;
+    draw();
+    return;
+  }
+
+  if (edge) return;
+
+  // ---- chests and spiders ----
+  if (tool === "chest" || tool === "spider") {
+    if (grid[at.row][at.col] === "#") {
+      status("Dig that out first - nothing lives in solid rock.");
+      return;
+    }
+    if (at.col === startCol && at.row === startRow) {
+      status("Not on your own starting square.");
+      return;
+    }
+
+    const list = (tool === "chest") ? chests : spiders;
+    const here = indexAt(list, at.col, at.row);
+
+    // Click once to put one down, click the same square again to take it
+    // away. One tool, both jobs - the same trick as the wall/dig button
+    // in the cavern, and for the same reason: you can always SEE which
+    // one it's going to do.
+    if (here >= 0) {
+      list.splice(here, 1);
+      status("Removed.");
+    } else {
+      // A chest and a spider on the same square would be one standing
+      // inside the other. Whichever you place second wins.
+      clearItemsAt(at.col, at.row);
+      list.push({ col: at.col, row: at.row });
+      status(tool === "chest" ? "Chest placed." : "Spider placed.");
+    }
+    draw();
+    return;
+  }
+
+  // ---- walls and floor ----
+  // Don't bury your own starting square.
+  if (tool === "wall" && at.col === startCol && at.row === startRow) {
+    status("That's where you start - keep it clear.");
+    return;
+  }
+
+  if (tool === "wall") clearItemsAt(at.col, at.row);
+
+  grid[at.row][at.col] = (tool === "wall") ? "#" : ".";
+  draw();
+}
+
+canvas.addEventListener("pointerdown", (e) => {
+  e.preventDefault();
+  painting = true;
+  // Keep getting events even if the finger slides off the canvas, so a
+  // fast drag doesn't just stop painting halfway.
+  canvas.setPointerCapture(e.pointerId);
+  paint(e);
+});
+
+canvas.addEventListener("pointermove", (e) => {
+  if (!painting) return;
+  e.preventDefault();
+  paint(e);
+});
+
+canvas.addEventListener("pointerup",     () => { painting = false; });
+canvas.addEventListener("pointercancel", () => { painting = false; });
+
+// --- 5. THE TOOL BUTTONS -----------------------------------------------
+
+const toolButtons = {
+  wall:   document.getElementById("toolWall"),
+  floor:  document.getElementById("toolFloor"),
+  start:  document.getElementById("toolStart"),
+  chest:  document.getElementById("toolChest"),
+  spider: document.getElementById("toolSpider"),
+};
+
+function pickTool(name) {
+  tool = name;
+  // Loop over ALL of them and set each one's state, rather than turning
+  // the old one off and the new one on. Fewer moving parts to get wrong,
+  // and it stays correct if a fourth tool ever turns up.
+  for (const key of Object.keys(toolButtons)) {
+    toolButtons[key].setAttribute("aria-pressed", key === name ? "true" : "false");
+  }
+}
+
+// Wire every button from the same list that styles them, so adding a
+// sixth tool is one line in toolButtons and one button in the HTML -
+// not three edits scattered about.
+for (const name of Object.keys(toolButtons)) {
+  toolButtons[name].onclick = () => pickTool(name);
+}
+
+// --- 6. SAVING AND LOADING ---------------------------------------------
+
+function status(text) {
+  document.getElementById("status").textContent = text;
+}
+
+// Turn the grid back into plain lines of text before saving. It's the
+// same shape the cavern's MAP is written in, so if you ever want to paste
+// your level straight into the code by hand, you can.
+function toRows() {
+  return grid.map(line => line.join(""));
+}
+
+function save() {
+  const level = {
+    version: 1,
+    cols: COLS,
+    rows: ROWS,
+    startCol: startCol,
+    startRow: startRow,
+    map: toRows(),
+    chests: chests,
+    spiders: spiders,
+  };
+
+  // localStorage only holds TEXT, so the whole thing gets turned into a
+  // string of JSON on the way in, and turned back on the way out.
+  try {
+    localStorage.setItem(SAVE_KEY, JSON.stringify(level));
+    status("Saved. Pick MY LEVEL in the cavern.");
+    return true;
+  } catch (err) {
+    // Private browsing modes can refuse to store anything at all.
+    status("The browser wouldn't let me save. Try a normal window.");
+    return false;
+  }
+}
+
+function load() {
+  let raw = null;
+  try { raw = localStorage.getItem(SAVE_KEY); } catch (err) { raw = null; }
+
+  if (!raw) { status("Nothing saved yet."); return false; }
+
+  try {
+    const level = JSON.parse(raw);
+    if (level.cols !== COLS || level.rows !== ROWS) {
+      status("That saved level is the wrong size.");
+      return false;
+    }
+    grid = level.map.map(line => line.split(""));
+    startCol = level.startCol;
+    startRow = level.startRow;
+
+    // Levels saved before chests and spiders existed simply won't have
+    // these. Default them to empty rather than falling over - old saves
+    // should still open, or you'd lose work every time we add a feature.
+    chests  = Array.isArray(level.chests)  ? level.chests  : [];
+    spiders = Array.isArray(level.spiders) ? level.spiders : [];
+
+    sealTheEdges();
+    draw();
+    status("Loaded your saved level.");
+    return true;
+  } catch (err) {
+    // Never trust stored text. It might be from an older version of this
+    // page, or something else entirely. Checking beats crashing.
+    status("The saved level was unreadable.");
+    return false;
+  }
+}
+
+document.getElementById("clear").onclick = () => {
+  blankLevel(false); startCol = 1; startRow = 1; draw();
+  status("Empty room. Draw some walls.");
+};
+document.getElementById("fill").onclick = () => {
+  blankLevel(true);
+  grid[startRow][startCol] = ".";
+  draw();
+  status("Solid rock. Now dig it out with Floor.");
+};
+document.getElementById("maze").onclick = randomMaze;
+document.getElementById("load").onclick = load;
+document.getElementById("save").onclick = save;
+document.getElementById("play").onclick = () => {
+  if (save()) window.location.href = "cavern.html";
+};
+
+// --- 7. GO -------------------------------------------------------------
+// Start from whatever was saved last time. Nothing saved? Have a maze.
+
+blankLevel(false);
+if (!load()) { randomMaze(); status("New level. Drag to draw walls."); }
+draw();
+
+</script>
+</body>
+</html>

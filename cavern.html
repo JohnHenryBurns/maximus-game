@@ -175,6 +175,28 @@
     .doom-nightmare:hover, .doom-nightmare:active {
       border-color: #ff5a3c; box-shadow: 0 0 30px rgba(255,60,30,0.6);
     }
+    .doom-builder b { color: #6fe3b0; }
+    .doom-builder:hover, .doom-builder:active {
+      border-color: #6fe3b0; box-shadow: 0 0 26px rgba(111,227,176,0.45);
+    }
+
+    #levelPick {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      font-size: 15px;
+      color: #c8c4d8;
+      cursor: pointer;
+    }
+    #levelPick b { color: #9ae3c0; }
+    #levelPick input { width: 18px; height: 18px; accent-color: #4f9f72; }
+
+    #builderLink {
+      font-size: 14px;
+      color: #7f7c96;
+      text-decoration: none;
+      border-bottom: 1px dotted #4a4458;
+    }
 
     #again {
       position: fixed;
@@ -207,6 +229,12 @@
   <div id="startScreen">
     <h2>CHOOSE YOUR DOOM</h2>
     <div id="doomButtons"></div>
+
+    <!-- Hidden until we've checked there IS a saved level. An option you
+         can tick that does nothing is worse than no option at all. -->
+    <label id="levelPick" style="display:none">
+      <input type="checkbox" id="useLevel"> Play <b>MY LEVEL</b> from the builder
+    </label>
   </div>
 
   <!-- Brings the picker back for a brand new cavern. -->
@@ -284,6 +312,128 @@
   const MAP_W = MAP[0].length;
   const MAP_H = MAP.length;
 
+  // MAKING THE MAP CHANGEABLE.
+  //
+  // The rows above are strings, and a string in JavaScript can never be
+  // altered - you can read MAP[3][7] but you cannot WRITE to it. It just
+  // silently does nothing, which is worse than an error.
+  //
+  // So each row becomes a list of single letters instead. `split('')`
+  // chops "###..." into ['#','#','#','.','.','.']. Everything that reads
+  // the map uses MAP[row][col], and that works exactly the same on a list
+  // as on a string - so nothing else in this entire file has to change.
+  for (let row = 0; row < MAP_H; row++) MAP[row] = MAP[row].split('');
+
+  // And a spare copy of how the cavern STARTED, so that when you pick a
+  // new cave, anything you built in sandbox mode gets swept away.
+  // slice() copies a list. Without it we'd just have two names pointing
+  // at the same one, and "restoring" it would restore your changes too.
+  const ORIGINAL_MAP = MAP.map(row => row.slice());
+
+  function resetMap() {
+    for (let row = 0; row < MAP_H; row++) MAP[row] = ORIGINAL_MAP[row].slice();
+  }
+
+  // --- YOUR OWN LEVEL, FROM THE BUILDER --------------------------------
+  //
+  // builder.html saves a level into localStorage - a little box of text
+  // the browser keeps for this site on this device. It's the only way two
+  // separate pages can hand something to each other with no server
+  // involved. Nothing leaves your computer.
+  //
+  // This name must match the builder's SAVE_KEY exactly. If either one is
+  // misspelled they simply never find each other, and NOTHING looks
+  // wrong - you'd just get the normal cave forever and no error at all.
+  const LEVEL_KEY = 'maximus-cavern-level';
+
+  // Where you start. The built-in cave starts you at 1,1; your own level
+  // starts you wherever you put the star.
+  let startCol = 1, startRow = 1;
+
+  // Never trust stored text. It could be from an older version of the
+  // builder, or hand-edited, or nonsense. So we check every single thing
+  // we're about to rely on, and hand back null the moment anything is
+  // off. A wrong-sized map would break the raycaster in ways that would
+  // take a very long evening to work out.
+  function loadCustomLevel() {
+    let raw = null;
+    try { raw = localStorage.getItem(LEVEL_KEY); } catch (err) { return null; }
+    if (!raw) return null;
+
+    try {
+      const level = JSON.parse(raw);
+      if (!level || !Array.isArray(level.map)) return null;
+      if (level.map.length !== MAP_H) return null;
+
+      for (const line of level.map) {
+        if (typeof line !== 'string' || line.length !== MAP_W) return null;
+      }
+
+      const col = level.startCol, row = level.startRow;
+      if (typeof col !== 'number' || typeof row !== 'number') return null;
+      if (col < 1 || row < 1 || col >= MAP_W - 1 || row >= MAP_H - 1) return null;
+      if (level.map[row][col] !== '.') return null;   // start inside rock
+
+      // Chests and spiders are optional - older levels won't have them.
+      // Anything standing in rock or off the edge gets quietly dropped
+      // rather than throwing the whole level away for one bad square.
+      level.chests  = cleanPlacements(level.chests,  level.map);
+      level.spiders = cleanPlacements(level.spiders, level.map);
+
+      return level;
+    } catch (err) {
+      return null;
+    }
+  }
+
+  // Keep only the placements that make sense. Note it hands back a NEW
+  // list rather than editing the one it was given - so a bad entry can
+  // never leave the original half-cleaned if something goes wrong
+  // partway through.
+  function cleanPlacements(list, map) {
+    const good = [];
+    if (!Array.isArray(list)) return good;
+
+    for (const spot of list) {
+      if (!spot || typeof spot.col !== 'number' || typeof spot.row !== 'number') continue;
+      if (spot.col < 1 || spot.row < 1) continue;
+      if (spot.col >= MAP_W - 1 || spot.row >= MAP_H - 1) continue;
+      if (map[spot.row][spot.col] !== '.') continue;    // standing in rock
+      good.push({ col: spot.col, row: spot.row });
+    }
+    return good;
+  }
+
+  // What the builder put down, or null when we're using the built-in
+  // cave. null means "there are no instructions, do it the old way" -
+  // which is different from an empty list, meaning "deliberately none".
+  let placedChests = null;
+  let placedSpiders = null;
+
+  function applyCustomLevel(level) {
+    for (let row = 0; row < MAP_H; row++) MAP[row] = level.map[row].split('');
+
+    // The outside ring holds the world in. The builder seals it too, but
+    // checking twice costs nothing and this is the one thing that would
+    // send the raycaster crawling off the edge of the map forever.
+    for (let col = 0; col < MAP_W; col++) {
+      MAP[0][col] = '#';
+      MAP[MAP_H - 1][col] = '#';
+    }
+    for (let row = 0; row < MAP_H; row++) {
+      MAP[row][0] = '#';
+      MAP[row][MAP_W - 1] = '#';
+    }
+
+    startCol = level.startCol;
+    startRow = level.startRow;
+
+    // An empty list still counts as instructions - "I placed none, so
+    // don't scatter any". Only null means "do whatever you normally do".
+    placedChests = level.chests;
+    placedSpiders = level.spiders;
+  }
+
   // Ask the map "is this spot solid rock?"
   // Anything outside the map counts as rock, so you can never fall out
   // of the world. That's a guard rail - a tiny bit of code whose only
@@ -306,6 +456,14 @@
     // spiders sit frozen instead of creeping up on you while you read.
     started: false,
     difficulty: 'normal',
+
+    // How many spiders you've squashed this run.
+    kills: 0,
+
+    // Cleared the cavern? And which frame did it happen on - we use that
+    // to fade the VICTORY banner in rather than slapping it up.
+    won: false,
+    wonAtFrame: 0,
 
     // Where you're standing. These are NOT pixels - they're map squares.
     // x: 1.5 means "halfway across square number 1". Starting you in a
@@ -439,6 +597,7 @@
     // Q drops whatever's in your hand.
     if (e.key.toLowerCase() === 'q') dropItem();
 
+
     // M turns the music off. Any game that plays sound has to have this.
     if (e.key.toLowerCase() === 'm') toggleMute();
 
@@ -562,6 +721,7 @@
   const DROP   = { x: 722, y: 246, r: 40 };
   const MUTE   = { x: 754, y: 46,  r: 30 };   // tucked up out of the way
   const FULL   = { x: 686, y: 46,  r: 30 };
+
 
 
   // FULLSCREEN.
@@ -902,6 +1062,39 @@
     osc.stop(t + 1.2);
   }
 
+  // FOUR NOTES GOING UP. That's all a fanfare is.
+  //
+  // They're scheduled ahead of time rather than played one by one -
+  // `t + i * 0.16` says "start this one a sixth of a second after the
+  // last". The web audio clock is far steadier than the game loop, so
+  // notes booked in advance land perfectly even if the game stutters.
+  function fanfare() {
+    if (!audio.on) return;
+    const t = audio.ctx.currentTime;
+    const notes = [392.00, 523.25, 659.25, 783.99];   // G  C  E  G
+
+    notes.forEach((freq, i) => {
+      const start = t + i * 0.16;
+
+      const osc = audio.ctx.createOscillator();
+      osc.type = 'triangle';
+      osc.frequency.value = freq;
+
+      const g = audio.ctx.createGain();
+      g.gain.setValueAtTime(0.0001, start);
+      g.gain.exponentialRampToValueAtTime(0.22, start + 0.02);
+      // The last note rings on much longer than the other three. That's
+      // what makes it sound like an ending instead of just stopping.
+      const hold = (i === notes.length - 1) ? 1.6 : 0.42;
+      g.gain.exponentialRampToValueAtTime(0.0001, start + hold);
+
+      osc.connect(g);
+      g.connect(audio.master);
+      osc.start(start);
+      osc.stop(start + hold + 0.05);
+    });
+  }
+
   function updateLounge() {
     if (state.frame < nextLoungeFrame) return;
     nextLoungeFrame = state.frame + LOUNGE_BEAT;
@@ -1200,6 +1393,7 @@
 
     updateSpiders();
     refillSpiders();   // does nothing unless you're in NIGHTMARE
+    checkVictory();
     updateMusic();
     checkPickups();
     checkHazards();
@@ -1375,8 +1569,7 @@
     target.hurtUntil = state.frame + 6;
 
     if (target.health <= 0) {
-      sprites.splice(targetIndex, 1);
-      const gained = heal(HEART_PER_KILL);
+      const gained = killSpiderAt(targetIndex);
       say('Spider down.' + (gained ? '  ' + heartWord(gained) : ''));
     }
   }
@@ -1424,9 +1617,8 @@
       thing.hurtUntil = state.frame + 14;
 
       if (thing.health <= 0) {
-        sprites.splice(i, 1);
+        gained += killSpiderAt(i);
         killed++;
-        gained += heal(HEART_PER_KILL);
       } else {
         thing.nextBite = state.frame + 45;
         hit++;
@@ -1492,8 +1684,7 @@
     target.hurtUntil = state.frame + 10;
 
     if (target.health <= 0) {
-      sprites.splice(targetIndex, 1);
-      const gained = heal(HEART_PER_KILL);
+      const gained = killSpiderAt(targetIndex);
       say('BANG! Spider down.' + (gained ? '  ' + heartWord(gained) : ''));
     } else {
       target.nextBite = state.frame + 30;
@@ -1540,9 +1731,8 @@
       thing.hurtUntil = state.frame + 10;
 
       if (thing.health <= 0) {
-        sprites.splice(i, 1);
+        gained += killSpiderAt(i);
         killed++;
-        gained += heal(HEART_PER_KILL);
       } else {
         // Knock it back, so three hits don't all land in the same
         // instant. It has to walk back in, and that gap is what turns a
@@ -1586,8 +1776,8 @@
     if (state.health <= 0) {
       state.health = MAX_HEARTS * 2;
       state.mercy = MERCY_FRAMES * 2;
-      state.x = 1.5;
-      state.y = 1.5;
+      state.x = startCol + 0.5;
+      state.y = startRow + 0.5;
       say('The cavern spits you back out. Try again.');
     } else {
       say('Something bites!');
@@ -1595,6 +1785,25 @@
   }
 
   const HEART_PER_KILL = 2;   // 2 half-hearts = one whole heart
+
+  // ONE PLACE WHERE A SPIDER DIES.
+  //
+  // The pistol, the shotgun, the machine gun and the knife all used to
+  // do these two lines themselves. Four copies of the same idea. Adding
+  // a kill counter meant editing all four and hoping I didn't miss one -
+  // and if I had, the number would just be quietly wrong forever. No
+  // crash, no error, nothing to hunt. The worst kind of bug.
+  //
+  // Now every weapon calls this instead. Give spiders a death sound one
+  // day and you write it here, once, and all four weapons get it.
+  //
+  // It hands back how much health you actually gained, so each weapon can
+  // still write its own message about it.
+  function killSpiderAt(index) {
+    sprites.splice(index, 1);
+    state.kills++;
+    return heal(HEART_PER_KILL);
+  }
 
   // Puts health back, but never more than the bar can hold. It returns
   // how much ACTUALLY landed, not how much you asked for - so on a full
@@ -2469,7 +2678,7 @@
         // Skip rock, and skip the square you start on - finding a chest
         // wedged in your face on frame one is a rubbish way to begin.
         if (MAP[row][col] !== '.') continue;
-        if (col === 1 && row === 1) continue;
+        if (col === startCol && row === startRow) continue;
         spots.push({ col: col, row: row });
       }
     }
@@ -2490,7 +2699,16 @@
     sprites.length = 0;
 
     // Collect every open floor square in the whole cavern.
-    const spots = openFloorSquares();
+    let spots = openFloorSquares();
+
+    // Squares you've already put something on are out of the running, so
+    // a random cobweb can't land on top of your chest.
+    if (placedChests || placedSpiders) {
+      const taken = new Set();
+      for (const p of (placedChests || [])) taken.add(p.row * MAP_W + p.col);
+      for (const p of (placedSpiders || [])) taken.add(p.row * MAP_W + p.col);
+      spots = spots.filter(s => !taken.has(s.row * MAP_W + s.col));
+    }
 
     // SHUFFLE. Walk backwards through the list and swap each square with
     // a random earlier one. Deal the whole deck, then take from the top -
@@ -2505,23 +2723,45 @@
     // Take from the top of the shuffled deck. The +0.5 puts each thing
     // in the MIDDLE of its square instead of jammed in the corner.
     let next = 0;
-    for (let i = 0; i < CHEST_COUNT && next < spots.length; i++, next++) {
-      // Every chest gets TWO new things it didn't have before: whether
-      // it's been opened, and what's hiding inside. The loot is decided
-      // right now, at the start - not at the moment you open it. Same
-      // result either way, but this means the cavern is already
-      // completely decided before you take a single step. It's not
-      // making things up as you go along; you're finding out.
+
+    // A chest gets TWO things it didn't have before: whether it's been
+    // opened, and what's hiding inside. The loot is decided right now,
+    // at the start - not at the moment you open it. Same result either
+    // way, but it means the cavern is already completely decided before
+    // you take a single step. It's not making things up as you go along;
+    // you're finding out.
+    function addChest(col, row) {
       sprites.push({
-        x: spots[next].col + 0.5,
-        y: spots[next].row + 0.5,
+        x: col + 0.5,
+        y: row + 0.5,
         kind: 'chest',
         opened: false,
         loot: LOOT_TYPES[Math.floor(Math.random() * LOOT_TYPES.length)],
       });
     }
+
+    if (placedChests) {
+      // You said where they go, so that's where they go.
+      for (const p of placedChests) addChest(p.col, p.row);
+    } else {
+      for (let i = 0; i < CHEST_COUNT && next < spots.length; i++, next++) {
+        addChest(spots[next].col, spots[next].row);
+      }
+    }
     for (let i = 0; i < WEB_COUNT && next < spots.length; i++, next++) {
       sprites.push({ x: spots[next].col + 0.5, y: spots[next].row + 0.5, kind: 'web' });
+    }
+
+    // ---- SPIDERS ----
+    if (placedSpiders) {
+      for (const p of placedSpiders) sprites.push(makeSpider(p.col + 0.5, p.row + 0.5));
+
+      // Your placements decide how many there are, not the difficulty.
+      // That matters for NIGHTMARE: the respawner tops the cavern back up
+      // to SPIDER_COUNT, so if this didn't change, killing one of your
+      // three would summon nine.
+      SPIDER_COUNT = placedSpiders.length;
+      return;
     }
 
     // Spiders, but never anywhere near where you start. Being bitten
@@ -2529,8 +2769,8 @@
     // it's just unfair - and unfair is the one thing a game can't be.
     for (let i = 0; i < SPIDER_COUNT; i++) {
       while (next < spots.length) {
-        const sx = spots[next].col + 0.5 - 1.5;
-        const sy = spots[next].row + 0.5 - 1.5;
+        const sx = spots[next].col - startCol;
+        const sy = spots[next].row - startRow;
         if (sx * sx + sy * sy > 30) break;    // at least ~5 squares off
         next++;
       }
@@ -2557,6 +2797,32 @@
   // Instead this just COUNTS them, once a frame, and notices when some are
   // missing. It doesn't care how they died. It doesn't even need to know
   // that weapons exist.
+
+  // --- 7c1b. WINNING ----------------------------------------------------
+  //
+  // Same idea as the respawner right below: don't ask the weapons. Just
+  // count what's left, once a frame. A weapon's job is to shoot things,
+  // not to know whether shooting that one happened to end the game.
+
+  function checkVictory() {
+    if (state.won) return;              // already won; don't win twice
+
+    // NIGHTMARE can't be cleared - kill one and another crawls in. So
+    // there's nothing to check, and worse, there's a 2.5 second gap
+    // between the last death and the replacement where the cave really
+    // IS empty. Without this line you'd get a VICTORY banner for two and
+    // a half seconds every time you got on top of them.
+    if (SPIDER_RESPAWN > 0) return;
+
+    for (const thing of sprites) {
+      if (thing.kind === 'spider') return;    // found one, so: not yet
+    }
+
+    state.won = true;
+    state.wonAtFrame = state.frame;
+    say('The cavern is CLEAR.');
+    fanfare();
+  }
 
   let nextSpawnFrame = 0;
 
@@ -2630,14 +2896,29 @@
 
   function startGame(name) {
     applyDifficulty(name);   // 1. pick the numbers
-    scatterThings();         // 2. build a fresh cavern using them
+
+    // 2. WHICH CAVE? Yours, or the one that came with the game. This has
+    //    to happen before scatterThings, because where the chests and
+    //    spiders can go depends entirely on where the walls are.
+    const wantsCustom = document.getElementById('useLevel').checked;
+    if (wantsCustom && customLevel) {
+      applyCustomLevel(customLevel);
+    } else {
+      resetMap();
+      startCol = 1;
+      startRow = 1;
+      placedChests = null;    // back to scattering things at random
+      placedSpiders = null;
+    }
+
+    scatterThings();         // 3. build a fresh cavern using them
 
     // 3. put the player back at the start, in one piece, with a pistol.
     //    Your pockets get emptied too - otherwise you could grab a
     //    machine gun on PINK and carry it straight into NIGHTMARE,
     //    which would rather spoil the point of NIGHTMARE.
-    state.x = 1.5;
-    state.y = 1.5;
+    state.x = startCol + 0.5;
+    state.y = startRow + 0.5;
     state.angle = 0.7;
     state.pitch = 0;
     state.health = MAX_HEARTS * 2;
@@ -2645,6 +2926,9 @@
     state.hurtFlash = 0;
     state.inventory = ['pistol', 'knife'];
     state.heldSlot = 0;
+    state.kills = 0;      // fresh cave, fresh score
+    state.won = false;
+    state.wonAtFrame = 0;
     nextSpawnFrame = state.frame + SPIDER_RESPAWN;
 
     // Browsers refuse to make any sound until you've actually clicked
@@ -2678,7 +2962,27 @@
       btn.onclick = () => startGame(name);
       holder.appendChild(btn);
     }
+
+    // The fourth tile isn't a difficulty at all - it's a door to the
+    // level builder. It looks like the others on purpose: it's one of the
+    // things you can choose from here, so it should sit with them.
+    const build = document.createElement('a');
+    build.className = 'doom doom-builder';
+    build.href = 'builder.html';
+    build.innerHTML = '<b>BUILDER</b><span>Draw your own cave, then come '
+                    + 'back and get lost in it.</span>';
+    holder.appendChild(build);
   })();
+
+  // Look for a level from the builder, once, when the page loads. If
+  // there's a good one, offer it - and tick it by default, because if
+  // you've just come from the builder that's obviously what you want.
+  let customLevel = loadCustomLevel();
+
+  if (customLevel) {
+    document.getElementById('levelPick').style.display = 'flex';
+    document.getElementById('useLevel').checked = true;
+  }
 
   // The corner button that brings the picker back for a fresh cave.
   document.getElementById('again').onclick = () => {
@@ -4224,6 +4528,110 @@
   }
 
 
+  // --- 7g2. THE SPIDER COUNTER ------------------------------------------
+  // Top right, opposite the hearts. Hearts are what you're losing;
+  // this is what you're winning.
+
+  // A tiny spider, drawn small enough to be a symbol rather than a
+  // picture. Four lines for legs and two blobs for the body - at this
+  // size your brain fills in everything else.
+  function drawTinySpider(cx, cy, colour) {
+    ctx.strokeStyle = colour;
+    ctx.fillStyle = colour;
+    ctx.lineWidth = 2;
+
+    // Legs: four strokes, each one crossing the whole body, which gets
+    // you eight legs for half the work.
+    for (const angle of [0.45, 1.15, 2.0, 2.7]) {
+      const dx = Math.cos(angle) * 10;
+      const dy = Math.sin(angle) * 7;
+      ctx.beginPath();
+      ctx.moveTo(cx - dx, cy - dy);
+      ctx.lineTo(cx + dx, cy + dy);
+      ctx.stroke();
+    }
+
+    ctx.beginPath();
+    ctx.ellipse(cx, cy + 1, 5, 4.2, 0, 0, Math.PI * 2);   // fat back end
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(cx, cy - 4, 2.6, 0, Math.PI * 2);             // head
+    ctx.fill();
+  }
+
+  function drawKills() {
+    const x = canvas.width - 22;
+    const y = 32;
+    const text = String(state.kills);
+
+    ctx.save();
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    ctx.font = 'bold 30px system-ui, sans-serif';
+
+    // Draw the number twice: a fat dark outline first, then the bright
+    // fill on top. Without the outline it vanishes the moment you stand
+    // in front of a pale wall - and on PINK the walls glow.
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.72)';
+    ctx.strokeText(text, x, y);
+    ctx.fillStyle = '#ecd6a0';
+    ctx.fillText(text, x, y);
+
+    // Park the spider just left of the number - and measure the number
+    // to find out where that is, so it still lines up at 9 kills and
+    // at 148.
+    const numberWidth = ctx.measureText(text).width;
+    drawTinySpider(x - numberWidth - 18, y, 'rgba(0, 0, 0, 0.72)');
+    ctx.lineWidth = 1.2;
+    drawTinySpider(x - numberWidth - 18, y, '#d8b8c8');
+
+    ctx.restore();
+  }
+
+
+  // --- 7g3. VICTORY ------------------------------------------------------
+
+  function drawVictory() {
+    if (!state.won) return;
+
+    const W = canvas.width;
+    const H = canvas.height;
+
+    // Fade in over about half a second instead of appearing instantly.
+    // Same information either way - it just feels like an ENDING rather
+    // than a thing that popped up.
+    let fade = (state.frame - state.wonAtFrame) / 30;
+    if (fade > 1) fade = 1;
+
+    ctx.save();
+
+    ctx.fillStyle = 'rgba(0, 0, 0, ' + (0.55 * fade) + ')';
+    ctx.fillRect(0, H / 2 - 96, W, 192);
+
+    ctx.textAlign = 'center';
+    ctx.globalAlpha = fade;
+
+    // The word itself, drawn twice again: dark outline under, gold over.
+    ctx.font = 'bold 76px system-ui, sans-serif';
+    ctx.lineWidth = 8;
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
+    ctx.strokeText('VICTORY!', W / 2, H / 2 - 12);
+    ctx.fillStyle = '#ffd45e';
+    ctx.fillText('VICTORY!', W / 2, H / 2 - 12);
+
+    ctx.font = 'bold 26px system-ui, sans-serif';
+    ctx.fillStyle = '#ecd6a0';
+    ctx.fillText(state.kills + ' spiders. Cavern clear.', W / 2, H / 2 + 30);
+
+    ctx.font = '19px system-ui, sans-serif';
+    ctx.fillStyle = '#b9ae95';
+    ctx.fillText('Hit  New cave  for another one.', W / 2, H / 2 + 66);
+
+    ctx.restore();
+  }
+
+
   // Draws the thumb controls. Only ever called once somebody has
   // actually touched the screen - there's no point cluttering up a
   // desktop screen with buttons nobody can press.
@@ -4293,6 +4701,7 @@
     drawButton(DROP, 'DROP', held !== undefined,
                [46, 62, 96], [176, 206, 255],
                held ? ITEMS[held].icon : null);
+
   }
 
   function drawButton(btn, label, ready, onColour, edgeColour, icon) {
@@ -4817,6 +5226,8 @@
 
     // Hearts, thumb controls, then your pockets - over the top of all.
     drawHearts();
+    drawKills();
+    drawVictory();
     if (touchMode) drawTouchControls();
     drawInventory();
   }
