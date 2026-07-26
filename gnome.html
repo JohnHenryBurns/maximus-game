@@ -294,6 +294,16 @@ const AUTO_AIM_RANGE = 330;
 // thick the monsters get further up. You need a moment to get going.
 const MONSTER_GRACE = 3;
 
+// --- FIREBALLS ---
+// One falls out of the sky every 25 seconds. 60 frames is a second, so
+// 25 seconds is 1500 frames.
+const FIREBALL_GAP   = 1500;
+// It flashes a warning at the top of the screen for a second first.
+// Something that drops out of nowhere and kills you isn't difficulty,
+// it's just rude - same rule as the wobble on a crumbling ledge.
+const FIREBALL_WARN  = 60;
+const FIREBALL_SPEED = 9.5;   // it comes down FAST once it lets go
+
 // MONSTER_EVERY, up in LEVELS, used to be a timer - a monster every so
 // many seconds. Counting LEDGES instead is better, and not just tidier:
 // it means the danger is built into the pole rather than into how long
@@ -310,7 +320,7 @@ const POLE_RIGHT = W / 2 + POLE_WIDTH / 2;
 //     Instead of gnomeX, gnomeY, gnomeSpeed... we keep them in one bag.
 
 let gnome, platforms, lavaY, lavaSpeed, cameraY, best, dead, deadTimer;
-let bullets, monsters, tick, nextShotAt, kills;
+let bullets, monsters, fireballs, tick, nextShotAt, nextFireballAt, kills;
 
 // How many ledges have been built this game. Drives the every-fifth
 // monster, and nothing else.
@@ -350,9 +360,10 @@ function newGame() {
   // didn't exist yet, and the whole game died before drawing one frame.
   //
   // Nothing wrong with the monsters, or the ledges. Just the ORDER.
-  bullets  = [];
-  monsters = [];
-  kills    = 0;
+  bullets   = [];
+  monsters  = [];
+  fireballs = [];
+  kills     = 0;
 
   // The starting ledge, so you don't begin the game falling into lava.
   // This one NEVER crumbles - `safe` exempts it. Spawning onto a floor
@@ -385,6 +396,7 @@ function newGame() {
   // kind - it never stops, so wobbles keep wobbling on the death screen.
   tick = 0;
   nextShotAt = 0;
+  nextFireballAt = FIREBALL_GAP;   // the first one is 25 seconds away
 }
 
 // --- 3. MAKING LEDGES --------------------------------------------------
@@ -1162,6 +1174,58 @@ function update() {
     }
   }
 
+  // --- FIREBALLS FROM THE SKY ---
+  if (tick >= nextFireballAt) {
+    nextFireballAt = tick + FIREBALL_GAP;
+
+    // It aims at wherever you are right now, give or take. Straight at
+    // you every time would be undodgeable; anywhere at all would almost
+    // always miss and you'd never learn to fear it.
+    fireballs.push({
+      x: gnome.x + (Math.random() - 0.5) * 90,
+      y: 0,                    // parked; the warning phase sets this
+      warn: FIREBALL_WARN,     // counting down before it lets go
+      spin: 0,
+    });
+  }
+
+  for (const f of fireballs) {
+    f.spin += 0.3;
+
+    if (f.warn > 0) {
+      // WARNING PHASE. It hangs just off the top of the screen, tracking
+      // the camera so it stays visible while the marker flashes. It
+      // isn't falling and it can't hurt you yet - one object doing two
+      // jobs, told apart by a single counter.
+      f.warn--;
+      f.y = cameraY - 30;
+      continue;
+    }
+
+    f.y += FIREBALL_SPEED;
+
+    // It smashes any ledge it passes through. It doesn't stop - it goes
+    // straight on down, wrecking everything in that column, and the
+    // ledges rebuild themselves afterwards like they always do.
+    for (const p of platforms) {
+      if (p.safe || p.falling) continue;
+      if (f.x > p.x - 8 && f.x < p.x + p.w + 8 &&
+          f.y > p.y - 14 && f.y < p.y + 20) {
+        p.falling = true;
+      }
+    }
+  }
+
+  // --- a fireball catching you ---
+  for (const f of fireballs) {
+    if (f.warn > 0) continue;              // still up in the sky
+    const dx = f.x - gnome.x;
+    const dy = f.y - (gnome.y - 17);
+    if (dx * dx + dy * dy < 26 * 26) { dead = true; deadTimer = 0; }
+  }
+
+  fireballs = fireballs.filter(f => f.y < lavaY + 40);
+
   // --- a monster catching you ---
   for (const m of monsters) {
     if (m.health <= 0) continue;
@@ -1253,6 +1317,7 @@ function draw() {
   for (const p of platforms) drawLedge(p, screenY);
   for (const m of monsters) drawMonster(m, screenY);
   for (const b of bullets) drawBullet(b, screenY);
+  for (const f of fireballs) drawFireball(f, screenY);
   if (!dead) drawGnome(screenY);
   drawLava(screenY);
   drawHud();
@@ -1410,6 +1475,76 @@ function drawBullet(b, screenY) {
   ctx.fillStyle = "#fffbe8";
   ctx.beginPath();
   ctx.arc(b.x, sy, 2.4, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+// A FIREBALL, and the warning that comes before it.
+function drawFireball(f, screenY) {
+  // ---- the warning ----
+  if (f.warn > 0) {
+    // Flash faster and faster as it's about to go. The gap between
+    // flashes IS the countdown - you can feel how long you've got
+    // without anybody printing a number on the screen.
+    const urgency = 1 - f.warn / FIREBALL_WARN;
+    const blink = Math.sin(shakeClock * (0.25 + urgency * 0.5));
+    if (blink < 0) return;
+
+    ctx.save();
+    ctx.globalAlpha = 0.55 + urgency * 0.45;
+
+    // A downward arrow at the top of the screen, over the column it's
+    // about to come down.
+    ctx.fillStyle = "#ff7a2a";
+    ctx.beginPath();
+    ctx.moveTo(f.x, 74);
+    ctx.lineTo(f.x - 17, 40);
+    ctx.lineTo(f.x + 17, 40);
+    ctx.closePath();
+    ctx.fill();
+
+    // And a faint smear of light straight down the danger column, so
+    // it's obvious WHERE and not just THAT.
+    const col = ctx.createLinearGradient(0, 74, 0, H);
+    col.addColorStop(0, "rgba(255, 110, 30, 0.24)");
+    col.addColorStop(1, "rgba(255, 110, 30, 0)");
+    ctx.fillStyle = col;
+    ctx.fillRect(f.x - 22, 74, 44, H);
+
+    ctx.restore();
+    return;
+  }
+
+  // ---- the fireball itself ----
+  const sy = screenY(f.y);
+  if (sy < -120 || sy > H + 60) return;
+
+  // A tail of fading blobs trailing up behind it. Drawing the same
+  // shape a few times, smaller and fainter each time, is the cheapest
+  // convincing trail there is - no particles to keep track of.
+  for (let i = 6; i >= 1; i--) {
+    ctx.globalAlpha = 0.1 + (6 - i) * 0.055;
+    ctx.fillStyle = i > 3 ? "#8f2708" : "#ff8c1a";
+    ctx.beginPath();
+    ctx.arc(f.x + Math.sin(f.spin + i) * 3, sy - i * 15, 15 - i * 1.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  const glow = ctx.createRadialGradient(f.x, sy, 3, f.x, sy, 40);
+  glow.addColorStop(0, "rgba(255, 220, 120, 0.85)");
+  glow.addColorStop(0.4, "rgba(255, 110, 20, 0.5)");
+  glow.addColorStop(1, "rgba(255, 90, 0, 0)");
+  ctx.fillStyle = glow;
+  ctx.fillRect(f.x - 42, sy - 42, 84, 84);
+
+  ctx.fillStyle = "#ff6a1a";
+  ctx.beginPath();
+  ctx.arc(f.x, sy, 15, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = "#ffe08a";
+  ctx.beginPath();
+  ctx.arc(f.x - 3, sy - 3, 7.5, 0, Math.PI * 2);
   ctx.fill();
 }
 
