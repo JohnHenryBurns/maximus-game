@@ -752,9 +752,24 @@
     audio.filter.Q.value = 5;
     audio.filter.connect(audio.master);
 
+    // Everything spooky goes through this one knob, so PINK mode can turn
+    // the whole horror soundtrack off with a single number instead of
+    // hunting down each oscillator.
+    audio.horror = audio.ctx.createGain();
+    audio.horror.gain.value = 1;
+    audio.horror.connect(audio.filter);
+
+    // And the lounge band gets its own channel, plugged in AFTER the
+    // filter. That filter is what makes the cave sound muffled and far
+    // away - run cheesy elevator music through it and you'd just get
+    // cheesy elevator mud.
+    audio.lounge = audio.ctx.createGain();
+    audio.lounge.gain.value = 0;
+    audio.lounge.connect(audio.master);
+
     const drone = audio.ctx.createGain();
     drone.gain.value = 0.30;
-    drone.connect(audio.filter);
+    drone.connect(audio.horror);
 
     // Two saw waves on the SAME note, but pulled a few cents apart. Play
     // them together and they drift in and out of step, which makes a
@@ -776,11 +791,135 @@
     const fifthGain = audio.ctx.createGain();
     fifthGain.gain.value = 0.13;
     fifth.connect(fifthGain);
-    fifthGain.connect(audio.filter);
+    fifthGain.connect(audio.horror);
     fifth.start();
 
     // Creep the volume up rather than slamming it on.
     audio.master.gain.setTargetAtTime(0.17, audio.ctx.currentTime, 1.6);
+
+    setMusicMode();   // horror or lounge, depending which level you picked
+  }
+
+  // SLIDE A KNOB, AND ACTUALLY ARRIVE.
+  //
+  // The rest of this file uses setTargetAtTime, which slides TOWARDS a
+  // value and never quite gets there - it goes 10%, 1%, 0.1%, forever,
+  // like something falling half the remaining distance every second.
+  // That's perfect for music swelling as a spider closes in. It is
+  // useless for switching a sound OFF, because "nearly nothing" is still
+  // something, and a drone at 0.4% volume is still a drone.
+  //
+  // linearRampToValueAtTime goes in a straight line and genuinely lands.
+  // cancelScheduledValues first, or whatever the old music asked for is
+  // still queued up and the two of them fight.
+  function rampTo(param, value, seconds) {
+    const t = audio.ctx.currentTime;
+    param.cancelScheduledValues(t);
+    param.setValueAtTime(param.value, t);   // start from wherever it is now
+    param.linearRampToValueAtTime(value, t + seconds);
+  }
+
+  // Flips between the two soundtracks. One knob down, one knob up.
+  function setMusicMode() {
+    if (!audio.on) return;
+    const lounging = !!DIFFICULTIES[state.difficulty].lounge;
+
+    rampTo(audio.horror.gain, lounging ? 0 : 1, 0.4);
+    rampTo(audio.lounge.gain, lounging ? 1 : 0, 0.4);
+
+    // The lounge band needs the master turned up and held there, because
+    // nothing is going to swell it - there's no danger to react to.
+    rampTo(audio.master.gain, lounging ? 0.20 : 0.17, 0.4);
+
+    // Park the spooky filter back down where it started, so if you switch
+    // away from PINK later it doesn't come roaring in wide open.
+    if (lounging) rampTo(audio.filter.frequency, 190, 0.4);
+  }
+
+  // Everything off. Used when the difficulty picker comes back up.
+  //
+  // This is needed because the drone oscillators never stop - they've
+  // been running since your first click and they'll run until you close
+  // the tab. Nothing "plays" a note here; we only ever turn knobs. So
+  // when the game stops updating, the music doesn't stop with it. It
+  // just carries on, unattended, over the top of the menu.
+  function silenceMusic() {
+    if (!audio.on) return;
+    rampTo(audio.horror.gain, 0, 0.25);
+    rampTo(audio.lounge.gain, 0, 0.25);
+  }
+
+  // --- THE LIFT MUSIC ----------------------------------------------------
+  // Four cheesy jazz chords going round and round forever, with a little
+  // noodly tune on top. It is aggressively relaxed. It has no idea it's
+  // in a cursed cavern, and that's the entire joke.
+
+  const LOUNGE_BEAT = 22;    // frames per beat. Smaller = faster = less smug.
+
+  // A chord is just several notes played at once. These are the actual
+  // frequencies in hertz - 261.63 is middle C. The pattern goes
+  // Fmaj7, G7, Cmaj7, Am7, which is about the cheesiest four chords
+  // in existence and is roughly every hotel lobby ever.
+  const LOUNGE_CHORDS = [
+    [174.61, 220.00, 261.63, 329.63],   // F  A  C  E
+    [196.00, 246.94, 293.66, 349.23],   // G  B  D  F
+    [261.63, 329.63, 392.00, 493.88],   // C  E  G  B
+    [220.00, 261.63, 329.63, 392.00],   // A  C  E  G
+  ];
+
+  // The tune on top, one slot per beat. `null` means "rest" - a beat
+  // where nobody plays. Rests are what stop a tune sounding like a
+  // typewriter; leave them out and it's exhausting.
+  const LOUNGE_TUNE = [
+    523.25, null,   659.25, 587.33,
+    493.88, null,   587.33, null,
+    659.25, 783.99, 659.25, 587.33,
+    523.25, null,   440.00, null,
+  ];
+
+  let loungeStep = 0;
+  let nextLoungeFrame = 0;
+
+  // A soft bell-ish note, like the vibraphone every lift in the world has.
+  function loungeBell(freq, level) {
+    const t = audio.ctx.currentTime;
+
+    const osc = audio.ctx.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.value = freq;
+
+    const g = audio.ctx.createGain();
+    // Quick in, slow out. That shape - fast attack, long fade - is what
+    // makes your ear hear "something struck" rather than "something
+    // switched on". Swap the two times round and it turns into an organ.
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(level, t + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 1.1);
+
+    osc.connect(g);
+    g.connect(audio.lounge);
+    osc.start(t);
+    osc.stop(t + 1.2);
+  }
+
+  function updateLounge() {
+    if (state.frame < nextLoungeFrame) return;
+    nextLoungeFrame = state.frame + LOUNGE_BEAT;
+
+    const beat = loungeStep % 16;      // four bars of four beats, then repeat
+    const bar = (beat / 4) | 0;
+
+    // New chord at the start of each bar, plus a fat low root note.
+    if (beat % 4 === 0) {
+      const chord = LOUNGE_CHORDS[bar];
+      for (const note of chord) loungeBell(note, 0.07);
+      loungeBell(chord[0] / 2, 0.10);      // halve a frequency = one octave down
+    }
+
+    const tune = LOUNGE_TUNE[beat];
+    if (tune) loungeBell(tune, 0.16);
+
+    loungeStep++;
   }
 
   // One heartbeat thump: a low note that drops in pitch as it fades.
@@ -891,23 +1030,44 @@
     src.start(t);
   }
 
-  const MUSIC_RANGE = 8;    // how close a spider has to be to stir it up
+  // How close a spider has to be to stir the music up - in STEPS through
+  // the maze now, not squares through solid rock.
+  const MUSIC_RANGE = 11;
 
   function updateMusic() {
     if (!audio.on) return;
 
+    // On PINK the band plays instead, and none of the scary stuff below
+    // runs at all - no swell, no heartbeat, no reacting to spiders. The
+    // lift music does not care that you are about to be bitten.
+    if (DIFFICULTIES[state.difficulty].lounge) { updateLounge(); return; }
+
     // How close is the NEAREST spider? That one number drives everything.
+    //
+    // It used to be the straight-line distance, which made the music a
+    // liar: a spider two squares away through a solid wall - one that
+    // would need a thirty-step walk to reach you - had the heartbeat
+    // hammering. Scary the first time, meaningless by the third.
+    //
+    // Now it asks the hunt map, so the music is counting the same steps
+    // the spider would have to actually take. When it thunders now, it
+    // means something is genuinely nearly on you.
     let closest = Infinity;
     for (const thing of sprites) {
       if (thing.kind !== 'spider') continue;
-      const dx = thing.x - state.x;
-      const dy = thing.y - state.y;
-      const gap = Math.sqrt(dx * dx + dy * dy);
-      if (gap < closest) closest = gap;
+      const steps = stepsFromYou(thing.x, thing.y);
+      if (steps >= 0 && steps < closest) closest = steps;
     }
 
     let heat = 0;
     if (closest < MUSIC_RANGE) heat = 1 - closest / MUSIC_RANGE;
+
+    // NIGHTMARE cuts the warning. "heat" is the number that swells the
+    // music and speeds the heartbeat up when something's near - so it's
+    // not really music, it's a radar you listen to instead of look at.
+    // Hold it at 0 and the cave stays calm and quiet no matter what's
+    // walking up behind you. One line. Horrible.
+    if (!SPIDER_MUSIC) heat = 0;
 
     const t = audio.ctx.currentTime;
 
@@ -1032,7 +1192,14 @@
     if (state.healFlash > 0) state.healFlash--;
     if (state.swing > 0) state.swing--;
 
+    // ORDER MATTERS HERE. The hunt map has to be rebuilt from where you
+    // are RIGHT NOW, before anything reads it. Move this below the two
+    // lines under it and the spiders chase where you were last frame -
+    // which almost works, and would be a horrible thing to debug.
+    buildHuntMap();
+
     updateSpiders();
+    refillSpiders();   // does nothing unless you're in NIGHTMARE
     updateMusic();
     checkPickups();
     checkHazards();
@@ -1537,13 +1704,17 @@
   const DIFFICULTIES = {
     pink: {
       label: 'PINK',
-      blurb: '2 slow pink spiders. They barely mean it.',
-      count: 2,          // only two in the whole cavern
-      health: 2,         // dies fast
+      blurb: '4 slow pink spiders, neon walls and lift music. They barely mean it.',
+      count: 4,          // four of them in the whole cavern
+      health: 5,         // five hits each - they're soft, but they're spongy
       speed: 0.012,      // much slower than you
-      sight: 4.0,        // short-sighted
+      sight: 6,          // short-sighted. Six steps through the maze.
       bite: 1,           // half a heart
       gap: 110,          // waits ages between bites
+      respawn: 0,        // 0 = when they're dead, they stay dead
+      music: true,       // the heartbeat warns you one is close
+      lounge: true,      // cheesy lift music instead of the horror drone
+      wall: 'neon',      // glowing pink rock. Not remotely cursed.
       body: [235, 120, 190],   // Red, Green, Blue - lots of red + blue = pink
       head: [250, 155, 210],
       leg:  [215,  95, 170],
@@ -1555,9 +1726,13 @@
       count: 5,
       health: 3,
       speed: 0.021,
-      sight: 6.5,
+      sight: 13,         // notices you from about half the cavern away
       bite: 1,
       gap: 75,
+      respawn: 0,
+      music: true,
+      lounge: false,
+      wall: 'stone',
       body: [40, 30, 36],
       head: [54, 40, 47],
       leg:  [28, 21, 26],
@@ -1565,13 +1740,29 @@
     },
     nightmare: {
       label: 'NIGHTMARE',
-      blurb: '9 spiders. Faster than you. They see you first.',
+      blurb: '9 spiders. Faster than you. They never stop coming, and you will not hear them.',
       count: 9,
       health: 5,         // even the shotgun has to work
       speed: 0.030,      // FASTER than you walk. You cannot outrun these.
-      sight: 11.0,       // spots you from most of the way across a tunnel
+      // 999 steps is further than any two points in this cavern. There is
+      // nowhere you can stand where they don't know exactly how to reach
+      // you. They are always, always coming.
+      sight: 999,
       bite: 2,           // a WHOLE heart per bite
       gap: 40,           // and it bites nearly twice as often
+
+      // THEY KEEP COMING. Kill one and about 2.5 seconds later another
+      // crawls in from somewhere far off. You can never clear this
+      // cavern - you can only survive it.
+      respawn: 150,
+
+      // SILENT. On the other levels the music swells and the heartbeat
+      // speeds up when something's near, which is really a warning
+      // system dressed up as music. Down here you get no warning at all.
+      music: false,
+      lounge: false,
+      wall: 'stone',
+
       body: [46, 12, 12],
       head: [70, 16, 16],
       leg:  [30,  8,  8],
@@ -1583,13 +1774,124 @@
   // you choose a level. That one word is the whole difference.
   let SPIDER_HEALTH = 3;
   let SPIDER_SPEED  = 0.021;
-  let SPIDER_SIGHT  = 6.5;
+  let SPIDER_SIGHT  = 13;    // measured in STEPS through the maze now
   let SPIDER_BITE   = 1;
   let SPIDER_GAP    = 75;
+  let SPIDER_RESPAWN = 0;      // frames before a dead one is replaced. 0 = never
+  let SPIDER_MUSIC   = true;   // does the music warn you they're near?
 
   // These two are the same at every level, so they stay const.
   const SPIDER_WANDER = 0.008;   // a slow mooch when it hasn't seen you
   const SPIDER_REACH = 0.8;      // how close before it can bite
+
+  // --- 5d0. THE HUNT MAP -------------------------------------------------
+  //
+  // Every frame we work out, for EVERY square in the cavern, how many
+  // steps it is from that square to you - walking, round corners, like a
+  // real thing has to. Not the straight line through solid rock.
+  //
+  // Picture pouring water in at your feet. It spreads to the squares next
+  // to you (1 step), then to the squares next to THOSE (2 steps), and so
+  // on until it's filled the cave. Walls stop it. What you're left with is
+  // a number on every square saying "this far from him".
+  //
+  // That's called a flood fill, and it is the single most useful trick in
+  // this whole file, because everything else just READS the answer:
+  //   - a spider looks at the squares beside it and walks to the smallest
+  //     number. Downhill. It doesn't need a plan, or a memory, or a map -
+  //     it just needs to know which way is less.
+  //   - the music asks for the number under the nearest spider, and now
+  //     knows how close it really is instead of how close it looks.
+  //
+  // Doing this 60 times a second sounds expensive. It's 400 squares. Your
+  // computer does more work than that drawing one spider's leg.
+
+  const flow = new Int32Array(MAP_W * MAP_H);        // steps to you, -1 = can't get there
+  const flowQueue = new Int32Array(MAP_W * MAP_H);   // the squares still to spread from
+
+  function buildHuntMap() {
+    flow.fill(-1);
+
+    const startCol = Math.floor(state.x);
+    const startRow = Math.floor(state.y);
+    if (startCol < 0 || startRow < 0 ||
+        startCol >= MAP_W || startRow >= MAP_H) return;
+    if (MAP[startRow][startCol] !== '.') return;   // somehow inside rock; give up
+
+    // A QUEUE: a line of squares waiting their turn. We add to the back
+    // and take from the front, which is what makes the water spread out
+    // evenly in all directions instead of racing off down one tunnel.
+    let head = 0, tail = 0;
+    const start = startRow * MAP_W + startCol;
+    flow[start] = 0;
+    flowQueue[tail++] = start;
+
+    // Try to spread into one square. Refuses if it's rock, or if the
+    // water already got there - and "already got there" ALWAYS means by a
+    // shorter route, because we're spreading out evenly. That one fact is
+    // why this finds the shortest way round and never has to check twice.
+    function spreadTo(col, row, steps) {
+      if (col < 0 || row < 0 || col >= MAP_W || row >= MAP_H) return;
+      const cell = row * MAP_W + col;
+      if (flow[cell] !== -1) return;
+      if (MAP[row][col] !== '.') return;
+      flow[cell] = steps;
+      flowQueue[tail++] = cell;
+    }
+
+    while (head < tail) {
+      const cell = flowQueue[head++];
+      const col = cell % MAP_W;
+      const row = (cell - col) / MAP_W;
+      const steps = flow[cell] + 1;
+
+      spreadTo(col - 1, row, steps);
+      spreadTo(col + 1, row, steps);
+      spreadTo(col, row - 1, steps);
+      spreadTo(col, row + 1, steps);
+    }
+  }
+
+  // How many steps is this spot from you, through the maze?
+  // -1 means there's no way through at all.
+  function stepsFromYou(x, y) {
+    const col = Math.floor(x);
+    const row = Math.floor(y);
+    if (col < 0 || row < 0 || col >= MAP_W || row >= MAP_H) return -1;
+    return flow[row * MAP_W + col];
+  }
+
+  // Look at the four squares around this one and pick whichever has the
+  // SMALLEST number on the hunt map - that's the way towards you. Returns
+  // the middle of that square to walk at, or null if it's already on top
+  // of you or stuck somewhere the water never reached.
+  function downhillFrom(x, y) {
+    const col = Math.floor(x);
+    const row = Math.floor(y);
+    if (col < 0 || row < 0 || col >= MAP_W || row >= MAP_H) return null;
+
+    let best = flow[row * MAP_W + col];
+    if (best < 0) return null;          // not connected to you at all
+
+    let bestCol = -1, bestRow = -1;
+
+    function consider(c, r) {
+      if (c < 0 || r < 0 || c >= MAP_W || r >= MAP_H) return;
+      const v = flow[r * MAP_W + c];
+      if (v < 0 || v >= best) return;   // rock, or not actually closer
+      best = v;
+      bestCol = c;
+      bestRow = r;
+    }
+
+    consider(col - 1, row);
+    consider(col + 1, row);
+    consider(col, row - 1);
+    consider(col, row + 1);
+
+    if (bestCol < 0) return null;
+    return { x: bestCol + 0.5, y: bestRow + 0.5 };
+  }
 
   function updateSpiders() {
     for (const thing of sprites) {
@@ -1599,6 +1901,13 @@
       const dy = state.y - thing.y;
       const gap = Math.sqrt(dx * dx + dy * dy);
 
+      // How far away it REALLY is - round the corners, not through them.
+      // This used to be `gap`, the straight-line distance, which meant a
+      // spider on the other side of a thick wall thought it was standing
+      // next to you and spent its whole life shoving at the rock.
+      const steps = stepsFromYou(thing.x, thing.y);
+      const noticed = steps >= 0 && steps <= SPIDER_SIGHT;
+
       // ---- hasn't noticed you: WANDER ----
       // It picks a direction, ambles that way for a second or two, then
       // picks another. Bump a wall and it re-picks straight away.
@@ -1606,7 +1915,7 @@
       // No cleverness at all - no plan, no memory, no map. But an animal
       // that mooches about looks alive, and one that stands frozen until
       // you walk into its bubble looks like a statue that woke up.
-      if (gap > SPIDER_SIGHT || gap < 0.001) {
+      if (!noticed || gap < 0.001) {
         if (state.frame >= thing.wanderUntil) {
           thing.wanderDir = Math.random() * Math.PI * 2;
           thing.wanderUntil = state.frame + 50 + Math.floor(Math.random() * 130);
@@ -1633,13 +1942,41 @@
       thing.facing = Math.atan2(dy, dx);
 
       if (gap > SPIDER_REACH) {
-        // Walk straight at you - and slide along walls exactly the way
-        // you do, by trying the two directions separately. Without that
-        // it wedges itself on a corner and gives up forever.
-        const stepX = (dx / gap) * SPIDER_SPEED;
-        const stepY = (dy / gap) * SPIDER_SPEED;
+        // WHICH WAY? Two answers, and we want the nicer of the two.
+        //
+        // If it's in the same square as you or right next door, it can see
+        // you properly - so it comes straight at you, which looks alive.
+        //
+        // Any further and it aims at the middle of whichever neighbouring
+        // square is closer to you on the hunt map. Do that over and over
+        // and it walks the corridors, turns the corners, and arrives.
+        // It still has no idea where you are. It only ever knows which of
+        // the four squares beside it is better than the one it's on.
+        let aimX = dx / gap;
+        let aimY = dy / gap;
+
+        if (steps > 1) {
+          const nextSquare = downhillFrom(thing.x, thing.y);
+          if (nextSquare) {
+            const tx = nextSquare.x - thing.x;
+            const ty = nextSquare.y - thing.y;
+            const len = Math.sqrt(tx * tx + ty * ty);
+            if (len > 0.001) { aimX = tx / len; aimY = ty / len; }
+          }
+        }
+
+        // Slide along walls exactly the way you do, by trying the two
+        // directions separately. Without that it wedges itself on a
+        // corner and gives up forever.
+        const stepX = aimX * SPIDER_SPEED;
+        const stepY = aimY * SPIDER_SPEED;
         if (!isWall(thing.x + stepX, thing.y)) thing.x += stepX;
         if (!isWall(thing.x, thing.y + stepY)) thing.y += stepY;
+
+        // Point its face the way it's actually walking, not at you
+        // through a wall - otherwise it scuttles sideways down corridors
+        // like a crab, staring at the rock.
+        thing.facing = Math.atan2(aimY, aimX);
 
         // Only counts up while it's actually moving, so a spider that
         // has stopped stops scuttling too.
@@ -1814,15 +2151,25 @@
     return total;   // comes out somewhere around 0 to 1
   }
 
-  function makeStoneTexture() {
-    const c = document.createElement('canvas');
-    c.width = TEX_SIZE;
-    c.height = TEX_SIZE;
-    const t = c.getContext('2d');
+  // TWO JOBS, SPLIT APART.
+  //
+  // Working out the SHAPE of the rock - which dots are bumps and which
+  // are dents - takes about a million noise lookups. Slow.
+  // Deciding what COLOUR to paint that shape is just multiplying. Fast.
+  //
+  // They used to be one function, which was fine while the walls were
+  // only ever one colour. But now PINK mode wants different walls, and
+  // redoing the slow half every time you pick a level would make the
+  // start screen hang. So: work out the shape once, keep it forever,
+  // and repaint it as often as we like.
+  //
+  // Splitting the slow part from the part that changes is one of the
+  // most useful moves there is. Watch for chances to do it.
 
-    // We're deciding the colour of every single dot ourselves, one at a
-    // time, so we skip the paintbrush and write straight into the pixels.
-    const img = t.createImageData(TEX_SIZE, TEX_SIZE);
+  let stoneShape = null;   // brightness of every dot, 0 to 1. No colour.
+
+  function buildStoneShape() {
+    const shape = new Float32Array(TEX_SIZE * TEX_SIZE);
 
     for (let py = 0; py < TEX_SIZE; py++) {
       for (let px = 0; px < TEX_SIZE; px++) {
@@ -1856,21 +2203,57 @@
         if (n < 0) n = 0;
         if (n > 1) n = 1;
 
-        // Turn that one number into a damp brown-grey cave colour.
-        const bright = 40 + n * 135;
-        const i = (py * TEX_SIZE + px) * 4;
-        img.data[i]     = bright;          // red
-        img.data[i + 1] = bright * 0.87;   // green
-        img.data[i + 2] = bright * 0.74;   // blue
-        img.data[i + 3] = 255;             // fully solid
+        shape[py * TEX_SIZE + px] = n;
       }
+    }
+
+    return shape;
+  }
+
+  // HOW TO COLOUR A WALL.
+  // Three numbers: how much red, green and blue to let through. The rock
+  // shape decides how BRIGHT each dot is; this decides what colour that
+  // brightness comes out as. Above 1 means "turn this one up past normal",
+  // which is exactly what makes a colour look like it's glowing.
+  const WALL_STONE = [1.00, 0.87, 0.74];   // damp brown-grey. The cave.
+  const WALL_NEON  = [1.45, 0.34, 1.05];   // red way up, green squashed = hot pink
+
+  // `flat` throws the rock shape away entirely and paints every dot the
+  // same. No bumps, no grit, no texture - just solid colour. On real
+  // stone that would look terrible. On glowing neon it looks deliberate.
+  function paintStone(tint, flat) {
+    const c = document.createElement('canvas');
+    c.width = TEX_SIZE;
+    c.height = TEX_SIZE;
+    const t = c.getContext('2d');
+
+    // We're deciding the colour of every single dot ourselves, one at a
+    // time, so we skip the paintbrush and write straight into the pixels.
+    const img = t.createImageData(TEX_SIZE, TEX_SIZE);
+
+    for (let p = 0; p < stoneShape.length; p++) {
+      // Flat mode ignores the shape and uses the same middling brightness
+      // everywhere. Everything else about the drawing is untouched - the
+      // walls still get darker with distance, and corners still catch the
+      // light differently, so the cave doesn't turn into flat soup.
+      const bright = flat ? 118 : 40 + stoneShape[p] * 135;
+      const i = p * 4;
+
+      // Math.min stops us going over 255. A colour channel can't be
+      // brighter than all the way on - push past it and it just wraps
+      // round to dark, which looks like the texture has measles.
+      img.data[i]     = Math.min(255, bright * tint[0]);   // red
+      img.data[i + 1] = Math.min(255, bright * tint[1]);   // green
+      img.data[i + 2] = Math.min(255, bright * tint[2]);   // blue
+      img.data[i + 3] = 255;                               // fully solid
     }
 
     t.putImageData(img, 0, 0);
     return c;
   }
 
-  const stoneTexture = makeStoneTexture();
+  stoneShape = buildStoneShape();          // the slow bit. Once, ever.
+  let stoneTexture = paintStone(WALL_STONE);
 
   // Keep the stone crisp and blocky when it gets stretched, instead of
   // letting the browser smear it into mush. Also: faster.
@@ -1889,7 +2272,7 @@
   const SHADES = 32;
   const shadeTable = new Uint32Array(SHADES * TEX_AREA);
 
-  (function mixTheShades() {
+  function mixTheShades() {
     const raw = stoneTexture.getContext('2d')
                             .getImageData(0, 0, TEX_SIZE, TEX_SIZE).data;
 
@@ -1905,7 +2288,19 @@
         shadeTable[offset + i] = (255 << 24) | (b << 16) | (g << 8) | r;
       }
     }
-  })();
+  }
+
+  mixTheShades();
+
+  // Repaint every wall, floor and ceiling in a new colour. Two steps,
+  // and BOTH are needed: the walls draw straight from stoneTexture,
+  // but the floor and ceiling read from the pre-mixed shadeTable.
+  // Repaint one and forget the other and you get pink walls sitting on
+  // a brown floor, which would look like a bug because it is one.
+  function repaintWalls(tint, flat) {
+    stoneTexture = paintStone(tint, flat);
+    mixTheShades();
+  }
 
   // Our own private sheet of pixels. We paint the floor and ceiling into
   // this by hand, dot by dot, then slap the whole thing onto the canvas
@@ -1930,10 +2325,19 @@
     return c;
   }
 
-  function makeWebTexture() {
+  // WEB_DUSTY is the normal cobweb: pale, greyish, not quite white.
+  // WEB_NEON is what PINK mode strings up instead.
+  const WEB_DUSTY = 'rgba(226, 231, 240, 0.7)';
+  const WEB_NEON  = 'rgba(90, 225, 255, 0.9)';
+
+  // The colour used to be typed straight into the line below, which was
+  // fine right up until we wanted a second colour. Handing it in as an
+  // ingredient instead costs nothing and means one function can make
+  // every web we'll ever want.
+  function makeWebTexture(colour) {
     const c = blankSprite();
     const t = c.getContext('2d');
-    t.strokeStyle = 'rgba(226, 231, 240, 0.7)';
+    t.strokeStyle = colour || WEB_DUSTY;
     t.lineWidth = 1;
 
     // The web hangs from a single point up top and fans out downward.
@@ -2034,6 +2438,44 @@
 
   const sprites = [];
 
+  // ONE place that knows how to build a spider. It used to be written out
+  // inside scatterThings, which was fine while spiders only ever appeared
+  // at the start. Now NIGHTMARE makes new ones mid-game too - and the
+  // moment a thing needs making in two places, it wants to be a function.
+  //
+  // Otherwise you give spiders a new ability one day, change it in one
+  // spot, and spend an afternoon wondering why only half of them have it.
+  function makeSpider(x, y) {
+    return {
+      x: x,
+      y: y,
+      kind: 'spider',
+      health: SPIDER_HEALTH,
+      nextBite: 0,      // the frame it's allowed to bite again
+      hurtUntil: 0,     // frame its white flash ends
+      step: Math.random() * 10,           // where it is in its scuttle
+      facing: Math.random() * Math.PI * 2,
+      wanderDir: Math.random() * Math.PI * 2,
+      wanderUntil: 0,
+    };
+  }
+
+  // Every open floor square in the cavern, as a plain list. Both the
+  // scatterer and the respawner need this, so neither one owns it.
+  function openFloorSquares() {
+    const spots = [];
+    for (let row = 0; row < MAP_H; row++) {
+      for (let col = 0; col < MAP_W; col++) {
+        // Skip rock, and skip the square you start on - finding a chest
+        // wedged in your face on frame one is a rubbish way to begin.
+        if (MAP[row][col] !== '.') continue;
+        if (col === 1 && row === 1) continue;
+        spots.push({ col: col, row: row });
+      }
+    }
+    return spots;
+  }
+
   // This used to run itself the moment the page loaded. It can't any more:
   // it doesn't know how many spiders to make until you've picked a level.
   // So it's a function now, and startGame() calls it once you have.
@@ -2048,16 +2490,7 @@
     sprites.length = 0;
 
     // Collect every open floor square in the whole cavern.
-    const spots = [];
-    for (let row = 0; row < MAP_H; row++) {
-      for (let col = 0; col < MAP_W; col++) {
-        // Skip rock, and skip the square you start on - finding a chest
-        // wedged in your face on frame one is a rubbish way to begin.
-        if (MAP[row][col] !== '.') continue;
-        if (col === 1 && row === 1) continue;
-        spots.push({ col: col, row: row });
-      }
-    }
+    const spots = openFloorSquares();
 
     // SHUFFLE. Walk backwards through the list and swap each square with
     // a random earlier one. Deal the whole deck, then take from the top -
@@ -2103,21 +2536,61 @@
       }
       if (next >= spots.length) break;
 
-      sprites.push({
-        // Nudged off the middle of its square, so three spiders never
-        // line up in a suspiciously tidy way.
-        x: spots[next].col + 0.5 + (Math.random() - 0.5) * 0.5,
-        y: spots[next].row + 0.5 + (Math.random() - 0.5) * 0.5,
-        kind: 'spider',
-        health: SPIDER_HEALTH,
-        nextBite: 0,      // the frame it's allowed to bite again
-        hurtUntil: 0,     // frame its white flash ends
-        step: Math.random() * 10,           // where it is in its scuttle
-        facing: Math.random() * Math.PI * 2,
-        wanderDir: Math.random() * Math.PI * 2,
-        wanderUntil: 0,
-      });
+      // Nudged off the middle of its square, so three spiders never
+      // line up in a suspiciously tidy way.
+      sprites.push(makeSpider(
+        spots[next].col + 0.5 + (Math.random() - 0.5) * 0.5,
+        spots[next].row + 0.5 + (Math.random() - 0.5) * 0.5
+      ));
       next++;
+    }
+  }
+
+  // --- 7c1. THEY KEEP COMING (nightmare only) --------------------------
+  //
+  // Notice what this does NOT do: it doesn't hang off the shotgun, or the
+  // pistol, or the knife. There are five different bits of code in this
+  // file that can kill a spider, and if respawning lived in all five,
+  // then the day you build a sixth weapon you'd have a mystery on your
+  // hands - the spiders would stop coming back and nothing would look wrong.
+  //
+  // Instead this just COUNTS them, once a frame, and notices when some are
+  // missing. It doesn't care how they died. It doesn't even need to know
+  // that weapons exist.
+
+  let nextSpawnFrame = 0;
+
+  function refillSpiders() {
+    if (SPIDER_RESPAWN <= 0) return;      // switched off on PINK and NORMAL
+
+    let alive = 0;
+    for (const thing of sprites) if (thing.kind === 'spider') alive++;
+
+    if (alive >= SPIDER_COUNT) {
+      // Nothing missing, so keep pushing the timer along. Without this
+      // line the timer would go stale while the cave was full, and then
+      // the instant you killed one, a replacement would appear the SAME
+      // frame - which reads as a bug even though it's just arithmetic.
+      nextSpawnFrame = state.frame + SPIDER_RESPAWN;
+      return;
+    }
+
+    if (state.frame < nextSpawnFrame) return;
+    nextSpawnFrame = state.frame + SPIDER_RESPAWN;
+
+    // Find somewhere far enough away that it can't just pop into
+    // existence in your face. Try 30 random squares and take the first
+    // one that's a decent distance off; if the cavern is so crowded that
+    // none of them work, give up quietly and try again next time.
+    const spots = openFloorSquares();
+    for (let tries = 0; tries < 30; tries++) {
+      const spot = spots[Math.floor(Math.random() * spots.length)];
+      const sx = spot.col + 0.5 - state.x;
+      const sy = spot.row + 0.5 - state.y;
+      if (sx * sx + sy * sy < 100) continue;     // closer than 10 squares? no.
+
+      sprites.push(makeSpider(spot.col + 0.5, spot.row + 0.5));
+      return;
     }
   }
 
@@ -2135,6 +2608,17 @@
     SPIDER_SIGHT  = d.sight;
     SPIDER_BITE   = d.bite;
     SPIDER_GAP    = d.gap;
+    SPIDER_RESPAWN = d.respawn;
+    SPIDER_MUSIC   = d.music;
+
+    const neon = d.wall === 'neon';
+    repaintWalls(neon ? WALL_NEON : WALL_STONE, neon);
+
+    // Restring every cobweb in the new colour. The webs already in the
+    // cavern don't need touching one by one - they all share this single
+    // set of pictures, so repainting it repaints the lot at once.
+    SPRITE_KINDS.web.shades =
+      makeShadedCopies(makeWebTexture(neon ? WEB_NEON : WEB_DUSTY));
 
     SPIDER_BODY = d.body;
     SPIDER_HEAD = d.head;
@@ -2161,11 +2645,19 @@
     state.hurtFlash = 0;
     state.inventory = ['pistol', 'knife'];
     state.heldSlot = 0;
+    nextSpawnFrame = state.frame + SPIDER_RESPAWN;
 
     // Browsers refuse to make any sound until you've actually clicked
     // something. That click used to be on the canvas. Now it's this
     // button - so the music has to be started from here instead.
     if (!audio.muted) startAudio();
+
+    // startAudio() only does anything the FIRST time. So when you come
+    // back and pick a different level, this is what actually swaps the
+    // soundtrack over.
+    loungeStep = 0;
+    nextLoungeFrame = 0;
+    setMusicMode();
 
     state.started = true;
     document.getElementById('startScreen').style.display = 'none';
@@ -2191,6 +2683,7 @@
   // The corner button that brings the picker back for a fresh cave.
   document.getElementById('again').onclick = () => {
     state.started = false;
+    silenceMusic();   // or the old level's music plays over the menu
     document.getElementById('startScreen').style.display = 'flex';
   };
 
