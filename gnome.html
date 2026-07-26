@@ -438,6 +438,7 @@ addEventListener("keydown", e => {
   keys[e.key.toLowerCase()] = true;
   if (e.key === " ") e.preventDefault();   // stop space scrolling the page
   if (e.key.toLowerCase() === "f") toggleFullscreen();
+  if (e.key.toLowerCase() === "m") audio.muted = !audio.muted;
   if (dead && deadTimer > 40) newGame();
 });
 
@@ -572,6 +573,249 @@ addEventListener("mouseup", () => { mouseShooting = false; });
 addEventListener("blur", () => { mouseShooting = false; });
 
 
+// --- 4d. SOUND ---------------------------------------------------------
+//
+// There is no sound FILE anywhere in this game. Nothing gets downloaded.
+// We describe the noise with numbers and the browser makes it up on the
+// spot - which is why the gnome can fart differently every single time.
+
+const audio = { ctx: null, on: false, muted: false };
+
+// WHAT THE GNOME DOES WHEN HE JUMPS.
+// Change either to false and that noise stops. Both true is the best one.
+const JUMP_BOING = true;
+const JUMP_FART  = true;
+
+// Browsers refuse to make any noise until you've clicked something.
+// That's deliberate: imagine if any page could start blaring at you.
+function startAudio() {
+  if (audio.on || audio.muted) return;
+  const Maker = window.AudioContext || window.webkitAudioContext;
+  if (!Maker) return;              // very old browser: no sound, game still works
+  audio.ctx = new Maker();
+  audio.on = true;
+}
+
+// A DISTORTION CURVE.
+//
+// This is a lookup table for "if the sound comes in at THIS loudness,
+// send it out at THAT loudness". A straight line changes nothing. This
+// one is a squashed S-shape, so loud bits get flattened off - and
+// flattening the tops off a wave is exactly what makes it sound RASPY
+// instead of smooth. It's the same trick as an electric guitar's fuzz.
+function raspCurve(amount) {
+  const n = 512;
+  const curve = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const x = (i * 2) / n - 1;          // spread from -1 to +1
+    curve[i] = ((3 + amount) * x * 0.35) / (1 + amount * Math.abs(x));
+  }
+  return curve;
+}
+
+// A LITTLE BAG OF PURE RANDOM NOISE.
+// Made once and reused, because building it every jump would be wasteful
+// and you genuinely cannot hear the difference.
+let noiseBuffer = null;
+function getNoise() {
+  if (noiseBuffer) return noiseBuffer;
+  const frames = audio.ctx.sampleRate;               // one second's worth
+  noiseBuffer = audio.ctx.createBuffer(1, frames, audio.ctx.sampleRate);
+  const data = noiseBuffer.getChannelData(0);
+  for (let i = 0; i < frames; i++) data[i] = Math.random() * 2 - 1;
+  return noiseBuffer;
+}
+
+// THE FART, properly this time.
+//
+// The first version was too TIDY. It buzzed politely at one steady
+// wobble and it sounded like a wasp in a jar. Real ones are messy, and
+// messy takes four ingredients:
+//
+//   1. A low buzzing wave that slides down  ... the "brrrr"
+//   2. TWO wobbles at once, at speeds that don't divide into each other,
+//      so they drift in and out of step and the flutter never repeats
+//   3. Fuzz, so it rasps instead of hums
+//   4. A splutter of noise through a narrow filter ... the wet bit
+//
+// Number 2 is the one that fixed it. One steady wobble sounds like a
+// machine. Two arguing with each other sounds like a bottom.
+function fart() {
+  if (!audio.on || audio.muted) return;
+
+  const ctx2 = audio.ctx;
+  const t = ctx2.currentTime;
+  const length = 0.26 + Math.random() * 0.40;
+
+  // Everything joins up here, so one volume shape controls the lot.
+  const out = ctx2.createGain();
+  out.gain.setValueAtTime(0.0001, t);
+  out.gain.exponentialRampToValueAtTime(0.42, t + 0.018);   // sudden start
+  // Sag in the middle, then trail away. A straight fade sounds like a
+  // dial being turned down; this sounds like something running out.
+  out.gain.exponentialRampToValueAtTime(0.26, t + length * 0.45);
+  out.gain.exponentialRampToValueAtTime(0.0001, t + length);
+  out.connect(ctx2.destination);
+
+  // ---- 3. the fuzz ----
+  const rasp = ctx2.createWaveShaper();
+  rasp.curve = raspCurve(9 + Math.random() * 8);
+
+  // ---- muffling, so it's all bottom-end ----
+  const filter = ctx2.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.frequency.setValueAtTime(1400, t);
+  filter.frequency.exponentialRampToValueAtTime(220, t + length);
+  filter.Q.value = 6;            // a bit of honk around the cutoff
+  rasp.connect(filter);
+  filter.connect(out);
+
+  // ---- 1. the buzz ----
+  const osc = ctx2.createOscillator();
+  osc.type = 'sawtooth';
+  const base = 58 + Math.random() * 42;
+  // A quick BLURT upwards at the very start before it sags. That little
+  // kick at the front is the difference between "prrrt" and "mmmm".
+  osc.frequency.setValueAtTime(base * 1.5, t);
+  osc.frequency.exponentialRampToValueAtTime(base, t + 0.06);
+  osc.frequency.exponentialRampToValueAtTime(base * 0.38, t + length);
+  osc.connect(rasp);
+
+  // ---- 2. two wobbles that don't agree ----
+  // About 25 and about 7. Because one doesn't divide neatly into the
+  // other, they line up differently every moment, and the flutter never
+  // settles into a pattern your ear can predict.
+  const wobbles = [
+    { rate: 19 + Math.random() * 12, depth: 34 + Math.random() * 26, type: 'square' },
+    { rate: 5  + Math.random() * 5,  depth: 22 + Math.random() * 18, type: 'triangle' },
+  ];
+  const running = [];
+  for (const w of wobbles) {
+    const lfo = ctx2.createOscillator();
+    lfo.type = w.type;
+    lfo.frequency.value = w.rate;
+    const depth = ctx2.createGain();
+    depth.gain.value = w.depth;
+    lfo.connect(depth);
+    depth.connect(osc.frequency);    // into PITCH, not volume
+    running.push(lfo);
+  }
+
+  // ---- 4. the wet splutter ----
+  const noise = ctx2.createBufferSource();
+  noise.buffer = getNoise();
+  noise.loop = true;
+
+  const noiseBand = ctx2.createBiquadFilter();
+  noiseBand.type = 'bandpass';
+  noiseBand.frequency.setValueAtTime(420 + Math.random() * 260, t);
+  noiseBand.frequency.exponentialRampToValueAtTime(180, t + length);
+  noiseBand.Q.value = 2.2;
+
+  const noiseLevel = ctx2.createGain();
+  noiseLevel.gain.value = 0.5;
+  noise.connect(noiseBand);
+  noiseBand.connect(noiseLevel);
+  noiseLevel.connect(rasp);        // through the fuzz as well
+
+  osc.start(t);   osc.stop(t + length + 0.05);
+  noise.start(t); noise.stop(t + length + 0.05);
+  for (const lfo of running) { lfo.start(t); lfo.stop(t + length + 0.05); }
+
+  // ---- and sometimes a cheeky little second one ----
+  // Not every time. A surprise that happens every time isn't a surprise,
+  // and this is the bit that makes people laugh twice.
+  if (Math.random() < 0.28) {
+    setTimeout(() => squeak(), (length * 1000) + 40 + Math.random() * 90);
+  }
+}
+
+// THE BOING.
+//
+// A cartoon spring is one idea: a note that swoops DOWN fast while
+// wobbling - and the wobble dies away as it goes.
+//
+// That fading wobble is the whole thing. A spring twangs like mad at
+// first and settles down as the energy runs out, so the "boi-oi-oi-oing"
+// gets calmer towards the end. Keep the wobble at full strength the
+// whole way and you don't get a spring, you get an ambulance.
+function boing() {
+  if (!audio.on || audio.muted) return;
+
+  const ctx2 = audio.ctx;
+  const t = ctx2.currentTime;
+  const length = 0.40 + Math.random() * 0.12;
+
+  const osc = ctx2.createOscillator();
+  osc.type = 'triangle';                  // rounder and softer than a saw
+  const top = 620 + Math.random() * 220;
+  osc.frequency.setValueAtTime(top, t);
+  osc.frequency.exponentialRampToValueAtTime(top * 0.17, t + length * 0.85);
+
+  // The twang, fading out. depth is how far it bends the pitch: starts
+  // huge, ends at almost nothing.
+  const lfo = ctx2.createOscillator();
+  lfo.type = 'sine';
+  lfo.frequency.value = 15 + Math.random() * 7;
+  const depth = ctx2.createGain();
+  depth.gain.setValueAtTime(230, t);
+  depth.gain.exponentialRampToValueAtTime(2, t + length);
+  lfo.connect(depth);
+  depth.connect(osc.frequency);
+
+  // Takes the fizzy edge off, so it's a boing and not a beep.
+  const filter = ctx2.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.frequency.value = 2200;
+
+  const g = ctx2.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.34, t + 0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + length);
+
+  osc.connect(filter);
+  filter.connect(g);
+  g.connect(ctx2.destination);
+
+  osc.start(t); osc.stop(t + length + 0.05);
+  lfo.start(t); lfo.stop(t + length + 0.05);
+}
+
+// The afterthought. Same idea, much shorter and higher.
+function squeak() {
+  if (!audio.on || audio.muted) return;
+  const ctx2 = audio.ctx;
+  const t = ctx2.currentTime;
+  const length = 0.09 + Math.random() * 0.09;
+
+  const osc = ctx2.createOscillator();
+  osc.type = 'sawtooth';
+  const base = 150 + Math.random() * 120;
+  osc.frequency.setValueAtTime(base, t);
+  osc.frequency.exponentialRampToValueAtTime(base * 0.55, t + length);
+
+  const lfo = ctx2.createOscillator();
+  lfo.type = 'square';
+  lfo.frequency.value = 34;
+  const depth = ctx2.createGain();
+  depth.gain.value = 45;
+  lfo.connect(depth);
+  depth.connect(osc.frequency);
+
+  const filter = ctx2.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.frequency.value = 1500;
+
+  const g = ctx2.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.20, t + 0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + length);
+
+  osc.connect(filter); filter.connect(g); g.connect(ctx2.destination);
+  osc.start(t); osc.stop(t + length + 0.04);
+  lfo.start(t); lfo.stop(t + length + 0.04);
+}
+
 // --- 4c. PUTTING A MONSTER SOMEWHERE -----------------------------------
 //
 // Picking WHERE is most of the work. A monster dropped anywhere at all
@@ -652,6 +896,13 @@ function update() {
     gnome.vy = -JUMP_POWER;    // negative = upward!
     gnome.onGround = false;
     jumpBuffer = 0;            // used it up
+
+    // Both at once. They're different pitches and different shapes, so
+    // your ear happily hears them as one silly noise rather than two
+    // sounds fighting - the boing swoops down while the fart flutters
+    // along underneath it.
+    if (JUMP_BOING) boing();
+    if (JUMP_FART) fart();
   }
 
   // --- gravity ---
@@ -1236,6 +1487,7 @@ function drawHud() {
     ctx.fillText("A / D  or  ← →  to run", W / 2, H - 118);
     ctx.fillText("SPACE to jump", W / 2, H - 94);
     ctx.fillText("X or CLICK to shoot", W / 2, H - 70);
+    ctx.fillText("M turns the gnome off", W / 2, H - 46);
     ctx.textAlign = "left";
   }
 
@@ -1277,6 +1529,10 @@ function loop() {
 // --- 8. THE START SCREEN -----------------------------------------------
 
 function startLevel(name) {
+  // Clicking this button is the "you touched something" the browser has
+  // been waiting for, so it's where the sound gets switched on.
+  startAudio();
+
   applyLevel(name);    // 1. swap the numbers
   newGame();           // 2. THEN build the pole, using them
   started = true;
