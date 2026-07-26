@@ -105,6 +105,91 @@
       max-height: 100vh;
       border-radius: 0;
     }
+    /* ------------------------------------------------------------------
+       THE START SCREEN.
+       It sits on top of everything (that's what z-index does) and covers
+       the whole window, until JavaScript sets its display to "none".
+       ------------------------------------------------------------------ */
+    #startScreen {
+      position: fixed;
+      inset: 0;                  /* top, right, bottom, left all = 0 */
+      background: rgba(4, 3, 6, 0.93);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 22px;
+      z-index: 50;
+      text-align: center;
+      padding: 16px;
+    }
+
+    #startScreen h2 {
+      margin: 0;
+      font-size: clamp(24px, 6vw, 44px);
+      letter-spacing: 3px;
+      color: #ffe9c4;
+      text-shadow: 0 0 18px #ff5e00;
+    }
+
+    #doomButtons {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 16px;
+    }
+
+    /* One rule styles all three buttons, because they're all class="doom". */
+    .doom {
+      width: 210px;
+      padding: 16px 14px;
+      border: 2px solid #4a4458;
+      border-radius: 12px;
+      background: #16121e;
+      color: #e8e8f0;
+      font-family: inherit;
+      font-size: 14px;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
+    }
+
+    .doom b { font-size: 21px; letter-spacing: 2px; }
+    .doom span { color: #9a9ab4; line-height: 1.4; }
+
+    .doom:hover, .doom:active { transform: scale(1.05); }
+
+    /* Each level gets its own colour, so the buttons TELL you what
+       you're in for before you've read a word. */
+    .doom-pink b { color: #ff9ad2; }
+    .doom-pink:hover, .doom-pink:active {
+      border-color: #ff9ad2; box-shadow: 0 0 26px rgba(255,154,210,0.5);
+    }
+    .doom-normal b { color: #b9b2c4; }
+    .doom-normal:hover, .doom-normal:active {
+      border-color: #b9b2c4; box-shadow: 0 0 26px rgba(185,178,196,0.45);
+    }
+    .doom-nightmare b { color: #ff5a3c; }
+    .doom-nightmare:hover, .doom-nightmare:active {
+      border-color: #ff5a3c; box-shadow: 0 0 30px rgba(255,60,30,0.6);
+    }
+
+    #again {
+      position: fixed;
+      top: 8px;
+      right: 10px;
+      color: #ffb27a;
+      background: rgba(0,0,0,0.45);
+      border: none;
+      font-family: inherit;
+      font-size: 14px;
+      padding: 6px 11px;
+      border-radius: 8px;
+      cursor: pointer;
+      z-index: 10;
+    }
   </style>
 </head>
 <body>
@@ -116,13 +201,25 @@
             background:rgba(0,0,0,0.45);padding:6px 11px;border-radius:8px;
             text-decoration:none;font-size:14px;z-index:10;">&larr; Arcade</a>
 
+  <!-- The difficulty picker. The three buttons aren't written out here -
+       JavaScript builds them from the DIFFICULTIES list further down, so
+       the list is the single place that decides what levels exist. -->
+  <div id="startScreen">
+    <h2>CHOOSE YOUR DOOM</h2>
+    <div id="doomButtons"></div>
+  </div>
+
+  <!-- Brings the picker back for a brand new cavern. -->
+  <button id="again">&#8635; New cave</button>
+
   <!-- width and height here are the DRAWING size: 800 x 600 dots (pixels).
        No matter how big the canvas looks on screen, we always draw as if
        it's 800 wide and 600 tall. That makes the math easy. -->
   <canvas id="screen" width="800" height="600"></canvas>
 
   <p>
-    Computer: click to look around, WASD or arrows to move, E to open,
+    Computer: click to look around with the mouse. W/S walk, A/D slide
+    sideways without turning, Z/X turn if you'd rather not use the mouse. E to open,
     click or Space to shoot or swing, Q to drop, 1&ndash;5 to pick a pocket, Esc to let go.<br>
     Phone: left thumb walks, right thumb looks, tap the buttons. Turn it sideways.<br>
     Slot 1 is the pistol &mdash; it kills spiders. Slot 2 is the knife &mdash; it cuts webs.<br>
@@ -204,6 +301,12 @@
   // Right now that's where you are and which way you're facing.
 
   const state = {
+    // Has the player picked a difficulty yet? While this is false the
+    // start screen is up, and update() below refuses to run - so the
+    // spiders sit frozen instead of creeping up on you while you read.
+    started: false,
+    difficulty: 'normal',
+
     // Where you're standing. These are NOT pixels - they're map squares.
     // x: 1.5 means "halfway across square number 1". Starting you in a
     // corner of open floor.
@@ -845,18 +948,49 @@
   }
 
   function update() {
-    // Turning just changes the angle you're facing. You don't move.
-    if (held('arrowleft',  'a')) state.angle -= TURN_SPEED;
-    if (held('arrowright', 'd')) state.angle += TURN_SPEED;
+    // Nothing in the cavern moves until you've chosen a difficulty.
+    // One `return` at the very top of update() freezes the entire game -
+    // the player, the spiders, the clock, all of it - because update() IS
+    // the game. Nothing changes anywhere else.
+    if (!state.started) return;
 
-    // Walking forward means moving a little bit in the direction you face.
-    // Math.cos gives the x part of that direction, Math.sin gives the y
-    // part. That pair is how you turn "an angle" into "a direction".
-    const stepX = Math.cos(state.angle) * MOVE_SPEED;
-    const stepY = Math.sin(state.angle) * MOVE_SPEED;
+    // Turning is the mouse's job now (and Z / X if you'd rather not use it).
+    if (keys['z']) state.angle -= TURN_SPEED;
+    if (keys['x']) state.angle += TURN_SPEED;
 
-    if (held('arrowup',   'w')) tryMove(state.x + stepX, state.y + stepY);
-    if (held('arrowdown', 's')) tryMove(state.x - stepX, state.y - stepY);
+    // FORWARD is the direction you're facing. Math.cos gives the x part of
+    // that direction, Math.sin gives the y part. That pair is how you turn
+    // "an angle" into "a direction".
+    const aheadX = Math.cos(state.angle);
+    const aheadY = Math.sin(state.angle);
+
+    // RIGHT is that same direction turned a quarter turn. There's a tidy
+    // trick for it: swap the two numbers over and flip the sign of one.
+    // (cos, sin) becomes (-sin, cos) and you're now pointing sideways.
+    // That's the whole of strafing.
+    const rightX = -aheadY;
+    const rightY =  aheadX;
+
+    // Add up everything you're holding down FIRST, then move once at the
+    // end. Moving twice in one frame - once for forward, once for
+    // sideways - makes diagonals faster than straight lines, and you can
+    // feel it even if you never work out why.
+    let goX = 0, goY = 0;
+
+    if (held('arrowup',   'w')) { goX += aheadX; goY += aheadY; }
+    if (held('arrowdown', 's')) { goX -= aheadX; goY -= aheadY; }
+    if (held('arrowleft', 'a')) { goX -= rightX; goY -= rightY; }
+    if (held('arrowright','d')) { goX += rightX; goY += rightY; }
+
+    if (goX !== 0 || goY !== 0) {
+      // Forward AND sideways at once makes a longer arrow than either on
+      // its own, so shrink it back down to length 1 before applying speed.
+      // Skip this and running diagonally is about 1.4x faster. Every game
+      // has this bug once.
+      const len = Math.sqrt(goX * goX + goY * goY);
+      tryMove(state.x + (goX / len) * MOVE_SPEED,
+              state.y + (goY / len) * MOVE_SPEED);
+    }
 
     // ---- and the same again, but from your left thumb ----
     if (drive.id !== null) {
@@ -1392,13 +1526,70 @@
   // But that's genuinely all most game monsters do, and it's plenty,
   // because YOU'RE the one who has to work out what to do about it.
 
-  const SPIDER_HEALTH = 3;       // three knife hits
-  const SPIDER_SPEED = 0.021;    // half your speed - you can always run
+  // --- DIFFICULTY -------------------------------------------------------
+  // Every one of these numbers used to be a `const` with one fixed value.
+  // Now there are three sets of them, and you pick a set at the start.
+  //
+  // That's ALL a difficulty level is. Not different code - the spider
+  // brain below is identical in all three. Just different numbers going
+  // into the same machine.
+
+  const DIFFICULTIES = {
+    pink: {
+      label: 'PINK',
+      blurb: '2 slow pink spiders. They barely mean it.',
+      count: 2,          // only two in the whole cavern
+      health: 2,         // dies fast
+      speed: 0.012,      // much slower than you
+      sight: 4.0,        // short-sighted
+      bite: 1,           // half a heart
+      gap: 110,          // waits ages between bites
+      body: [235, 120, 190],   // Red, Green, Blue - lots of red + blue = pink
+      head: [250, 155, 210],
+      leg:  [215,  95, 170],
+      eye:  [255, 255, 255],
+    },
+    normal: {
+      label: 'NORMAL',
+      blurb: '5 cave spiders. The cavern as it was meant to be.',
+      count: 5,
+      health: 3,
+      speed: 0.021,
+      sight: 6.5,
+      bite: 1,
+      gap: 75,
+      body: [40, 30, 36],
+      head: [54, 40, 47],
+      leg:  [28, 21, 26],
+      eye:  [255, 74, 74],
+    },
+    nightmare: {
+      label: 'NIGHTMARE',
+      blurb: '9 spiders. Faster than you. They see you first.',
+      count: 9,
+      health: 5,         // even the shotgun has to work
+      speed: 0.030,      // FASTER than you walk. You cannot outrun these.
+      sight: 11.0,       // spots you from most of the way across a tunnel
+      bite: 2,           // a WHOLE heart per bite
+      gap: 40,           // and it bites nearly twice as often
+      body: [46, 12, 12],
+      head: [70, 16, 16],
+      leg:  [30,  8,  8],
+      eye:  [255, 210, 60],    // yellow eyes in the dark
+    },
+  };
+
+  // `let`, not `const` - because unlike a const, these get swapped when
+  // you choose a level. That one word is the whole difference.
+  let SPIDER_HEALTH = 3;
+  let SPIDER_SPEED  = 0.021;
+  let SPIDER_SIGHT  = 6.5;
+  let SPIDER_BITE   = 1;
+  let SPIDER_GAP    = 75;
+
+  // These two are the same at every level, so they stay const.
   const SPIDER_WANDER = 0.008;   // a slow mooch when it hasn't seen you
-  const SPIDER_SIGHT = 6.5;      // how far off it notices you
   const SPIDER_REACH = 0.8;      // how close before it can bite
-  const SPIDER_BITE = 1;         // half a heart
-  const SPIDER_GAP = 75;         // frames between bites, about 1.2 seconds
 
   function updateSpiders() {
     for (const thing of sprites) {
@@ -1528,7 +1719,18 @@
   // not 60 times a second - so it can afford to be fussy.
 
   // Bigger than before: more dots means room for finer roughness.
-  const TEX_SIZE = 128;
+  //
+  // 256 now, not 128. When you stand with your nose against a wall, ONE
+  // dot of this wallpaper gets stretched across dozens of screen dots -
+  // that's what turned the rock into giant Lego bricks. Doubling this
+  // halves the size of the bricks.
+  //
+  // It isn't free: the shade table further down keeps 32 copies of this
+  // texture, so going from 128 to 256 takes it from about 2MB of memory
+  // to about 8MB. Worth it, but that's the trade you're making. It also
+  // MUST stay a power of two (…64, 128, 256, 512) - the floor code uses
+  // a bit-twiddling trick that only works on those.
+  const TEX_SIZE = 256;
 
   // SMOOTH RANDOMNESS, step 1: scatter random numbers on a small grid.
   // A 4x4 grid gives big fat blobs. A 32x32 grid gives tiny ones.
@@ -1583,12 +1785,17 @@
   // games make mountains, clouds, fire and caves - all from this.
   // More weight down at the small sizes than before. Fine layers are
   // where BUMPS come from - big soft blobs alone just look like clouds.
+  // A bigger texture on its own would just be the SAME rock, blown up
+  // bigger and blurrier. Pointless. The extra detail has to come from
+  // somewhere - so there's a new 128 layer on the end, finer than
+  // anything that was here before. THAT's what you'll see up close.
   const ROCK_LAYERS = [
-    { grid: makeNoiseGrid(4),  size: 4,  weight: 0.34 },
-    { grid: makeNoiseGrid(8),  size: 8,  weight: 0.26 },
-    { grid: makeNoiseGrid(16), size: 16, weight: 0.20 },
-    { grid: makeNoiseGrid(32), size: 32, weight: 0.13 },
-    { grid: makeNoiseGrid(64), size: 64, weight: 0.07 },
+    { grid: makeNoiseGrid(4),   size: 4,   weight: 0.32 },
+    { grid: makeNoiseGrid(8),   size: 8,   weight: 0.24 },
+    { grid: makeNoiseGrid(16),  size: 16,  weight: 0.18 },
+    { grid: makeNoiseGrid(32),  size: 32,  weight: 0.12 },
+    { grid: makeNoiseGrid(64),  size: 64,  weight: 0.08 },
+    { grid: makeNoiseGrid(128), size: 128, weight: 0.06 },   // the new one
   ];
 
   // Which way the pretend torch shines from, for the bump shading.
@@ -1812,7 +2019,7 @@
 
   const CHEST_COUNT = 5;
   const WEB_COUNT = 12;
-  const SPIDER_COUNT = 5;
+  let SPIDER_COUNT = 5;   // set by the difficulty you pick
 
   // What a chest can be hiding. Add a word here and chests can drop it -
   // as long as there's a picture for it over in ITEMS.
@@ -1827,7 +2034,19 @@
 
   const sprites = [];
 
-  (function scatterThings() {
+  // This used to run itself the moment the page loaded. It can't any more:
+  // it doesn't know how many spiders to make until you've picked a level.
+  // So it's a function now, and startGame() calls it once you have.
+  function scatterThings() {
+    // Sweep the cavern empty first, so picking a new level doesn't just
+    // pile fresh spiders on top of the old ones.
+    //
+    // `sprites.length = 0` empties the list WITHOUT making a new one.
+    // That matters: half the code in this file is already holding onto
+    // this exact list. Hand them a replacement and they'd carry on
+    // looking at the old empty one forever.
+    sprites.length = 0;
+
     // Collect every open floor square in the whole cavern.
     const spots = [];
     for (let row = 0; row < MAP_H; row++) {
@@ -1900,7 +2119,80 @@
       });
       next++;
     }
+  }
+
+  // --- 7c2. CHOOSING YOUR DOOM -----------------------------------------
+
+  // Copies one difficulty's numbers into the variables the game actually
+  // reads. Everything else in the file carries on exactly as before and
+  // has no idea anything changed - it just finds different numbers there.
+  function applyDifficulty(name) {
+    const d = DIFFICULTIES[name];
+
+    SPIDER_COUNT  = d.count;
+    SPIDER_HEALTH = d.health;
+    SPIDER_SPEED  = d.speed;
+    SPIDER_SIGHT  = d.sight;
+    SPIDER_BITE   = d.bite;
+    SPIDER_GAP    = d.gap;
+
+    SPIDER_BODY = d.body;
+    SPIDER_HEAD = d.head;
+    SPIDER_LEG  = d.leg;
+    SPIDER_EYE  = d.eye;
+
+    state.difficulty = name;
+  }
+
+  function startGame(name) {
+    applyDifficulty(name);   // 1. pick the numbers
+    scatterThings();         // 2. build a fresh cavern using them
+
+    // 3. put the player back at the start, in one piece, with a pistol.
+    //    Your pockets get emptied too - otherwise you could grab a
+    //    machine gun on PINK and carry it straight into NIGHTMARE,
+    //    which would rather spoil the point of NIGHTMARE.
+    state.x = 1.5;
+    state.y = 1.5;
+    state.angle = 0.7;
+    state.pitch = 0;
+    state.health = MAX_HEARTS * 2;
+    state.mercy = 0;
+    state.hurtFlash = 0;
+    state.inventory = ['pistol', 'knife'];
+    state.heldSlot = 0;
+
+    // Browsers refuse to make any sound until you've actually clicked
+    // something. That click used to be on the canvas. Now it's this
+    // button - so the music has to be started from here instead.
+    if (!audio.muted) startAudio();
+
+    state.started = true;
+    document.getElementById('startScreen').style.display = 'none';
+    say('You are in the ' + DIFFICULTIES[name].label + ' cavern.');
+  }
+
+  // Build the three buttons from the DIFFICULTIES list itself. Add a
+  // fourth difficulty up there and a fourth button appears down here on
+  // its own - because this code counts the levels instead of assuming 3.
+  (function buildStartScreen() {
+    const holder = document.getElementById('doomButtons');
+
+    for (const name of Object.keys(DIFFICULTIES)) {
+      const d = DIFFICULTIES[name];
+      const btn = document.createElement('button');
+      btn.className = 'doom doom-' + name;
+      btn.innerHTML = '<b>' + d.label + '</b><span>' + d.blurb + '</span>';
+      btn.onclick = () => startGame(name);
+      holder.appendChild(btn);
+    }
   })();
+
+  // The corner button that brings the picker back for a fresh cave.
+  document.getElementById('again').onclick = () => {
+    state.started = false;
+    document.getElementById('startScreen').style.display = 'flex';
+  };
 
   // --- 7d. THE CHEST, IN ACTUAL 3D -------------------------------------
   // A cobweb really is a flat thing, so a flat picture is honest.
@@ -2437,10 +2729,12 @@
 
   const SPIDER_SIZE = 1.15;      // overall size. Crank it. It's horrible.
 
-  const SPIDER_BODY = [40, 30, 36];
-  const SPIDER_HEAD = [54, 40, 47];
-  const SPIDER_LEG  = [28, 21, 26];
-  const SPIDER_EYE  = [255, 74, 74];
+  // `let` again - applyDifficulty() up above swaps these when you pick
+  // a level, which is how the spiders come out pink.
+  let SPIDER_BODY = [40, 30, 36];
+  let SPIDER_HEAD = [54, 40, 47];
+  let SPIDER_LEG  = [28, 21, 26];
+  let SPIDER_EYE  = [255, 74, 74];
 
   function drawSpider(thing, cam, depth) {
     const W = canvas.width;
@@ -3727,6 +4021,12 @@
 
 
     // ---- WALLS, one skinny stripe at a time ------------------------
+    // Remembers whether smoothing is currently switched on. Flipping that
+    // setting makes the browser do a bit of work, and 400 stripes means
+    // we'd be flipping it 400 times a frame if we weren't careful. So we
+    // only actually change it when the answer is different from last time.
+    let smoothWalls = false;
+
     for (let screenX = 0; screenX < W; screenX += COLUMN_W) {
       // Slide along that ruler: -1 is the far left of our view,
       // 0 is dead ahead, +1 is the far right.
@@ -3792,6 +4092,22 @@
       // stretch it to fill this whole stripe, top to bottom. Do that 400
       // times across the screen and the stone wraps around the cavern.
       const texX = Math.floor(wallX * TEX_SIZE);
+
+      // Far-off stone stays crisp and blocky - that's the look, and it's
+      // faster. But when a stripe gets taller than the texture is, every
+      // dot is being stretched, and crisp stops meaning "sharp" and starts
+      // meaning "enormous square". So for the really close stripes only,
+      // we let the browser blend the dots together instead.
+      //
+      // Blurry-up-close beats bricks-up-close. Neither is perfect - the
+      // proper fix is a whole second texture just for close range, which
+      // is a much bigger job for a much smaller win.
+      const stretched = wallH > TEX_SIZE;
+      if (stretched !== smoothWalls) {
+        smoothWalls = stretched;
+        ctx.imageSmoothingEnabled = stretched;
+      }
+
       ctx.drawImage(stoneTexture, texX, 0, 1, TEX_SIZE,
                                   screenX, top, COLUMN_W, wallH);
 
@@ -3802,6 +4118,12 @@
       ctx.fillStyle = 'rgba(0,0,0,' + (1 - light) + ')';
       ctx.fillRect(screenX, top, COLUMN_W, wallH);
     }
+
+    // Switch smoothing back OFF before anything else gets drawn. The
+    // spiders, the chests, your hand and the item icons all expect crisp
+    // pixels - leave it on and they all quietly go soft, and you'd spend
+    // an hour hunting for what you broke over here.
+    ctx.imageSmoothingEnabled = false;
 
 
     // ---- CHESTS AND COBWEBS ----------------------------------------
