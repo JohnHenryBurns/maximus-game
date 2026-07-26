@@ -4592,17 +4592,39 @@
 
   // --- 7g3. VICTORY ------------------------------------------------------
 
+  // How long VICTORY! stays up: 120 frames, and the game runs at 60
+  // frames a second, so that's two seconds. Then it clears off and gives
+  // you your cavern back.
+  const VICTORY_SHOW = 120;
+  const VICTORY_FADE = 24;    // frames spent fading in, and again fading out
+
   function drawVictory() {
     if (!state.won) return;
+
+    // How long has it been up? Counted from the frame you won on.
+    const age = state.frame - state.wonAtFrame;
+
+    // Past its two seconds - draw nothing at all.
+    //
+    // Note we DON'T set state.won back to false. That flag means "this
+    // cavern has been beaten", which stays true forever. Whether the
+    // banner is on screen is a different question, and the answer is
+    // worked out from the clock. Muddle those two together and winning
+    // would un-win itself after two seconds, and checkVictory would
+    // cheerfully congratulate you all over again.
+    if (age > VICTORY_SHOW) return;
 
     const W = canvas.width;
     const H = canvas.height;
 
-    // Fade in over about half a second instead of appearing instantly.
-    // Same information either way - it just feels like an ENDING rather
-    // than a thing that popped up.
-    let fade = (state.frame - state.wonAtFrame) / 30;
+    // Fade in at the start, fade out at the end, full brightness in the
+    // middle. Both edges come from the same number, so the banner can
+    // never arrive gently and then vanish with a snap.
+    let fade = age / VICTORY_FADE;                        // easing in
+    const leaving = (VICTORY_SHOW - age) / VICTORY_FADE;  // easing out
+    if (leaving < fade) fade = leaving;                   // whichever is dimmer
     if (fade > 1) fade = 1;
+    if (fade < 0) fade = 0;
 
     ctx.save();
 
