@@ -215,21 +215,21 @@ const LEVELS = {
     blurb: 'Slow lava, patient ledges, and the odd sleepy monster.',
     lavaStart: 0.15, lavaSpeedup: 0.000014,
     crumble: 115, regrow: 38,
-    every: 9, monsterHp: 1,
+    every: 4, monsterHp: 1,
   },
   normal: {
     label: 'CLIMB',
     blurb: 'A fair fight. You will still cook eventually.',
     lavaStart: 0.22, lavaSpeedup: 0.000024,
     crumble: 82, regrow: 50,
-    every: 7, monsterHp: 2,
+    every: 3, monsterHp: 2,
   },
   hard: {
     label: 'MELTDOWN',
     blurb: 'The pole is falling apart and so are you.',
     lavaStart: 0.30, lavaSpeedup: 0.000035,
     crumble: 60, regrow: 60,
-    every: 5, monsterHp: 2,
+    every: 2, monsterHp: 2,
   },
   apocalypse: {
     label: 'APOCALYPSE',
@@ -237,7 +237,7 @@ const LEVELS = {
     lavaStart: 0.72, lavaSpeedup: 0.000090,   // more than twice MELTDOWN
     crumble: 30,      // half a second and it's gone
     regrow: 80,       // and it takes its time coming back
-    every: 4,
+    every: 1,         // one on EVERY single ledge. All of them. Sorry.
     monsterHp: 2,
     fly: true,        // this one changes how monsters BEHAVE, not just how many
   },
@@ -281,6 +281,18 @@ const BULLET_SPEED = 10;    // how fast a shot flies
 const BULLET_LIFE  = 60;    // frames before it fizzles out. Stops it
                             // travelling forever and eating memory.
 const FIRE_GAP     = 11;    // frames between shots. Smaller = machine gun.
+
+// AUTO-AIM. Spot a monster and the gnome deals with it himself.
+// Set to false and you're back to firing manually.
+const AUTO_AIM = true;
+// How far he can see. Beyond this he doesn't notice, which matters -
+// an infinite range would have him sniping things off the top of the
+// screen that you never even knew were there.
+const AUTO_AIM_RANGE = 330;
+
+// The first few ledges are always clear, on every level, no matter how
+// thick the monsters get further up. You need a moment to get going.
+const MONSTER_GRACE = 3;
 
 // MONSTER_EVERY, up in LEVELS, used to be a timer - a monster every so
 // many seconds. Counting LEDGES instead is better, and not just tidier:
@@ -879,13 +891,53 @@ function addLedge(y) {
   platforms.push(ledge);
   ledgeCount++;
 
-  // Every fifth one gets a guard - but never the first few, or you'd be
-  // shot at before you'd worked out which key jumps.
-  if (ledgeCount >= MONSTER_EVERY && ledgeCount % MONSTER_EVERY === 0) {
+  // Every so-many gets a guard - but never the first few, whatever the
+  // level says. That check used to be `ledgeCount >= MONSTER_EVERY`,
+  // which quietly stopped protecting anything once MONSTER_EVERY got
+  // small: on APOCALYPSE it's 1, so ledge number one would have had a
+  // monster on it, about a metre above your head, on frame one.
+  //
+  // A guard rail that depends on the thing it's guarding against isn't
+  // a guard rail. MONSTER_GRACE is its own number and always applies.
+  if (ledgeCount > MONSTER_GRACE && ledgeCount % MONSTER_EVERY === 0) {
     putMonsterOn(ledge);
   }
 
   return ledge;
+}
+
+// --- 4e. SPOTTING SOMETHING TO SHOOT -----------------------------------
+//
+// Walks every monster and keeps the closest one that's near enough to
+// bother with. Hands back null if there's nothing worth shooting - and
+// null is a perfectly good answer, not a failure.
+//
+// NEAREST, not first-in-the-list. Shooting at something far away while
+// one is about to land on your head would be a strange way to behave.
+
+function nearestMonster() {
+  let best = null;
+  // Starting the "closest so far" at the maximum range is a neat trick:
+  // anything further away automatically fails the same comparison that
+  // sorts the rest, so there's no separate check for out-of-range.
+  let bestDist = AUTO_AIM_RANGE;
+
+  const handY = gnome.y - 20;
+
+  for (const m of monsters) {
+    if (m.health <= 0) continue;
+
+    const dx = m.x - gnome.x;
+    const dy = (m.y - 14) - handY;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = m;
+    }
+  }
+
+  return best;
 }
 
 // --- 5. UPDATE: the rules of the world ---------------------------------
@@ -998,15 +1050,48 @@ function update() {
   }
 
   // --- SHOOTING ---
-  // He fires whichever way he's facing. No aiming - one less thing to do
-  // with your thumbs while you're also jumping for your life.
+  // Two ways to fire, and pressing the button always wins. You should
+  // never feel like the gnome ignored you because he'd decided something
+  // else was more interesting.
   const wantsShoot = keys["x"] || keys["j"] || touchShooting || mouseShooting;
-  if (wantsShoot && tick >= nextShotAt) {
+
+  // Nothing to aim at unless auto-aim is on AND you're not already firing.
+  const target = (AUTO_AIM && !wantsShoot) ? nearestMonster() : null;
+
+  if ((wantsShoot || target) && tick >= nextShotAt) {
     nextShotAt = tick + FIRE_GAP;
+
+    // Where the shot comes out: his hand, not his feet.
+    const handY = gnome.y - 20;
+    let vx, vy;
+
+    if (target) {
+      // AIM. The arrow from his hand to the monster, shrunk to length 1,
+      // then scaled up to bullet speed. Same shrink-to-1 trick as the
+      // diagonal running and the flying monsters - and for the same
+      // reason: without it, a shot going diagonally would be faster than
+      // one going straight.
+      const dx = target.x - gnome.x;
+      const dy = (target.y - 14) - handY;
+      const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+
+      vx = (dx / dist) * BULLET_SPEED;
+      vy = (dy / dist) * BULLET_SPEED;
+
+      // Turn to face what he's shooting at. Firing backwards over his
+      // own shoulder would look ridiculous.
+      gnome.facing = dx >= 0 ? 1 : -1;
+    } else {
+      // Manual: straight ahead, dead level, the way it always was.
+      vx = gnome.facing * BULLET_SPEED;
+      vy = 0;
+    }
+
     bullets.push({
       x: gnome.x + gnome.facing * 15,
-      y: gnome.y - 20,               // out of the hand, not the feet
-      vx: gnome.facing * BULLET_SPEED,
+      y: handY,
+      vx: vx,
+      vy: vy,          // bullets can climb and dive now, not just fly flat
       life: BULLET_LIFE,
     });
     gnome.recoil = 5;                // shoves the pistol back for 5 frames
@@ -1016,6 +1101,7 @@ function update() {
   // --- bullets ---
   for (const b of bullets) {
     b.x += b.vx;
+    b.y += b.vy;
     b.life--;
   }
 
@@ -1088,7 +1174,14 @@ function update() {
   // Done in ONE place, at the end, after everything has had its say.
   // Removing things from a list while you're still looping over it is
   // how you end up skipping every other one.
-  bullets = bullets.filter(b => b.life > 0 && b.x > -30 && b.x < W + 30);
+  // Bullets used to only ever fly sideways, so checking the left and
+  // right edges was enough. Now they can climb and dive, so they need
+  // a top and a bottom too - otherwise an aimed shot that misses sails
+  // off up the pole forever and never gets tidied away.
+  bullets = bullets.filter(b =>
+    b.life > 0 &&
+    b.x > -30 && b.x < W + 30 &&
+    b.y > cameraY - 200 && b.y < cameraY + H + 200);
 
   // A monster goes when it's shot, or when it ends up in the lava. A
   // SITTING one also goes when its ledge is swallowed for good.
@@ -1298,12 +1391,20 @@ function drawBullet(b, screenY) {
   const sy = screenY(b.y);
   if (sy < -20 || sy > H + 20) return;
 
+  // The streak points back along the way it's travelling. It used to
+  // just go flat sideways, which was fine when bullets only ever flew
+  // sideways - now an aimed shot would have had a streak pointing
+  // somewhere it had never been.
+  const speed = Math.sqrt(b.vx * b.vx + b.vy * b.vy) || 1;
+  const tailX = b.x - (b.vx / speed) * 13;
+  const tailY = sy - (b.vy / speed) * 13;
+
   ctx.strokeStyle = "#ffe08a";
   ctx.lineWidth = 3;
   ctx.lineCap = "round";
   ctx.beginPath();
   ctx.moveTo(b.x, sy);
-  ctx.lineTo(b.x - Math.sign(b.vx) * 13, sy);
+  ctx.lineTo(tailX, tailY);
   ctx.stroke();
 
   ctx.fillStyle = "#fffbe8";
