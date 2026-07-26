@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Sinking Pole</title>
+
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="theme-color" content="#1a0a06">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="Sinking Pole">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="icon" href="icon-192.png">
+
+  <style>
+    body {
+      margin: 0;
+      overscroll-behavior: none;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #0b0503;
+      font-family: system-ui, sans-serif;
+      -webkit-user-select: none;
+      user-select: none;
+      /* Stops the phone doing its own scrolling when you drag on the game. */
+      touch-action: none;
+      overflow: hidden;
+    }
+
+    /* ------------------------------------------------------------------
+       The canvas is ALWAYS 460 x 760 on the inside, no matter what
+       screen it's on. The CSS below just stretches that rectangle to
+       fit the window, like a projector.
+
+       Why bother? Because it means the game plays EXACTLY the same on
+       your phone and on a giant monitor. On a wide screen you'd
+       otherwise be able to see miles of lava and it'd be too easy.
+       ------------------------------------------------------------------ */
+    canvas {
+      height: 100vh;
+      max-width: 100vw;
+      /* This keeps the 460:760 shape instead of squashing it. */
+      aspect-ratio: 460 / 760;
+      display: block;
+      /* Keeps the chunky pixel look when it gets stretched up big. */
+      image-rendering: pixelated;
+      touch-action: none;
+    }
+
+    /* A little "back to the menu" link, parked in the corner. */
+    #back {
+      position: fixed;
+      top: 8px;
+      left: 10px;
+      color: #ffb27a;
+      background: rgba(0,0,0,0.45);
+      padding: 6px 11px;
+      border-radius: 8px;
+      text-decoration: none;
+      font-size: 14px;
+      z-index: 10;
+    }
+  </style>
+</head>
+<body>
+
+  <a id="back" href="index.html">&larr; Arcade</a>
+  <canvas id="screen" width="460" height="760"></canvas>
+
+<script>
+"use strict";
+
+// ======================================================================
+// SINKING POLE
+// A stone pole sticking out of a lava field. It is sinking.
+// You are a gnome standing on it. Good luck.
+// ======================================================================
+
+const canvas = document.getElementById("screen");
+const ctx    = canvas.getContext("2d");
+
+// The size we PRETEND the screen is. Everything below uses these two
+// numbers instead of the real window size, so the game is always fair.
+const W = 460;
+const H = 760;
+
+// --- 1. THE KNOBS ------------------------------------------------------
+//     Every one of these is a number you can change. Change one, save,
+//     press F5, see what happens. That is the whole job.
+
+const GRAVITY      = 0.62;   // how hard you get pulled down each frame
+const JUMP_POWER    = 13.4;  // how hard you shove off when you jump
+const RUN_SPEED     = 3.7;   // sideways speed
+const MAX_FALL      = 17;    // fastest you're allowed to fall
+
+const POLE_WIDTH    = 92;    // how fat the stone pole is
+const GAP           = 84;    // vertical space between platforms
+const LEDGE_LEN     = 118;   // how far a ledge sticks out from the pole
+
+const LAVA_START    = 0.30;  // how fast the pole sinks at the beginning
+const LAVA_SPEEDUP  = 0.000035; // how much nastier it gets every frame
+
+const POLE_LEFT  = W / 2 - POLE_WIDTH / 2;
+const POLE_RIGHT = W / 2 + POLE_WIDTH / 2;
+
+
+// --- 2. THE GNOME ------------------------------------------------------
+//     An object is just a bag of labelled numbers that belong together.
+//     Instead of gnomeX, gnomeY, gnomeSpeed... we keep them in one bag.
+
+let gnome, platforms, lavaY, lavaSpeed, cameraY, best, dead, deadTimer;
+
+function newGame() {
+  gnome = {
+    x: W / 2,      // sideways position (middle of the pole)
+    y: 0,          // up-and-down position. NEGATIVE means higher up!
+    vx: 0,         // "v" is for velocity - how fast it's moving right now
+    vy: 0,
+    w: 26,         // how wide the gnome is
+    h: 34,         // how tall
+    onGround: false,
+    facing: 1      // 1 = looking right, -1 = looking left
+  };
+
+  // The starting ledge, so you don't begin the game falling into lava.
+  platforms = [ { x: POLE_LEFT - 60, y: 40, w: POLE_WIDTH + 120 } ];
+
+  // Build the first stack of ledges going up.
+  let y = 40;
+  for (let i = 0; i < 14; i++) {
+    y -= GAP;
+    platforms.push(makeLedge(y));
+  }
+
+  lavaY     = 260;      // lava starts below the first ledge...
+  lavaSpeed = LAVA_START;
+  cameraY   = 0;
+  dead      = false;
+  deadTimer = 0;
+  best      = 0;
+}
+
+// --- 3. MAKING LEDGES --------------------------------------------------
+//     A ledge sticks out of the pole - sometimes left, sometimes right,
+//     sometimes it goes all the way across. Math.random() gives a
+//     number between 0 and 1, which is how we flip a coin in code.
+
+function makeLedge(y) {
+  const roll = Math.random();
+
+  if (roll < 0.15) {
+    // A rare full ledge, right across the pole. A little rest stop.
+    return { x: POLE_LEFT - 70, y: y, w: POLE_WIDTH + 140 };
+  }
+
+  // How long this one is - a bit random so they're not all identical.
+  const len = LEDGE_LEN - 30 + Math.random() * 40;
+
+  if (roll < 0.575) {
+    return { x: POLE_LEFT - len, y: y, w: len + 14 };   // sticks out LEFT
+  } else {
+    return { x: POLE_RIGHT - 14, y: y, w: len + 14 };   // sticks out RIGHT
+  }
+}
+
+
+// --- 4. CONTROLS -------------------------------------------------------
+//     "keys" remembers which buttons are being held down RIGHT NOW.
+//     keydown puts a true in the bag, keyup takes it out again.
+
+const keys = {};
+
+addEventListener("keydown", e => {
+  keys[e.key.toLowerCase()] = true;
+  if (e.key === " ") e.preventDefault();   // stop space scrolling the page
+  if (e.key.toLowerCase() === "f") toggleFullscreen();
+  if (dead && deadTimer > 40) newGame();
+});
+
+addEventListener("keyup", e => { keys[e.key.toLowerCase()] = false; });
+
+function toggleFullscreen() {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else document.documentElement.requestFullscreen().catch(() => {});
+}
+
+// --- TOUCH CONTROLS ---
+// No buttons drawn on screen. Instead: the LEFT half of the screen and
+// the RIGHT half of the screen are the steering, and a quick tap-and-lift
+// is a jump. Fewer things to miss with your thumb.
+let touchDir = 0;      // -1 left, 0 nothing, 1 right
+let touchJump = false;
+
+canvas.addEventListener("touchstart", e => {
+  e.preventDefault();
+  if (dead && deadTimer > 40) { newGame(); return; }
+  for (const t of e.changedTouches) {
+    const half = canvas.getBoundingClientRect();
+    const localX = (t.clientX - half.left) / half.width;   // 0 to 1
+    if (localX < 0.5) touchDir = -1; else touchDir = 1;
+  }
+  touchJump = true;
+}, { passive: false });
+
+canvas.addEventListener("touchend", e => {
+  e.preventDefault();
+  if (e.touches.length === 0) { touchDir = 0; touchJump = false; }
+}, { passive: false });
+
+
+// --- 5. UPDATE: the rules of the world ---------------------------------
+//     This runs about 60 times a second. Everything that MOVES, moves here.
+
+function update() {
+
+  if (dead) { deadTimer++; return; }
+
+  // --- steering ---
+  let dir = 0;
+  if (keys["arrowleft"]  || keys["a"]) dir -= 1;
+  if (keys["arrowright"] || keys["d"]) dir += 1;
+  dir += touchDir;
+  dir = Math.max(-1, Math.min(1, dir));   // keep it between -1 and 1
+
+  gnome.vx = dir * RUN_SPEED;
+  if (dir !== 0) gnome.facing = dir;
+
+  // --- jumping ---
+  // You can only jump if your feet are actually on something.
+  const wantsJump = keys[" "] || keys["arrowup"] || keys["w"] || touchJump;
+  if (wantsJump && gnome.onGround) {
+    gnome.vy = -JUMP_POWER;    // negative = upward!
+    gnome.onGround = false;
+    touchJump = false;
+  }
+
+  // --- gravity ---
+  // This is the whole secret of platformers. Every single frame, fall
+  // a tiny bit faster than last frame. That's what makes jumps arc.
+  gnome.vy += GRAVITY;
+  if (gnome.vy > MAX_FALL) gnome.vy = MAX_FALL;
+
+  // --- actually move ---
+  gnome.x += gnome.vx;
+  gnome.y += gnome.vy;
+
+  // Walls at the edges of the lava field, so you can't run off forever.
+  if (gnome.x < 16)     gnome.x = 16;
+  if (gnome.x > W - 16) gnome.x = W - 16;
+
+  // --- landing on ledges ---
+  gnome.onGround = false;
+  if (gnome.vy >= 0) {                       // only when FALLING, not rising
+    for (const p of platforms) {
+      const feet = gnome.y;
+      const overlapsSideways = gnome.x + gnome.w / 2 > p.x &&
+                               gnome.x - gnome.w / 2 < p.x + p.w;
+      // Did the feet cross the top of this ledge this frame?
+      const crossed = feet >= p.y && feet - gnome.vy <= p.y + 2;
+      if (overlapsSideways && crossed) {
+        gnome.y = p.y;
+        gnome.vy = 0;
+        gnome.onGround = true;
+      }
+    }
+  }
+
+  // --- the pole sinks ---
+  // Really the lava climbs, which is the same thing from where you're
+  // standing, and much easier to write.
+  lavaSpeed += LAVA_SPEEDUP;
+  lavaY -= lavaSpeed;
+
+  // --- the camera ---
+  // The gnome stays put around 60% down the screen; the world slides.
+  const wantCamera = gnome.y - H * 0.6;
+  cameraY += (wantCamera - cameraY) * 0.12;   // 0.12 = smooth, laggy follow
+  // Never let the camera drop below the lava - always show the danger.
+  if (cameraY > lavaY - H * 0.82) cameraY = lavaY - H * 0.82;
+
+  // --- how high have you got? ---
+  const height = Math.max(0, Math.floor((40 - gnome.y) / 20));
+  if (height > best) best = height;
+
+  // --- build more pole above you, forever ---
+  let topY = platforms[platforms.length - 1].y;
+  while (topY > cameraY - 200) {
+    topY -= GAP;
+    platforms.push(makeLedge(topY));
+  }
+
+  // --- throw away ledges that have sunk into the lava ---
+  // If we didn't, the list would grow to a million and the game would
+  // get slower and slower the better you played.
+  platforms = platforms.filter(p => p.y < lavaY + 200);
+
+  // --- cooked? ---
+  if (gnome.y > lavaY) { dead = true; deadTimer = 0; }
+}
+
+
+// --- 6. DRAW: what it all looks like -----------------------------------
+
+function draw() {
+  // Sky: a hot, hazy orange glow near the lava, dark up high.
+  const sky = ctx.createLinearGradient(0, 0, 0, H);
+  sky.addColorStop(0,    "#1a0a1e");
+  sky.addColorStop(0.55, "#3a1209");
+  sky.addColorStop(1,    "#7a2405");
+  ctx.fillStyle = sky;
+  ctx.fillRect(0, 0, W, H);
+
+  // screenY() turns a world position into a screen position.
+  // This one tiny function is what makes the camera work.
+  const screenY = wy => wy - cameraY;
+
+  drawPole(screenY);
+  for (const p of platforms) drawLedge(p, screenY);
+  if (!dead) drawGnome(screenY);
+  drawLava(screenY);
+  drawHud();
+}
+
+function drawPole(screenY) {
+  // The great stone pole, going from the lava up past the top of the screen.
+  const top = screenY(-100000);
+  const bottom = screenY(lavaY) + 40;
+
+  const stone = ctx.createLinearGradient(POLE_LEFT, 0, POLE_RIGHT, 0);
+  stone.addColorStop(0,    "#3c3a44");
+  stone.addColorStop(0.35, "#6a6676");
+  stone.addColorStop(1,    "#2e2c36");
+  ctx.fillStyle = stone;
+  ctx.fillRect(POLE_LEFT, top, POLE_WIDTH, bottom - top);
+
+  // Brick lines, so you can SEE that it's sinking. Without these the
+  // pole looks like it's standing still even though it isn't.
+  ctx.strokeStyle = "rgba(0,0,0,0.35)";
+  ctx.lineWidth = 2;
+  const firstBrick = Math.floor(cameraY / 46) * 46;
+  for (let wy = firstBrick; wy < cameraY + H; wy += 46) {
+    const sy = screenY(wy);
+    ctx.beginPath();
+    ctx.moveTo(POLE_LEFT, sy);
+    ctx.lineTo(POLE_RIGHT, sy);
+    ctx.stroke();
+  }
+}
+
+function drawLedge(p, screenY) {
+  const sy = screenY(p.y);
+  if (sy < -40 || sy > H + 40) return;   // off screen? don't bother drawing.
+
+  ctx.fillStyle = "#8b8496";
+  ctx.fillRect(p.x, sy, p.w, 12);
+  ctx.fillStyle = "#565062";
+  ctx.fillRect(p.x, sy + 8, p.w, 8);     // shadow under the lip
+  ctx.fillStyle = "#b9b2c4";
+  ctx.fillRect(p.x, sy, p.w, 3);         // bright top edge
+}
+
+function drawGnome(screenY) {
+  const sy = screenY(gnome.y);
+  const x = gnome.x;
+
+  ctx.save();
+  ctx.translate(x, sy);
+  ctx.scale(gnome.facing, 1);   // flips the whole gnome when he turns around
+
+  // boots
+  ctx.fillStyle = "#4a2c14";
+  ctx.fillRect(-10, -7, 8, 7);
+  ctx.fillRect(2, -7, 8, 7);
+
+  // blue tunic
+  ctx.fillStyle = "#2f5fb0";
+  ctx.fillRect(-11, -22, 22, 15);
+
+  // face
+  ctx.fillStyle = "#f0c39a";
+  ctx.fillRect(-8, -28, 16, 8);
+
+  // eye
+  ctx.fillStyle = "#111";
+  ctx.fillRect(2, -26, 3, 3);
+
+  // big white beard
+  ctx.fillStyle = "#eeeef4";
+  ctx.beginPath();
+  ctx.moveTo(-8, -22);
+  ctx.lineTo(8, -22);
+  ctx.lineTo(0, -8);
+  ctx.closePath();
+  ctx.fill();
+
+  // the important part: a giant red pointy hat
+  ctx.fillStyle = "#c0281f";
+  ctx.beginPath();
+  ctx.moveTo(-12, -28);
+  ctx.lineTo(12, -28);
+  ctx.lineTo(4, -50);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.restore();
+}
+
+function drawLava(screenY) {
+  const sy = screenY(lavaY);
+  if (sy > H) return;
+
+  const glow = ctx.createLinearGradient(0, sy - 30, 0, sy + 90);
+  glow.addColorStop(0,   "#ffb703");
+  glow.addColorStop(0.3, "#ff6a00");
+  glow.addColorStop(1,   "#8a1502");
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, sy, W, H - sy + 10);
+
+  // A wobbly surface. Math.sin() makes a smooth wave, and feeding it
+  // the clock makes the wave travel sideways.
+  const t = performance.now() / 380;
+  ctx.fillStyle = "#ffd166";
+  ctx.beginPath();
+  ctx.moveTo(0, sy + 8);
+  for (let x = 0; x <= W; x += 10) {
+    ctx.lineTo(x, sy + Math.sin(x / 34 + t) * 6);
+  }
+  ctx.lineTo(W, sy + 16);
+  ctx.lineTo(0, sy + 16);
+  ctx.fill();
+}
+
+function drawHud() {
+  ctx.fillStyle = "#ffe9c4";
+  ctx.font = "bold 26px system-ui, sans-serif";
+  ctx.textAlign = "left";
+  ctx.fillText("HEIGHT " + best + "m", 16, 40);
+
+  if (dead) {
+    ctx.fillStyle = "rgba(0,0,0,0.66)";
+    ctx.fillRect(0, H / 2 - 110, W, 210);
+
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#ff8f4a";
+    ctx.font = "bold 44px system-ui, sans-serif";
+    ctx.fillText("COOKED", W / 2, H / 2 - 50);
+
+    ctx.fillStyle = "#ffe9c4";
+    ctx.font = "bold 30px system-ui, sans-serif";
+    ctx.fillText("You climbed " + best + "m", W / 2, H / 2 + 6);
+
+    if (deadTimer > 40) {
+      ctx.font = "20px system-ui, sans-serif";
+      ctx.fillStyle = "#c9c2b4";
+      ctx.fillText("Tap or press any key to try again", W / 2, H / 2 + 58);
+    }
+  }
+}
+
+
+// --- 7. THE GAME LOOP --------------------------------------------------
+//     update, draw, update, draw... about 60 times a second, forever.
+
+function loop() {
+  update();
+  draw();
+  requestAnimationFrame(loop);
+}
+
+newGame();
+loop();
+
+</script>
+</body>
+</html>
