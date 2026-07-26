@@ -767,6 +767,7 @@
 
   const SPIDER_HEALTH = 3;       // three knife hits
   const SPIDER_SPEED = 0.021;    // half your speed - you can always run
+  const SPIDER_WANDER = 0.008;   // a slow mooch when it hasn't seen you
   const SPIDER_SIGHT = 6.5;      // how far off it notices you
   const SPIDER_REACH = 0.8;      // how close before it can bite
   const SPIDER_BITE = 1;         // half a heart
@@ -780,8 +781,38 @@
       const dy = state.y - thing.y;
       const gap = Math.sqrt(dx * dx + dy * dy);
 
-      // Too far off to have noticed you. It just sits there.
-      if (gap > SPIDER_SIGHT || gap < 0.001) continue;
+      // ---- hasn't noticed you: WANDER ----
+      // It picks a direction, ambles that way for a second or two, then
+      // picks another. Bump a wall and it re-picks straight away.
+      //
+      // No cleverness at all - no plan, no memory, no map. But an animal
+      // that mooches about looks alive, and one that stands frozen until
+      // you walk into its bubble looks like a statue that woke up.
+      if (gap > SPIDER_SIGHT || gap < 0.001) {
+        if (state.frame >= thing.wanderUntil) {
+          thing.wanderDir = Math.random() * Math.PI * 2;
+          thing.wanderUntil = state.frame + 50 + Math.floor(Math.random() * 130);
+        }
+
+        const wx = Math.cos(thing.wanderDir) * SPIDER_WANDER;
+        const wy = Math.sin(thing.wanderDir) * SPIDER_WANDER;
+        let shifted = false;
+
+        if (!isWall(thing.x + wx, thing.y)) { thing.x += wx; shifted = true; }
+        else thing.wanderUntil = 0;          // nose to the rock: turn now
+
+        if (!isWall(thing.x, thing.y + wy)) { thing.y += wy; shifted = true; }
+        else thing.wanderUntil = 0;
+
+        if (shifted) {
+          thing.step += SPIDER_WANDER;
+          thing.facing = thing.wanderDir;
+        }
+        continue;
+      }
+
+      // ---- it has seen you ----
+      thing.facing = Math.atan2(dy, dx);
 
       if (gap > SPIDER_REACH) {
         // Walk straight at you - and slide along walls exactly the way
@@ -1106,76 +1137,6 @@
     return c;
   }
 
-  // A spider. `lift` is either +1 or -1, and it shifts which legs are up
-  // and which are down. Draw it twice with the two values and you get two
-  // frames - flick between them as it walks and it scuttles.
-  //
-  // TWO frames. That's all. Not eight, not a smooth animation. Two.
-  // Your eye fills in an enormous amount of movement from almost nothing,
-  // as long as the timing is right.
-  function makeSpiderTexture(lift) {
-    const c = blankSprite();
-    const t = c.getContext('2d');
-    const cx = 32;
-    const cy = 34;
-
-    // Legs first, so the body covers where they join on.
-    t.strokeStyle = '#191317';
-    t.lineWidth = 3;
-    t.lineCap = 'round';
-
-    for (let side = -1; side <= 1; side += 2) {
-      for (let i = 0; i < 4; i++) {
-        // Every leg points out at a slightly different angle, and every
-        // other leg is raised. Real spiders move alternate legs - that's
-        // what stops them falling over, and it's what makes this read as
-        // walking rather than sliding.
-        const spread = 0.50 + i * 0.44;
-        const raised = (i % 2 === 0) ? lift : -lift;
-
-        const kneeX = cx + side * Math.cos(spread) * 16;
-        const kneeY = cy - Math.sin(spread) * 10 - raised * 4;
-        const footX = cx + side * Math.cos(spread) * 28;
-        const footY = cy + 13 + i * 1.6 + raised * 3;
-
-        t.beginPath();
-        t.moveTo(cx + side * 6, cy);
-        t.quadraticCurveTo(kneeX, kneeY, footX, footY);
-        t.stroke();
-      }
-    }
-
-    // Fat back end.
-    t.fillStyle = '#241a20';
-    t.beginPath();
-    t.ellipse(cx, cy + 6, 13, 11, 0, 0, Math.PI * 2);
-    t.fill();
-
-    // A dark red marking, so it isn't just a black blob.
-    t.fillStyle = '#5c2032';
-    t.beginPath();
-    t.ellipse(cx, cy + 7, 5, 6.5, 0, 0, Math.PI * 2);
-    t.fill();
-
-    // Head end.
-    t.fillStyle = '#302229';
-    t.beginPath();
-    t.ellipse(cx, cy - 8, 9, 7, 0, 0, Math.PI * 2);
-    t.fill();
-
-    // EYES. Five little red dots, and they do more work than everything
-    // else put together. A dark shape with legs is a shape. A dark shape
-    // with legs and eyes is looking at you.
-    t.fillStyle = '#ff4646';
-    for (const eye of [[-4.5, -10], [0, -11.5], [4.5, -10], [-2, -7], [2, -7]]) {
-      t.beginPath();
-      t.arc(cx + eye[0], cy + eye[1], 1.6, 0, Math.PI * 2);
-      t.fill();
-    }
-
-    return c;
-  }
-
   // Same pre-mixing idea as the floor, but these have see-through bits,
   // so we can't just splash black over the top - that would darken the
   // holes too. 'source-atop' means "only paint where there's already
@@ -1216,11 +1177,8 @@
     },
   };
 
-  // The two scuttle frames, each pre-darkened 16 ways like everything else.
-  const SPIDER_FRAMES = [
-    makeShadedCopies(makeSpiderTexture(1)),
-    makeShadedCopies(makeSpiderTexture(-1)),
-  ];
+  // (The spider used to be two flat pictures here. It's real 3D now -
+  // see section 7d2 - so the pictures have gone.)
 
 
   // --- 7c. SCATTERING THEM AROUND --------------------------------------
@@ -1293,13 +1251,18 @@
       if (next >= spots.length) break;
 
       sprites.push({
-        x: spots[next].col + 0.5,
-        y: spots[next].row + 0.5,
+        // Nudged off the middle of its square, so three spiders never
+        // line up in a suspiciously tidy way.
+        x: spots[next].col + 0.5 + (Math.random() - 0.5) * 0.5,
+        y: spots[next].row + 0.5 + (Math.random() - 0.5) * 0.5,
         kind: 'spider',
         health: SPIDER_HEALTH,
         nextBite: 0,      // the frame it's allowed to bite again
         hurtUntil: 0,     // frame its white flash ends
-        step: Math.random() * 10,   // where it is in its scuttle
+        step: Math.random() * 10,           // where it is in its scuttle
+        facing: Math.random() * Math.PI * 2,
+        wanderDir: Math.random() * Math.PI * 2,
+        wanderUntil: 0,
       });
       next++;
     }
@@ -1822,6 +1785,220 @@
       // The keyhole.
       paintOnFace(frontPanel.pts, 0.475, 0.525, 0.77, 0.90,
                   torchShade([48, 34, 12], lit));
+    }
+
+    ctx.restore();
+  }
+
+
+  // --- 7d2. THE SPIDER, IN ACTUAL 3D ------------------------------------
+  // It used to be a flat picture that spun to face you. A cobweb can get
+  // away with that, because a cobweb really is flat. A spider absolutely
+  // cannot - it has a fat body, a head, and eight legs arching up and out,
+  // and every one of those changes shape as it turns.
+  //
+  // So it's built out of TUBES now: a tapered tube from one point in the
+  // cavern to another. Body, head, sixteen leg segments, eyes. Same idea
+  // as the hand, except these live in the world instead of on your face.
+
+  const SPIDER_SIZE = 1.15;      // overall size. Crank it. It's horrible.
+
+  const SPIDER_BODY = [40, 30, 36];
+  const SPIDER_HEAD = [54, 40, 47];
+  const SPIDER_LEG  = [28, 21, 26];
+  const SPIDER_EYE  = [255, 74, 74];
+
+  function drawSpider(thing, cam, depth) {
+    const W = canvas.width;
+    const H = canvas.height;
+
+    let torch = 1 - depth / TORCH_RANGE;
+    if (torch <= 0) return;        // too far off to see at all
+    if (torch > 1) torch = 1;
+
+    const flashing = state.frame < thing.hurtUntil;
+    const panels = [];
+    let ranOffScreen = false;
+
+    // Which way it's pointing, and which way is sideways from that.
+    const faceX = Math.cos(thing.facing);
+    const faceY = Math.sin(thing.facing);
+    const sideX = -faceY;
+    const sideY = faceX;
+
+    // Turn "this far forward, this far to the side, this high off the
+    // floor" into a real spot in the cavern. Everything below is written
+    // in the spider's OWN directions - so when it turns, the whole animal
+    // turns with it and not one number down there has to change.
+    function at(fwd, side, high) {
+      return [thing.x + faceX * fwd + sideX * side,
+              thing.y + faceY * fwd + sideY * side,
+              high];
+    }
+
+    // ONE TAPERED TUBE, from a to b, in full 3D.
+    //
+    // A leg points out AND down at the same time, so unlike the hand we
+    // can't just work sideways in a flat plane. We need two directions
+    // that are both square-on to the tube. The cross product hands you
+    // one: give it two directions and it points at right angles to both.
+    // Do it twice and you've got a proper ring to build the tube around.
+    function addTube(a, b, ra, rb, colour, sides) {
+      let ax = b[0] - a[0], ay = b[1] - a[1], az = b[2] - a[2];
+      const len = Math.sqrt(ax * ax + ay * ay + az * az) || 1;
+      ax /= len; ay /= len; az /= len;
+
+      // Any direction that isn't along the tube. Straight up works,
+      // unless the tube itself is pointing straight up - then use across.
+      let ux = 0, uy = 0, uz = 1;
+      if (Math.abs(az) > 0.9) { ux = 1; uz = 0; }
+
+      let q1x = ay * uz - az * uy;
+      let q1y = az * ux - ax * uz;
+      let q1z = ax * uy - ay * ux;
+      const q1len = Math.sqrt(q1x * q1x + q1y * q1y + q1z * q1z) || 1;
+      q1x /= q1len; q1y /= q1len; q1z /= q1len;
+
+      const q2x = ay * q1z - az * q1y;
+      const q2y = az * q1x - ax * q1z;
+      const q2z = ax * q1y - ay * q1x;
+
+      const ringA = [], ringB = [], outward = [];
+      for (let k = 0; k < sides; k++) {
+        const turn = (Math.PI * 2 * k) / sides;
+        const c = Math.cos(turn), s = Math.sin(turn);
+        const nx = q1x * c + q2x * s;
+        const ny = q1y * c + q2y * s;
+        const nz = q1z * c + q2z * s;
+        outward.push([nx, ny]);
+        ringA.push([a[0] + nx * ra, a[1] + ny * ra, a[2] + nz * ra]);
+        ringB.push([b[0] + nx * rb, b[1] + ny * rb, b[2] + nz * rb]);
+      }
+
+      for (let k = 0; k < sides; k++) {
+        const k2 = (k + 1) % sides;
+        const corners = [ringA[k], ringA[k2], ringB[k2], ringB[k]];
+
+        const pts = [];
+        let depthSum = 0;
+        for (const corner of corners) {
+          // 0.5 is floor level, measured DOWN from your eyes - so a
+          // height ABOVE the floor has to be taken off it.
+          const spot = cam.project(corner[0], corner[1], 0.5 - corner[2]);
+          if (spot === null) { ranOffScreen = true; return; }
+          pts.push(spot);
+          depthSum += spot.depth;
+        }
+
+        // Your torch is at your eye, so panels turned toward you are lit.
+        const midX = (corners[0][0] + corners[2][0]) / 2;
+        const midY = (corners[0][1] + corners[2][1]) / 2;
+        let toMeX = state.x - midX;
+        let toMeY = state.y - midY;
+        const away = Math.sqrt(toMeX * toMeX + toMeY * toMeY) || 1;
+        toMeX /= away; toMeY /= away;
+
+        const nx = (outward[k][0] + outward[k2][0]) / 2;
+        const ny = (outward[k][1] + outward[k2][1]) / 2;
+        const facing = Math.max(0, nx * toMeX + ny * toMeY);
+
+        panels.push({
+          pts: pts,
+          depth: depthSum / 4,
+          lit: (0.28 + 0.72 * facing) * torch,
+          colour: colour,
+        });
+      }
+    }
+
+    const S = SPIDER_SIZE;
+
+    // ---- the fat back end and the head ----
+    addTube(at(-0.27 * S, 0, 0.20 * S), at(-0.03 * S, 0, 0.22 * S),
+            0.135 * S, 0.100 * S, SPIDER_BODY, 6);
+    if (ranOffScreen) return;
+
+    addTube(at(-0.03 * S, 0, 0.22 * S), at(0.16 * S, 0, 0.19 * S),
+            0.100 * S, 0.070 * S, SPIDER_HEAD, 6);
+    if (ranOffScreen) return;
+
+    // ---- eight legs, arching UP from the body then down to the floor ----
+    // That arch is the whole silhouette of a spider. A leg that goes
+    // straight out sideways looks like a crab.
+    for (let side = -1; side <= 1; side += 2) {
+      for (let i = 0; i < 4; i++) {
+        // Alternate legs lift, and the two sides are out of step with
+        // each other - which is how eight legs walk without tangling.
+        const beat = ((i + (side > 0 ? 1 : 0)) % 2) ? 0 : Math.PI;
+        const lift = Math.sin(thing.step * 8 + beat) * 0.055 * S;
+
+        const hipFwd = 0.10 * S - i * 0.075 * S;
+
+        const hip  = at(hipFwd, side * 0.09 * S, 0.20 * S);
+        const knee = at(hipFwd + 0.05 * S, side * 0.27 * S, 0.35 * S + lift);
+        const foot = at(hipFwd - 0.03 * S, side * 0.42 * S,
+                        0.02 * S + Math.max(0, lift) * 1.6);
+
+        addTube(hip, knee, 0.030 * S, 0.024 * S, SPIDER_LEG, 4);
+        if (ranOffScreen) return;
+        addTube(knee, foot, 0.024 * S, 0.011 * S, SPIDER_LEG, 4);
+        if (ranOffScreen) return;
+      }
+    }
+
+    // ---- eyes, poking out the front of the head ----
+    for (const eye of [[-0.052, 0.055], [0, 0.068], [0.052, 0.055],
+                       [-0.030, 0.020], [0.030, 0.020]]) {
+      const base = at(0.155 * S, eye[0] * S, (0.19 + eye[1]) * S);
+      const tip = [base[0] + faceX * 0.020 * S,
+                   base[1] + faceY * 0.020 * S,
+                   base[2]];
+      addTube(base, tip, 0.017 * S, 0.014 * S, SPIDER_EYE, 4);
+      if (ranOffScreen) return;
+    }
+
+    // Which columns is it allowed in? Only the ones where it's nearer
+    // than the wall - same stencil trick as the chests.
+    let minX = Infinity, maxX = -Infinity;
+    for (const panel of panels) {
+      for (const point of panel.pts) {
+        if (point.sx < minX) minX = point.sx;
+        if (point.sx > maxX) maxX = point.sx;
+      }
+    }
+    const fromX = Math.max(0, Math.floor(minX));
+    const toX = Math.min(W - 1, Math.ceil(maxX));
+    if (toX < fromX) return;
+
+    ctx.save();
+    ctx.beginPath();
+    let runStart = -1;
+    for (let x = fromX; x <= toX + 1; x++) {
+      const visible = (x <= toX) && (depth < zBuffer[x]);
+      if (visible && runStart < 0) runStart = x;
+      if (!visible && runStart >= 0) {
+        ctx.rect(runStart, 0, x - runStart, H);
+        runStart = -1;
+      }
+    }
+    ctx.clip();
+
+    panels.sort((a, b) => b.depth - a.depth);
+
+    for (const panel of panels) {
+      const pts = panel.pts;
+      ctx.beginPath();
+      ctx.moveTo(pts[0].sx, pts[0].sy);
+      for (let i = 1; i < 4; i++) ctx.lineTo(pts[i].sx, pts[i].sy);
+      ctx.closePath();
+
+      // Just been stabbed? Every panel goes white for a few frames.
+      ctx.fillStyle = flashing ? '#ffffff'
+                               : torchShade(panel.colour, panel.lit);
+      ctx.fill();
+      ctx.strokeStyle = ctx.fillStyle;
+      ctx.lineWidth = 1;
+      ctx.stroke();
     }
 
     ctx.restore();
@@ -2734,8 +2911,14 @@
 
       // Chests are real boxes now, so they get built a completely
       // different way. Webs carry on being flat pictures.
+      // Chests and spiders are real 3D things now, built out of corners
+      // in the cavern. Only webs and dropped loot are still flat.
       if (thing.kind === 'chest') {
         drawChest(thing, cam, depth);
+        continue;
+      }
+      if (thing.kind === 'spider') {
+        drawSpider(thing, cam, depth);
         continue;
       }
 
@@ -2743,20 +2926,8 @@
       // from different places and sit at different heights, so work out
       // which picture and where it hangs before drawing either.
       let shades, scale, vOffset;
-      let flashing = false;
 
-      if (thing.kind === 'spider') {
-        // Flick between the two leg frames as it walks. thing.step only
-        // grows while it's actually moving, so a spider stood still
-        // stands still - the animation is tied to the walking, not to
-        // the clock. That one detail is most of what sells it as alive.
-        const frame = (Math.floor(thing.step * 7) % 2 === 0) ? 0 : 1;
-        shades = SPIDER_FRAMES[frame];
-        scale = 0.55;
-        vOffset = 0.5 - scale / 2;    // stood on the floor
-        flashing = state.frame < thing.hurtUntil;
-
-      } else if (thing.kind === 'loot') {
+      if (thing.kind === 'loot') {
         shades = ITEMS[thing.item].shades;
         scale = 0.34;
         // Just above the floor, bobbing gently. Every dropped thing gets
@@ -2787,12 +2958,7 @@
       let light = 1 - depth / TORCH_RANGE;
       if (light < 0) light = 0;
 
-      // Just been stabbed? Draw it at full brightness for a few frames.
-      // It goes bright in the dark, which is unmissable - and you need to
-      // know a hit landed, otherwise you're swinging on faith.
-      const picture = flashing
-        ? shades[SPRITE_SHADES - 1]
-        : shades[(light * (SPRITE_SHADES - 1)) | 0];
+      const picture = shades[(light * (SPRITE_SHADES - 1)) | 0];
 
       // Ask the picture how big it is rather than assuming. Cobwebs are
       // 64 dots across, item pictures are 48, and this same loop draws
