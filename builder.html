@@ -16,19 +16,26 @@
   <style>
     body {
       margin: 0;
-      overscroll-behavior: none;
       min-height: 100vh;
       display: flex;
       flex-direction: column;
       align-items: center;
       gap: 12px;
-      padding: 10px 10px 30px;
+      padding: 10px 10px 14px;
       background: #07060a;
       color: #e8e8f0;
       font-family: system-ui, sans-serif;
       -webkit-user-select: none;
       user-select: none;
-      touch-action: none;
+
+      /* NO touch-action here. It used to say `touch-action: none`, which
+         tells the browser to ignore every touch gesture on the page -
+         including SCROLLING. On a computer nobody noticed, because a
+         mouse wheel isn't a touch gesture. On a phone it meant the
+         buttons below the grid simply could not be reached.
+
+         That rule belongs on the canvas ONLY, where we really do want to
+         stop the page sliding about while you're drawing on it. */
     }
 
     h1 { margin: 4px 0 0; font-size: 22px; letter-spacing: 3px; color: #ffd6a8; }
@@ -38,14 +45,34 @@
       background: #0d0b12;
       border: 2px solid #35354a;
       border-radius: 8px;
+
+      /* THIS is where stopping touch gestures belongs - and only here.
+         Drawing a wall shouldn't drag the page around underneath you. */
       touch-action: none;
-      max-width: 96vw;
+
+      /* Never wider than the screen, and never taller than about half of
+         it. That `52vh` is the important one on a phone: without it the
+         grid is as tall as it is wide, fills the display, and shoves
+         every button off the bottom. */
+      width: min(600px, 96vw, 52vh);
       height: auto;
       /* Keeps the squares square however wide the screen is. */
       aspect-ratio: 1 / 1;
     }
 
     .row { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+
+    /* The two buttons that matter most get stuck to the bottom of the
+       screen, so they're reachable without scrolling at all. `sticky`
+       means "sit here normally, but never scroll out of view". */
+    .actions {
+      position: sticky;
+      bottom: 0;
+      width: 100%;
+      padding: 10px 0 6px;
+      margin-top: 2px;
+      background: linear-gradient(rgba(7,6,10,0), #07060a 34%);
+    }
 
     button, .link {
       font-family: inherit;
@@ -107,12 +134,14 @@
     <button id="load" class="danger">Reload saved</button>
   </div>
 
-  <div class="row">
+  <!-- The message sits ABOVE the pinned buttons. Below them it would be
+       covered by the very thing it's reporting on. -->
+  <div id="status"></div>
+
+  <div class="row actions">
     <button id="save" class="go">Save level</button>
     <button id="play" class="go">Save &amp; play it</button>
   </div>
-
-  <div id="status"></div>
 
 <script>
 "use strict";
