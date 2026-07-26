@@ -105,6 +105,34 @@ const LEDGE_LEN     = 118;   // how far a ledge sticks out from the pole
 const LAVA_START    = 0.30;  // how fast the pole sinks at the beginning
 const LAVA_SPEEDUP  = 0.000035; // how much nastier it gets every frame
 
+// HOW LONG A LEDGE HOLDS YOU. 60 frames is one second.
+// Stand on one longer than this and it gives way. You cannot camp.
+const CRUMBLE_TIME  = 60;
+// It starts shaking this many frames before it goes, so you get a
+// warning. A trap with no warning isn't difficulty, it's just a surprise.
+const WOBBLE_WARNING = 26;
+
+// And how long until it builds itself back. Another second.
+// This is what turns the whole thing from a punishment into a RHYTHM:
+// nothing is ever lost for good, so a ledge you missed is just a ledge
+// you have to wait for. Set it to 9999 and the pole slowly destroys
+// itself and the game becomes horrible. Try it once.
+const REGROW_TIME = 60;
+
+// --- THE PISTOL ---
+const BULLET_SPEED = 10;    // how fast a shot flies
+const BULLET_LIFE  = 60;    // frames before it fizzles out. Stops it
+                            // travelling forever and eating memory.
+const FIRE_GAP     = 11;    // frames between shots. Smaller = machine gun.
+
+// --- LAVA MONSTERS ---
+const MONSTER_HEALTH   = 2;      // shots to kill
+const MONSTER_WALK     = 0.62;   // how fast they patrol their ledge
+const MONSTER_FIRST    = 150;    // frames before the very first one
+const MONSTER_GAP      = 130;    // frames between them at the start
+const MONSTER_GAP_MIN  = 34;     // ...and the fastest they ever come
+const MONSTER_SPEEDUP  = 1.6;    // frames knocked off the gap each spawn
+
 const POLE_LEFT  = W / 2 - POLE_WIDTH / 2;
 const POLE_RIGHT = W / 2 + POLE_WIDTH / 2;
 
@@ -114,6 +142,18 @@ const POLE_RIGHT = W / 2 + POLE_WIDTH / 2;
 //     Instead of gnomeX, gnomeY, gnomeSpeed... we keep them in one bag.
 
 let gnome, platforms, lavaY, lavaSpeed, cameraY, best, dead, deadTimer;
+let bullets, monsters, tick, nextShotAt, nextMonsterAt, monsterGap, kills;
+
+// The height of the highest ledge built so far. Kept as its own number
+// rather than read off the end of the list, because ledges that give way
+// keep moving after they're built - so the last one in the list is no
+// longer reliably the highest one.
+let topLedgeY = 40;
+
+// Ticks up every single frame, even when you're dead. The crumbling
+// ledges shake in time with it. It's separate from the game's own
+// timers on purpose - a wobble should keep wobbling on the death screen.
+let shakeClock = 0;
 
 function newGame() {
   gnome = {
@@ -124,17 +164,23 @@ function newGame() {
     w: 26,         // how wide the gnome is
     h: 34,         // how tall
     onGround: false,
-    facing: 1      // 1 = looking right, -1 = looking left
+    facing: 1,     // 1 = looking right, -1 = looking left
+    recoil: 0      // frames left of the pistol kicking back
   };
 
   // The starting ledge, so you don't begin the game falling into lava.
-  platforms = [ { x: POLE_LEFT - 60, y: 40, w: POLE_WIDTH + 120 } ];
+  // This one NEVER crumbles - `safe` exempts it. Spawning onto a floor
+  // that's already counting down would mean losing before you'd worked
+  // out which key jumps.
+  const base = newLedge(POLE_LEFT - 60, 40, POLE_WIDTH + 120);
+  base.safe = true;
+  platforms = [ base ];
 
   // Build the first stack of ledges going up.
-  let y = 40;
+  topLedgeY = 40;
   for (let i = 0; i < 14; i++) {
-    y -= GAP;
-    platforms.push(makeLedge(y));
+    topLedgeY -= GAP;
+    platforms.push(makeLedge(topLedgeY));
   }
 
   lavaY     = 260;      // lava starts below the first ledge...
@@ -143,6 +189,19 @@ function newGame() {
   dead      = false;
   deadTimer = 0;
   best      = 0;
+
+  bullets  = [];
+  monsters = [];
+  kills    = 0;
+
+  // `tick` counts frames of ACTUAL PLAY. It stops while you're dead,
+  // which is what you want for anything that should feel like game time:
+  // reload speed, how often monsters arrive. shakeClock is the other
+  // kind - it never stops, so wobbles keep wobbling on the death screen.
+  tick = 0;
+  nextShotAt = 0;
+  nextMonsterAt = MONSTER_FIRST;
+  monsterGap = MONSTER_GAP;
 }
 
 // --- 3. MAKING LEDGES --------------------------------------------------
@@ -150,21 +209,50 @@ function newGame() {
 //     sometimes it goes all the way across. Math.random() gives a
 //     number between 0 and 1, which is how we flip a coin in code.
 
+// Every ledge carries three extra things now:
+//   stood   - how many frames you've spent standing on THIS one
+//   falling - has it given way? (it stops being solid the moment it has)
+//   vy      - how fast it's dropping once it goes
+//
+// Each ledge remembering its own timer is what makes this work. One
+// shared timer would mean stepping onto a fresh ledge inherited the last
+// one's countdown, and the game would feel haunted.
+function newLedge(x, y, w) {
+  return {
+    x: x,
+    y: y,
+    // WHERE IT BELONGS. `y` is where it is right now, which changes while
+    // it's tumbling. homeY is where it came from, and never changes - so
+    // it always knows exactly where to build itself back.
+    //
+    // Keeping "where it is" and "where it lives" as two separate facts is
+    // the whole trick here. Try doing this with only one and you'll find
+    // you've got nowhere to put it back to.
+    homeY: y,
+    w: w,
+    stood: 0,       // frames you've stood on it
+    falling: false, // has it given way?
+    vy: 0,          // how fast it's tumbling
+    gone: 0,        // frames since it gave way
+    fadeIn: 0,      // frames left of its reappearing shimmer
+  };
+}
+
 function makeLedge(y) {
   const roll = Math.random();
 
   if (roll < 0.15) {
     // A rare full ledge, right across the pole. A little rest stop.
-    return { x: POLE_LEFT - 70, y: y, w: POLE_WIDTH + 140 };
+    return newLedge(POLE_LEFT - 70, y, POLE_WIDTH + 140);
   }
 
   // How long this one is - a bit random so they're not all identical.
   const len = LEDGE_LEN - 30 + Math.random() * 40;
 
   if (roll < 0.575) {
-    return { x: POLE_LEFT - len, y: y, w: len + 14 };   // sticks out LEFT
+    return newLedge(POLE_LEFT - len, y, len + 14);      // sticks out LEFT
   } else {
-    return { x: POLE_RIGHT - 14, y: y, w: len + 14 };   // sticks out RIGHT
+    return newLedge(POLE_RIGHT - 14, y, len + 14);      // sticks out RIGHT
   }
 }
 
@@ -189,29 +277,171 @@ function toggleFullscreen() {
   else document.documentElement.requestFullscreen().catch(() => {});
 }
 
-// --- TOUCH CONTROLS ---
-// No buttons drawn on screen. Instead: the LEFT half of the screen and
-// the RIGHT half of the screen are the steering, and a quick tap-and-lift
-// is a jump. Fewer things to miss with your thumb.
-let touchDir = 0;      // -1 left, 0 nothing, 1 right
-let touchJump = false;
+// --- 4b. TOUCH CONTROLS -------------------------------------------------
+//
+// The old version used the left half and right half of the whole screen,
+// with any tap counting as a jump. Two things wrong with that: you could
+// never run WITHOUT jumping, and there was nothing on screen to tell you
+// the rule existed. Invisible controls are only obvious to the person who
+// wrote them.
+//
+// So: three real buttons you can see, and each finger is tracked
+// separately - which is what lets you hold RIGHT with one thumb and jab
+// JUMP with the other at the same time.
 
-canvas.addEventListener("touchstart", e => {
+const BUTTONS = [
+  { name: "left",  x:  76, y: 648, r: 50, label: "◀" },
+  { name: "right", x: 188, y: 648, r: 50, label: "▶" },
+  { name: "jump",  x: 372, y: 636, r: 62, label: "JUMP" },
+  { name: "shoot", x: 268, y: 548, r: 46, label: "FIRE" },
+];
+
+// Which button each finger is currently on. A Map keyed by the finger's
+// id, because a phone gives every touch its own id and keeps it for as
+// long as that finger stays down. Two fingers, two entries, no confusion.
+const fingers = new Map();
+
+// Has anyone touched the screen at all? Until they have, we don't draw
+// the buttons - no point cluttering a computer screen with things you
+// can't press.
+let usingTouch = false;
+
+// JUMP BUFFERING. Tapping jump sets this to 8, and it ticks down every
+// frame. The gnome jumps if it's above zero and his feet are down.
+//
+// That means a tap a few frames BEFORE you land still works. Without it,
+// tapping one frame too early does nothing at all, and it feels like the
+// game ignored you - which, fairly, it did. Real platformers all do this.
+let jumpBuffer = 0;
+
+// The fire button doesn't need buffering - the gun has its own cooldown
+// and you can hold it down. So this is just "is a finger on FIRE".
+// Different question, so it's a different variable rather than a clever
+// reuse of the jump one.
+let touchShooting = false;
+let mouseShooting = false;
+
+// The canvas is stretched by CSS, so a finger at 300 real screen pixels
+// is somewhere quite different in our pretend 460-wide world. This works
+// out where. Get this wrong and every button is slightly off.
+function touchToCanvas(t) {
+  const box = canvas.getBoundingClientRect();
+  return {
+    x: (t.clientX - box.left) / box.width * W,
+    y: (t.clientY - box.top) / box.height * H,
+  };
+}
+
+function buttonAt(x, y) {
+  for (const b of BUTTONS) {
+    const dx = x - b.x;
+    const dy = y - b.y;
+    // Compare the SQUARES instead of doing a square root. Same answer,
+    // less work - a trick worth knowing, because "is this within that
+    // distance" comes up constantly.
+    if (dx * dx + dy * dy < b.r * b.r) return b.name;
+  }
+  return null;
+}
+
+function handleTouch(e) {
+  e.preventDefault();
+  usingTouch = true;
+
+  if (dead && deadTimer > 40) { newGame(); return; }
+
+  for (const t of e.changedTouches) {
+    if (e.type === "touchend" || e.type === "touchcancel") {
+      fingers.delete(t.identifier);
+      continue;
+    }
+
+    const p = touchToCanvas(t);
+    const hit = buttonAt(p.x, p.y);
+    const was = fingers.get(t.identifier);
+
+    // Only count a jump when a finger ARRIVES on the button - not every
+    // frame it sits there. Otherwise holding JUMP would make the gnome
+    // bounce like a pogo stick the instant he touched anything.
+    if (hit === "jump" && was !== "jump") jumpBuffer = 8;
+
+    fingers.set(t.identifier, hit);
+  }
+}
+
+canvas.addEventListener("touchstart",  handleTouch, { passive: false });
+canvas.addEventListener("touchmove",   handleTouch, { passive: false });
+canvas.addEventListener("touchend",    handleTouch, { passive: false });
+canvas.addEventListener("touchcancel", handleTouch, { passive: false });
+
+// Read the fingers and work out which way we're being pushed. Holding
+// both at once cancels out, which is exactly what happens on a keyboard.
+function touchSteering() {
+  let dir = 0;
+  touchShooting = false;
+  for (const on of fingers.values()) {
+    if (on === "left")  dir -= 1;
+    if (on === "right") dir += 1;
+    if (on === "shoot") touchShooting = true;
+  }
+  return Math.max(-1, Math.min(1, dir));
+}
+
+// Clicking anywhere shoots, on a computer. There's no aiming to do -
+// the gnome fires whichever way he's facing - so the mouse doesn't need
+// to point at anything, and the button is just "yes, now".
+canvas.addEventListener("mousedown", e => {
   e.preventDefault();
   if (dead && deadTimer > 40) { newGame(); return; }
-  for (const t of e.changedTouches) {
-    const half = canvas.getBoundingClientRect();
-    const localX = (t.clientX - half.left) / half.width;   // 0 to 1
-    if (localX < 0.5) touchDir = -1; else touchDir = 1;
-  }
-  touchJump = true;
-}, { passive: false });
+  mouseShooting = true;
+});
+addEventListener("mouseup", () => { mouseShooting = false; });
+// Let go outside the window and we'd never hear about it otherwise, and
+// the gun would jam on forever.
+addEventListener("blur", () => { mouseShooting = false; });
 
-canvas.addEventListener("touchend", e => {
-  e.preventDefault();
-  if (e.touches.length === 0) { touchDir = 0; touchJump = false; }
-}, { passive: false });
 
+// --- 4c. PUTTING A MONSTER SOMEWHERE -----------------------------------
+//
+// Picking WHERE is most of the work. A monster dropped anywhere at all
+// would sometimes land right on your face, and sometimes miles away
+// where you'd never meet it. Neither is a game.
+
+function spawnMonsterOnLedge() {
+  // Which ledges already have one? A Set gives us a fast "is this in
+  // here?" - and we can put the ledge OBJECTS straight in it, no ids or
+  // numbering needed, because two names for the same object match.
+  const taken = new Set();
+  for (const m of monsters) taken.add(m.ledge);
+
+  const options = platforms.filter(p =>
+    !p.safe &&                    // never the starting ledge
+    !p.falling &&                 // not one that's mid-collapse
+    !taken.has(p) &&              // one monster per ledge
+    p.w > 45 &&                   // needs room to pace about
+    p.y < gnome.y - 70 &&         // ABOVE you - in your way, not on you
+    p.y > cameraY - 620);         // but close enough that you'll meet it
+
+  // Nothing suitable right now? Do nothing at all, and try again on the
+  // next go round. Much better than forcing one somewhere silly.
+  if (options.length === 0) return;
+
+  const ledge = options[Math.floor(Math.random() * options.length)];
+
+  monsters.push({
+    // We keep the LEDGE ITSELF, not its position or its number in the
+    // list. Positions go stale the moment anything moves, and list
+    // numbers go wrong the moment anything is removed. A direct hold on
+    // the thing can't drift out of date.
+    ledge: ledge,
+    x: ledge.x + ledge.w / 2,
+    y: ledge.y,
+    dir: Math.random() < 0.5 ? -1 : 1,
+    health: MONSTER_HEALTH,
+    hurtUntil: 0,
+    wobble: Math.random() * 6,    // so they don't all pulse in time
+  });
+}
 
 // --- 5. UPDATE: the rules of the world ---------------------------------
 //     This runs about 60 times a second. Everything that MOVES, moves here.
@@ -220,11 +450,13 @@ function update() {
 
   if (dead) { deadTimer++; return; }
 
+  tick++;
+
   // --- steering ---
   let dir = 0;
   if (keys["arrowleft"]  || keys["a"]) dir -= 1;
   if (keys["arrowright"] || keys["d"]) dir += 1;
-  dir += touchDir;
+  dir += touchSteering();
   dir = Math.max(-1, Math.min(1, dir));   // keep it between -1 and 1
 
   gnome.vx = dir * RUN_SPEED;
@@ -232,11 +464,13 @@ function update() {
 
   // --- jumping ---
   // You can only jump if your feet are actually on something.
-  const wantsJump = keys[" "] || keys["arrowup"] || keys["w"] || touchJump;
+  if (jumpBuffer > 0) jumpBuffer--;
+
+  const wantsJump = keys[" "] || keys["arrowup"] || keys["w"] || jumpBuffer > 0;
   if (wantsJump && gnome.onGround) {
     gnome.vy = -JUMP_POWER;    // negative = upward!
     gnome.onGround = false;
-    touchJump = false;
+    jumpBuffer = 0;            // used it up
   }
 
   // --- gravity ---
@@ -255,8 +489,12 @@ function update() {
 
   // --- landing on ledges ---
   gnome.onGround = false;
+  let standingOn = null;
+
   if (gnome.vy >= 0) {                       // only when FALLING, not rising
     for (const p of platforms) {
+      if (p.falling) continue;               // it's given way - not solid any more
+
       const feet = gnome.y;
       const overlapsSideways = gnome.x + gnome.w / 2 > p.x &&
                                gnome.x - gnome.w / 2 < p.x + p.w;
@@ -266,9 +504,135 @@ function update() {
         gnome.y = p.y;
         gnome.vy = 0;
         gnome.onGround = true;
+        standingOn = p;
       }
     }
   }
+
+  // --- ledges give way ---
+  // The timer belongs to the LEDGE, not to the gnome, and it never gets
+  // reset. Hop off and back on and you pick up where you left off - so
+  // bouncing on the spot buys you nothing. The only way up is up.
+  if (standingOn && !standingOn.safe) {
+    standingOn.stood++;
+    if (standingOn.stood > CRUMBLE_TIME) standingOn.falling = true;
+  }
+
+  // Anything that's given way now drops out of the world. It's not solid
+  // any more, so it can fall straight through everything else, which is
+  // both correct and much less code than the alternative.
+  for (const p of platforms) {
+    if (p.fadeIn > 0) p.fadeIn--;
+    if (!p.falling) continue;
+
+    p.vy += GRAVITY * 0.45;      // lighter than the gnome - it flutters
+    p.y += p.vy;
+    p.gone++;
+
+    // ...and then it builds itself back, exactly where it was.
+    if (p.gone > REGROW_TIME) {
+      p.falling = false;
+      p.y = p.homeY;      // this is what homeY was for
+      p.vy = 0;
+      p.gone = 0;
+      p.stood = 0;        // a fresh ledge, with a fresh second on it
+      p.fadeIn = 14;      // shimmer back into being rather than blinking on
+    }
+  }
+
+  // --- SHOOTING ---
+  // He fires whichever way he's facing. No aiming - one less thing to do
+  // with your thumbs while you're also jumping for your life.
+  const wantsShoot = keys["x"] || keys["j"] || touchShooting || mouseShooting;
+  if (wantsShoot && tick >= nextShotAt) {
+    nextShotAt = tick + FIRE_GAP;
+    bullets.push({
+      x: gnome.x + gnome.facing * 15,
+      y: gnome.y - 20,               // out of the hand, not the feet
+      vx: gnome.facing * BULLET_SPEED,
+      life: BULLET_LIFE,
+    });
+    gnome.recoil = 5;                // shoves the pistol back for 5 frames
+  }
+  if (gnome.recoil > 0) gnome.recoil--;
+
+  // --- bullets ---
+  for (const b of bullets) {
+    b.x += b.vx;
+    b.life--;
+  }
+
+  // --- new monsters crawl onto the ledges above you ---
+  if (tick >= nextMonsterAt) {
+    // They come faster and faster, but never faster than MONSTER_GAP_MIN.
+    // A limit like that matters: without one, the gap eventually goes
+    // NEGATIVE and you get a monster every single frame, forever.
+    monsterGap = Math.max(MONSTER_GAP_MIN, monsterGap - MONSTER_SPEEDUP);
+    nextMonsterAt = tick + monsterGap;
+    spawnMonsterOnLedge();
+  }
+
+  // --- monsters ---
+  for (const m of monsters) {
+    const ledge = m.ledge;
+    m.wobble += 0.11;
+
+    // It stands on its ledge, so its height is simply the ledge's height.
+    // We don't give the monster its own gravity or its own falling code -
+    // it just reads where the ledge is, every frame. Which means when
+    // that ledge crumbles away, the monster rides it down into the lava
+    // without a single extra line. Things that follow something else are
+    // far less trouble than things that work it out for themselves.
+    m.y = ledge.y;
+
+    if (!ledge.falling) {
+      // Patrol back and forth, turning round at the ends.
+      m.x += m.dir * MONSTER_WALK;
+      if (m.x < ledge.x + 15)             { m.x = ledge.x + 15; m.dir = 1; }
+      if (m.x > ledge.x + ledge.w - 15)   { m.x = ledge.x + ledge.w - 15; m.dir = -1; }
+    }
+  }
+
+  // --- bullets hitting monsters ---
+  // Two lists, so we walk one inside the other. It's the simplest way and
+  // with a handful of each it's nothing - a computer eats this for
+  // breakfast. Worry about it when there are thousands, not before.
+  for (const b of bullets) {
+    if (b.life <= 0) continue;
+    for (const m of monsters) {
+      if (m.health <= 0) continue;
+      const dx = b.x - m.x;
+      const dy = b.y - (m.y - 14);
+      if (dx * dx + dy * dy < 22 * 22) {
+        m.health--;
+        m.hurtUntil = shakeClock + 8;
+        b.life = 0;                  // the bullet is used up
+        if (m.health <= 0) kills++;
+        break;                       // one bullet, one monster
+      }
+    }
+  }
+
+  // --- a monster catching you ---
+  for (const m of monsters) {
+    if (m.health <= 0) continue;
+    const dx = m.x - gnome.x;
+    const dy = (m.y - 14) - (gnome.y - 17);
+    if (dx * dx + dy * dy < 26 * 26) { dead = true; deadTimer = 0; }
+  }
+
+  // --- clear out the dead and the gone ---
+  // Done in ONE place, at the end, after everything has had its say.
+  // Removing things from a list while you're still looping over it is
+  // how you end up skipping every other one.
+  bullets = bullets.filter(b => b.life > 0 && b.x > -30 && b.x < W + 30);
+
+  // A monster goes when it's shot, when its ledge carries it into the
+  // lava, or when its ledge is swallowed for good. That middle one is
+  // free - we never wrote any code for it. It falls out of the fact that
+  // the monster's height IS its ledge's height.
+  monsters = monsters.filter(m =>
+    m.health > 0 && m.y < lavaY && m.ledge.homeY < lavaY + 200);
 
   // --- the pole sinks ---
   // Really the lava climbs, which is the same thing from where you're
@@ -288,16 +652,19 @@ function update() {
   if (height > best) best = height;
 
   // --- build more pole above you, forever ---
-  let topY = platforms[platforms.length - 1].y;
-  while (topY > cameraY - 200) {
-    topY -= GAP;
-    platforms.push(makeLedge(topY));
+  while (topLedgeY > cameraY - 200) {
+    topLedgeY -= GAP;
+    platforms.push(makeLedge(topLedgeY));
   }
 
   // --- throw away ledges that have sunk into the lava ---
   // If we didn't, the list would grow to a million and the game would
   // get slower and slower the better you played.
-  platforms = platforms.filter(p => p.y < lavaY + 200);
+  // Note this asks about homeY, not y. A ledge that's mid-tumble has a
+  // `y` way down near the lava - check that and we'd throw it away a
+  // moment before it was due to build itself back, and ledges would
+  // randomly stop returning. It's where it LIVES that decides.
+  platforms = platforms.filter(p => p.homeY < lavaY + 200);
 
   // --- cooked? ---
   if (gnome.y > lavaY) { dead = true; deadTimer = 0; }
@@ -321,9 +688,50 @@ function draw() {
 
   drawPole(screenY);
   for (const p of platforms) drawLedge(p, screenY);
+  for (const m of monsters) drawMonster(m, screenY);
+  for (const b of bullets) drawBullet(b, screenY);
   if (!dead) drawGnome(screenY);
   drawLava(screenY);
   drawHud();
+  drawButtons();
+}
+
+// The three thumb buttons. They light up while a finger is on them -
+// which matters more than it sounds. Without that you can never tell
+// whether the game missed your press or your thumb simply slipped off
+// the edge, and those two problems get fixed in completely different ways.
+function drawButtons() {
+  if (!usingTouch) return;
+
+  // save() and restore() are a bookmark. Canvas settings STICK - change
+  // textBaseline here and the HEIGHT counter up top quietly moves next
+  // frame, in a completely different function, for no visible reason.
+  // save() now, restore() at the end, and nothing leaks out.
+  ctx.save();
+
+  const pressed = new Set(fingers.values());
+
+  for (const b of BUTTONS) {
+    const on = pressed.has(b.name);
+
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+    ctx.fillStyle = on ? "rgba(255, 190, 120, 0.42)"
+                       : "rgba(20, 12, 10, 0.34)";
+    ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = on ? "rgba(255, 220, 170, 0.95)"
+                         : "rgba(255, 210, 160, 0.42)";
+    ctx.stroke();
+
+    ctx.fillStyle = on ? "#fff4e0" : "rgba(255, 226, 190, 0.72)";
+    ctx.font = (b.name === "jump" ? "bold 22px" : "30px") + " system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(b.label, b.x, b.y + 1);
+  }
+
+  ctx.restore();
 }
 
 function drawPole(screenY) {
@@ -356,12 +764,154 @@ function drawLedge(p, screenY) {
   const sy = screenY(p.y);
   if (sy < -40 || sy > H + 40) return;   // off screen? don't bother drawing.
 
-  ctx.fillStyle = "#8b8496";
-  ctx.fillRect(p.x, sy, p.w, 12);
+  // HOW CLOSE IS IT TO GOING? 0 = untouched, 1 = about to give way.
+  // Everything below reads from this one number.
+  let strain = 0;
+  if (!p.safe && CRUMBLE_TIME > WOBBLE_WARNING) {
+    strain = (p.stood - (CRUMBLE_TIME - WOBBLE_WARNING)) / WOBBLE_WARNING;
+    if (strain < 0) strain = 0;
+    if (strain > 1) strain = 1;
+  }
+
+  // Shake, harder the closer it gets. Math.sin with the frame count
+  // makes it buzz back and forth; multiplying by strain means an
+  // untouched ledge sits perfectly still.
+  const shake = strain === 0 ? 0
+              : Math.sin(shakeClock * 1.4) * 3.2 * strain;
+
+  const x = p.x + shake;
+
+  ctx.save();
+  if (p.falling) {
+    // Fading out as it drops. Once it's see-through it's obviously not
+    // something you can land on any more.
+    ctx.globalAlpha = Math.max(0, 1 - p.vy / 26);
+  } else if (p.fadeIn > 0) {
+    // Fading back IN. Appearing instantly would look like a glitch;
+    // half a second of shimmer reads as "it rebuilt itself".
+    ctx.globalAlpha = 1 - p.fadeIn / 14;
+  }
+
+  // Redden as it strains. Mixing from grey towards a hot orange, so it
+  // looks like the lava is already getting to it.
+  const r = Math.round(139 + strain * 90);
+  const g = Math.round(132 - strain * 62);
+  const b = Math.round(150 - strain * 110);
+
+  ctx.fillStyle = "rgb(" + r + "," + g + "," + b + ")";
+  ctx.fillRect(x, sy, p.w, 12);
   ctx.fillStyle = "#565062";
-  ctx.fillRect(p.x, sy + 8, p.w, 8);     // shadow under the lip
-  ctx.fillStyle = "#b9b2c4";
-  ctx.fillRect(p.x, sy, p.w, 3);         // bright top edge
+  ctx.fillRect(x, sy + 8, p.w, 8);       // shadow under the lip
+  ctx.fillStyle = strain > 0.5 ? "#ffd08a" : "#b9b2c4";
+  ctx.fillRect(x, sy, p.w, 3);           // bright top edge
+
+  // Cracks, once it's really struggling.
+  if (strain > 0.35 && !p.falling) {
+    ctx.strokeStyle = "rgba(20,10,14,0.75)";
+    ctx.lineWidth = 1.6;
+    for (let i = 1; i < 4; i++) {
+      const cx = x + (p.w * i) / 4;
+      ctx.beginPath();
+      ctx.moveTo(cx, sy);
+      ctx.lineTo(cx + 4 - i * 2, sy + 12);
+      ctx.stroke();
+    }
+  }
+
+  ctx.restore();
+}
+
+// A bullet: a short bright streak rather than a dot. Drawing it stretched
+// out along the way it's travelling is an old trick - your eye reads the
+// smear as speed, and a round dot at this size just looks like a crumb.
+function drawBullet(b, screenY) {
+  const sy = screenY(b.y);
+  if (sy < -20 || sy > H + 20) return;
+
+  ctx.strokeStyle = "#ffe08a";
+  ctx.lineWidth = 3;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(b.x, sy);
+  ctx.lineTo(b.x - Math.sign(b.vx) * 13, sy);
+  ctx.stroke();
+
+  ctx.fillStyle = "#fffbe8";
+  ctx.beginPath();
+  ctx.arc(b.x, sy, 2.4, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+// A LAVA MONSTER. A wobbling blob of molten rock with a furious face.
+// Nothing here is a picture from a file - it's all circles and triangles,
+// same as everything else in this game.
+function drawMonster(m, screenY) {
+  const sy = screenY(m.y);
+  if (sy < -60 || sy > H + 60) return;
+
+  // Flashes white for a few frames when shot, so a hit that DOESN'T kill
+  // still obviously landed. Without this, shooting something with 2
+  // health feels like the first shot missed.
+  const flashing = shakeClock < m.hurtUntil;
+
+  // The body squashes and stretches as it moves. Two sine waves running
+  // at different speeds, so it never quite repeats and looks alive.
+  const squash = 1 + Math.sin(m.wobble) * 0.16;
+  const stretch = 1 - Math.sin(m.wobble) * 0.12;
+
+  const cy = sy - 14;
+
+  // A hot glow around it, painted first so everything else sits on top.
+  const glow = ctx.createRadialGradient(m.x, cy, 4, m.x, cy, 34);
+  glow.addColorStop(0, "rgba(255, 150, 40, 0.55)");
+  glow.addColorStop(1, "rgba(255, 90, 0, 0)");
+  ctx.fillStyle = glow;
+  ctx.fillRect(m.x - 36, cy - 36, 72, 72);
+
+  ctx.save();
+  ctx.translate(m.x, cy);
+  ctx.scale(stretch, squash);
+
+  ctx.fillStyle = flashing ? "#ffffff" : "#ff6a1a";
+  ctx.beginPath();
+  ctx.arc(0, 0, 17, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Cooler crust on top, molten underneath.
+  ctx.fillStyle = flashing ? "#ffffff" : "#8f2708";
+  ctx.beginPath();
+  ctx.arc(0, -6, 12, Math.PI, Math.PI * 2);
+  ctx.fill();
+
+  // Drippy blobs hanging off the bottom.
+  ctx.fillStyle = flashing ? "#ffffff" : "#ff9c2e";
+  for (const off of [-9, 0, 9]) {
+    ctx.beginPath();
+    ctx.arc(off, 13 + Math.sin(m.wobble + off) * 2, 4.2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Angry eyes. Two triangles pointing inwards - that's the whole face,
+  // and it's enough. Eyebrows down and in reads as "cross" every time.
+  if (!flashing) {
+    ctx.fillStyle = "#2a0a02";
+    for (const side of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(side * 3, -4);
+      ctx.lineTo(side * 11, -7);
+      ctx.lineTo(side * 10, 1);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.fillStyle = "#ffd166";
+    for (const side of [-1, 1]) {
+      ctx.beginPath();
+      ctx.arc(side * 7.5, -3, 1.7, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  ctx.restore();
 }
 
 function drawGnome(screenY) {
@@ -407,6 +957,25 @@ function drawGnome(screenY) {
   ctx.closePath();
   ctx.fill();
 
+  // THE PISTOL. Drawn after the hat so it sits in front of him.
+  // Because we already flipped the whole gnome with ctx.scale further up,
+  // this only ever has to be drawn pointing RIGHT. Turning round is
+  // handled once, for everything, instead of once per body part.
+  const kick = gnome.recoil * 0.9;      // shoved back while it fires
+  ctx.fillStyle = "#3a3f4a";
+  ctx.fillRect(6 - kick, -22, 15, 5);   // barrel
+  ctx.fillRect(6 - kick, -20, 6, 8);    // grip
+  ctx.fillStyle = "#8b93a3";
+  ctx.fillRect(6 - kick, -22, 15, 2);   // a shine along the top
+
+  // Muzzle flash, only in the frames just after firing.
+  if (gnome.recoil > 2) {
+    ctx.fillStyle = "#ffe08a";
+    ctx.beginPath();
+    ctx.arc(22 - kick, -19.5, 5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
   ctx.restore();
 }
 
@@ -441,6 +1010,25 @@ function drawHud() {
   ctx.textAlign = "left";
   ctx.fillText("HEIGHT " + best + "m", 16, 40);
 
+  ctx.textAlign = "right";
+  ctx.fillStyle = "#ffb27a";
+  ctx.fillText("☠ " + kills, W - 16, 40);
+  ctx.textAlign = "left";
+  ctx.fillStyle = "#ffe9c4";
+
+  // A hint, but only until you've actually climbed something. The moment
+  // you're 3m up you've clearly worked it out, and a permanent hint is
+  // just clutter sitting on top of the game forever.
+  if (best < 3 && !dead && !usingTouch) {
+    ctx.textAlign = "center";
+    ctx.font = "17px system-ui, sans-serif";
+    ctx.fillStyle = "rgba(255, 233, 196, 0.72)";
+    ctx.fillText("A / D  or  ← →  to run", W / 2, H - 118);
+    ctx.fillText("SPACE to jump", W / 2, H - 94);
+    ctx.fillText("X or CLICK to shoot", W / 2, H - 70);
+    ctx.textAlign = "left";
+  }
+
   if (dead) {
     ctx.fillStyle = "rgba(0,0,0,0.66)";
     ctx.fillRect(0, H / 2 - 110, W, 210);
@@ -453,6 +1041,9 @@ function drawHud() {
     ctx.fillStyle = "#ffe9c4";
     ctx.font = "bold 30px system-ui, sans-serif";
     ctx.fillText("You climbed " + best + "m", W / 2, H / 2 + 6);
+    ctx.font = "20px system-ui, sans-serif";
+    ctx.fillText(kills + " monsters down", W / 2, H / 2 + 34);
+    ctx.font = "bold 30px system-ui, sans-serif";
 
     if (deadTimer > 40) {
       ctx.font = "20px system-ui, sans-serif";
@@ -467,6 +1058,7 @@ function drawHud() {
 //     update, draw, update, draw... about 60 times a second, forever.
 
 function loop() {
+  shakeClock++;
   update();
   draw();
   requestAnimationFrame(loop);
