@@ -1,0 +1,1875 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>BOB THE ROBOT PIRATE</title>
+
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="theme-color" content="#07060a">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="icon" href="icon-192.png">
+
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      overflow: hidden;              /* no scrollbars - the game IS the page */
+      background: #07060a;
+      overscroll-behavior: none;     /* stops the phone pulling to refresh */
+      -webkit-user-select: none;
+      user-select: none;
+      touch-action: none;            /* we handle all the finger stuff ourselves */
+      font-family: system-ui, sans-serif;
+    }
+
+    /* The canvas is the rectangle we're allowed to draw on.
+       Everything you see in the game gets painted onto this one thing. */
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    /* Text that sits ON TOP of the canvas. pointer-events:none means
+       your finger goes straight through it to the game underneath. */
+    #hud {
+      position: fixed;
+      top: 14px;
+      left: 0;
+      width: 100%;
+      text-align: center;
+      color: #ffd98a;
+      font-size: 15px;
+      letter-spacing: 2px;
+      text-shadow: 0 0 10px #000;
+      pointer-events: none;
+    }
+
+    #back {
+      position: fixed;
+      top: 10px;
+      left: 12px;
+      color: #8a8aa8;
+      font-size: 14px;
+      text-decoration: none;
+      padding: 6px 10px;
+    }
+  </style>
+</head>
+<body>
+
+  <canvas id="screen"></canvas>
+  <div id="hud">MOUSE to look &nbsp;&middot;&nbsp; W/S move &nbsp;&middot;&nbsp; A/D strafe &nbsp;&middot;&nbsp; ESC frees the mouse</div>
+  <a id="back" href="index.html">&larr; arcade</a>
+
+<script>
+// ===================================================================
+//  BOB THE ROBOT PIRATE  -  a 3D boss fight by Maximus
+// ===================================================================
+//
+//  HOW THE 3D WORKS (the only hard bit - read this once):
+//
+//  The world has three directions instead of two:
+//      x  =  left and right
+//      y  =  UP and down
+//      z  =  forwards and backwards (away from you)
+//
+//  The screen is flat. It only has two directions. So for every corner
+//  of every box, we have to turn (x, y, z) into just (screen x, screen y).
+//
+//  The trick is DIVIDING BY DISTANCE. Something 2 steps away gets
+//  divided by 2. Something 100 steps away gets divided by 100, so it
+//  shrinks to almost nothing. That's why far things look small,
+//  and that is genuinely the whole secret of 3D.
+// ===================================================================
+
+  const canvas = document.getElementById('screen');
+  const ctx    = canvas.getContext('2d');
+
+  let W = 0, H = 0;     // how wide and tall the screen is, in pixels
+
+  function fitCanvas() {
+    W = canvas.width  = Math.floor(window.innerWidth);
+    H = canvas.height = Math.floor(window.innerHeight);
+  }
+  window.addEventListener('resize', fitCanvas);
+  fitCanvas();
+
+
+// -------------------------------------------------------------------
+//  THE CAMERA - your eye in the world
+// -------------------------------------------------------------------
+//  yaw   = which way it's turned (like spinning on a chair)
+//  pitch = how far up or down it's tilted (like nodding)
+// -------------------------------------------------------------------
+
+  const cam = { x: 0, y: 5, z: -10, yaw: 0, pitch: -0.16 };
+
+
+// -------------------------------------------------------------------
+//  THE HERO - that's you
+// -------------------------------------------------------------------
+
+  const hero = {
+    x: 0,          // where you are, left to right
+    z: 0,          // where you are, forwards and back
+    yaw: 0,        // which way you're facing (left and right)
+    pitch: 0,      // how far up or down you're looking. + is up.
+    walkSpeed: 9,  // steps per second. MAKE THIS BIGGER, it's funny.
+    turnSpeed: 2.6,// how fast you spin
+    bounce: 0      // ticks up while walking, to bob your head up and down
+  };
+
+
+// -------------------------------------------------------------------
+//  PROJECT - the most important function in the whole game.
+//  Give it a point in the 3D world, it tells you where that point
+//  lands on your flat screen.
+// -------------------------------------------------------------------
+
+  function project(x, y, z) {
+
+    // Step 1: how far is this point from the camera?
+    const dx = x - cam.x;
+    const dy = y - cam.y;
+    const dz = z - cam.z;
+
+    // Step 2: spin it by the camera's yaw, so "forwards" really means
+    // the way the camera is looking.
+    const cy = Math.cos(cam.yaw), sy = Math.sin(cam.yaw);
+    const rx = dx * cy - dz * sy;   // how far to the RIGHT of the camera
+    let   rz = dx * sy + dz * cy;   // how far IN FRONT of the camera
+    let   ry = dy;                  // how far ABOVE the camera
+
+    // Step 3: tilt it by the camera's pitch (looking up or down).
+    const cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch);
+    const fz = rz * cp + ry * sp;
+    const fy = ry * cp - rz * sp;
+
+    // Step 4: THE MAGIC LINE. Divide by how far in front it is.
+    // Big distance -> tiny number -> tiny on screen.
+    const focal = H * 0.9;          // bigger number = more zoomed in
+    return {
+      x: W / 2 + rx * focal / fz,
+      y: H / 2 - fy * focal / fz,   // minus, because screen y grows DOWNWARDS
+      depth: fz                     // remember the distance, we need it later
+    };
+  }
+
+
+// -------------------------------------------------------------------
+//  THE FACE LIST
+//  Every flat surface we want to draw this frame goes in here first.
+//  Then we sort them furthest-away-first and paint them in that order,
+//  so near things cover up far things. Painters do exactly this:
+//  sky first, then hills, then the tree in front. It even has a name -
+//  the "painter's algorithm".
+// -------------------------------------------------------------------
+
+  let faces = [];
+
+  // Take a colour like [200, 60, 60] and make it darker or lighter.
+  // Sides of a box get different brightness, which is what makes your
+  // brain believe it's a solid object and not a flat blob.
+  function shade(rgb, amount) {
+    return 'rgb(' + (rgb[0] * amount | 0) + ',' +
+                    (rgb[1] * amount | 0) + ',' +
+                    (rgb[2] * amount | 0) + ')';
+  }
+
+  // Add one flat shape (given its corners in 3D) to the list.
+  //
+  // "lift" is a cheat. A shape painted flat on the deck is the same
+  // distance away as the plank underneath it, so the sorting can't
+  // decide which goes on top and they flicker at each other. Lift
+  // fibs about the distance - "pretend I'm half a step nearer" - and
+  // the shape always wins. Every 3D engine has a trick like this.
+  function addFace(points3d, colour, lift) {
+    const flat = [];
+    let total = 0;
+
+    for (const p of points3d) {
+      const s = project(p[0], p[1], p[2]);
+      // If any corner is behind the camera the maths goes haywire and
+      // the shape smears across the screen. Easiest fix: skip it.
+      if (s.depth < 0.4) return;
+      flat.push(s);
+      total += s.depth;
+    }
+
+    faces.push({
+      points: flat,
+      depth: total / flat.length - (lift || 0),   // average distance, for sorting
+      colour: colour
+    });
+  }
+
+
+// -------------------------------------------------------------------
+//  ADD BOX - everything in this game is made of boxes.
+//  You, Bob, the masts, the barrels. All boxes.
+// -------------------------------------------------------------------
+//  cx, cy, cz = where the middle of the box is
+//  w, h, d    = how wide, how tall, how deep
+//  rgb        = its colour, like [180, 40, 40]
+//  spin       = optional: turn the box on the spot
+// -------------------------------------------------------------------
+
+  function addBox(cx, cy, cz, w, h, d, rgb, spin, tilt) {
+    spin = spin || 0;      // turning left and right, like shaking your head "no"
+    tilt = tilt || 0;      // nodding up and down, like nodding "yes"
+
+    const hw = w / 2, hh = h / 2, hd = d / 2;
+    const c  = Math.cos(spin), s  = Math.sin(spin);
+    const ct = Math.cos(tilt), st = Math.sin(tilt);
+
+    // The 8 corners of a box, measured from its own middle.
+    const local = [
+      [-hw, -hh, -hd], [ hw, -hh, -hd], [ hw, -hh,  hd], [-hw, -hh,  hd],
+      [-hw,  hh, -hd], [ hw,  hh, -hd], [ hw,  hh,  hd], [-hw,  hh,  hd]
+    ];
+
+    // Nod each corner first, THEN turn it, then move it to where the
+    // box really lives. The order matters: nod-then-turn is a head
+    // looking up. Turn-then-nod is a head falling off sideways.
+    const world = local.map(function (p) {
+      const ty = p[1] * ct - p[2] * st;
+      const tz = p[1] * st + p[2] * ct;
+      return [
+        cx + p[0] * c + tz * s,
+        cy + ty,
+        cz - p[0] * s + tz * c
+      ];
+    });
+
+    // A box has 6 sides. Each one is 4 of those corners.
+    // The number on the end is how bright that side is:
+    // the top catches the most light, the bottom is in shadow.
+    const sides = [
+      [[4, 5, 6, 7], 1.00],   // top
+      [[0, 4, 5, 1], 0.72],   // front
+      [[2, 6, 7, 3], 0.58],   // back
+      [[3, 7, 4, 0], 0.86],   // left
+      [[1, 5, 6, 2], 0.66],   // right
+      [[0, 1, 2, 3], 0.40]    // bottom
+    ];
+
+    for (const [idx, light] of sides) {
+      addFace([world[idx[0]], world[idx[1]], world[idx[2]], world[idx[3]]],
+              shade(rgb, light));
+    }
+  }
+
+
+// -------------------------------------------------------------------
+//  THE SHIP - a big wooden deck floating on the sea
+// -------------------------------------------------------------------
+
+  const DECK = 20;        // the deck goes from -20 to +20. It's big.
+  const PLANK = 2.5;      // how wide each wooden plank is
+  const WATER_Y = -1.5;   // the height of the sea. The deck floats just above it.
+
+  function drawDeck() {
+    // Lay the deck out as a grid of planks. Two slightly different
+    // browns, swapped every other plank, so you can see the woodgrain
+    // and tell that you're actually moving.
+    for (let x = -DECK; x < DECK; x += PLANK) {
+      for (let z = -DECK; z < DECK; z += PLANK) {
+
+        // Skip planks that are behind you - no point doing the maths
+        // for wood you can't even see. This keeps the game fast.
+        const away = Math.hypot(x - cam.x, z - cam.z);
+        if (away > 70) continue;
+
+        const stripe = (Math.round(x / PLANK) % 2 === 0);
+        const wood = stripe ? [104, 72, 44] : [92, 63, 38];
+
+        addFace([[x, 0, z], [x + PLANK, 0, z],
+                 [x + PLANK, 0, z + PLANK], [x, 0, z + PLANK]],
+                shade(wood, 1));
+      }
+    }
+
+    // A railing all the way round so you can't fall in the sea.
+    for (let i = -DECK; i <= DECK; i += PLANK) {
+      addBox(i, 0.9, -DECK, 0.5, 1.8, 0.5, [70, 48, 30]);
+      addBox(i, 0.9,  DECK, 0.5, 1.8, 0.5, [70, 48, 30]);
+      addBox(-DECK, 0.9, i, 0.5, 1.8, 0.5, [70, 48, 30]);
+      addBox( DECK, 0.9, i, 0.5, 1.8, 0.5, [70, 48, 30]);
+    }
+
+    // The hull - four dark walls that go down under the water, so the
+    // deck looks like a ship instead of a floating rug.
+    addBox(0, -2.5, -DECK, DECK * 2, 4, 1.2, [58, 40, 26]);
+    addBox(0, -2.5,  DECK, DECK * 2, 4, 1.2, [58, 40, 26]);
+    addBox(-DECK, -2.5, 0, 1.2, 4, DECK * 2, [58, 40, 26]);
+    addBox( DECK, -2.5, 0, 1.2, 4, DECK * 2, [58, 40, 26]);
+
+    // Two masts, so it looks like a real pirate ship.
+    addBox(-13, 9, -13, 1.4, 18, 1.4, [78, 54, 32]);
+    addBox( 13, 9, -13, 1.4, 18, 1.4, [78, 54, 32]);
+
+    // A couple of barrels to bump into.
+    addBox(-8, 1.3,  6, 2.4, 2.6, 2.4, [96, 66, 40]);
+    addBox( 9, 1.3, -4, 2.4, 2.6, 2.4, [96, 66, 40]);
+  }
+
+
+// -------------------------------------------------------------------
+//  THE HERO'S BODY - you, built out of six boxes
+// -------------------------------------------------------------------
+
+  function drawHero() {
+    const y = hero.yaw;
+
+    // While walking, hero.bounce ticks upwards. sin() turns a
+    // number that keeps rising into a wave that goes up-down-up-down,
+    // which is a really easy way to make anything bob about.
+    const bob = Math.sin(hero.bounce * 9) * 0.12;
+    const swing = Math.sin(hero.bounce * 9) * 0.5;   // arms and legs swinging
+
+    const px = hero.x, pz = hero.z;
+
+    // legs (they swing opposite ways, like real legs)
+    addBox(px + Math.cos(y) * 0.35, 0.75 + swing * 0.1, pz - Math.sin(y) * 0.35,
+           0.5, 1.5, 0.5, [50, 60, 120], y);
+    addBox(px - Math.cos(y) * 0.35, 0.75 - swing * 0.1, pz + Math.sin(y) * 0.35,
+           0.5, 1.5, 0.5, [50, 60, 120], y);
+
+    // body
+    addBox(px, 2.2 + bob, pz, 1.4, 1.6, 0.9, [200, 70, 60], y);
+
+    // arms
+    addBox(px + Math.cos(y) * 0.95, 2.3 + bob + swing * 0.15, pz - Math.sin(y) * 0.95,
+           0.42, 1.3, 0.42, [225, 180, 150], y);
+    addBox(px - Math.cos(y) * 0.95, 2.3 + bob - swing * 0.15, pz + Math.sin(y) * 0.95,
+           0.42, 1.3, 0.42, [225, 180, 150], y);
+
+    // head
+    addBox(px, 3.4 + bob, pz, 0.95, 0.95, 0.95, [235, 195, 165], y);
+  }
+
+
+// ===================================================================
+//  BOB THE ROBOT PIRATE
+// ===================================================================
+//  Bob is about SIX TIMES your height. He is made of 40-odd boxes.
+//
+//  Everything about him is measured from his FEET, not from the middle
+//  of the world. That means when we move his feet upwards, every single
+//  bit of him comes along for the ride - which is exactly what we need
+//  to make him rise up out of the sea.
+// ===================================================================
+
+  const bob = {
+    x: 0,
+    z: 34,              // out in the sea, past the back railing
+    y: -34,             // where his FEET are. He starts DEEP under the sea.
+    yaw: 0,             // which way he's turned. 0 = looking at the ship.
+    scale: 2.5,         // HOW BIG HE IS. 1 = the size he was built. This is
+                        // the single most fun number in the entire file.
+    mouth: 0,           // 0 = jaw shut, 1 = jaw hanging wide open
+    headPitch: 0,       // 0 = looking at you, 1.1 = craning up at the sky
+    sway: 0             // ticks up forever, used to make him creak about
+  };
+
+  // Bob's colours, all in one place so they're easy to fiddle with.
+  const IRON   = [122, 126, 138];
+  const DARK   = [ 74,  78,  90];
+  const RUST   = [146,  88,  52];
+  const GOLD   = [206, 164,  62];
+  const BLACK  = [ 38,  32,  40];
+  const BONE   = [226, 222, 208];
+  const SKULL  = [198, 194, 180];   // his face - old iron gone bone-coloured
+  const SOCKET = [ 20,  16,  22];   // the black pits his eyes glow out of
+  const GLOW   = [255,  70,  48];
+
+  // Put one box on Bob, measured from his feet.
+  function bobBox(ox, oy, oz, w, h, d, rgb, tilt) {
+
+    // MAKE HIM BIGGER. Every measurement gets multiplied by his scale -
+    // how far out the box sits AND how big the box is. Both have to be
+    // multiplied. Scale only the sizes and he turns into a fat man;
+    // scale only the positions and he explodes into loose parts.
+    const S = bob.scale;
+    ox *= S; oy *= S; oz *= S;
+    w  *= S; h  *= S; d  *= S;
+
+    const c = Math.cos(bob.yaw), s = Math.sin(bob.yaw);
+    const wx = bob.x + ox * c + oz * s;
+    const wz = bob.z - ox * s + oz * c;
+    let   wy = bob.y + oy;
+
+    // THE UNDERWATER TRICK:
+    // We simply don't draw anything below the water line. A box that's
+    // half under gets chopped down to just its top half. That's all it
+    // takes to make him look like he's rising out of the sea - there's
+    // no clever water code at all, we just hide the bits underneath.
+    const top = wy + h / 2;
+    let bottom = wy - h / 2;
+    if (top <= WATER_Y) return;         // completely under - draw nothing
+    if (bottom < WATER_Y) {             // sticking half out - shrink it
+      bottom = WATER_Y;
+      h = top - bottom;
+      wy = bottom + h / 2;
+    }
+
+    addBox(wx, wy, wz, w, h, d, rgb, bob.yaw, tilt || 0);
+  }
+
+
+// -------------------------------------------------------------------
+//  BOB'S NECK JOINT
+// -------------------------------------------------------------------
+//  Here's the problem: if you just move Bob's head upwards, it comes
+//  off. A head doesn't slide - it SWINGS, on a hinge at the neck.
+//
+//  So for every box in his head we measure how far it is from the neck
+//  joint, swing that gap round by the nod angle, and put the box at the
+//  new spot. His hat is further from the joint than his teeth are, so
+//  the hat travels further. That's what makes it look like one solid
+//  head instead of a pile of parts drifting about.
+// -------------------------------------------------------------------
+
+  const NECK = 19.3;      // how high above his feet the neck joint is
+
+  // Where does a point in Bob's head end up after he's nodded?
+  function headLocal(oy, oz) {
+    const p = bob.headPitch;
+    const c = Math.cos(p), s = Math.sin(p);
+    const gap = oy - NECK;                  // how far above the joint it started
+    return {
+      y: NECK + gap * c - oz * s,
+      z: gap * s + oz * c
+    };
+  }
+
+  // Same as bobBox, but the box swings with his head.
+  function headBox(ox, oy, oz, w, h, d, rgb) {
+    const moved = headLocal(oy, oz);
+    bobBox(ox, moved.y, moved.z, w, h, d, rgb, bob.headPitch);
+  }
+
+  // What yaw would have Bob staring straight at you?
+  //
+  // The front of Bob - his face - is the local -z side of all his boxes.
+  // Spin that by his yaw and it points along ( -sin(yaw), -cos(yaw) ).
+  // We want that to point at the hero, so we flip the signs of the gap
+  // between them and hand it to atan2, which turns an arrow back into
+  // an angle. atan2 is the "which way is that?" function.
+  function yawTowardsHero() {
+    return Math.atan2(bob.x - hero.x, bob.z - hero.z);
+  }
+
+  // Turn one angle towards another WITHOUT spinning the long way round.
+  // If he's facing left and you run right, the gap can come out as 350
+  // degrees when it's really just -10. These two while loops drag the
+  // difference back into the "shortest way round" range.
+  function turnTowards(now, target, speed, dt) {
+    let gap = target - now;
+    while (gap >  Math.PI) gap -= Math.PI * 2;
+    while (gap < -Math.PI) gap += Math.PI * 2;
+    return now + gap * Math.min(1, speed * dt);
+  }
+
+  function drawBob() {
+    // A slow creak from side to side so he never looks frozen.
+    const creak = Math.sin(bob.sway * 0.8) * 0.25;
+    const jaw   = bob.mouth * 1.5;      // how far the jaw hatch drops
+
+    // ---- LEGS -------------------------------------------------------
+    // His left leg is a proper metal leg...
+    bobBox(-2.6, 4.5, 0, 3.0, 9, 3.0, IRON);
+    bobBox(-2.6, 0.6, 0.4, 3.6, 1.2, 4.4, DARK);      // iron boot
+
+    // ...and his right leg is a PEG LEG, because he is a pirate.
+    bobBox( 2.6, 6.5, 0, 3.0, 5, 3.0, IRON);          // thigh
+    bobBox( 2.6, 2.4, 0, 1.3, 4, 1.3, [92, 64, 40]);  // wooden peg
+    bobBox( 2.6, 0.5, 0, 1.9, 0.7, 1.9, [78, 54, 32]);// the foot of the peg
+
+    // ---- BODY -------------------------------------------------------
+    bobBox(0, 10.2 + creak * 0.2, 0, 8.0, 2.6, 4.4, DARK);   // hips
+    bobBox(0, 14.6, 0, 11.0, 7.2, 5.4, IRON);                // chest
+    bobBox(0, 12.4, 0.2, 11.2, 1.0, 5.6, RUST);              // rust stripe
+
+    // Rivets. Little bolts holding him together.
+    for (const rx of [-4.2, 0, 4.2]) {
+      bobBox(rx, 17.4, -2.8, 0.7, 0.7, 0.7, DARK);
+      bobBox(rx, 11.9, -2.8, 0.7, 0.7, 0.7, DARK);
+    }
+
+    // A glowing power core in the middle of his chest.
+    // This is almost certainly going to be his weak spot later...
+    bobBox(0, 14.8, -2.9, 2.4, 2.4, 0.5, GLOW);
+    bobBox(0, 14.8, -2.7, 3.4, 3.4, 0.4, GOLD);
+
+    // A gold belt, because pirates.
+    bobBox(0, 11.0, -2.5, 8.4, 1.6, 0.5, GOLD);
+    bobBox(0, 11.0, -2.7, 2.0, 2.4, 0.4, BLACK);   // buckle
+
+    // ---- ARMS -------------------------------------------------------
+    // Left arm ends in a grabbing claw.
+    bobBox(-6.6, 17.0, 0, 3.2, 3.2, 3.2, DARK);              // shoulder
+    bobBox(-6.8, 12.6 + creak, 0, 2.4, 7.0, 2.4, IRON);      // arm
+    bobBox(-7.4, 8.8 + creak, 0, 1.0, 2.2, 1.0, DARK);       // claw finger
+    bobBox(-6.2, 8.8 + creak, 0, 1.0, 2.2, 1.0, DARK);       // claw finger
+
+    // ---- THE HOOK ARM - the one that smashes the deck ---------------
+    // This arm isn't welded pointing down like the other one. It's a
+    // CHAIN of blocks marching away from the shoulder in whatever
+    // direction we point them. That means the same code can hang it by
+    // his side, wind it up over his head, or drive it into the deck.
+    bobBox(attack.armX, 17.0, 0, 3.4, 3.4, 3.4, DARK);       // shoulder ball
+
+    // Turn the arm's angle into an arrow. Angle 0 points straight down.
+    const armY = -Math.cos(attack.armPitch);
+    const armZ = -Math.sin(attack.armPitch);
+
+    const links = 8;
+    for (let i = 1; i <= links; i++) {
+      const far = (i / links) * attack.armLen;      // how far down the arm
+      bobBox(attack.armX, 17.0 + armY * far, armZ * far,
+             2.5, 2.5, 2.5, i > links - 2 ? DARK : IRON);
+    }
+
+    // The hook itself, stuck on the far end of the chain.
+    const tipFar = attack.armLen + 1.4;
+    const tipY = 17.0 + armY * tipFar;
+    const tipZ = armZ * tipFar;
+    bobBox(attack.armX, tipY, tipZ, 1.8, 1.8, 1.8, BONE);
+    bobBox(attack.armX + 1.5, tipY + armY * 1.2, tipZ + armZ * 1.2,
+           1.3, 2.6, 1.3, BONE);
+
+    // ---- HEAD: AN IRON SKULL ----------------------------------------
+    // A real skull is wide and round at the top and narrow at the
+    // bottom, so we use two boxes: a big cranium and a narrower face.
+    bobBox(0, 18.8, 0, 2.6, 1.6, 2.6, DARK);                 // neck (doesn't nod)
+    headBox(0, 22.6, 0, 6.2, 3.2, 5.0, SKULL);               // cranium
+    headBox(0, 20.6, 0.2, 5.0, 1.8, 4.6, SKULL);             // the face part
+
+    // A heavy brow ridge across the top. This is what makes him look
+    // ANGRY instead of surprised - it's basically an eyebrow.
+    headBox(0, 23.3, -2.5, 6.0, 0.7, 0.6, SKULL);
+
+    // Cheekbones, one either side.
+    headBox(-2.5, 21.2, -2.2, 1.1, 1.6, 0.7, SKULL);
+    headBox( 2.5, 21.2, -2.2, 1.1, 1.6, 0.7, SKULL);
+
+    // ---- TWO GLOWING RED EYES ---------------------------------------
+    // Each eye is three boxes stacked front to back:
+    //   1. a pitch-black socket sunk into the skull
+    //   2. a dim red halo, so the light looks like it's spilling out
+    //   3. the bright red eye itself, poking out at the front
+    for (const ex of [-1.6, 1.6]) {
+      headBox(ex, 22.3, -2.60, 2.3, 2.3, 0.5, SOCKET);
+      headBox(ex, 22.3, -2.78, 1.9, 1.9, 0.4, [150, 30, 25]);
+      headBox(ex, 22.3, -2.95, 1.2, 1.2, 0.4, GLOW);
+    }
+
+    // A dark triangle of a nose hole.
+    headBox(0, 21.4, -2.45, 0.9, 1.0, 0.5, SOCKET);
+    headBox(0, 20.9, -2.45, 0.5, 0.6, 0.5, SOCKET);
+
+    // ---- TEETH -------------------------------------------------------
+    // Six teeth in the top jaw, with gaps between them. A loop, because
+    // typing out six almost-identical lines would be silly.
+    for (let i = 0; i < 6; i++) {
+      headBox(-2.1 + i * 0.84, 19.9, -2.35, 0.62, 1.2, 0.5, BONE);
+    }
+
+    // The blackness inside his mouth. This is the missile tube.
+    headBox(0, 19.4, -2.1, 4.4, 1.6, 0.4, BLACK);
+
+    // The bottom jaw. It hinges down when mouth = 1, and it takes its
+    // own row of teeth with it. Notice how "- jaw" appears on every
+    // line here - that's what makes the whole jaw move as one piece.
+    headBox(0, 18.7 - jaw, -1.8 - jaw * 0.5, 4.8, 1.1, 2.6, SKULL);
+    for (let i = 0; i < 6; i++) {
+      headBox(-2.1 + i * 0.84, 19.5 - jaw, -2.35 - jaw * 0.5, 0.62, 1.1, 0.5, BONE);
+    }
+
+    // ---- THE HAT ----------------------------------------------------
+    // A tricorn: a flat brim, a lump on top, and three turned-up corners.
+    headBox(0, 24.2, 0, 9.0, 0.7, 8.0, BLACK);               // brim
+    headBox(0, 25.4, 0, 5.6, 2.2, 5.0, BLACK);               // the crown
+    headBox(0, 25.0, -4.0, 6.0, 2.0, 0.8, BLACK);            // front corner
+    headBox(-4.4, 25.0, 1.4, 0.8, 2.0, 5.0, BLACK);          // left corner
+    headBox( 4.4, 25.0, 1.4, 0.8, 2.0, 5.0, BLACK);          // right corner
+    headBox(0, 24.6, -4.3, 6.2, 0.4, 0.4, GOLD);             // gold trim
+
+    // A little skull and crossbones on the front of the hat.
+    headBox(0, 25.7, -4.3, 1.4, 1.4, 0.4, BONE);
+    headBox(-1.3, 25.2, -4.3, 2.6, 0.4, 0.4, BONE);
+    headBox( 1.3, 25.2, -4.3, 2.6, 0.4, 0.4, BONE);
+  }
+
+
+// -------------------------------------------------------------------
+//  THE SKY AND THE SEA
+//  These are just two big rectangles painted before anything else.
+//  The horizon slides up and down when the camera tilts.
+// -------------------------------------------------------------------
+
+  function drawBackground() {
+    const focal = H * 0.9;
+    const horizon = H / 2 + focal * Math.tan(cam.pitch);
+
+    const sky = ctx.createLinearGradient(0, 0, 0, Math.max(horizon, 1));
+    sky.addColorStop(0, '#1b2a52');
+    sky.addColorStop(1, '#8a6a9a');
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, W, horizon);
+
+    const sea = ctx.createLinearGradient(0, horizon, 0, H);
+    sea.addColorStop(0, '#2a4468');
+    sea.addColorStop(1, '#12203a');
+    ctx.fillStyle = sea;
+    ctx.fillRect(0, horizon, W, H - horizon);
+  }
+
+
+// ===================================================================
+//  SOUND
+// ===================================================================
+//  Browsers refuse to make noise until you've tapped the page at least
+//  once. That's why the game starts on a title screen - the tap that
+//  starts the game is also the tap that switches the sound on.
+// ===================================================================
+
+  let audio = null;
+  let noiseClip = null;
+
+  function startAudio() {
+    if (audio) return;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    audio = new AC();
+
+    // A bucket of random numbers played as sound is STATIC - that
+    // shhhhh noise. Squash the high notes out of it and it becomes
+    // the sea. Squash the low notes and it becomes an explosion.
+    noiseClip = audio.createBuffer(1, audio.sampleRate * 2, audio.sampleRate);
+    const data = noiseClip.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+  }
+
+  function playNoise(seconds, fromHz, toHz, volume) {
+    if (!audio) return;
+    const src = audio.createBufferSource();
+    src.buffer = noiseClip;
+    const filter = audio.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(fromHz, audio.currentTime);
+    filter.frequency.exponentialRampToValueAtTime(toHz, audio.currentTime + seconds);
+    const gain = audio.createGain();
+    gain.gain.setValueAtTime(volume, audio.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + seconds);
+    src.connect(filter); filter.connect(gain); gain.connect(audio.destination);
+    src.start();
+    src.stop(audio.currentTime + seconds);
+  }
+
+  function playTone(fromHz, toHz, seconds, volume, shape) {
+    if (!audio) return;
+    const osc = audio.createOscillator();
+    osc.type = shape || 'sawtooth';
+    osc.frequency.setValueAtTime(fromHz, audio.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(toHz, audio.currentTime + seconds);
+    const gain = audio.createGain();
+    gain.gain.setValueAtTime(volume, audio.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + seconds);
+    osc.connect(gain); gain.connect(audio.destination);
+    osc.start();
+    osc.stop(audio.currentTime + seconds);
+  }
+
+  function soundRise()   { playTone(46, 24, 3.2, 0.22);           playNoise(3.2, 500, 110, 0.30); }
+  function soundLaunch() { playTone(160, 1100, 0.7, 0.16, 'square'); playNoise(1.8, 400, 3500, 0.30); }
+  function soundBoom()   { playTone(95, 22, 1.4, 0.40, 'sine');   playNoise(2.0, 2400, 60, 0.55); }
+
+
+// ===================================================================
+//  THE MISSILE, THE EXPLOSION, AND THE FOAM
+// ===================================================================
+
+  // The missile Bob spits out of his mouth.
+  const missile = { alive: false, x: 0, y: 0, z: 0, speed: 0, puffs: [] };
+
+  // The explosion is just a big pile of shards flung in every direction.
+  let shards = [];
+  let flash = 0;        // how white the screen is right now (1 = totally white)
+  let shake = 0;        // how hard the camera is rattling
+
+  function launchMissile() {
+    // Working out where his mouth IS turns out to be the fiddly bit,
+    // because it moves twice: once when he turns to face you, and again
+    // when he cranes his head back. So we run the mouth through exactly
+    // the same two steps his boxes go through - nod it at the neck
+    // joint, then spin it by his yaw - and fire from wherever it lands.
+    // ...and everything has to be multiplied by his scale as well,
+    // because his mouth is 2.5 times further from his feet than it
+    // used to be. Miss this and the missile fires out of his belly.
+    const mouth = headLocal(19.4, -3.0);
+    const S = bob.scale;
+    missile.alive = true;
+    missile.x = bob.x + mouth.z * S * Math.sin(bob.yaw);
+    missile.y = bob.y + mouth.y * S;
+    missile.z = bob.z + mouth.z * S * Math.cos(bob.yaw);
+    missile.speed = 42;
+    missile.puffs = [];
+    soundLaunch();
+  }
+
+  const PUFF_LIFE = 1.6;     // how many seconds a puff of smoke lasts
+
+  function updateMissile(dt) {
+
+    // THE SMOKE GOES FIRST, ON PURPOSE.
+    // Smoke doesn't care whether the missile still exists - it drifts
+    // and fades away by itself. If we put this below the "is it alive?"
+    // check, then the moment the missile blew up this code would stop
+    // running and the trail would hang in the sky forever.
+    for (const p of missile.puffs) p.age += dt;
+    missile.puffs = missile.puffs.filter(function (p) { return p.age < PUFF_LIFE; });
+
+    if (!missile.alive) return;
+
+    missile.y += missile.speed * dt;      // STRAIGHT UP. No steering.
+
+    // Drop a puff of smoke behind it every frame.
+    missile.puffs.push({ x: missile.x, y: missile.y - 1.6, z: missile.z, age: 0 });
+  }
+
+  function explodeMissile() {
+    missile.alive = false;
+    shards = [];
+
+    // 70 chunks, each thrown off in a totally random direction.
+    for (let i = 0; i < 70; i++) {
+      const a = Math.random() * Math.PI * 2;      // random compass direction
+      const up = Math.random() * 2 - 1;           // random up-or-down
+      const power = 20 + Math.random() * 55;
+      shards.push({
+        x: missile.x, y: missile.y, z: missile.z,
+        vx: Math.cos(a) * power,
+        vy: up * power,
+        vz: Math.sin(a) * power,
+        size: 1.5 + Math.random() * 5.5,
+        life: 1.4 + Math.random() * 1.2,
+        colour: [[255, 240, 160], [255, 170, 40], [255, 90, 30], [180, 60, 30]]
+                [Math.floor(Math.random() * 4)]
+      });
+    }
+
+    flash = 1;
+    shake = 1;
+    soundBoom();
+  }
+
+  function updateShards(dt) {
+    for (const s of shards) {
+      s.x += s.vx * dt;
+      s.y += s.vy * dt;
+      s.z += s.vz * dt;
+      s.vy -= 26 * dt;        // gravity pulls every chunk back down
+      s.life -= dt;
+    }
+    shards = shards.filter(function (s) { return s.life > 0; });
+
+    // The flash and the shake both fade away on their own.
+    if (flash > 0) flash = Math.max(0, flash - dt * 2.2);
+    if (shake > 0) shake = Math.max(0, shake - dt * 1.6);
+  }
+
+  function drawMissile() {
+    for (const p of missile.puffs) {
+      // left is 1 when the puff is brand new and 0 when it's about to go.
+      const left = 1 - p.age / PUFF_LIFE;
+
+      // Multiply "getting bigger" by "running out of time". The puff
+      // billows outwards and then shrinks away to nothing, instead of
+      // vanishing all at once like someone switched it off.
+      const size = (2.6 + p.age * 10) * left;
+      const grey = 90 + left * 70;
+
+      addBox(p.x, p.y, p.z, size, size, size, [grey, grey, grey + 10]);
+    }
+    if (!missile.alive) return;
+    addBox(missile.x, missile.y, missile.z, 3.0, 8.5, 3.0, [190, 60, 50]);         // body
+    addBox(missile.x, missile.y + 5.0, missile.z, 1.7, 3.0, 1.7, [220, 220, 230]); // nose
+    addBox(missile.x, missile.y - 5.5, missile.z, 4.0, 4.0, 4.0, [255, 200, 80]);  // flame
+  }
+
+  function drawShards() {
+    for (const s of shards) {
+      addBox(s.x, s.y, s.z, s.size, s.size, s.size, s.colour);
+    }
+  }
+
+  // White foam churning on the water where Bob is coming up.
+  let foam = 0;      // 0 = calm sea, 1 = boiling
+
+  function drawFoam() {
+    if (foam <= 0.01) return;
+    const ring = 14;
+    for (let i = 0; i < ring; i++) {
+      const a = (i / ring) * Math.PI * 2;
+      // The foam ring has to grow with him too, or it churns away
+      // somewhere inside his chest where nobody can see it.
+      const wobble = Math.sin(bob.sway * 7 + i) * 1.6;
+      const r = (8 + wobble + foam * 3) * bob.scale;
+      const fx = bob.x + Math.cos(a) * r;
+      const fz = bob.z + Math.sin(a) * r;
+      const s = (3.0 + foam * 2) * bob.scale;
+      const white = 150 + foam * 90;
+      addFace([[fx - s, WATER_Y + 0.1, fz - s], [fx + s, WATER_Y + 0.1, fz - s],
+               [fx + s, WATER_Y + 0.1, fz + s], [fx - s, WATER_Y + 0.1, fz + s]],
+              'rgb(' + (white | 0) + ',' + (white + 20 | 0) + ',' + (white + 40 | 0) + ')');
+    }
+  }
+
+
+// ===================================================================
+//  LOOK AT - point the camera straight at something.
+//  Handy for a cutscene: "camera, watch Bob's head" is one line.
+// ===================================================================
+
+  function lookAt(tx, ty, tz) {
+    const dx = tx - cam.x, dy = ty - cam.y, dz = tz - cam.z;
+    cam.yaw = Math.atan2(dx, dz);
+    cam.pitch = Math.atan2(dy, Math.hypot(dx, dz));
+  }
+
+  // Slide a number smoothly towards another number. Used all over the
+  // place to stop the camera snapping about like a startled cat.
+  function glide(now, target, howFast, dt) {
+    return now + (target - now) * Math.min(1, howFast * dt);
+  }
+
+
+// ===================================================================
+//  THE CUTSCENE
+// ===================================================================
+//  The whole scene is one big list of "at THIS many seconds, do THIS".
+//  sceneTime just counts upwards, and each bit of the scene checks
+//  whether its moment has arrived yet.
+// ===================================================================
+
+  let state = 'title';      // 'title', 'cutscene', or 'fight'
+  let sceneTime = 0;
+  let bigText = '';
+  let bigTextFade = 0;
+  let launched = false;
+  let exploded = false;
+
+  // Bob is 65 units tall now - about SIXTEEN of you stacked up. These
+  // are the three heights his feet sit at during the cutscene.
+  const BOB_DEEP  = -70;    // completely hidden. Not even his hat shows.
+  const BOB_RISEN = -42.5;  // head and shoulders out. Looks big. Isn't.
+  const BOB_STAND = -27;    // THE REAL HIM. Water up to his waist.
+
+  function beginCutscene() {
+    state = 'cutscene';
+    sceneTime = 0;
+    launched = false;
+    exploded = false;
+    bob.y = BOB_DEEP;
+    bob.mouth = 0;
+    bob.headPitch = 0;
+    foam = 0;
+    shards = [];
+    flash = 0;
+    missile.alive = false;
+    missile.puffs = [];
+    hero.x = 0; hero.z = -6; hero.yaw = 0;
+
+    // Point him at you BEFORE he comes up, so he breaks the surface
+    // already staring straight down at the deck. No awkward shuffling.
+    bob.yaw = yawTowardsHero();
+  }
+
+  function runCutscene(dt) {
+    sceneTime += dt;
+    const t = sceneTime;
+
+    // ---- 0.0s : a calm, empty sea. Then it starts to bubble. --------
+    if (t < 1.0) {
+      cam.x = 9; cam.y = 2.0; cam.z = 4;
+      lookAt(0, WATER_Y + 2, bob.z);
+      foam = t * 0.5;
+      bigText = 'THE SEA IS TOO QUIET...';
+      bigTextFade = Math.min(1, t * 3);
+    }
+
+    // ---- 1.0s : BOB RISES (or so you think) --------------------------
+    else if (t < 4.2) {
+      if (foam < 0.9) soundRise();     // fires once, the moment he starts
+      foam = 1;
+
+      // How far through the rise are we? 0 at the start, 1 at the end.
+      const howFar = (t - 1.0) / 3.2;
+      // Squaring it makes him start slow and heavy, then heave upwards.
+      bob.y = BOB_DEEP + (BOB_RISEN - BOB_DEEP) * (howFar * howFar);
+
+      cam.x = glide(cam.x, 13, 1.2, dt);
+      cam.y = glide(cam.y, 3.5, 1.2, dt);
+      cam.z = glide(cam.z, -2, 1.2, dt);
+      lookAt(bob.x, bob.y + 52, bob.z);        // keep that skull in shot
+
+      bigText = 'BOB THE ROBOT PIRATE';
+      bigTextFade = Math.min(1, (t - 1.0) * 2);
+    }
+
+    // ---- 4.2s : he settles, dripping, and glares at you --------------
+    else if (t < 5.0) {
+      bob.y = BOB_RISEN;
+      foam = glide(foam, 0.4, 1.5, dt);
+      cam.x = glide(cam.x, 8, 1.5, dt);
+      cam.y = glide(cam.y, 11, 1.5, dt);
+      cam.z = glide(cam.z, 13, 1.5, dt);       // push in close on his head
+      lookAt(bob.x, bob.y + 56, bob.z);
+      bigTextFade = Math.max(0, bigTextFade - dt * 2);
+    }
+
+    // ---- 5.0s : he cranes his head back and the jaw swings open -----
+    else if (t < 5.6) {
+      bob.y = BOB_RISEN;
+      bob.headPitch = glide(bob.headPitch, 1.1, 4, dt);   // look up at the sky
+      bob.mouth = glide(bob.mouth, 1, 6, dt);
+      lookAt(bob.x, bob.y + 54, bob.z);
+      bigText = '';
+    }
+
+    // ---- 5.6s : LAUNCH ----------------------------------------------
+    else if (t < 7.6) {
+      bob.headPitch = 1.1;      // stays craned back, watching it climb
+      bob.mouth = 1;
+      if (!launched) { launchMissile(); launched = true; }
+      // The camera cranes upwards to watch it climb too.
+      lookAt(missile.x, missile.y, missile.z);
+    }
+
+    // ---- 7.6s : BOOM -------------------------------------------------
+    else if (t < 9.4) {
+      if (!exploded) { explodeMissile(); exploded = true; }
+      bob.mouth = glide(bob.mouth, 0, 3, dt);
+
+      // He admires the fireball for a beat, then lowers his head and
+      // looks straight down at YOU. That pause is the whole moment.
+      if (t > 8.4) bob.headPitch = glide(bob.headPitch, 0, 2.2, dt);
+
+      // Stare at the fireball for a second, THEN tip the camera back
+      // down to Bob. drop goes 0 -> 1, and we slide the aim between the
+      // two heights using it.
+      const drop = Math.max(0, Math.min(1, (t - 8.4) / 1.0));
+      const aimY = missile.y + (bob.y + 52 - missile.y) * drop;
+      cam.y = glide(cam.y, 11, 1.5, dt);
+      lookAt(bob.x, aimY, bob.z);
+      bigText = '';
+      bigTextFade = 0;
+    }
+
+    // ---- 9.4s : THE REVEAL ------------------------------------------
+    // He isn't finished. What came out of the sea was his HEAD.
+    // He keeps rising, and the camera has to run backwards to fit him in.
+    else if (t < 12.4) {
+      if (foam < 0.9) soundRise();
+      foam = 1;
+      bob.headPitch = 0;
+
+      const howFar = (t - 9.4) / 2.6;
+      bob.y = BOB_RISEN + (BOB_STAND - BOB_RISEN) * (howFar * howFar);
+
+      // The camera legs it backwards and upwards to keep him on screen.
+      cam.x = glide(cam.x, 22, 1.3, dt);
+      cam.y = glide(cam.y, 8, 1.3, dt);
+      cam.z = glide(cam.z, -16, 1.3, dt);
+      lookAt(bob.x, bob.y + 34, bob.z);        // aim at the middle of him
+
+      bigText = 'THAT WAS JUST HIS HEAD';
+      bigTextFade = Math.min(1, (t - 9.8) * 2);
+    }
+
+    // ---- 12.4s : swoop back down behind you, and GO ------------------
+    else {
+      bob.y = BOB_STAND;
+      bob.mouth = 0;
+      foam = glide(foam, 0.4, 1.2, dt);
+
+      const want = followSpot();
+      cam.x = glide(cam.x, want.x, 2.4, dt);
+      cam.y = glide(cam.y, want.y, 2.4, dt);
+      cam.z = glide(cam.z, want.z, 2.4, dt);
+      cam.yaw = glide(cam.yaw, want.yaw, 2.4, dt);
+      cam.pitch = glide(cam.pitch, want.pitch, 2.4, dt);
+
+      bigText = 'GET READY';
+      bigTextFade = Math.max(0, 1 - (t - 13.2) * 2);
+
+      if (t > 14.0) { state = 'fight'; bigText = ''; }
+    }
+  }
+
+  // Where the over-the-shoulder camera wants to be.
+  //
+  // The camera ORBITS you, like it's on the end of a 9-unit pole stuck
+  // to your head. Look up and the camera swings DOWN and behind, so it's
+  // peering up past you. Look down and it swings up over your shoulder.
+  // That swing is the entire reason looking up and down feels right in
+  // a third-person game instead of just tilting the picture.
+  const CAM_DIST = 9;
+
+  function followSpot() {
+    // Which way you're looking, as an arrow in 3D.
+    const flat = Math.cos(hero.pitch);         // squashes the arrow when you
+                                               // look up, because it's leaning
+    const lookX = Math.sin(hero.yaw) * flat;
+    const lookY = Math.sin(hero.pitch);
+    const lookZ = Math.cos(hero.yaw) * flat;
+
+    // Start at your head and walk BACKWARDS along that arrow.
+    let y = 4.2 - lookY * CAM_DIST;
+
+    // ...but never let the camera drop through the deck.
+    if (y < 1.8) y = 1.8;
+
+    return {
+      x: hero.x - lookX * CAM_DIST,
+      y: y,
+      z: hero.z - lookZ * CAM_DIST,
+      yaw: hero.yaw,
+      pitch: hero.pitch
+    };
+  }
+
+
+// ===================================================================
+//  BOB'S FIRST ATTACK: THE HOOK SLAM
+// ===================================================================
+//  A thick red line appears across the deck, running straight away
+//  from Bob. He winds his hook arm up over his head. Then he drives it
+//  down onto the line.
+//
+//  Stand on the line when it lands and you're jam.
+//
+//  The whole attack is four steps in a row, and each one just counts
+//  a timer down to zero and then hands over to the next:
+//
+//     wait  ->  warn  ->  slam  ->  recover  ->  wait  -> ...
+//
+//  This is called a STATE MACHINE, and almost every enemy in every
+//  game you have ever played is built out of one.
+// ===================================================================
+
+  const LINE_HALF_WIDTH = 4.0;    // how thick the deadly line is
+  const ARM_REST_LEN    = 8.4;    // how long his arm is when just hanging
+
+  const attack = {
+    phase: 'wait',
+    timer: 2.5,
+
+    cx: 0, cz: 0,        // the middle of the red line
+    dx: 0, dz: 1,        // the direction the line runs ALONG
+    nx: 1, nz: 0,        // sideways from the line - the way you must dodge
+
+    armX: 6.6,           // where his arm is, across his body
+    armPitch: 0,         // 0 = hanging down, negative = wound up over his head
+    armLen: ARM_REST_LEN,
+
+    aimX: 6.6, aimPitch: 0, aimLen: ARM_REST_LEN,   // where the swing is going
+    glow: 0,             // how angry the red line looks right now
+
+    kind: 'missiles',    // which attack is running. Flips every time, so
+                         // starting on 'missiles' means the HOOK goes first.
+    fired: 0,            // how many missiles have gone so far
+    fireTimer: 0
+  };
+
+  function soundWarn()  { playTone(280, 620, 0.28, 0.13, 'square'); }
+  function soundWhine() { playTone(160, 900, 0.6, 0.12, 'sawtooth'); }
+  function soundSlam()  { playTone(120, 30, 0.9, 0.35, 'sine'); playNoise(1.1, 1600, 90, 0.45); }
+
+
+  // Work out the arm swing that would land the hook on a spot on the deck.
+  function armAimFor(tx, tz) {
+    const S = bob.scale;
+    const c = Math.cos(bob.yaw), s = Math.sin(bob.yaw);
+    const dx = tx - bob.x, dz = tz - bob.z;
+
+    // Turn a spot in the WORLD into a spot on BOB. This is bobBox run
+    // backwards: it spins the gap the other way and then un-scales it.
+    const ox = (dx * c - dz * s) / S;
+    const oz = (dx * s + dz * c) / S;
+    const oy = (0.4 - bob.y) / S;         // the deck, measured in Bob-units
+
+    const gy = oy - 17.0;                 // how far below his shoulder
+    const gz = oz;
+
+    return {
+      // atan2 turns the arrow from his shoulder to the deck back into
+      // an angle - the exact angle to swing his arm to.
+      pitch: Math.atan2(-gz, -gy),
+      // ...and how far it is, is how long the arm has to stretch.
+      length: Math.max(ARM_REST_LEN, Math.hypot(gy, gz)),
+      x: Math.max(-6.0, Math.min(6.6, ox))    // swing across his body
+    };
+  }
+
+  function pickAttack() {
+    // The line goes through wherever you are RIGHT NOW, running
+    // straight away from Bob. So the way out is always SIDEWAYS -
+    // which is exactly what the A and D strafe keys are for.
+    attack.cx = hero.x;
+    attack.cz = hero.z;
+
+    let ax = hero.x - bob.x, az = hero.z - bob.z;
+    const len = Math.hypot(ax, az) || 1;
+    ax /= len; az /= len;
+
+    attack.dx = ax;  attack.dz = az;       // along the line
+    attack.nx = az;  attack.nz = -ax;      // across it - a quarter turn round
+
+    const aim = armAimFor(attack.cx, attack.cz);
+    attack.aimPitch = aim.pitch;
+    attack.aimLen   = aim.length;
+    attack.aimX     = aim.x;
+  }
+
+  // Splinters of deck flying everywhere.
+  function deckBurst(x, z) {
+    for (let i = 0; i < 45; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const power = 12 + Math.random() * 34;
+      shards.push({
+        x: x, y: 0.6, z: z,
+        vx: Math.cos(a) * power,
+        vy: 8 + Math.random() * 18,
+        vz: Math.sin(a) * power,
+        size: 0.7 + Math.random() * 2.6,
+        life: 0.8 + Math.random() * 0.9,
+        colour: [[128, 92, 58], [156, 116, 74], [92, 66, 44], [206, 188, 156]]
+                [Math.floor(Math.random() * 4)]
+      });
+    }
+  }
+
+  function impact() {
+    shake = 1.3;
+    soundSlam();
+    deckBurst(attack.cx, attack.cz);
+
+    // HOW FAR ARE YOU FROM THE LINE?
+    // Not how far along it - that doesn't matter, the line crosses the
+    // whole ship. What matters is how far SIDEWAYS you are from it.
+    // Multiplying the gap by the line's sideways arrow and adding it up
+    // gives exactly that. (Grown-ups call this a "dot product".)
+    const offX = hero.x - attack.cx;
+    const offZ = hero.z - attack.cz;
+    const across = Math.abs(offX * attack.nx + offZ * attack.nz);
+
+    if (across < LINE_HALF_WIDTH + 0.7) squash();
+  }
+
+// ===================================================================
+//  BOB'S SECOND ATTACK: THE FIVE-MISSILE BARRAGE
+// ===================================================================
+//  He cranes back, jaw open, and lobs five missiles onto the deck one
+//  after another. Each one paints a bright red dot where it's going to
+//  land, and the dot swells and flashes faster as the missile drops.
+//
+//  THE SNEAKY BIT: each missile aims near wherever you are AT THE
+//  MOMENT IT FIRES. They come 0.45 seconds apart. The first lands right
+//  on your head and the rest scatter around you - so the deck fills up
+//  with craters and you have to keep finding new gaps to stand in.
+// ===================================================================
+
+  const BLAST_R   = 6.5;    // how big the red dot is - and the bang
+  const BOMB_FLY  = 1.7;    // seconds from his mouth to the deck
+  const ARC_HEIGHT = 34;    // how high they lob
+
+  let bombs = [];
+
+  // Choose where one missile should land.
+  //
+  // We don't just pick a spot - we pick SIXTEEN and keep the roomiest
+  // one. Any spot that's already too close to a dot on the deck gets
+  // beaten by a spot that isn't. That's why the five craters spread out
+  // instead of piling into each other, without ever needing a rule
+  // saying "the third one goes here". Guess, score, keep the best.
+  function pickBombTarget(isFirst) {
+    let bestX = hero.x, bestZ = hero.z, bestGap = -1;
+
+    for (let tries = 0; tries < 16; tries++) {
+      let tx, tz;
+
+      if (isFirst && tries === 0) {
+        tx = hero.x;  tz = hero.z;      // the FIRST one lands on your head
+      } else {
+        // The rest scatter around wherever you are now.
+        const a = Math.random() * Math.PI * 2;
+        const away = 6 + Math.random() * 13;
+        tx = hero.x + Math.cos(a) * away;
+        tz = hero.z + Math.sin(a) * away;
+      }
+
+      // Never off the edge of the ship - a crater in the sea is no fun.
+      tx = Math.max(-17, Math.min(17, tx));
+      tz = Math.max(-17, Math.min(17, tz));
+
+      // How far is this from the nearest dot already out there?
+      let nearest = 999;
+      for (const b of bombs) {
+        nearest = Math.min(nearest, Math.hypot(tx - b.tx, tz - b.tz));
+      }
+
+      if (nearest > bestGap) { bestGap = nearest; bestX = tx; bestZ = tz; }
+      if (nearest > BLAST_R * 1.8) break;    // plenty of room. Done.
+    }
+
+    return { x: bestX, z: bestZ };
+  }
+
+  function fireBomb(isFirst) {
+    // Same mouth maths as the cutscene missile: nod at the neck joint,
+    // spin by his yaw, scale it up.
+    const mouth = headLocal(19.4, -3.0);
+    const S = bob.scale;
+    const spot = pickBombTarget(isFirst);
+
+    bombs.push({
+      sx: bob.x + mouth.z * S * Math.sin(bob.yaw),
+      sy: bob.y + mouth.y * S,
+      sz: bob.z + mouth.z * S * Math.cos(bob.yaw),
+      tx: spot.x,
+      tz: spot.z,
+      t: 0,
+      x: 0, y: 0, z: 0,
+      puffs: [],
+      puffTimer: 0
+    });
+
+    soundWhine();
+  }
+
+  function updateBombs(dt) {
+    for (const b of bombs) {
+      b.t += dt;
+      const p = Math.min(1, b.t / BOMB_FLY);     // 0 = just fired, 1 = landing
+
+      // Slide in a straight line from his mouth to the target...
+      b.x = b.sx + (b.tx - b.sx) * p;
+      b.z = b.sz + (b.tz - b.sz) * p;
+
+      // ...and then add a big hump on top. sin() is 0 at the start,
+      // 1 in the middle and 0 again at the end - which is EXACTLY the
+      // shape of anything you throw. That one line is the whole arc.
+      b.y = b.sy + (0.6 - b.sy) * p + Math.sin(p * Math.PI) * ARC_HEIGHT;
+
+      // Smoke, but only every so often instead of every single frame,
+      // or five missiles would bury the screen in grey boxes.
+      b.puffTimer -= dt;
+      for (const q of b.puffs) q.age += dt;
+      b.puffs = b.puffs.filter(function (q) { return q.age < 0.55; });
+      if (p < 1 && b.puffTimer <= 0) {
+        b.puffs.push({ x: b.x, y: b.y, z: b.z, age: 0 });
+        b.puffTimer = 0.05;
+      }
+    }
+
+    // Anything that has arrived goes bang and leaves the list.
+    const landed = bombs.filter(function (b) { return b.t >= BOMB_FLY; });
+    bombs        = bombs.filter(function (b) { return b.t <  BOMB_FLY; });
+    for (const b of landed) bombLanded(b);
+  }
+
+  function bombLanded(b) {
+    deckBurst(b.tx, b.tz);
+    shake = Math.max(shake, 0.9);
+    flash = Math.max(flash, 0.3);
+    soundBoom();
+
+    // Were you inside the red dot? Straight-line distance, nothing clever.
+    if (state === 'fight') {
+      const gap = Math.hypot(hero.x - b.tx, hero.z - b.tz);
+      if (gap < BLAST_R) squash();
+    }
+  }
+
+  function drawBombs() {
+    for (const b of bombs) {
+      for (const q of b.puffs) {
+        const left = 1 - q.age / 0.55;
+        const size = (2.4 + q.age * 12) * left;
+        const g = 100 + left * 60;
+        addBox(q.x, q.y, q.z, size, size, size, [g, g, g + 10]);
+      }
+      addBox(b.x, b.y, b.z, 2.4, 4.6, 2.4, [190, 60, 50]);
+      addBox(b.x, b.y - 3.6, b.z, 3.2, 3.2, 3.2, [255, 200, 80]);
+    }
+  }
+
+  // The bright red dots painted on the deck.
+  function drawBombDots() {
+    for (const b of bombs) {
+      const close = Math.min(1, b.t / BOMB_FLY);   // 1 means it's about to hit
+
+      const beat = Math.sin(bob.sway * (10 + close * 42));
+      const red  = Math.min(255, 120 + close * 110 + beat * 40);
+      const rest = 22 + close * 28;
+
+      // A circle is just a shape with enough sides that you can't tell
+      // it isn't one. Twenty is plenty.
+      addFace(ringOfPoints(b.tx, b.tz, BLAST_R, 0.06),
+              'rgb(' + (red | 0) + ',' + (rest | 0) + ',' + (rest | 0) + ')', 0.45);
+
+      // A hot middle that swells as the missile falls, so you can see
+      // how long you've got left without looking up.
+      addFace(ringOfPoints(b.tx, b.tz, BLAST_R * (0.2 + close * 0.55), 0.07),
+              'rgb(255,' + ((80 + close * 120) | 0) + ',55)', 0.5);
+    }
+  }
+
+  function ringOfPoints(cx, cz, r, y) {
+    const points = [];
+    for (let i = 0; i < 20; i++) {
+      const a = (i / 20) * Math.PI * 2;
+      points.push([cx + Math.cos(a) * r, y, cz + Math.sin(a) * r]);
+    }
+    return points;
+  }
+
+
+  let squashTimer = 0;
+
+  function squash() {
+    state = 'squashed';
+    squashTimer = 2.2;
+  }
+
+  function restartFight() {
+    state = 'fight';
+    hero.x = 0; hero.z = -6; hero.yaw = 0; hero.pitch = 0;
+    attack.phase = 'wait';
+    attack.timer = 2.5;
+    attack.glow = 0;
+    attack.armPitch = 0;
+    attack.armLen = ARM_REST_LEN;
+    attack.armX = 6.6;
+    shards = [];
+    bombs = [];        // clear the sky, or you'd get flattened the
+                       // instant you stood back up. Very unfair.
+    shake = 0;
+    bob.headPitch = 0;
+    bob.mouth = 0;
+  }
+
+  function updateAttack(dt) {
+    attack.timer -= dt;
+
+    if (attack.phase === 'wait') {
+      attack.glow = 0;
+      restArm(dt, 4);
+      if (attack.timer <= 0) {
+        // Take it in turns: hook, missiles, hook, missiles...
+        attack.kind = (attack.kind === 'slam') ? 'missiles' : 'slam';
+
+        if (attack.kind === 'slam') {
+          pickAttack();
+          attack.phase = 'warn';
+          attack.timer = 1.7;
+          soundWarn();
+        } else {
+          attack.phase = 'aim';
+          attack.timer = 0.8;
+          attack.fired = 0;
+          attack.fireTimer = 0;
+        }
+      }
+    }
+
+    // ---- MISSILE BARRAGE: crane back and open up ---------------------
+    else if (attack.phase === 'aim') {
+      bob.headPitch = glide(bob.headPitch, 0.85, 5, dt);
+      bob.mouth     = glide(bob.mouth, 1, 6, dt);
+      restArm(dt, 4);
+      if (attack.timer <= 0) { attack.phase = 'fire'; attack.timer = 2.6; }
+    }
+
+    // ---- MISSILE BARRAGE: five of them, one at a time ----------------
+    else if (attack.phase === 'fire') {
+      bob.headPitch = 0.85;
+      bob.mouth = 1;
+      restArm(dt, 4);
+
+      attack.fireTimer -= dt;
+      if (attack.fired < 5 && attack.fireTimer <= 0) {
+        fireBomb(attack.fired === 0);      // is this the first of the five?
+        attack.fired++;
+        attack.fireTimer = 0.45;
+      }
+
+      if (attack.fired >= 5 && attack.timer <= 0) {
+        attack.phase = 'recover';
+        attack.timer = 1.2;
+      }
+    }
+
+    else if (attack.phase === 'warn') {
+      // glow crawls from 0 to 1 as the moment gets closer.
+      attack.glow = 1 - Math.max(0, attack.timer) / 1.7;
+      // Wind the hook up over his head. Negative angle = backwards.
+      attack.armPitch = glide(attack.armPitch, -1.6, 5, dt);
+      attack.armLen   = glide(attack.armLen, ARM_REST_LEN, 5, dt);
+      attack.armX     = glide(attack.armX, attack.aimX, 3, dt);
+      if (attack.timer <= 0) { attack.phase = 'slam'; attack.timer = 0.16; }
+    }
+
+    else if (attack.phase === 'slam') {
+      attack.glow = 1;
+      // 26 is a BRUTAL glide speed. The arm covers the whole swing in
+      // about a sixth of a second, which is why it feels like a whip.
+      attack.armPitch = glide(attack.armPitch, attack.aimPitch, 26, dt);
+      attack.armLen   = glide(attack.armLen, attack.aimLen, 26, dt);
+      attack.armX     = glide(attack.armX, attack.aimX, 26, dt);
+      if (attack.timer <= 0) {
+        impact();
+        attack.phase = 'recover';
+        attack.timer = 1.1;
+      }
+    }
+
+    else {  // recover - he heaves the hook back out of the deck
+      attack.glow = Math.max(0, attack.glow - dt * 3);
+      restArm(dt, 2.6);
+      if (attack.timer <= 0) { attack.phase = 'wait'; attack.timer = 1.7; }
+    }
+  }
+
+  function restArm(dt, speed) {
+    attack.armPitch = glide(attack.armPitch, 0, speed, dt);
+    attack.armLen   = glide(attack.armLen, ARM_REST_LEN, speed, dt);
+    attack.armX     = glide(attack.armX, 6.6, speed, dt);
+  }
+
+  // Paint the red line onto the deck.
+  function drawWarningLine() {
+    if (attack.phase !== 'warn' && attack.phase !== 'slam') return;
+
+    // The pulse gets FASTER as well as brighter. A thing flashing
+    // quicker is the clearest way a game can shout "hurry up".
+    const beat = Math.sin(bob.sway * (9 + attack.glow * 34));
+    const red = Math.min(255, 110 + attack.glow * 120 + beat * 45);
+    const rest = 26 + attack.glow * 30;
+    const colour = 'rgb(' + (red | 0) + ',' + (rest | 0) + ',' + (rest | 0) + ')';
+
+    // Chop the line into chunks so each chunk sorts against the planks
+    // around it properly, instead of one huge strip guessing once.
+    const chunks = 26, halfLen = 46, hw = LINE_HALF_WIDTH;
+    for (let i = 0; i < chunks; i++) {
+      const a = -halfLen + (i / chunks) * halfLen * 2;
+      const b = -halfLen + ((i + 1) / chunks) * halfLen * 2;
+      const ax = attack.cx + attack.dx * a, az = attack.cz + attack.dz * a;
+      const bx = attack.cx + attack.dx * b, bz = attack.cz + attack.dz * b;
+
+      addFace([
+        [ax + attack.nx * hw, 0.06, az + attack.nz * hw],
+        [bx + attack.nx * hw, 0.06, bz + attack.nz * hw],
+        [bx - attack.nx * hw, 0.06, bz - attack.nz * hw],
+        [ax - attack.nx * hw, 0.06, az - attack.nz * hw]
+      ], colour, 0.45);
+    }
+  }
+
+
+// -------------------------------------------------------------------
+//  CONTROLS
+// -------------------------------------------------------------------
+
+  const keys = {};
+  window.addEventListener('keydown', function (e) {
+    keys[e.key.toLowerCase()] = true;
+    // Stop the arrow keys from scrolling the page around.
+    if (e.key.startsWith('Arrow') || e.key === ' ') e.preventDefault();
+    pressed();
+  });
+  window.addEventListener('keyup', function (e) {
+    keys[e.key.toLowerCase()] = false;
+  });
+
+  // Tapping the screen counts as a button press too, so this works on a phone.
+  window.addEventListener('pointerdown', pressed);
+
+  function pressed() {
+    startAudio();                       // the first tap switches sound on
+    grabMouse();                        // ...and hands us the mouse
+
+    if (state === 'title') {
+      beginCutscene();
+    } else if (state === 'cutscene' && sceneTime > 0.6) {
+      // Seen it already? Skip it.
+      state = 'fight';
+      bob.y = BOB_STAND;
+      bob.mouth = 0;
+      bob.headPitch = 0;
+      missile.alive = false;
+      missile.puffs = [];
+      shards = [];
+      flash = 0;
+      foam = 0.35;
+      bigText = '';
+      bigTextFade = 0;
+    }
+  }
+
+  function held(a, b) {
+    return keys[a] || keys[b];
+  }
+
+
+// -------------------------------------------------------------------
+//  THE MOUSE
+// -------------------------------------------------------------------
+//  Normally the mouse pointer stops at the edge of the screen, which
+//  would mean you could only ever turn so far. "Pointer lock" hides the
+//  pointer and hands us the RAW movement instead - "the mouse moved 12
+//  pixels right" - which can go on forever. That's how every shooter
+//  in the world does it.
+//
+//  Press ESC any time to get your normal mouse pointer back.
+// -------------------------------------------------------------------
+
+  const MOUSE_SPEED = 0.0026;    // bigger = twitchier aim
+  const LOOK_UP_LIMIT   = 0.95;  // how far up you can crane (in radians)
+  const LOOK_DOWN_LIMIT = -0.45; // and how far down
+
+  function mouseIsCaptured() {
+    return document.pointerLockElement === canvas;
+  }
+
+  function grabMouse() {
+    if (!mouseIsCaptured() && canvas.requestPointerLock) {
+      canvas.requestPointerLock();
+    }
+  }
+
+  window.addEventListener('mousemove', function (e) {
+    if (!mouseIsCaptured()) return;
+
+    // Mouse right = turn right.
+    hero.yaw += e.movementX * MOUSE_SPEED;
+
+    // Mouse UP is a NEGATIVE movementY, because screens count downwards.
+    // So we subtract, and then pushing the mouse forward looks up.
+    hero.pitch -= e.movementY * MOUSE_SPEED;
+
+    // Stop you from looking so far up that you flip over backwards.
+    hero.pitch = Math.max(LOOK_DOWN_LIMIT, Math.min(LOOK_UP_LIMIT, hero.pitch));
+  });
+
+
+// -------------------------------------------------------------------
+//  UPDATE - runs about 60 times a second. Moves everything.
+//  dt is how many seconds passed since the last frame. Multiplying by
+//  dt means the game runs the same speed on a fast or slow computer.
+// -------------------------------------------------------------------
+
+  function update(dt) {
+
+    bob.sway += dt;    // keeps Bob creaking gently instead of standing frozen
+
+    // Bob always turns to face you. He does it slowly, because he
+    // weighs about four tons - and it means if you sprint round behind
+    // him you get a couple of seconds while he's still coming about.
+    //
+    // BUT: once he's picked his line and started winding up, he's
+    // committed. If he kept turning, the arm would swing somewhere
+    // other than the line he showed you - and a boss that lies to you
+    // is just unfair.
+    const committed = (attack.phase === 'warn' || attack.phase === 'slam');
+    if (!committed) {
+      bob.yaw = turnTowards(bob.yaw, yawTowardsHero(), 1.6, dt);
+    }
+
+    // These keep running no matter what's going on, so the missile and
+    // the fireball still behave properly during the cutscene.
+    updateMissile(dt);
+    updateBombs(dt);
+    updateShards(dt);
+
+    if (state === 'title') {
+      // Slow drifting shot of the empty sea while you decide to press start.
+      cam.x = 9; cam.y = 2.0; cam.z = 4;
+      lookAt(0, WATER_Y + 2, bob.z);
+      return;
+    }
+
+    if (state === 'cutscene') {
+      runCutscene(dt);
+      return;
+    }
+
+    // Squashed. Hold still for a moment, then put you back on your feet.
+    if (state === 'squashed') {
+      restArm(dt, 3);
+      const want = followSpot();
+      cam.x = want.x; cam.y = want.y; cam.z = want.z;
+      cam.yaw = want.yaw; cam.pitch = want.pitch;
+      squashTimer -= dt;
+      if (squashTimer <= 0) restartFight();
+      return;
+    }
+
+    // ---- YOU'RE IN CONTROL NOW --------------------------------------
+
+    // Head back down to eye level and jaw shut, unless an attack is
+    // busy overriding these a few lines further down.
+    bob.headPitch = glide(bob.headPitch, 0, 3, dt);
+    bob.mouth     = glide(bob.mouth, 0, 4, dt);
+
+    updateAttack(dt);
+
+    // The arrow keys still turn you, so the game still works if you
+    // haven't got a mouse. The mouse does it better though.
+    if (keys['arrowleft'])  hero.yaw -= hero.turnSpeed * dt;
+    if (keys['arrowright']) hero.yaw += hero.turnSpeed * dt;
+
+    // Forwards and backwards
+    let step = 0;
+    if (held('arrowup',   'w')) step =  1;
+    if (held('arrowdown', 's')) step = -1;
+
+    // Sideways. This is called STRAFING - sliding left and right
+    // WITHOUT turning, so you can circle round Bob while still staring
+    // straight at him. It's how you dodge things in a shooter.
+    let side = 0;
+    if (keys['a']) side = -1;
+    if (keys['d']) side =  1;
+
+    if (step !== 0 || side !== 0) {
+      // "Forwards" as an arrow: sin and cos turn an angle into x and z.
+      hero.x += Math.sin(hero.yaw) * hero.walkSpeed * step * dt;
+      hero.z += Math.cos(hero.yaw) * hero.walkSpeed * step * dt;
+
+      // "Right" is just "forwards" turned a quarter turn, which swaps
+      // the sin and cos over and flips one sign. That's all a quarter
+      // turn ever is.
+      hero.x += Math.cos(hero.yaw) * hero.walkSpeed * side * dt;
+      hero.z -= Math.sin(hero.yaw) * hero.walkSpeed * side * dt;
+
+      hero.bounce += dt;              // only bob while actually moving
+    }
+
+    // Don't walk through the railing.
+    const edge = DECK - 1.5;
+    hero.x = Math.max(-edge, Math.min(edge, hero.x));
+    hero.z = Math.max(-edge, Math.min(edge, hero.z));
+
+    // The camera sits behind your shoulder and looks slightly down.
+    const want = followSpot();
+    cam.x = want.x; cam.y = want.y; cam.z = want.z;
+    cam.yaw = want.yaw; cam.pitch = want.pitch;
+  }
+
+
+// -------------------------------------------------------------------
+//  DRAW - paint one whole picture
+// -------------------------------------------------------------------
+
+  function draw() {
+
+    // When the bomb goes off, rattle the camera about a bit. It's a
+    // tiny thing but it's most of why an explosion FEELS big.
+    const savedX = cam.x, savedY = cam.y;
+    if (shake > 0) {
+      cam.x += (Math.random() - 0.5) * shake * 1.2;
+      cam.y += (Math.random() - 0.5) * shake * 1.2;
+    }
+
+    drawBackground();
+
+    faces = [];        // empty the list, we rebuild it every single frame
+    drawDeck();
+    drawWarningLine();
+    drawBombDots();
+    drawFoam();
+    drawHero();
+    drawBob();
+    drawMissile();
+    drawBombs();
+    drawShards();
+
+    // Furthest away gets painted FIRST, so close things end up on top.
+    faces.sort(function (a, b) { return b.depth - a.depth; });
+
+    for (const f of faces) {
+      ctx.beginPath();
+      ctx.moveTo(f.points[0].x, f.points[0].y);
+      for (let i = 1; i < f.points.length; i++) {
+        ctx.lineTo(f.points[i].x, f.points[i].y);
+      }
+      ctx.closePath();
+      ctx.fillStyle = f.colour;
+      ctx.fill();
+    }
+
+    cam.x = savedX; cam.y = savedY;    // undo the shake for next frame
+
+    drawOverlay();
+  }
+
+
+// -------------------------------------------------------------------
+//  OVERLAY - the flash, the big words, and the title screen.
+//  These are painted flat on top, AFTER all the 3D. No maths needed.
+// -------------------------------------------------------------------
+
+  const hudEl = document.getElementById('hud');
+
+  function drawOverlay() {
+
+    // Only show the controls hint once you're actually in control.
+    hudEl.style.opacity = (state === 'fight') ? '1' : '0';
+
+    // ---- SQUASHED ----------------------------------------------------
+    if (state === 'squashed') {
+      // Red wash over everything, fading as you get back up.
+      const strong = Math.min(1, squashTimer / 2.2);
+      ctx.fillStyle = 'rgba(150,10,10,' + (strong * 0.7) + ')';
+      ctx.fillRect(0, 0, W, H);
+
+      ctx.textAlign = 'center';
+      ctx.font = 'bold ' + Math.min(W * 0.11, 76) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#000';
+      ctx.fillText('SQUASHED!', W / 2 + 4, H * 0.47 + 4);
+      ctx.fillStyle = '#ffe08a';
+      ctx.fillText('SQUASHED!', W / 2, H * 0.47);
+
+      ctx.font = Math.min(W * 0.035, 20) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#ffd0d0';
+      ctx.fillText('strafe with A and D to get off the line', W / 2, H * 0.58);
+      return;      // nothing else gets drawn while you're jam
+    }
+
+    // The white flash of the explosion.
+    if (flash > 0) {
+      ctx.fillStyle = 'rgba(255,245,220,' + (flash * 0.85) + ')';
+      ctx.fillRect(0, 0, W, H);
+    }
+
+    // Cinematic black bars, so it feels like a film and not a game.
+    if (state === 'cutscene') {
+      const bar = H * 0.09;
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, W, bar);
+      ctx.fillRect(0, H - bar, W, bar);
+    }
+
+    // ---- THE CROSSHAIR ----------------------------------------------
+    // It lives dead in the middle of the screen and never moves. That
+    // sounds wrong for something "controlled by the mouse" - but the
+    // mouse turns the whole WORLD underneath it. The crosshair stays
+    // put and everything else swings around to meet it.
+    if (state === 'fight') {
+      const mx = W / 2, my = H / 2;
+      const gap = 7, arm = 13;
+
+      // Draw it twice: a fat dark version first, then a thin bright one
+      // on top. That outline is what stops it vanishing against Bob.
+      for (const pass of [{ width: 4.5, colour: 'rgba(0,0,0,0.55)' },
+                          { width: 2.0, colour: '#ff5a3c' }]) {
+        ctx.lineWidth = pass.width;
+        ctx.strokeStyle = pass.colour;
+        ctx.beginPath();
+        ctx.moveTo(mx - gap - arm, my); ctx.lineTo(mx - gap, my);   // left
+        ctx.moveTo(mx + gap, my); ctx.lineTo(mx + gap + arm, my);   // right
+        ctx.moveTo(mx, my - gap - arm); ctx.lineTo(mx, my - gap);   // up
+        ctx.moveTo(mx, my + gap); ctx.lineTo(mx, my + gap + arm);   // down
+        ctx.stroke();
+      }
+
+      // A dot in the middle, so you know exactly where "exactly" is.
+      ctx.fillStyle = '#ffd98a';
+      ctx.fillRect(mx - 1.5, my - 1.5, 3, 3);
+    }
+
+    ctx.textAlign = 'center';
+
+    // If the game hasn't got hold of the mouse, say so.
+    if (state === 'fight' && !mouseIsCaptured()) {
+      ctx.font = '15px system-ui, sans-serif';
+      ctx.fillStyle = 'rgba(255,217,138,0.85)';
+      ctx.fillText('click to aim with the mouse', W / 2, H * 0.63);
+    }
+
+    // The big words that appear during the cutscene.
+    if (bigText && bigTextFade > 0.01) {
+      const size = Math.min(W * 0.075, 54);
+      ctx.font = 'bold ' + size + 'px system-ui, sans-serif';
+      ctx.globalAlpha = bigTextFade;
+      ctx.fillStyle = '#000';
+      ctx.fillText(bigText, W / 2 + 3, H * 0.72 + 3);
+      ctx.fillStyle = '#ffd98a';
+      ctx.fillText(bigText, W / 2, H * 0.72);
+      ctx.globalAlpha = 1;
+    }
+
+    // The title screen.
+    if (state === 'title') {
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fillRect(0, 0, W, H);
+
+      const big = Math.min(W * 0.1, 68);
+      ctx.font = 'bold ' + big + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#ff6a3c';
+      ctx.fillText('BOB', W / 2, H * 0.34);
+      ctx.font = 'bold ' + (big * 0.42) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#ffd98a';
+      ctx.fillText('THE ROBOT PIRATE', W / 2, H * 0.44);
+
+      ctx.font = (Math.min(W * 0.035, 20)) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#cfcfe4';
+      ctx.fillText('press any key  ·  or tap the screen', W / 2, H * 0.62);
+      ctx.fillStyle = '#7c7c96';
+      ctx.fillText('a game by Maximus', W / 2, H * 0.70);
+    }
+
+    // A hint that you're allowed to skip the film.
+    if (state === 'cutscene' && sceneTime > 1.2) {
+      ctx.font = '13px system-ui, sans-serif';
+      ctx.fillStyle = 'rgba(220,220,240,0.5)';
+      ctx.fillText('tap to skip', W / 2, H * 0.955);
+    }
+  }
+
+
+// -------------------------------------------------------------------
+//  THE GAME LOOP - the heartbeat. Update, draw, repeat, forever.
+// -------------------------------------------------------------------
+
+  let lastTime = 0;
+
+  function frame(now) {
+    // now is measured in milliseconds, so divide by 1000 to get seconds.
+    let dt = (now - lastTime) / 1000;
+    lastTime = now;
+
+    // If you switch tabs and come back, dt could be HUGE and you'd
+    // teleport across the map. Cap it so that can't happen.
+    if (!dt || dt > 0.1) dt = 0.016;
+
+    update(dt);
+    draw();
+
+    requestAnimationFrame(frame);   // "call me again next frame please"
+  }
+
+  requestAnimationFrame(frame);
+
+</script>
+</body>
+</html>
