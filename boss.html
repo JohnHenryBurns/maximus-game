@@ -64,7 +64,7 @@
 <body>
 
   <canvas id="screen"></canvas>
-  <div id="hud">MOUSE to look &nbsp;&middot;&nbsp; W/S move &nbsp;&middot;&nbsp; A/D strafe &nbsp;&middot;&nbsp; ESC frees the mouse</div>
+  <div id="hud">MOUSE look &nbsp;&middot;&nbsp; W/S move &nbsp;&middot;&nbsp; A/D strafe &nbsp;&middot;&nbsp; RIGHT-CLICK swings the wrench</div>
   <a id="back" href="index.html">&larr; arcade</a>
 
 <script>
@@ -120,9 +120,11 @@
     z: 0,          // where you are, forwards and back
     yaw: 0,        // which way you're facing (left and right)
     pitch: 0,      // how far up or down you're looking. + is up.
-    walkSpeed: 9,  // steps per second. MAKE THIS BIGGER, it's funny.
+    walkSpeed: 16, // steps per second. MAKE THIS BIGGER, it's funny.
     turnSpeed: 2.6,// how fast you spin
-    bounce: 0      // ticks up while walking, to bob your head up and down
+    bounce: 0,     // ticks up while walking, to bob your head up and down
+    swingTimer: 0, // counts down while the wrench is mid-swing
+    swingHit: false// has this swing already connected with something?
   };
 
 
@@ -324,13 +326,29 @@
 //  THE HERO'S BODY - you, built out of six boxes
 // -------------------------------------------------------------------
 
+  // Slide smoothly from one number to another. t = 0 gives you a,
+  // t = 1 gives you b, and 0.5 gives you exactly halfway.
+  function mix(a, b, t) {
+    return a + (b - a) * Math.max(0, Math.min(1, t));
+  }
+
+  // Turn a spot measured ON YOU into a spot in the world - same idea as
+  // bobBox, just for the little guy.
+  function heroPoint(ox, oz) {
+    const c = Math.cos(hero.yaw), s = Math.sin(hero.yaw);
+    return [hero.x + ox * c + oz * s, hero.z - ox * s + oz * c];
+  }
+
   function drawHero() {
     const y = hero.yaw;
 
     // While walking, hero.bounce ticks upwards. sin() turns a
     // number that keeps rising into a wave that goes up-down-up-down,
-    // which is a really easy way to make anything bob about.
-    const bob = Math.sin(hero.bounce * 9) * 0.12;
+    // which is a really easy way to make anything bounce about.
+    //
+    // (This used to be called "bob", which shadowed BOB. Two different
+    // things with the same name is how you lose an afternoon.)
+    const bounce = Math.sin(hero.bounce * 9) * 0.12;
     const swing = Math.sin(hero.bounce * 9) * 0.5;   // arms and legs swinging
 
     const px = hero.x, pz = hero.z;
@@ -342,16 +360,78 @@
            0.5, 1.5, 0.5, [50, 60, 120], y);
 
     // body
-    addBox(px, 2.2 + bob, pz, 1.4, 1.6, 0.9, [200, 70, 60], y);
+    addBox(px, 2.2 + bounce, pz, 1.4, 1.6, 0.9, [200, 70, 60], y);
 
-    // arms
-    addBox(px + Math.cos(y) * 0.95, 2.3 + bob + swing * 0.15, pz - Math.sin(y) * 0.95,
+    // left arm swings with the walk
+    addBox(px - Math.cos(y) * 0.95, 2.3 + bounce - swing * 0.15, pz + Math.sin(y) * 0.95,
            0.42, 1.3, 0.42, [225, 180, 150], y);
-    addBox(px - Math.cos(y) * 0.95, 2.3 + bob - swing * 0.15, pz + Math.sin(y) * 0.95,
-           0.42, 1.3, 0.42, [225, 180, 150], y);
+
+    // right arm holds the wrench, so it swings with the WRENCH instead
+    const wa = wrenchAngle();
+    addBox(px + Math.cos(y) * 0.95, 2.3 + bounce + Math.cos(wa) * 0.35,
+           pz - Math.sin(y) * 0.95, 0.42, 1.3, 0.42, [225, 180, 150], y);
 
     // head
-    addBox(px, 3.4 + bob, pz, 0.95, 0.95, 0.95, [235, 195, 165], y);
+    addBox(px, 3.4 + bounce, pz, 0.95, 0.95, 0.95, [235, 195, 165], y);
+
+    drawWrench(wa, bounce);
+  }
+
+
+// -------------------------------------------------------------------
+//  THE WRENCH
+// -------------------------------------------------------------------
+//  Your one and only weapon. It sits in your right hand, and when you
+//  swing it, it goes up over your shoulder and then chops down.
+//
+//  The whole swing is ONE ANGLE that moves through three stages:
+//     rest -> raised up behind you -> chopped down -> back to rest
+// -------------------------------------------------------------------
+
+  const SWING_TIME  = 0.42;     // how long one whole swing takes
+  const WRENCH_REST = 1.9;      // resting angle: held forward and down
+
+  function wrenchAngle() {
+    if (hero.swingTimer <= 0) return WRENCH_REST;
+
+    // p walks from 0 at the start of the swing to 1 at the end.
+    const p = 1 - hero.swingTimer / SWING_TIME;
+
+    if (p < 0.30) return mix(WRENCH_REST, -0.4, p / 0.30);       // heave it up
+    if (p < 0.55) return mix(-0.4, 2.6, (p - 0.30) / 0.25);      // CHOP
+    return mix(2.6, WRENCH_REST, (p - 0.55) / 0.45);             // back to rest
+  }
+
+  function drawWrench(a, bounce) {
+    // Which way the wrench is pointing, measured on YOU.
+    // a = 0 points straight up, a = 1.57 points straight forward.
+    const dirY = Math.cos(a), dirZ = -Math.sin(a);
+
+    const handY = 1.95 + bounce;
+    const handX = 0.95, handZ = 0.25;
+
+    // Walk out along the wrench and drop a box at each stop.
+    // The "tilt" we hand addBox is -a, which leans each box over to
+    // match the direction we just worked out.
+    function piece(along, w, h, d, rgb, sideways) {
+      const lx = handX + (sideways || 0);
+      const lz = handZ + dirZ * along;
+      const p = heroPoint(lx, lz);
+      addBox(p[0], handY + dirY * along, p[1], w, h, d, rgb, hero.yaw, -a);
+    }
+
+    piece(0.85, 0.24, 1.7, 0.24, [96, 100, 112]);      // the handle
+    piece(1.80, 0.85, 0.55, 0.45, [168, 174, 190]);    // the head
+    piece(2.15, 0.24, 0.55, 0.42, [168, 174, 190], -0.3);   // jaw
+    piece(2.15, 0.24, 0.55, 0.42, [168, 174, 190],  0.3);   // jaw
+  }
+
+  function swingWrench() {
+    if (state !== 'fight') return;
+    if (hero.swingTimer > 0) return;      // one swing at a time
+    hero.swingTimer = SWING_TIME;
+    hero.swingHit = false;                // this swing hasn't connected yet
+    playNoise(0.18, 900, 3000, 0.12);     // a little whoosh
   }
 
 
@@ -375,7 +455,8 @@
                         // the single most fun number in the entire file.
     mouth: 0,           // 0 = jaw shut, 1 = jaw hanging wide open
     headPitch: 0,       // 0 = looking at you, 1.1 = craning up at the sky
-    sway: 0             // ticks up forever, used to make him creak about
+    sway: 0,            // ticks up forever, used to make him creak about
+    armGone: false      // true once you've torn the hook arm off him
   };
 
   // Bob's colours, all in one place so they're easy to fiddle with.
@@ -520,6 +601,17 @@
     bobBox(-6.2, 8.8 + creak, 0, 1.0, 2.2, 1.0, DARK);       // claw finger
 
     // ---- THE HOOK ARM - the one that smashes the deck ---------------
+    // ...unless you've already torn it off, in which case he's just got
+    // a sparking stump and one very bad mood.
+    if (bob.armGone) {
+      bobBox(6.6, 17.0, 0, 3.4, 3.4, 3.4, DARK);            // shoulder ball
+      bobBox(6.6, 15.4, 0, 2.6, 1.8, 2.6, [92, 60, 44]);    // torn metal
+      // Sparks, flickering on and off at random.
+      if (Math.random() < 0.5) {
+        bobBox(6.6 + (Math.random() - 0.5) * 2, 14.4 + Math.random(),
+               (Math.random() - 0.5) * 2, 0.5, 0.5, 0.5, [255, 220, 120]);
+      }
+    } else {
     // This arm isn't welded pointing down like the other one. It's a
     // CHAIN of blocks marching away from the shoulder in whatever
     // direction we point them. That means the same code can hang it by
@@ -544,6 +636,7 @@
     bobBox(attack.armX, tipY, tipZ, 1.8, 1.8, 1.8, BONE);
     bobBox(attack.armX + 1.5, tipY + armY * 1.2, tipZ + armZ * 1.2,
            1.3, 2.6, 1.3, BONE);
+    }   // end of "if his arm is still attached"
 
     // ---- HEAD: AN IRON SKULL ----------------------------------------
     // A real skull is wide and round at the top and narrow at the
@@ -688,6 +781,201 @@
     osc.stop(audio.currentTime + seconds);
   }
 
+// ===================================================================
+//  THE ROCK BAND
+// ===================================================================
+//  There's no music FILE in this game. Downloading one would break the
+//  "works offline, works instantly" rule. So we build a band instead.
+//
+//  A rock band is really just five machines:
+//    GUITAR - buzzy sawtooth waves, squashed until they crunch
+//    BASS   - one soft low note per chord
+//    KICK   - a sine wave sliding from high to low, very fast
+//    SNARE  - a short burst of static with the low end cut off
+//    HI-HAT - a VERY short burst of static, only the top end left
+//
+//  Then something has to tell them all when to play. That's the
+//  SEQUENCER at the bottom: it walks through a list of notes, sixteen
+//  steps to a bar, and books each sound in slightly before it's due.
+// ===================================================================
+
+  let musicGain = null;      // the volume knob for the whole band
+  let crunch = null;         // the guitar amp
+  let musicOn = false;
+  let musicStep = 0;
+  let musicNextTime = 0;
+  let musicTimer = null;
+
+  const BPM  = 152;
+  const STEP = 60 / BPM / 4;      // one sixteenth note, in seconds
+
+  // Notes are MIDI numbers. 40 is a low E, and every +1 is one fret up.
+  // null means "no note here" - a rest.
+  //
+  // THIS IS THE RIFF. Change these numbers and the song changes.
+  const E = 40, G = 43, A = 45, B = 47, D = 38, F = 41, C = 48;
+  const RIFF = [
+    E, null, E, null,  E, null, E, null,  E, null, G, null,  A, null, G, null,
+    E, null, E, null,  E, null, E, null,  E, null, A, null,  B, null, A, null,
+    D, null, D, null,  D, null, D, null,  D, null, F, null,  G, null, F, null,
+    E, null, E, null,  G, null, A, null,  B, null, C, null,  B, A,    G, null
+  ];
+
+  // Which steps of each bar the drums hit on.
+  const KICK_ON  = [0, 6, 8, 14];
+  const SNARE_ON = [4, 12];
+
+  // Turn a MIDI note number into an actual frequency in hertz.
+  // Going up 12 notes doubles the number - that's an octave.
+  function midiHz(n) {
+    return 440 * Math.pow(2, (n - 69) / 12);
+  }
+
+  function buildBand() {
+    if (crunch) return;
+
+    musicGain = audio.createGain();
+    musicGain.gain.value = 0.40;      // sit the band under the sound effects
+    musicGain.connect(audio.destination);
+
+    // THE DISTORTION. A clean wave is a smooth curve. Squash the tops
+    // and bottoms flat and it buzzes - that's ALL an electric guitar's
+    // crunch is. tanh() is a squashing curve: little numbers go through
+    // untouched, big ones get flattened.
+    const shaper = audio.createWaveShaper();
+    const n = 1024, curve = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const x = (i / (n - 1)) * 2 - 1;
+      curve[i] = Math.tanh(x * 4.5);
+    }
+    shaper.curve = curve;
+
+    // Roll the harshest top end off, like a real amp's speaker.
+    const tone = audio.createBiquadFilter();
+    tone.type = 'lowpass';
+    tone.frequency.value = 2500;
+
+    shaper.connect(tone);
+    tone.connect(musicGain);
+    crunch = shaper;
+  }
+
+  // A POWER CHORD: the note, plus the note seven frets up. Two notes.
+  // That's the sound of basically every rock song ever written.
+  function guitar(note, when, len) {
+    const hz = midiHz(note);
+    for (const step of [1, 1.4983]) {          // 1.4983 = seven frets up
+      for (const detune of [-7, 7]) {          // two slightly-out-of-tune
+        const o = audio.createOscillator();    // copies = a fatter sound
+        o.type = 'sawtooth';
+        o.frequency.value = hz * step;
+        o.detune.value = detune;
+
+        const g = audio.createGain();
+        g.gain.setValueAtTime(0.0001, when);
+        g.gain.exponentialRampToValueAtTime(0.16, when + 0.005);
+        g.gain.exponentialRampToValueAtTime(0.0001, when + len);
+
+        o.connect(g); g.connect(crunch);
+        o.start(when); o.stop(when + len + 0.02);
+      }
+    }
+  }
+
+  function bassNote(note, when, len) {
+    const o = audio.createOscillator();
+    o.type = 'triangle';
+    o.frequency.value = midiHz(note - 12);     // one octave down
+    const g = audio.createGain();
+    g.gain.setValueAtTime(0.0001, when);
+    g.gain.exponentialRampToValueAtTime(0.30, when + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, when + len);
+    o.connect(g); g.connect(musicGain);
+    o.start(when); o.stop(when + len + 0.02);
+  }
+
+  // A sine wave falling from 165Hz to 45Hz in a tenth of a second.
+  // Your ear doesn't hear a note, it hears a THUMP.
+  function kick(when) {
+    const o = audio.createOscillator();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(165, when);
+    o.frequency.exponentialRampToValueAtTime(45, when + 0.10);
+    const g = audio.createGain();
+    g.gain.setValueAtTime(0.95, when);
+    g.gain.exponentialRampToValueAtTime(0.001, when + 0.19);
+    o.connect(g); g.connect(musicGain);
+    o.start(when); o.stop(when + 0.21);
+  }
+
+  // Static with the low end cut away. Cut at 1400Hz for a snare...
+  function snare(when) {
+    hitOfStatic(when, 1400, 0.48, 0.16);
+  }
+  // ...and cut way up at 7500Hz, much shorter, for a hi-hat.
+  function hat(when) {
+    hitOfStatic(when, 7500, 0.13, 0.045);
+  }
+
+  function hitOfStatic(when, cutHz, volume, len) {
+    const s = audio.createBufferSource();
+    s.buffer = noiseClip;
+    const f = audio.createBiquadFilter();
+    f.type = 'highpass';
+    f.frequency.value = cutHz;
+    const g = audio.createGain();
+    g.gain.setValueAtTime(volume, when);
+    g.gain.exponentialRampToValueAtTime(0.001, when + len);
+    s.connect(f); f.connect(g); g.connect(musicGain);
+    s.start(when, Math.random());     // start somewhere random in the static
+    s.stop(when + len + 0.02);
+  }
+
+  // Play everything that happens on one step of the song.
+  function playStep(i, when) {
+    const note = RIFF[i];
+    if (note !== null && note !== undefined) {
+      guitar(note, when, STEP * 1.9);
+      bassNote(note, when, STEP * 1.9);
+    }
+
+    const beat = i % 16;                       // where we are in the bar
+    if (KICK_ON.indexOf(beat) >= 0) kick(when);
+    if (SNARE_ON.indexOf(beat) >= 0) snare(when);
+    if (beat % 2 === 0) hat(when);
+  }
+
+  // THE SEQUENCER.
+  //
+  // We can't just play a note the instant it's due - the game might be
+  // busy drawing a frame and the note would land late, and late notes
+  // sound TERRIBLE. So instead we run ahead: every 25 milliseconds we
+  // look a tenth of a second into the future and BOOK every note due in
+  // that window. The sound card plays them at exactly the right moment.
+  function musicScheduler() {
+    if (!musicOn || !audio) return;
+    while (musicNextTime < audio.currentTime + 0.12) {
+      playStep(musicStep, musicNextTime);
+      musicNextTime += STEP;
+      musicStep = (musicStep + 1) % RIFF.length;
+    }
+  }
+
+  function startMusic() {
+    if (!audio || musicOn) return;
+    buildBand();
+    musicOn = true;
+    musicStep = 0;
+    musicNextTime = audio.currentTime + 0.06;
+    musicTimer = setInterval(musicScheduler, 25);
+  }
+
+  function toggleMusic() {
+    if (!musicGain) return;
+    musicGain.gain.value = musicGain.gain.value > 0 ? 0 : 0.40;
+  }
+
+
   function soundRise()   { playTone(46, 24, 3.2, 0.22);           playNoise(3.2, 500, 110, 0.30); }
   function soundLaunch() { playTone(160, 1100, 0.7, 0.16, 'square'); playNoise(1.8, 400, 3500, 0.30); }
   function soundBoom()   { playTone(95, 22, 1.4, 0.40, 'sine');   playNoise(2.0, 2400, 60, 0.55); }
@@ -769,6 +1057,10 @@
     flash = 1;
     shake = 1;
     soundBoom();
+
+    // THE BAND KICKS IN ON THE EXPLOSION.
+    // Not a second before, not a second after. Right on the bang.
+    startMusic();
   }
 
   function updateShards(dt) {
@@ -1084,11 +1376,40 @@
     aimX: 6.6, aimPitch: 0, aimLen: ARM_REST_LEN,   // where the swing is going
     glow: 0,             // how angry the red line looks right now
 
-    kind: 'missiles',    // which attack is running. Flips every time, so
-                         // starting on 'missiles' means the HOOK goes first.
-    fired: 0,            // how many missiles have gone so far
-    fireTimer: 0
+    kind: 'skulls',      // which attack is running
+    turn: 2,             // where we are in the list below. Starting at the
+                         // LAST one means the hook slam goes first.
+    fired: 0,            // how many missiles or skulls have gone so far
+    fireTimer: 0,
+    thrown: false,       // has THIS swing already let go of its skull?
+    armHits: 0           // wrench hits landed on the stuck arm so far
   };
+
+  // Bob takes these in turns, over and over. Want a different order?
+  // Shuffle this line. Want him to do the slam twice as often? Put it
+  // in twice. The whole fight is choreographed from this one list.
+  const ATTACK_ORDER = ['slam', 'missiles', 'skulls', 'stuckslam'];
+
+  // ...but once his arm is off, both hook attacks are gone for good.
+  // Ripping it off doesn't just look cool, it genuinely deletes half
+  // of what he can do to you. THAT is why it's worth the risk.
+  function attackList() {
+    return bob.armGone ? ['missiles', 'skulls'] : ATTACK_ORDER;
+  }
+
+  const WRENCH_REACH = 8.0;    // how close you must be to whack the hook
+  const HITS_TO_RIP  = 3;      // wrench swings needed to tear it loose
+
+  let fallenArm = null;        // his arm, lying on the deck, forever
+
+  function soundClang() {
+    playTone(900, 300, 0.22, 0.22, 'square');
+    playNoise(0.3, 3000, 700, 0.3);
+  }
+  function soundRip() {
+    playTone(420, 40, 1.4, 0.4, 'sawtooth');
+    playNoise(1.6, 2600, 90, 0.5);
+  }
 
   function soundWarn()  { playTone(280, 620, 0.28, 0.13, 'square'); }
   function soundWhine() { playTone(160, 900, 0.6, 0.12, 'sawtooth'); }
@@ -1296,7 +1617,7 @@
     // Were you inside the red dot? Straight-line distance, nothing clever.
     if (state === 'fight') {
       const gap = Math.hypot(hero.x - b.tx, hero.z - b.tz);
-      if (gap < BLAST_R) squash();
+      if (gap < BLAST_R) squash('BLASTED!', 'keep moving - the dots follow you');
     }
   }
 
@@ -1344,11 +1665,270 @@
   }
 
 
+// ===================================================================
+//  BOB'S THIRD ATTACK: FIVE FLAMING SKULLS
+// ===================================================================
+//  He winds the hook arm back and hurls burning skulls across the deck,
+//  one after another. They fly flat and fast at about chest height, so
+//  there's no getting over or under them - you have to sidestep.
+//
+//  Each one is aimed at where you're standing, give or take a few
+//  paces. So they arrive one at a time and each one asks you the same
+//  question: LEFT OR RIGHT? Get it wrong and you're toast.
+// ===================================================================
+
+  const SKULL_SPEED = 24;      // slow enough to watch one coming and pick a side
+  const SKULL_Y     = 2.6;     // chest height
+  const SKULL_HIT   = 3.0;     // how close is too close
+
+  let skulls = [];
+
+  // Where is the end of Bob's hook arm, in the real world, if his arm
+  // were at this angle? Same three steps as always: walk out along the
+  // arm, spin by his yaw, scale it up.
+  function armTipWorld(pitch) {
+    const S = bob.scale;
+    const far = ARM_REST_LEN + 1.4;
+    const ox = attack.armX;
+    const oy = 17.0 - Math.cos(pitch) * far;
+    const oz =      - Math.sin(pitch) * far;
+
+    return {
+      x: bob.x + (ox * Math.cos(bob.yaw) + oz * Math.sin(bob.yaw)) * S,
+      y: bob.y + oy * S,
+      z: bob.z + (-ox * Math.sin(bob.yaw) + oz * Math.cos(bob.yaw)) * S
+    };
+  }
+
+  function throwSkull() {
+    // Spawn it out where his hand is when the arm is flung forward.
+    const hand = armTipWorld(1.25);
+
+    // Aim at you, but wide by a few paces so they don't all come down
+    // the same line. Some you dodge left, some you dodge right.
+    const wide = (Math.random() - 0.5) * 17;
+    const aimX = hero.x + wide;
+    const aimZ = hero.z;
+
+    // Point it from the hand to that spot, then make it that fast.
+    let dx = aimX - hand.x, dz = aimZ - hand.z;
+    const len = Math.hypot(dx, dz) || 1;
+    dx /= len; dz /= len;
+
+    skulls.push({
+      x: hand.x, y: hand.y, z: hand.z,
+      vx: dx * SKULL_SPEED,
+      vz: dz * SKULL_SPEED,
+      // It starts up at his hand and settles to chest height as it flies.
+      spin: Math.random() * 6,
+      tumble: Math.random() * 6,
+      spinRate: 3 + Math.random() * 5,
+      fire: [],
+      fireTimer: 0,
+      age: 0
+    });
+
+    soundThrow();
+  }
+
+  function soundThrow() {
+    playNoise(0.7, 700, 2600, 0.22);
+    playTone(240, 90, 0.5, 0.14, 'sawtooth');
+  }
+
+  function updateSkulls(dt) {
+    for (const s of skulls) {
+      s.age += dt;
+      s.x += s.vx * dt;
+      s.z += s.vz * dt;
+
+      // Drift down from his hand to chest height and then stay there,
+      // so it's always a sideways dodge and never a jump.
+      s.y = glide(s.y, SKULL_Y, 2.4, dt);
+
+      s.spin   += s.spinRate * dt;
+      s.tumble += s.spinRate * 0.7 * dt;
+
+      // Trail of fire. Same every-so-often trick as the missile smoke.
+      s.fireTimer -= dt;
+      for (const f of s.fire) f.age += dt;
+      s.fire = s.fire.filter(function (f) { return f.age < 0.45; });
+      if (s.fireTimer <= 0) {
+        s.fire.push({ x: s.x, y: s.y, z: s.z, age: 0 });
+        s.fireTimer = 0.035;
+      }
+
+      // Did it get you?
+      //
+      // It has to be close AND at your height. They leave his hand up
+      // in the air and drop to chest height as they fly, so without the
+      // height check a skull sailing over your head would still get you.
+      if (state === 'fight' && !s.spent && s.age > 0.15) {
+        const gap = Math.hypot(hero.x - s.x, hero.z - s.z);
+        const tooHigh = Math.abs(s.y - SKULL_Y) > 2.4;
+        if (gap < SKULL_HIT && !tooHigh) { s.spent = true; burned(); }
+      }
+    }
+
+    // Bin any that have flown off the ship.
+    skulls = skulls.filter(function (s) {
+      return s.age < 4 && Math.abs(s.x) < 44 && Math.abs(s.z) < 44;
+    });
+  }
+
+  function drawSkulls() {
+    for (const s of skulls) {
+
+      // The flames trailing behind it, fading from white-hot to red.
+      for (const f of s.fire) {
+        const left = 1 - f.age / 0.45;
+        const size = (2.2 + f.age * 5) * left;
+        addBox(f.x, f.y, f.z, size, size, size,
+               [255, 90 + left * 150, 30 + left * 90]);
+      }
+
+      // A flicker of fire wrapped round the skull itself.
+      const lick = 3.4 + Math.sin(s.age * 30) * 0.5;
+      addBox(s.x, s.y, s.z, lick, lick, lick, [255, 140, 40]);
+
+      // The skull. It tumbles as it flies - spin AND tilt, both ticking
+      // up on their own.
+      addBox(s.x, s.y, s.z, 2.5, 2.5, 2.5, BONE, s.spin, s.tumble);
+
+      // Two burning eyes. They have to tumble WITH the skull, so we
+      // spin their offsets by the same two angles before adding them on.
+      for (const side of [-0.62, 0.62]) {
+        const e = spinPoint(side, 0.25, -1.35, s.spin, s.tumble);
+        addBox(s.x + e[0], s.y + e[1], s.z + e[2], 0.8, 0.8, 0.6, GLOW);
+      }
+
+      // ...and a mouthful of teeth.
+      const m = spinPoint(0, -0.85, -1.3, s.spin, s.tumble);
+      addBox(s.x + m[0], s.y + m[1], s.z + m[2], 1.7, 0.6, 0.5, SOCKET);
+    }
+  }
+
+  // Spin an offset by a turn and a nod. Exactly what addBox does to
+  // every corner - pulled out so other things can borrow it.
+  function spinPoint(ox, oy, oz, spin, tilt) {
+    const c = Math.cos(spin), s = Math.sin(spin);
+    const ct = Math.cos(tilt), st = Math.sin(tilt);
+    const ty = oy * ct - oz * st;
+    const tz = oy * st + oz * ct;
+    return [ox * c + tz * s, ty, -ox * s + tz * c];
+  }
+
+  function burned() {
+    flash = Math.max(flash, 0.5);
+    shake = Math.max(shake, 0.8);
+    soundBoom();
+    squash('BURNED!', 'the skulls fly flat - step out of the way');
+  }
+
+
+// ===================================================================
+//  BOB'S FOURTH ATTACK: HE GETS HIS ARM STUCK
+// ===================================================================
+//  It starts out as exactly the same hook slam. Red line, wind-up,
+//  down it comes. Dodge it the same way.
+//
+//  But this time the hook goes THROUGH the deck and jams there. Bob
+//  heaves and heaves and can't get it out - and for about nine seconds
+//  the biggest, meanest thing in the game is stuck to the floor.
+//
+//  Run over and hit it with your wrench three times.
+// ===================================================================
+
+  function wrenchTick(dt) {
+    if (hero.swingTimer <= 0) return;
+    hero.swingTimer -= dt;
+
+    // The wrench only counts as hitting things during the CHOP - not
+    // while you're lifting it, and not on the way back up. p is how far
+    // through the swing we are, same number wrenchAngle uses.
+    const p = 1 - hero.swingTimer / SWING_TIME;
+    if (hero.swingHit || p < 0.36 || p > 0.58) return;
+
+    if (attack.phase !== 'stuck') return;
+
+    // Are you close enough to the buried hook?
+    const gap = Math.hypot(hero.x - attack.cx, hero.z - attack.cz);
+    if (gap > WRENCH_REACH) return;
+
+    hero.swingHit = true;         // this swing has done its damage
+    attack.armHits++;
+    soundClang();
+    shake = Math.max(shake, 0.5);
+    sparksAt(attack.cx, 1.5, attack.cz);
+
+    if (attack.armHits >= HITS_TO_RIP) ripArmOff();
+  }
+
+  function sparksAt(x, y, z) {
+    for (let i = 0; i < 26; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const power = 6 + Math.random() * 16;
+      shards.push({
+        x: x, y: y, z: z,
+        vx: Math.cos(a) * power,
+        vy: 5 + Math.random() * 12,
+        vz: Math.sin(a) * power,
+        size: 0.35 + Math.random() * 0.9,
+        life: 0.4 + Math.random() * 0.5,
+        colour: [[255, 240, 170], [255, 200, 80], [255, 150, 50]]
+                [Math.floor(Math.random() * 3)]
+      });
+    }
+  }
+
+  function ripArmOff() {
+    bob.armGone = true;
+
+    // Leave the arm lying on the deck where it fell. It stays there for
+    // the rest of the fight, which is the whole point - it's a trophy.
+    fallenArm = { x: attack.cx, z: attack.cz, yaw: Math.random() * 3 };
+
+    flash = Math.max(flash, 0.8);
+    shake = 1.5;
+    soundRip();
+    sparksAt(attack.cx, 2.0, attack.cz);
+    deckBurst(attack.cx, attack.cz);
+
+    bigText = 'HIS ARM CAME OFF!';
+    bigTextFade = 1;
+
+    attack.phase = 'recover';
+    attack.timer = 2.0;
+  }
+
+  // The arm, lying where it landed.
+  function drawFallenArm() {
+    if (!fallenArm) return;
+    const a = fallenArm.yaw;
+    for (let i = 0; i < 5; i++) {
+      addBox(fallenArm.x + Math.sin(a) * i * 2.6, 1.2,
+             fallenArm.z + Math.cos(a) * i * 2.6,
+             2.6, 2.4, 2.6, i > 3 ? DARK : IRON, a);
+    }
+    // the hook on the end, bent over
+    addBox(fallenArm.x + Math.sin(a) * 14, 1.4, fallenArm.z + Math.cos(a) * 14,
+           2.0, 2.0, 2.0, BONE, a);
+    addBox(fallenArm.x + Math.sin(a) * 16.5, 2.4, fallenArm.z + Math.cos(a) * 16.5,
+           1.4, 3.0, 1.4, BONE, a);
+  }
+
+
   let squashTimer = 0;
 
-  function squash() {
+  let squashWord = 'SQUASHED!';
+  let squashHint = 'strafe with A and D to get off the line';
+
+  function squash(word, hint) {
+    if (state !== 'fight') return;      // can't die twice in one go
     state = 'squashed';
     squashTimer = 2.2;
+    squashWord = word || 'SQUASHED!';
+    squashHint = hint || 'strafe with A and D to get off the line';
   }
 
   function restartFight() {
@@ -1362,7 +1942,7 @@
     attack.armX = 6.6;
     shards = [];
     bombs = [];        // clear the sky, or you'd get flattened the
-                       // instant you stood back up. Very unfair.
+    skulls = [];       // instant you stood back up. Very unfair.
     shake = 0;
     bob.headPitch = 0;
     bob.mouth = 0;
@@ -1375,19 +1955,76 @@
       attack.glow = 0;
       restArm(dt, 4);
       if (attack.timer <= 0) {
-        // Take it in turns: hook, missiles, hook, missiles...
-        attack.kind = (attack.kind === 'slam') ? 'missiles' : 'slam';
+        // Work down the list and then start again from the top.
+        // The % wraps 3 back round to 0 - it's the remainder after
+        // dividing, and it's how you make anything go round in a loop.
+        const list = attackList();
+        attack.turn = (attack.turn + 1) % list.length;
+        attack.kind = list[attack.turn];
 
-        if (attack.kind === 'slam') {
+        if (attack.kind === 'slam' || attack.kind === 'stuckslam') {
           pickAttack();
           attack.phase = 'warn';
           attack.timer = 1.7;
           soundWarn();
-        } else {
+        } else if (attack.kind === 'missiles') {
           attack.phase = 'aim';
           attack.timer = 0.8;
           attack.fired = 0;
           attack.fireTimer = 0;
+        } else {
+          attack.phase = 'rear';
+          attack.timer = 0.7;
+          attack.fired = 0;
+          attack.fireTimer = 0;
+        }
+      }
+    }
+
+    // ---- FLAMING SKULLS: wind the hook arm right back ----------------
+    else if (attack.phase === 'rear') {
+      attack.armPitch = glide(attack.armPitch, -1.5, 6, dt);
+      attack.armX     = glide(attack.armX, 6.6, 4, dt);
+      if (attack.timer <= 0) {
+        attack.phase = 'hurl';
+        attack.fireTimer = 0.45;    // he's already wound up, so sling it
+        attack.thrown = false;
+      }
+    }
+
+    // ---- FLAMING SKULLS: hurl them ONE AT A TIME ---------------------
+    // Each skull gets a whole throw to itself. The cycle lasts about a
+    // second: haul the arm back over his shoulder, then sling it
+    // forward. Then do it all again for the next one.
+    else if (attack.phase === 'hurl') {
+      attack.fireTimer -= dt;
+      attack.armLen = glide(attack.armLen, ARM_REST_LEN, 8, dt);
+
+      if (attack.fireTimer > 0.42) {
+        // WIND UP - slow and heavy, hauling it right back.
+        attack.armPitch = glide(attack.armPitch, -1.55, 7, dt);
+        attack.thrown = false;
+      } else {
+        // WHIP - fling it forward. 20 is four times as fast as the
+        // wind-up, and that difference is the whole feel of a throw.
+        attack.armPitch = glide(attack.armPitch, 1.45, 20, dt);
+
+        // THE SKULL LEAVES HIS HAND WHEN THE ARM SWINGS PAST THE FRONT.
+        // Not after some number of seconds - we watch the arm and let
+        // go at the right moment. Change the swing speed and the throw
+        // still looks right, because the release follows the arm.
+        if (!attack.thrown && attack.armPitch > 0.85) {
+          if (attack.fired < 5) { throwSkull(); attack.fired++; }
+          attack.thrown = true;
+        }
+      }
+
+      if (attack.fireTimer <= 0) {
+        if (attack.fired >= 5) {
+          attack.phase = 'recover';
+          attack.timer = 1.0;
+        } else {
+          attack.fireTimer = 1.05;      // wind up for the next one
         }
       }
     }
@@ -1438,8 +2075,48 @@
       attack.armX     = glide(attack.armX, attack.aimX, 26, dt);
       if (attack.timer <= 0) {
         impact();
+
+        // On the FOURTH attack, the hook doesn't come back out.
+        if (attack.kind === 'stuckslam') {
+          attack.phase = 'stuck';
+          attack.timer = 9.0;      // how long you get before he wrenches free
+          attack.armHits = 0;
+          bigText = 'HIT HIS ARM WITH THE WRENCH!';
+          bigTextFade = 1;
+        } else {
+          attack.phase = 'recover';
+          attack.timer = 1.1;
+        }
+      }
+    }
+
+    // ---- STUCK: the hook is buried and he can't pull it out ---------
+    else if (attack.phase === 'stuck') {
+      // He heaves at it. The arm judders, and so does the whole world.
+      const heave = Math.sin(bob.sway * 9);
+      attack.armLen = attack.aimLen + heave * 0.35;
+      attack.armPitch = attack.aimPitch + heave * 0.04;
+      shake = Math.max(shake, 0.18 + Math.abs(heave) * 0.12);
+      attack.glow = 0.4 + heave * 0.2;
+
+      // A grunt of effort every so often.
+      if (Math.random() < dt * 2.2) playTone(70, 45, 0.5, 0.16, 'sawtooth');
+
+      // Tell you what to do, and change the message once you're close.
+      const gap = Math.hypot(hero.x - attack.cx, hero.z - attack.cz);
+      bigText = (gap > WRENCH_REACH)
+        ? 'RUN TO HIS ARM!'
+        : 'RIGHT-CLICK! ' + (HITS_TO_RIP - attack.armHits) + ' TO GO';
+      bigTextFade = 1;
+
+      // Ran out of time? He rips it free himself and you missed your shot.
+      if (attack.timer <= 0) {
+        bigText = 'HE PULLED IT FREE!';
+        bigTextFade = 1;
         attack.phase = 'recover';
-        attack.timer = 1.1;
+        attack.timer = 1.2;
+        shake = 1.0;
+        soundSlam();
       }
     }
 
@@ -1496,17 +2173,33 @@
     // Stop the arrow keys from scrolling the page around.
     if (e.key.startsWith('Arrow') || e.key === ' ') e.preventDefault();
     pressed();
+    if (e.key === ' ') swingWrench();
+    if (e.key.toLowerCase() === 'm') toggleMusic();    // M turns the band off
   });
   window.addEventListener('keyup', function (e) {
     keys[e.key.toLowerCase()] = false;
   });
 
-  // Tapping the screen counts as a button press too, so this works on a phone.
-  window.addEventListener('pointerdown', pressed);
+  // Tapping or clicking the screen counts as a button press too, so
+  // this works on a phone as well as with a mouse.
+  window.addEventListener('pointerdown', function (e) { pressed(e); });
 
-  function pressed() {
+  // Right-clicking normally pops up the browser's own little menu,
+  // which would land right on top of the game. This says "no thanks" -
+  // the right button belongs to us now.
+  window.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+
+  function pressed(e) {
     startAudio();                       // the first tap switches sound on
     grabMouse();                        // ...and hands us the mouse
+
+    // RIGHT MOUSE BUTTON = SWING THE WRENCH.
+    // Buttons are numbered: 0 is left, 1 is the wheel, 2 is right.
+    // We stop here so a right-click never does anything else.
+    if (e && e.button === 2) {
+      swingWrench();
+      return;
+    }
 
     if (state === 'title') {
       beginCutscene();
@@ -1523,6 +2216,7 @@
       foam = 0.35;
       bigText = '';
       bigTextFade = 0;
+      startMusic();          // skipped the film? You still get the band.
     }
   }
 
@@ -1572,6 +2266,127 @@
   });
 
 
+// ===================================================================
+//  PHONE AND TABLET CONTROLS
+// ===================================================================
+//  No mouse and no keyboard, so we hand out the screen instead:
+//
+//     LEFT half  - drag your thumb to walk. Wherever you first touch
+//                  becomes the middle of the stick, so you never have
+//                  to look down and aim for a button.
+//     RIGHT half - drag to look around.
+//     The button - swing the wrench.
+//
+//  Every touch gets its own pointerId, which is how we can tell them
+//  apart and let you walk and look AT THE SAME TIME with two thumbs.
+// ===================================================================
+
+  let touchMode = false;                       // has anyone touched the screen?
+  const TOUCH_LOOK = 0.0055;
+  const STICK_MAX  = 62;                       // how far the thumb stick moves
+
+  const stick = { id: null, ox: 0, oy: 0, x: 0, y: 0 };
+  const look  = { id: null, lx: 0, ly: 0 };
+
+  function wrenchButton() {
+    const r = Math.min(58, W * 0.11);
+    return { x: W - r - 26, y: H - r - 26, r: r };
+  }
+
+  window.addEventListener('pointerdown', function (e) {
+    if (e.pointerType !== 'touch') return;
+
+    if (!touchMode) {
+      touchMode = true;
+      hudEl.innerHTML = 'LEFT thumb walks &nbsp;&middot;&nbsp; RIGHT thumb looks';
+    }
+
+    // The wrench button wins over everything else.
+    const b = wrenchButton();
+    if (Math.hypot(e.clientX - b.x, e.clientY - b.y) < b.r + 14) {
+      swingWrench();
+      return;
+    }
+
+    // Left half of the screen = the walking stick.
+    if (e.clientX < W * 0.5 && stick.id === null) {
+      stick.id = e.pointerId;
+      stick.ox = e.clientX;      // this touch becomes the middle of the stick
+      stick.oy = e.clientY;
+      stick.x = 0; stick.y = 0;
+      return;
+    }
+
+    // Right half = looking around.
+    if (look.id === null) {
+      look.id = e.pointerId;
+      look.lx = e.clientX;
+      look.ly = e.clientY;
+    }
+  });
+
+  window.addEventListener('pointermove', function (e) {
+    if (e.pointerId === stick.id) {
+      let dx = e.clientX - stick.ox;
+      let dy = e.clientY - stick.oy;
+
+      // Don't let the stick go further than STICK_MAX from the middle.
+      // If it's too far out, squash it back onto the edge of the circle.
+      const len = Math.hypot(dx, dy);
+      if (len > STICK_MAX) { dx = dx / len * STICK_MAX; dy = dy / len * STICK_MAX; }
+
+      stick.x = dx / STICK_MAX;      // -1 (left) to 1 (right)
+      stick.y = dy / STICK_MAX;      // -1 (up)   to 1 (down)
+    }
+
+    else if (e.pointerId === look.id) {
+      hero.yaw   += (e.clientX - look.lx) * TOUCH_LOOK;
+      hero.pitch -= (e.clientY - look.ly) * TOUCH_LOOK;
+      hero.pitch = Math.max(LOOK_DOWN_LIMIT, Math.min(LOOK_UP_LIMIT, hero.pitch));
+      look.lx = e.clientX;
+      look.ly = e.clientY;
+    }
+  });
+
+  function letGo(e) {
+    if (e.pointerId === stick.id) { stick.id = null; stick.x = 0; stick.y = 0; }
+    if (e.pointerId === look.id)  { look.id = null; }
+  }
+  window.addEventListener('pointerup', letGo);
+  window.addEventListener('pointercancel', letGo);
+
+  // Draw the stick and the wrench button on top of the game.
+  function drawTouchControls() {
+    if (!touchMode || state !== 'fight') return;
+
+    // The walking stick, but only while a thumb is actually down.
+    if (stick.id !== null) {
+      ring(stick.ox, stick.oy, STICK_MAX, 'rgba(255,255,255,0.16)', 3);
+      const kx = stick.ox + stick.x * STICK_MAX;
+      const ky = stick.oy + stick.y * STICK_MAX;
+      ring(kx, ky, 26, 'rgba(255,217,138,0.75)', 4);
+    }
+
+    // The wrench button.
+    const b = wrenchButton();
+    const pressedNow = hero.swingTimer > 0;
+    ring(b.x, b.y, b.r, pressedNow ? 'rgba(255,120,60,0.9)'
+                                   : 'rgba(255,255,255,0.35)', 4);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#ffffff';
+    ctx.font = (b.r * 0.9) + 'px system-ui, sans-serif';
+    ctx.fillText('🔧', b.x, b.y + b.r * 0.32);
+  }
+
+  function ring(x, y, r, colour, width) {
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.lineWidth = width;
+    ctx.strokeStyle = colour;
+    ctx.stroke();
+  }
+
+
 // -------------------------------------------------------------------
 //  UPDATE - runs about 60 times a second. Moves everything.
 //  dt is how many seconds passed since the last frame. Multiplying by
@@ -1599,6 +2414,7 @@
     // the fireball still behave properly during the cutscene.
     updateMissile(dt);
     updateBombs(dt);
+    updateSkulls(dt);
     updateShards(dt);
 
     if (state === 'title') {
@@ -1631,6 +2447,11 @@
     bob.headPitch = glide(bob.headPitch, 0, 3, dt);
     bob.mouth     = glide(bob.mouth, 0, 4, dt);
 
+    // Any message on screen quietly fades unless something keeps
+    // shouting it. The stuck-arm phase shouts it every frame.
+    bigTextFade = Math.max(0, bigTextFade - dt * 0.5);
+
+    wrenchTick(dt);
     updateAttack(dt);
 
     // The arrow keys still turn you, so the game still works if you
@@ -1649,6 +2470,15 @@
     let side = 0;
     if (keys['a']) side = -1;
     if (keys['d']) side =  1;
+
+    // The thumb stick joins in on top of the keyboard. Up on the screen
+    // is forward, and screen y counts DOWNWARDS, so it gets a minus.
+    if (stick.id !== null) {
+      step += -stick.y;
+      side +=  stick.x;
+    }
+    step = Math.max(-1, Math.min(1, step));
+    side = Math.max(-1, Math.min(1, side));
 
     if (step !== 0 || side !== 0) {
       // "Forwards" as an arrow: sin and cos turn an angle into x and z.
@@ -1696,11 +2526,13 @@
     drawDeck();
     drawWarningLine();
     drawBombDots();
+    drawFallenArm();
     drawFoam();
     drawHero();
     drawBob();
     drawMissile();
     drawBombs();
+    drawSkulls();
     drawShards();
 
     // Furthest away gets painted FIRST, so close things end up on top.
@@ -1745,13 +2577,13 @@
       ctx.textAlign = 'center';
       ctx.font = 'bold ' + Math.min(W * 0.11, 76) + 'px system-ui, sans-serif';
       ctx.fillStyle = '#000';
-      ctx.fillText('SQUASHED!', W / 2 + 4, H * 0.47 + 4);
+      ctx.fillText(squashWord, W / 2 + 4, H * 0.47 + 4);
       ctx.fillStyle = '#ffe08a';
-      ctx.fillText('SQUASHED!', W / 2, H * 0.47);
+      ctx.fillText(squashWord, W / 2, H * 0.47);
 
       ctx.font = Math.min(W * 0.035, 20) + 'px system-ui, sans-serif';
       ctx.fillStyle = '#ffd0d0';
-      ctx.fillText('strafe with A and D to get off the line', W / 2, H * 0.58);
+      ctx.fillText(squashHint, W / 2, H * 0.58);
       return;      // nothing else gets drawn while you're jam
     }
 
@@ -1797,10 +2629,13 @@
       ctx.fillRect(mx - 1.5, my - 1.5, 3, 3);
     }
 
+    drawTouchControls();
+
     ctx.textAlign = 'center';
 
-    // If the game hasn't got hold of the mouse, say so.
-    if (state === 'fight' && !mouseIsCaptured()) {
+    // If the game hasn't got hold of the mouse, say so. Not on a phone
+    // though - there's no mouse to grab.
+    if (state === 'fight' && !mouseIsCaptured() && !touchMode) {
       ctx.font = '15px system-ui, sans-serif';
       ctx.fillStyle = 'rgba(255,217,138,0.85)';
       ctx.fillText('click to aim with the mouse', W / 2, H * 0.63);
