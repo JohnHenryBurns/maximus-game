@@ -21,7 +21,7 @@
 </head>
 <body>
 <canvas id="screen"></canvas>
-<div id="hud">W / UP = go &nbsp;&nbsp; S / DOWN = brake &nbsp;&nbsp; A D / LEFT RIGHT = steer</div>
+<div id="hud">MOUSE or A D = steer &nbsp;&nbsp; W / UP = go &nbsp;&nbsp; S / DOWN = brake &nbsp;&nbsp; R = restart</div>
 
 <script>
 // ===================================================================
@@ -212,6 +212,149 @@
 
 
 // -------------------------------------------------------------------
+//  THE RIVAL
+// -------------------------------------------------------------------
+//  His whole brain is one idea: LOOK AHEAD.
+//
+//  He doesn't steer at where the road is. He steers at where the road
+//  is GOING to be, about forty units in front of him. That is exactly
+//  what you do when you drive - you look up the road, not at your own
+//  bonnet - and it's the entire reason he takes corners smoothly
+//  instead of sawing left and right chasing the line he's already on.
+//
+//  He also lifts off when he has a lot of turning to do. Two rules.
+//  That's a racing driver.
+// -------------------------------------------------------------------
+
+  const RIVAL_TOP  = 97;     // he's slower than you flat out (you get 105)
+  const RIVAL_LOOK = 42;     // how far up the road he's looking
+  const RIVAL_TURN = 1.7;    // how fast he can swing the wheel
+
+  // HIS RACING LINE - how far right of the middle he sits.
+  //
+  // Not decoration. The ramps sit in the middle of the road and he has
+  // no idea they exist, so down the centre line he'd drive straight
+  // through every single one. Out here he threads past them, and it
+  // leaves the middle of the road - and the ramps - to you.
+  const RIVAL_LINE = 7.5;
+
+  const RIVAL_BODY  = [196, 52, 44];
+  const RIVAL_CAB   = [40, 44, 58];
+  const RIVAL_DARK  = [28, 30, 40];
+  const RIVAL_LIGHT = [255, 120, 90];
+
+  const rival = { x: 6, z: 0, yaw: 0, speed: 0 };
+
+  // Turn from one angle towards another, but never further than "rate"
+  // lets you in one frame. The wrapping is the fiddly bit: going from
+  // 359 degrees to 1 degree is a 2 degree nudge, not a 358 degree
+  // panic, and without these two lines he'd spin the wrong way round
+  // every time the track crossed straight ahead.
+  function turnTowards(now, want, rate, dt) {
+    let gap = want - now;
+    while (gap >  Math.PI) gap -= Math.PI * 2;
+    while (gap < -Math.PI) gap += Math.PI * 2;
+    return now + clamp(gap, -rate * dt, rate * dt);
+  }
+
+  function updateRival(dt) {
+    // Where will the road be, up ahead?
+    const aheadZ = rival.z + RIVAL_LOOK;
+    const wantYaw = Math.atan2(roadX(aheadZ) + RIVAL_LINE - rival.x,
+                               aheadZ - rival.z);
+
+    // How much turning has he got to do? Work this out BEFORE steering,
+    // because after steering the answer is always "hardly any".
+    let gap = wantYaw - rival.yaw;
+    while (gap >  Math.PI) gap -= Math.PI * 2;
+    while (gap < -Math.PI) gap += Math.PI * 2;
+    const bend = Math.abs(gap);
+
+    rival.yaw = turnTowards(rival.yaw, wantYaw, RIVAL_TURN, dt);
+
+    // Big corner coming? Lift off. Straight bit? Foot down.
+    const target = RIVAL_TOP * (1 - Math.min(0.42, bend * 1.7));
+    rival.speed += (target - rival.speed) * Math.min(1, 1.9 * dt);
+
+    rival.x += Math.sin(rival.yaw) * rival.speed * dt;
+    rival.z += Math.cos(rival.yaw) * rival.speed * dt;
+  }
+
+  function drawRival() {
+    const s = rival.yaw;
+    const co = Math.cos(s), si = Math.sin(s);
+
+    addBox(rival.x, 1.5, rival.z, 4.6, 1.5, 9.0, RIVAL_BODY, s);      // body
+    addBox(rival.x, 2.7, rival.z + 0.5, 3.6, 1.3, 4.2, RIVAL_CAB, s); // cabin
+
+    // Spoiler on the back. The car faces its own +z, so the back of it
+    // is NEGATIVE z - that's why these numbers are minus.
+    addBox(rival.x, 3.1, rival.z - 4.3, 5.0, 0.35, 1.2, RIVAL_DARK, s);
+
+    // Four wheels. Each one has to be placed in the CAR'S directions,
+    // not the world's - so we spin the corner offsets the same way the
+    // box itself gets spun.
+    for (const wx of [-2.5, 2.5]) {
+      for (const wz of [-3.0, 3.2]) {
+        addBox(rival.x + wx * co + wz * si, 0.9,
+               rival.z - wx * si + wz * co,
+               0.9, 1.8, 2.2, RIVAL_DARK, s);
+      }
+    }
+
+    // Tail lights, so you can tell instantly which way he's pointing.
+    for (const lx of [-1.5, 1.5]) {
+      addBox(rival.x + lx * co - 4.4 * si, 1.9,
+             rival.z - lx * si - 4.4 * co,
+             1.1, 0.6, 0.3, RIVAL_LIGHT, s);
+    }
+  }
+
+
+// -------------------------------------------------------------------
+//  THE RACE
+// -------------------------------------------------------------------
+
+  const RACE_LENGTH = 5000;   // how far to the finish line
+
+  let race = 'countdown';     // 'countdown', 'racing' or 'done'
+  let countdown = 3.8;
+  let result = '';
+
+  function resetRace() {
+    car.x = -6; car.z = 0; car.yaw = 0; car.speed = 0; car.steer = 0;
+    car.y = 0; car.vy = 0; car.airborne = false; car.climb = 0;
+    car.airTime = 0;
+
+    rival.x = 6; rival.z = 0; rival.yaw = 0; rival.speed = 0;
+
+    mouseSteer = 0;
+    shake = 0;
+    countdown = 3.8;
+    result = '';
+    race = 'countdown';
+  }
+
+  // The chequered line, and a post either side of it.
+  function drawFinish() {
+    const fx = roadX(RACE_LENGTH);
+    if (RACE_LENGTH < car.z - 40 || RACE_LENGTH > car.z + VIEW * SEG) return;
+
+    for (let i = -6; i < 6; i++) {
+      const x0 = fx + i * 2.2, x1 = x0 + 2.2;
+      const dark = (i % 2 === 0);
+      addFace([[x0, 0, RACE_LENGTH], [x1, 0, RACE_LENGTH],
+               [x1, 0, RACE_LENGTH + 4], [x0, 0, RACE_LENGTH + 4]],
+              dark ? '#14161c' : '#f2f4f8', 0.6);
+    }
+
+    addBox(fx - 15, 6, RACE_LENGTH + 2, 1.2, 12, 1.2, [230, 232, 238]);
+    addBox(fx + 15, 6, RACE_LENGTH + 2, 1.2, 12, 1.2, [230, 232, 238]);
+    addBox(fx, 12, RACE_LENGTH + 2, 31, 2.2, 1.0, [214, 62, 58]);
+  }
+
+
+// -------------------------------------------------------------------
 //  PROJECT - the most important function in the whole game.
 //  Give it a point in the 3D world, it tells you where that point
 //  lands on your flat screen. This is Bob's, word for word.
@@ -279,16 +422,27 @@
                     (rgb[2] * amount | 0) + ')';
   }
 
-  // A box, for the posts down the side of the track.
-  function addBox(cx, cy, cz, w, h, d, rgb) {
+  // A box - now with SPIN, so it can point whichever way it's driving.
+  //
+  // We build the 8 corners around zero first, turn them all by the same
+  // angle, and only then move them into place. Turning first and moving
+  // second is the whole trick - do it the other way round and the box
+  // swings around the middle of the world instead of its own middle.
+  function addBox(cx, cy, cz, w, h, d, rgb, spin) {
+    spin = spin || 0;
     const hw = w / 2, hh = h / 2, hd = d / 2;
+    const co = Math.cos(spin), si = Math.sin(spin);
 
-    const c = [
-      [cx - hw, cy - hh, cz - hd], [cx + hw, cy - hh, cz - hd],
-      [cx + hw, cy - hh, cz + hd], [cx - hw, cy - hh, cz + hd],
-      [cx - hw, cy + hh, cz - hd], [cx + hw, cy + hh, cz - hd],
-      [cx + hw, cy + hh, cz + hd], [cx - hw, cy + hh, cz + hd]
+    const local = [
+      [-hw, -hh, -hd], [ hw, -hh, -hd], [ hw, -hh,  hd], [-hw, -hh,  hd],
+      [-hw,  hh, -hd], [ hw,  hh, -hd], [ hw,  hh,  hd], [-hw,  hh,  hd]
     ];
+
+    const c = local.map(function (v) {
+      return [cx + v[0] * co + v[2] * si,
+              cy + v[1],
+              cz - v[0] * si + v[2] * co];
+    });
 
     // Each side gets its own brightness. That difference is the whole
     // reason your brain sees a solid object and not a flat blob.
@@ -581,10 +735,60 @@
 
 
 // -------------------------------------------------------------------
+//  THE MOUSE IS THE STEERING WHEEL
+// -------------------------------------------------------------------
+//  Click once and the browser HIDES the mouse pointer and hands us the
+//  raw movement instead - "the mouse moved 12 to the right" rather than
+//  "the mouse is at 400,300". That's called pointer lock, and it's the
+//  only way to steer properly, because otherwise the pointer hits the
+//  edge of the screen and you simply can't turn any further.
+//
+//  Push the mouse right, the wheel winds right, and it stays there
+//  until you push it back - exactly like a real wheel. It only creeps
+//  back to centre slowly, so holding a corner is something you DO,
+//  not something that happens on its own.
+// -------------------------------------------------------------------
+
+  const MOUSE_SENS   = 0.0055;   // how twitchy the mouse is. Try 0.02.
+  const MOUSE_RETURN = 0.7;      // how eagerly the wheel self-centres
+
+  let mouseSteer = 0;
+  let locked = false;
+
+  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+  canvas.addEventListener('click', function () {
+    if (!locked && canvas.requestPointerLock) canvas.requestPointerLock();
+  });
+
+  document.addEventListener('pointerlockchange', function () {
+    locked = (document.pointerLockElement === canvas);
+  });
+
+  window.addEventListener('mousemove', function (e) {
+    if (!locked) return;
+    mouseSteer = clamp(mouseSteer + e.movementX * MOUSE_SENS, -1, 1);
+  });
+
+
+// -------------------------------------------------------------------
 //  DRIVING
 // -------------------------------------------------------------------
 
   function update(dt) {
+
+    // ---- THE LIGHTS ------------------------------------------------
+    if (race === 'countdown') {
+      countdown -= dt;
+      if (countdown <= 0) race = 'racing';
+    }
+
+    if (race === 'racing') updateRival(dt);
+
+    // R puts everything back to the start line.
+    if (keys['r'] && race === 'done') resetRace();
+
+    const driving = (race === 'racing');
 
     // ---- WHAT ARE YOU STANDING ON? ---------------------------------
     // Compare where you are with where the road is at your distance.
@@ -608,9 +812,10 @@
                 :                           GRASS_SPEED;
 
     // ---- THE PEDALS -------------------------------------------------
-    if (held('w', 'arrowup')) {
+    // No throttle before the lights go, and none after you've finished.
+    if (driving && held('w', 'arrowup')) {
       car.speed += ACCEL * dt;
-    } else if (held('s', 'arrowdown')) {
+    } else if (driving && held('s', 'arrowdown')) {
       car.speed -= BRAKE * dt;
     } else {
       car.speed -= DRAG * dt;      // let go and you coast to a stop
@@ -625,9 +830,13 @@
     // Holding left doesn't snap the wheel to full lock - it winds
     // TOWARDS full lock, and letting go winds it back. Try setting both
     // of those speeds to 99 and drive: it feels like a bar of soap.
-    let want = 0;
+    // The mouse creeps back towards straight on its own, slowly.
+    mouseSteer -= mouseSteer * Math.min(1, MOUSE_RETURN * dt);
+
+    let want = mouseSteer;
     if (held('a', 'arrowleft'))  want -= 1;
     if (held('d', 'arrowright')) want += 1;
+    want = clamp(want, -1, 1);
 
     const windSpeed = (want === 0) ? 6 : 4;
     car.steer += (want - car.steer) * Math.min(1, windSpeed * dt);
@@ -693,6 +902,12 @@
     cam.y = 3.1 + car.y;      // ...including upwards. You SEE the jump.
     cam.yaw = car.yaw;
 
+    // ---- HAS ANYBODY CROSSED THE LINE? ------------------------------
+    if (race === 'racing') {
+      if (car.z >= RACE_LENGTH)        { race = 'done'; result = 'WIN'; }
+      else if (rival.z >= RACE_LENGTH) { race = 'done'; result = 'LOSE'; }
+    }
+
     // Lean the view a touch into the corner. Tiny effect, and you will
     // absolutely feel it if you delete it.
     cam.yaw += car.steer * 0.03;
@@ -715,6 +930,8 @@
     drawRoad();
     drawShortcuts();
     drawRamps();
+    drawFinish();
+    drawRival();
 
     // Furthest away gets painted FIRST, so close things end up on top.
     faces.sort(function (a, b) { return b.depth - a.depth; });
@@ -733,6 +950,78 @@
     cam.y = savedY;
 
     drawDash();
+    drawRaceHud();
+  }
+
+
+// -------------------------------------------------------------------
+//  THE RACE INFORMATION - who's winning, how far to go
+// -------------------------------------------------------------------
+
+  function drawRaceHud() {
+    ctx.textAlign = 'center';
+
+    // ---- HOW FAR AHEAD OR BEHIND ARE YOU? --------------------------
+    // Both of you are measured by how far down the track you've got,
+    // so comparing is just a subtraction. Nothing clever needed.
+    const gap = car.z - rival.z;
+    const ahead = gap >= 0;
+
+    ctx.font = 'bold ' + Math.min(W * 0.05, 30) + 'px system-ui, sans-serif';
+    ctx.fillStyle = ahead ? '#8cf0a0' : '#ff8a6a';
+    ctx.fillText(ahead ? '1st' : '2nd', W / 2, H * 0.075);
+
+    ctx.font = Math.min(W * 0.03, 18) + 'px system-ui, sans-serif';
+    ctx.fillStyle = '#cfd6e6';
+    ctx.fillText((ahead ? '+' : '') + Math.round(gap) + 'm', W / 2, H * 0.115);
+
+    // How far to the flag.
+    const left = Math.max(0, RACE_LENGTH - car.z);
+    ctx.fillStyle = '#8c94aa';
+    ctx.fillText(left > 0 ? (left / 100).toFixed(1) + ' km to go' : 'FINISH',
+                 W / 2, H * 0.15);
+
+    // ---- THE LIGHTS ------------------------------------------------
+    if (race === 'countdown') {
+      // Math.ceil turns 2.4 seconds left into the number "3", so it
+      // counts 3, 2, 1 the way a person would say it out loud.
+      const n = Math.ceil(countdown - 0.8);
+      const word = n > 0 ? String(n) : 'GO!';
+
+      ctx.font = 'bold ' + Math.min(W * 0.2, 150) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#000';
+      ctx.fillText(word, W / 2 + 5, H * 0.44 + 5);
+      ctx.fillStyle = n > 0 ? '#ffe08a' : '#8cf0a0';
+      ctx.fillText(word, W / 2, H * 0.44);
+    }
+
+    // ---- THE RESULT -------------------------------------------------
+    if (race === 'done') {
+      const won = (result === 'WIN');
+
+      ctx.fillStyle = won ? 'rgba(255,190,60,0.20)' : 'rgba(150,20,20,0.35)';
+      ctx.fillRect(0, 0, W, H);
+
+      ctx.font = 'bold ' + Math.min(W * 0.13, 92) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#000';
+      ctx.fillText(won ? 'YOU WIN' : 'HE GOT YOU', W / 2 + 5, H * 0.42 + 5);
+      ctx.fillStyle = won ? '#ffe08a' : '#ffc0b0';
+      ctx.fillText(won ? 'YOU WIN' : 'HE GOT YOU', W / 2, H * 0.42);
+
+      ctx.font = Math.min(W * 0.035, 21) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#eef0f4';
+      ctx.fillText(won ? 'you beat him by ' + Math.round(gap) + ' metres'
+                       : 'he beat you by ' + Math.round(-gap) + ' metres',
+                   W / 2, H * 0.53);
+      ctx.fillText('press R to race again', W / 2, H * 0.60);
+    }
+
+    // ---- CLICK TO STEER --------------------------------------------
+    if (!locked && race !== 'done') {
+      ctx.font = Math.min(W * 0.032, 19) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#cfd6e6';
+      ctx.fillText('click to steer with the mouse', W / 2, H * 0.66);
+    }
   }
 
 
@@ -762,6 +1051,7 @@
   }
 
   fitScreen();
+  resetRace();          // put both cars on the line before the first frame
   requestAnimationFrame(loop);
 
 </script>
