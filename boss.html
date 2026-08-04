@@ -482,6 +482,13 @@
     sway: 0,            // ticks up forever, used to make him creak about
     armGone: false,     // true once you've torn the hook arm off him
     arm2Gone: false,    // true once the SECOND arm is off as well
+    // ---- THE ENDGAME ------------------------------------------------
+    // These four go off in order, and each one is a point of no return.
+    biteCount: 0,       // how many times he's chomped the deck
+    mouthStuck: false,  // true when his jaws are buried in the planks
+    headHits: 0,        // wrench swings landed on his stuck head
+    headGone: false,    // ...and that's the end of Bob.
+
     hatched: false,     // true once he's let the little ones out
     chestOpen: 0,       // 0 = chest shut, 1 = doors wide open
     hasCannon: false,   // true once he's fished the cannon up out of the sea.
@@ -730,6 +737,15 @@
     // A real skull is wide and round at the top and narrow at the
     // bottom, so we use two boxes: a big cranium and a narrower face.
     bobBox(0, 18.8, 0, 2.6, 1.6, 2.6, DARK);                 // neck (doesn't nod)
+
+    // NO HEAD, NO REST OF THIS FUNCTION.
+    //
+    // The head happens to be the very last thing we draw on him, so
+    // "stop here" is all it takes to remove it - the neck stump above
+    // is already drawn and everything below is skipped. Putting the
+    // head last wasn't planned for this. It just paid off.
+    if (bob.headGone) return;
+
     headBox(0, 22.6, 0, 6.2, 3.2, 5.0, SKULL);               // cranium
     headBox(0, 20.6, 0.2, 5.0, 1.8, 4.6, SKULL);             // the face part
 
@@ -1247,7 +1263,8 @@
 //  whether its moment has arrived yet.
 // ===================================================================
 
-  let state = 'title';      // 'title', 'cutscene', or 'fight'
+  let state = 'title';      // 'title', 'cutscene', 'fight', 'squashed', 'won'
+  let wonTimer = 0;         // ticks up on the victory screen
   let sceneTime = 0;
   let bigText = '';
   let bigTextFade = 0;
@@ -1471,6 +1488,8 @@
     aimX: 6.6, aimPitch: 0, aimLen: ARM_REST_LEN,   // where the swing is going
     glow: 0,             // how angry the red line looks right now
 
+    jawX: 0, jawZ: 0,    // where his jaws ended up buried in the deck
+
     recoil: 0,           // kicks to 1 the instant he fires, then falls back
                          // to 0 on its own. That shove-and-settle is most
                          // of why a gun feels like it went off.
@@ -1505,7 +1524,12 @@
   const WRENCH_REACH = 8.0;    // how close you must be to whack the hook
   const HITS_TO_RIP  = 3;      // wrench swings needed to tear it loose
 
-  let fallenArm = null;        // his arm, lying on the deck, forever
+  // His arms, lying on the deck, forever. This used to be ONE arm in a
+  // single variable - and then he grew a second one you can tear off,
+  // and one variable can't hold two arms. A list can hold any number.
+  let fallenArms = [];
+
+  let fallenHead = null;       // and eventually, his head
 
   function soundClang() {
     playTone(900, 300, 0.22, 0.22, 'square');
@@ -1997,6 +2021,21 @@
       return;                    // ONE swing hits ONE of them. No sweeping.
     }
 
+    // HIS HEAD, jammed in the planks. Three swings and it's over.
+    if (attack.phase === 'jawstuck') {
+      if (Math.hypot(hero.x - attack.jawX, hero.z - attack.jawZ) > WRENCH_REACH) return;
+
+      hero.swingHit = true;
+      bob.headHits++;
+      soundClang();
+      shake = Math.max(shake, 0.9);
+      flash = Math.max(flash, 0.25);
+      sparksAt(attack.jawX, 2.6, attack.jawZ);
+
+      if (bob.headHits >= HEAD_HITS) ripHeadOff();
+      return;
+    }
+
     if (attack.phase !== 'stuck') return;
 
     // Are you close enough to the buried hook?
@@ -2030,27 +2069,35 @@
   }
 
   function ripArmOff() {
-    bob.armGone = true;
+    // Is this the second one? If the first is already gone, it must be.
+    const second = bob.armGone;
 
-    // HE SWITCHES ARMS.
-    //
-    // activeArm was +1 (his hook arm). Now it's -1, and every bit of
-    // arm code - the winding up, the throwing, the parking - starts
-    // driving his OTHER arm instead. We didn't have to rewrite any of
-    // it. That is the entire payoff for drawing both arms with one
-    // function: teaching him to swap hands cost us ONE line.
-    bob.activeArm = -1;
-    attack.armX = armHomeX();      // pop it straight to the other side
+    if (second) {
+      bob.arm2Gone = true;
+      bob.hasCannon = false;    // nothing left to hold it with. It's in the sea.
+    } else {
+      bob.armGone = true;
 
-    // Wind the turn counter back so the CANNON is the very next thing
-    // he does. attackList() is now ['cannon','missiles','skulls'], and
-    // 'wait' does turn = (turn + 1) % 3 - so -1 becomes 0, the cannon.
-    // You rip his arm off and he answers you immediately.
-    attack.turn = -1;
+      // HE SWITCHES ARMS.
+      //
+      // activeArm was +1 (his hook arm). Now it's -1, and every bit of
+      // arm code - the winding up, the throwing, the parking - starts
+      // driving his OTHER arm instead. We didn't have to rewrite any of
+      // it. That is the entire payoff for drawing both arms with one
+      // function: teaching him to swap hands cost us ONE line.
+      bob.activeArm = -1;
+      attack.armX = armHomeX();      // pop it straight to the other side
+
+      // Wind the turn counter back so the CANNON is the very next thing
+      // he does. attackList() is now ['cannon','missiles','skulls'], and
+      // 'wait' does turn = (turn + 1) % 3 - so -1 becomes 0, the cannon.
+      // You rip his arm off and he answers you immediately.
+      attack.turn = -1;
+    }
 
     // Leave the arm lying on the deck where it fell. It stays there for
     // the rest of the fight, which is the whole point - it's a trophy.
-    fallenArm = { x: attack.cx, z: attack.cz, yaw: Math.random() * 3 };
+    fallenArms.push({ x: attack.cx, z: attack.cz, yaw: Math.random() * 3 });
 
     flash = Math.max(flash, 0.8);
     shake = 1.5;
@@ -2058,27 +2105,48 @@
     sparksAt(attack.cx, 2.0, attack.cz);
     deckBurst(attack.cx, attack.cz);
 
-    bigText = 'HIS ARM CAME OFF!';
+    bigText = second ? 'BOTH ARMS GONE!' : 'HIS ARM CAME OFF!';
     bigTextFade = 1;
 
     attack.phase = 'recover';
     attack.timer = 2.0;
   }
 
-  // The arm, lying where it landed.
-  function drawFallenArm() {
-    if (!fallenArm) return;
-    const a = fallenArm.yaw;
-    for (let i = 0; i < 5; i++) {
-      addBox(fallenArm.x + Math.sin(a) * i * 2.6, 1.2,
-             fallenArm.z + Math.cos(a) * i * 2.6,
-             2.6, 2.4, 2.6, i > 3 ? DARK : IRON, a);
+  // The arms, lying where they landed. Same drawing as before, just
+  // wrapped in a loop so it runs once per arm instead of once, ever.
+  function drawFallenArms() {
+    for (const arm of fallenArms) {
+      const a = arm.yaw;
+      for (let i = 0; i < 5; i++) {
+        addBox(arm.x + Math.sin(a) * i * 2.6, 1.2,
+               arm.z + Math.cos(a) * i * 2.6,
+               2.6, 2.4, 2.6, i > 3 ? DARK : IRON, a);
+      }
+      // the hook on the end, bent over
+      addBox(arm.x + Math.sin(a) * 14, 1.4, arm.z + Math.cos(a) * 14,
+             2.0, 2.0, 2.0, BONE, a);
+      addBox(arm.x + Math.sin(a) * 16.5, 2.4, arm.z + Math.cos(a) * 16.5,
+             1.4, 3.0, 1.4, BONE, a);
     }
-    // the hook on the end, bent over
-    addBox(fallenArm.x + Math.sin(a) * 14, 1.4, fallenArm.z + Math.cos(a) * 14,
-           2.0, 2.0, 2.0, BONE, a);
-    addBox(fallenArm.x + Math.sin(a) * 16.5, 2.4, fallenArm.z + Math.cos(a) * 16.5,
-           1.4, 3.0, 1.4, BONE, a);
+  }
+
+  // His head, face down on the planks where you knocked it. The trophy.
+  function drawFallenHead() {
+    if (!fallenHead) return;
+    const a = fallenHead.yaw;
+    const x = fallenHead.x, z = fallenHead.z;
+
+    addBox(x, 3.4, z, 15.5, 8.0, 12.5, SKULL, a);           // the cranium
+    addBox(x, 1.6, z - 2.0, 12.5, 4.5, 11.5, SKULL, a);     // the face
+    addBox(x, 7.0, z, 22.0, 1.8, 20.0, BLACK, a);           // the hat brim
+    addBox(x, 9.0, z, 14.0, 5.5, 12.5, BLACK, a);           // the crown
+
+    // The eyes are OUT. No power, no glow - just two black pits. That
+    // one colour change is what says "finished" better than any words.
+    for (const ex of [-4.0, 4.0]) {
+      addBox(x + Math.cos(a) * ex, 3.6, z - 6.2 + Math.sin(a) * ex,
+             5.5, 5.5, 1.2, SOCKET, a);
+    }
   }
 
 
@@ -2224,6 +2292,94 @@
     bobBox(cx, cy + by * mFar, cz + bz * mFar, 4.4 * C, 4.4 * C, 4.4 * C, DARK);
     bobBox(cx, cy + by * (mFar + 0.9 * C), cz + bz * (mFar + 0.9 * C),
            2.6 * C, 2.6 * C, 2.6 * C, BLACK);
+  }
+
+// ===================================================================
+//  THE END OF BOB: HE BITES THE SHIP
+// ===================================================================
+//  No arms left. So he uses the only thing he has left - his teeth.
+//
+//  He wades right up to the ship, ducks down until his skull is level
+//  with the deck, and BITES at wherever you're standing. Ten times.
+//
+//  On the eleventh his jaws go through the planks and JAM there, and
+//  for the first time in the whole fight his head is down at your
+//  level and it isn't going anywhere. Three swings of the wrench.
+//
+//  Maximus wrote this ending. I only typed it in.
+// ===================================================================
+
+  const BITES_TO_STICK = 10;   // ten clean bites, then the eleventh sticks
+  const BITE_R         = 7.0;  // how wide his jaws are where they land
+  const BOB_BITE_Y     = -40;  // how far he ducks. Puts his jaw on the deck.
+  const BITE_LEAD      = 3.0;  // his jaw lands this far in front of him
+  const HEAD_HITS      = 3;    // wrench swings to take his head off
+
+  // WHERE HIS JAWS ACTUALLY ARE, right now, in the real world.
+  //
+  // We paint the red circle HERE rather than at some spot we picked in
+  // advance. That means the warning can never lie to you - if the maths
+  // for his head ever changes, the circle moves with it, automatically.
+  // A warning that doesn't match the attack is worse than no warning.
+  function jawWorld() {
+    return mouthWorld();
+  }
+
+  function startBite() {
+    attack.phase = 'bitewarn';
+    attack.timer = 1.4;
+    bob.mouthStuck = false;
+  }
+
+  // The red circle under his jaws.
+  function drawBiteRing() {
+    if (attack.phase !== 'bitewarn' && attack.phase !== 'bitesnap') return;
+
+    const jaw = jawWorld();
+    const close = attack.phase === 'bitesnap' ? 1
+                : 1 - Math.max(0, attack.timer) / 1.4;
+
+    const beat = Math.sin(bob.sway * (9 + close * 40));
+    const red  = Math.min(255, 110 + close * 130 + beat * 40);
+    const rest = 24 + close * 30;
+
+    addFace(ringOfPoints(jaw.x, jaw.z, BITE_R, 0.06),
+            'rgb(' + (red | 0) + ',' + (rest | 0) + ',' + (rest | 0) + ')', 0.45);
+    addFace(ringOfPoints(jaw.x, jaw.z, BITE_R * (0.2 + close * 0.6), 0.07),
+            'rgb(255,' + ((70 + close * 130) | 0) + ',50)', 0.5);
+  }
+
+  function soundChomp() {
+    playTone(200, 55, 0.35, 0.42, 'square');    // the clack of the teeth
+    playNoise(0.45, 1800, 200, 0.4);
+  }
+
+  function soundHeadOff() {
+    playTone(520, 30, 2.4, 0.5, 'sawtooth');
+    playNoise(2.6, 2800, 60, 0.55);
+  }
+
+  function ripHeadOff() {
+    bob.headGone = true;
+
+    fallenHead = {
+      x: attack.jawX,
+      z: attack.jawZ,
+      yaw: bob.yaw + (Math.random() - 0.5)
+    };
+
+    flash = 1;
+    shake = 2.2;
+    soundHeadOff();
+    sparksAt(attack.jawX, 3.0, attack.jawZ);
+    deckBurst(attack.jawX, attack.jawZ);
+
+    // Every last mini goes down with him.
+    minis = [];
+
+    state = 'won';
+    wonTimer = 0;
+    bigText = '';
   }
 
 // ===================================================================
@@ -2525,7 +2681,13 @@
     // switch them off, because they turn themselves off. Without this
     // the sea boils for the rest of the fight after one dunk.
     attack.recoil = glide(attack.recoil, 0, 9, dt);
-    foam          = glide(foam, 0.35, 0.6, dt);
+
+    // The sea settles back to its normal churn - UNLESS he's leaning
+    // over the ship to bite you, in which case the foam would be
+    // boiling away on the deck around his neck, which is nonsense.
+    const biting = attack.phase === 'bitewarn' || attack.phase === 'bitesnap' ||
+                   attack.phase === 'biteup'   || attack.phase === 'jawstuck';
+    foam = glide(foam, biting ? 0 : 0.35, biting ? 2 : 0.6, dt);
 
     // ...and a third. The chest hauls itself shut the moment the two
     // phases that need it open are over. Same idea again: the doors
@@ -2538,6 +2700,26 @@
       attack.glow = 0;
       restArm(dt, 4);
       if (attack.timer <= 0) {
+
+        // THE ENDGAME LADDER. Each rung is checked before the ordinary
+        // attack list, and each one is permanent - so once he's climbed
+        // onto a rung he never goes back down to the one below.
+
+        // No arms at all? Then it's teeth from here to the end.
+        if (bob.arm2Gone) { startBite(); return; }
+
+        // Little ones all dead? Then he tries the stuck-arm trick again
+        // with his LAST arm - and it's the same attack, the same code,
+        // just driving the other side. He has no idea he's about to
+        // make exactly the same mistake twice.
+        if (bob.hatched && minis.length === 0) {
+          attack.kind = 'stuckslam';
+          pickAttack();
+          attack.phase = 'warn';
+          attack.timer = 1.7;
+          soundWarn();
+          return;
+        }
 
         // HAS HE RUN OUT OF IDEAS? If he's shown you all five attacks
         // and you're still standing, he stops attacking and opens up.
@@ -2585,6 +2767,90 @@
           attack.fireTimer = 0;
         }
       }
+    }
+
+    // ---- THE BITE: he wades in and lines you up ----------------------
+    else if (attack.phase === 'bitewarn') {
+      // He drags his whole body over to you. His mouth is fixed to his
+      // neck, so he can barely reach forward at all - the ONLY way he
+      // gets his teeth near you is to physically come and get you.
+      bob.x = glide(bob.x, hero.x, 2.6, dt);
+      bob.z = glide(bob.z, hero.z + BITE_LEAD, 2.6, dt);
+      bob.y = glide(bob.y, BOB_BITE_Y, 2.4, dt);
+
+      bob.headPitch = glide(bob.headPitch, -1.2, 4, dt);   // face down
+      bob.mouth     = glide(bob.mouth, 1, 5, dt);          // jaws wide
+      restArm(dt, 3);
+
+      bigText = 'BITE ' + (bob.biteCount + 1);
+      bigTextFade = 1;
+
+      if (attack.timer <= 0) { attack.phase = 'bitesnap'; attack.timer = 0.14; }
+    }
+
+    // ---- THE BITE: CHOMP ---------------------------------------------
+    else if (attack.phase === 'bitesnap') {
+      bob.mouth = glide(bob.mouth, 0, 30, dt);      // snap shut, HARD
+
+      if (attack.timer <= 0) {
+        const jaw = jawWorld();
+        bob.biteCount++;
+
+        attack.jawX = jaw.x;
+        attack.jawZ = jaw.z;
+
+        shake = Math.max(shake, 1.2);
+        soundChomp();
+        deckBurst(jaw.x, jaw.z);
+
+        // Were you between his teeth?
+        if (Math.hypot(hero.x - jaw.x, hero.z - jaw.z) < BITE_R) {
+          hurt('CHOMPED!', 'watch the circle - it lands where his jaw is');
+        }
+
+        // Ten clean bites. The eleventh is the one that ruins him.
+        if (bob.biteCount > BITES_TO_STICK) {
+          bob.mouthStuck = true;
+          bob.headHits = 0;
+          attack.phase = 'jawstuck';
+          attack.timer = 999;
+          flash = Math.max(flash, 0.6);
+        } else {
+          attack.phase = 'biteup';
+          attack.timer = 0.8;
+        }
+      }
+    }
+
+    // ---- THE BITE: he rears back, chewing -----------------------------
+    else if (attack.phase === 'biteup') {
+      // He does NOT go back out to sea between bites. He stays looming
+      // over the ship for the whole finale, which is the point.
+      bob.headPitch = glide(bob.headPitch, -0.5, 4, dt);
+      bob.mouth = Math.abs(Math.sin(bob.sway * 12)) * 0.5;   // chewing
+      restArm(dt, 3);
+
+      if (attack.timer <= 0) startBite();
+    }
+
+    // ---- HIS JAWS ARE STUCK IN THE DECK -------------------------------
+    // His head is down at your level and it is going nowhere. This is
+    // the shot the whole fight has been building to.
+    else if (attack.phase === 'jawstuck') {
+      const heave = Math.sin(bob.sway * 8);
+
+      bob.headPitch = -1.2 + heave * 0.05;    // straining to pull free
+      bob.mouth = 0.15 + Math.abs(heave) * 0.1;
+      shake = Math.max(shake, 0.2 + Math.abs(heave) * 0.14);
+      restArm(dt, 3);
+
+      if (Math.random() < dt * 2.5) playTone(65, 40, 0.5, 0.18, 'sawtooth');
+
+      const gap = Math.hypot(hero.x - attack.jawX, hero.z - attack.jawZ);
+      bigText = (gap > WRENCH_REACH)
+        ? 'HIS HEAD! GET TO IT!'
+        : 'RIGHT-CLICK! ' + (HEAD_HITS - bob.headHits) + ' TO GO';
+      bigTextFade = 1;
     }
 
     // ---- THE LITTLE ONES: the doors grind open -----------------------
@@ -3186,6 +3452,20 @@
       return;
     }
 
+    // YOU WON. Bob stays exactly where he fell, headless, and the camera
+    // sits and looks at what you did. Nothing restarts. Nothing counts
+    // down. You get to just stand there.
+    if (state === 'won') {
+      wonTimer += dt;
+      bob.sway += dt;
+      restArm(dt, 3);
+
+      const want = followSpot();
+      cam.x = want.x; cam.y = want.y; cam.z = want.z;
+      cam.yaw = want.yaw; cam.pitch = want.pitch;
+      return;
+    }
+
     // Squashed. Hold still for a moment, then put you back on your feet.
     if (state === 'squashed') {
       restArm(dt, 3);
@@ -3283,7 +3563,9 @@
     drawDeck();
     drawWarningLine();
     drawBombDots();
-    drawFallenArm();
+    drawBiteRing();
+    drawFallenArms();
+    drawFallenHead();
     drawFoam();
     drawHero();
     drawBob();
@@ -3363,6 +3645,36 @@
 
     // Only show the controls hint once you're actually in control.
     hudEl.style.opacity = (state === 'fight') ? '1' : '0';
+
+    // ---- YOU WON -----------------------------------------------------
+    if (state === 'won') {
+      // A warm gold wash that fades UP over two seconds instead of
+      // slapping you in the face, so you get a moment to see the wreck
+      // before the words arrive.
+      const fade = Math.min(1, wonTimer / 2.0);
+
+      ctx.fillStyle = 'rgba(255,190,60,' + (fade * 0.22) + ')';
+      ctx.fillRect(0, 0, W, H);
+
+      ctx.textAlign = 'center';
+      ctx.font = 'bold ' + Math.min(W * 0.12, 88) + 'px system-ui, sans-serif';
+      ctx.fillStyle = 'rgba(0,0,0,' + fade + ')';
+      ctx.fillText('BOB IS DOWN', W / 2 + 5, H * 0.44 + 5);
+      ctx.fillStyle = 'rgba(255,224,138,' + fade + ')';
+      ctx.fillText('BOB IS DOWN', W / 2, H * 0.44);
+
+      if (wonTimer > 1.4) {
+        const late = Math.min(1, (wonTimer - 1.4) / 1.2);
+        ctx.font = Math.min(W * 0.038, 22) + 'px system-ui, sans-serif';
+        ctx.fillStyle = 'rgba(255,240,214,' + late + ')';
+        ctx.fillText('both arms, twelve cannonballs, three little ones ' +
+                     'and eleven bites', W / 2, H * 0.56);
+        ctx.fillText('and you still had ' + hero.hearts +
+                     (hero.hearts === 1 ? ' heart left' : ' hearts left'),
+                     W / 2, H * 0.62);
+      }
+      return;
+    }
 
     // ---- SQUASHED ----------------------------------------------------
     if (state === 'squashed') {
