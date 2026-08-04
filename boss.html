@@ -1488,6 +1488,7 @@
     aimX: 6.6, aimPitch: 0, aimLen: ARM_REST_LEN,   // where the swing is going
     glow: 0,             // how angry the red line looks right now
 
+    biteX: 0, biteZ: 0,  // the spot on the deck he's about to bite
     jawX: 0, jawZ: 0,    // where his jaws ended up buried in the deck
 
     recoil: 0,           // kicks to 1 the instant he fires, then falls back
@@ -2312,30 +2313,45 @@
   const BITES_TO_STICK = 10;   // ten clean bites, then the eleventh sticks
   const BITE_R         = 7.0;  // how wide his jaws are where they land
   const BOB_BITE_Y     = -40;  // how far he ducks. Puts his jaw on the deck.
-  const BITE_LEAD      = 3.0;  // his jaw lands this far in front of him
   const HEAD_HITS      = 3;    // wrench swings to take his head off
 
-  // WHERE HIS JAWS ACTUALLY ARE, right now, in the real world.
+  // HOW FAR BACK HE REARS UP BEFORE HE STRIKES.
   //
-  // We paint the red circle HERE rather than at some spot we picked in
-  // advance. That means the warning can never lie to you - if the maths
-  // for his head ever changes, the circle moves with it, automatically.
-  // A warning that doesn't match the attack is worse than no warning.
-  function jawWorld() {
-    return mouthWorld();
-  }
+  // The first version had him wade over and just stand there with his
+  // head next to you for the whole wind-up, and his skull filled half
+  // the screen. Maximus spotted it immediately.
+  //
+  // So now he does what an actual biting thing does: rears back where
+  // you can SEE him, then crosses the whole gap in a third of a second.
+  // Close up for an instant instead of close up for a second and a half.
+  const BITE_STANDOFF  = 19;
+
+  // His jaw hangs this far in front of his body when his head is down.
+  // Worked out from his neck joint: at a head pitch of -1.2 his mouth
+  // sits 1.179 Bob-units forward, and he's scaled up 2.5 times.
+  const JAW_OFFSET     = 2.95;
 
   function startBite() {
     attack.phase = 'bitewarn';
     attack.timer = 1.4;
     bob.mouthStuck = false;
+
+    // Lock in where he's aiming. ONE pair of numbers does three jobs:
+    // it's where the red circle is drawn, it's where we drive his body
+    // so his jaw lands, and it's what we measure you against to see if
+    // he got you. Three things that must agree, from one source - so
+    // they cannot drift apart.
+    attack.biteX = hero.x;
+    attack.biteZ = hero.z;
   }
 
   // The red circle under his jaws.
   function drawBiteRing() {
     if (attack.phase !== 'bitewarn' && attack.phase !== 'bitesnap') return;
 
-    const jaw = jawWorld();
+    // Same attack.biteX / attack.biteZ that his body is driven to and
+    // that the hit is measured against. One source of truth.
+    const bx = attack.biteX, bz = attack.biteZ;
     const close = attack.phase === 'bitesnap' ? 1
                 : 1 - Math.max(0, attack.timer) / 1.4;
 
@@ -2343,9 +2359,9 @@
     const red  = Math.min(255, 110 + close * 130 + beat * 40);
     const rest = 24 + close * 30;
 
-    addFace(ringOfPoints(jaw.x, jaw.z, BITE_R, 0.06),
+    addFace(ringOfPoints(bx, bz, BITE_R, 0.06),
             'rgb(' + (red | 0) + ',' + (rest | 0) + ',' + (rest | 0) + ')', 0.45);
-    addFace(ringOfPoints(jaw.x, jaw.z, BITE_R * (0.2 + close * 0.6), 0.07),
+    addFace(ringOfPoints(bx, bz, BITE_R * (0.2 + close * 0.6), 0.07),
             'rgb(255,' + ((70 + close * 130) | 0) + ',50)', 0.5);
   }
 
@@ -2771,41 +2787,56 @@
 
     // ---- THE BITE: he wades in and lines you up ----------------------
     else if (attack.phase === 'bitewarn') {
-      // He drags his whole body over to you. His mouth is fixed to his
-      // neck, so he can barely reach forward at all - the ONLY way he
-      // gets his teeth near you is to physically come and get you.
-      bob.x = glide(bob.x, hero.x, 2.6, dt);
-      bob.z = glide(bob.z, hero.z + BITE_LEAD, 2.6, dt);
-      bob.y = glide(bob.y, BOB_BITE_Y, 2.4, dt);
+      // The circle creeps towards you the whole time he's winding up.
+      // Slowly - you run at 16 and it crawls - so running away always
+      // works and standing still never does.
+      attack.biteX = glide(attack.biteX, hero.x, 1.4, dt);
+      attack.biteZ = glide(attack.biteZ, hero.z, 1.4, dt);
 
-      bob.headPitch = glide(bob.headPitch, -1.2, 4, dt);   // face down
+      // He rears UP and hangs back, well clear of the camera, lining
+      // himself up over the spot. You get to see the whole animal.
+      bob.x = glide(bob.x, attack.biteX, 3, dt);
+      bob.z = glide(bob.z, attack.biteZ + BITE_STANDOFF, 3, dt);
+      bob.y = glide(bob.y, BOB_STAND, 3, dt);
+
+      bob.headPitch = glide(bob.headPitch, -0.35, 4, dt);  // head up, watching
       bob.mouth     = glide(bob.mouth, 1, 5, dt);          // jaws wide
       restArm(dt, 3);
 
       bigText = 'BITE ' + (bob.biteCount + 1);
       bigTextFade = 1;
 
-      if (attack.timer <= 0) { attack.phase = 'bitesnap'; attack.timer = 0.14; }
+      if (attack.timer <= 0) { attack.phase = 'bitesnap'; attack.timer = 0.3; }
     }
 
-    // ---- THE BITE: CHOMP ---------------------------------------------
+    // ---- THE BITE: THE LUNGE ------------------------------------------
+    // He crosses nineteen units and drops thirteen in a third of a
+    // second. Those glide speeds are enormous on purpose - that's the
+    // difference between leaning over and STRIKING.
     else if (attack.phase === 'bitesnap') {
-      bob.mouth = glide(bob.mouth, 0, 30, dt);      // snap shut, HARD
+      bob.x = glide(bob.x, attack.biteX, 16, dt);
+      bob.z = glide(bob.z, attack.biteZ + JAW_OFFSET, 16, dt);
+      bob.y = glide(bob.y, BOB_BITE_Y, 16, dt);
+
+      bob.headPitch = glide(bob.headPitch, -1.2, 18, dt);
+      bob.mouth     = glide(bob.mouth, 0, 22, dt);   // snap shut, HARD
+      restArm(dt, 3);
 
       if (attack.timer <= 0) {
-        const jaw = jawWorld();
         bob.biteCount++;
 
-        attack.jawX = jaw.x;
-        attack.jawZ = jaw.z;
+        // He bit exactly where the circle was. Not nearly - exactly,
+        // because both of them read the same two numbers.
+        attack.jawX = attack.biteX;
+        attack.jawZ = attack.biteZ;
 
         shake = Math.max(shake, 1.2);
         soundChomp();
-        deckBurst(jaw.x, jaw.z);
+        deckBurst(attack.jawX, attack.jawZ);
 
         // Were you between his teeth?
-        if (Math.hypot(hero.x - jaw.x, hero.z - jaw.z) < BITE_R) {
-          hurt('CHOMPED!', 'watch the circle - it lands where his jaw is');
+        if (Math.hypot(hero.x - attack.jawX, hero.z - attack.jawZ) < BITE_R) {
+          hurt('CHOMPED!', 'get off the circle - he lands right on it');
         }
 
         // Ten clean bites. The eleventh is the one that ruins him.
@@ -2822,11 +2853,14 @@
       }
     }
 
-    // ---- THE BITE: he rears back, chewing -----------------------------
+    // ---- THE BITE: he hauls himself back up ---------------------------
+    // And he gets OFF you fast. Sitting on the camera between bites was
+    // the whole problem - so the retreat is quicker than the wind-up.
     else if (attack.phase === 'biteup') {
-      // He does NOT go back out to sea between bites. He stays looming
-      // over the ship for the whole finale, which is the point.
-      bob.headPitch = glide(bob.headPitch, -0.5, 4, dt);
+      bob.y = glide(bob.y, BOB_STAND, 5, dt);
+      bob.z = glide(bob.z, attack.biteZ + BITE_STANDOFF, 5, dt);
+
+      bob.headPitch = glide(bob.headPitch, -0.35, 5, dt);
       bob.mouth = Math.abs(Math.sin(bob.sway * 12)) * 0.5;   // chewing
       restArm(dt, 3);
 
@@ -2838,6 +2872,12 @@
     // the shot the whole fight has been building to.
     else if (attack.phase === 'jawstuck') {
       const heave = Math.sin(bob.sway * 8);
+
+      // Pin him. His teeth are IN the planks, so he cannot drift even
+      // a little - the head you're swinging at has to stay put.
+      bob.x = attack.jawX;
+      bob.z = attack.jawZ + JAW_OFFSET;
+      bob.y = BOB_BITE_Y;
 
       bob.headPitch = -1.2 + heave * 0.05;    // straining to pull free
       bob.mouth = 0.15 + Math.abs(heave) * 0.1;
