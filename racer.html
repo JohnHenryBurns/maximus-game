@@ -21,7 +21,7 @@
 </head>
 <body>
 <canvas id="screen"></canvas>
-<div id="hud">MOUSE or A D = steer &nbsp;&nbsp; W / UP = go &nbsp;&nbsp; S / DOWN = brake &nbsp;&nbsp; R = restart</div>
+<div id="hud">MOUSE or A D = steer &nbsp;&nbsp; W = go &nbsp;&nbsp; S = brake &nbsp;&nbsp; <b>B = look behind you</b> &nbsp;&nbsp; R = restart</div>
 
 <script>
 // ===================================================================
@@ -209,6 +209,7 @@
   const GRAVITY     = 34;
 
   let shake = 0;             // rattles the camera on the grass
+  let clock = 0;             // seconds since the page loaded, for blinking
 
 
 // -------------------------------------------------------------------
@@ -314,6 +315,193 @@
 
 
 // -------------------------------------------------------------------
+//  THE THING BEHIND YOU
+// -------------------------------------------------------------------
+//  It runs at 78. You can do 105 on tarmac, 88 on the dirt shortcuts,
+//  and 32 in the grass. So the rule is simple and you never have to be
+//  told it: STAY ON THE ROAD AND KEEP YOUR FOOT DOWN.
+//
+//  Every mistake you make, it gets closer. It doesn't get angry, it
+//  doesn't speed up, it doesn't cheat. It just never stops.
+//
+//  THE HARD PART wasn't the monster - it was that this is a first
+//  person game and you cannot see behind you. So it gets three ways
+//  of being there: hold B to look back at it, a warning that grows on
+//  the edges of your screen, and a rumble that gets louder. Something
+//  you can't see and can't hear may as well not exist.
+// -------------------------------------------------------------------
+
+  const MONSTER_SPEED   = 78;    // how fast it runs. Forever.
+  const MONSTER_START   = 230;   // how far back it begins
+  const MONSTER_MAX_GAP = 320;   // it never falls further behind than this
+  const EAT_RANGE       = 9;     // this close and it's got you
+  const DANGER_RANGE    = 170;   // when the screen starts warning you
+
+  const MON_SKIN = [64, 92, 58];
+  const MON_DARK = [40, 58, 38];
+  const MON_BELLY= [104, 112, 70];
+  const MON_TOOTH= [232, 228, 208];
+  const MON_EYE  = [255, 84, 40];
+
+  const monster = { x: 0, z: -MONSTER_START, yaw: 0, step: 0 };
+
+  let danger = 0;          // 0 = miles away, 1 = teeth on your neck
+  let lookingBack = false;
+
+  function updateMonster(dt) {
+    // It runs at you, not at the road. Shortcuts don't shake it off.
+    monster.x += (car.x - monster.x) * Math.min(1, 1.2 * dt);
+    monster.z += MONSTER_SPEED * dt;
+
+    // Point it where it's heading, so it leans into the corners.
+    monster.yaw = Math.atan2(car.x - monster.x, Math.max(1, car.z - monster.z));
+
+    // IT NEVER GIVES UP. Get a long way ahead and it still keeps coming
+    // - we just quietly stop it dropping off the back of the world.
+    // Without this you could build a 2km lead and coast, and the
+    // scariest thing in the game would become a rumour.
+    if (car.z - monster.z > MONSTER_MAX_GAP) {
+      monster.z = car.z - MONSTER_MAX_GAP;
+    }
+
+    monster.step += dt * 5.5;
+
+    const gap = car.z - monster.z;
+    danger = 1 - clamp(gap / DANGER_RANGE, 0, 1);
+
+    // ---- IT ATE THE OTHER DRIVER ------------------------------------
+    // If you're winning hard enough, you get to watch it happen to
+    // somebody else instead.
+    if (!rivalEaten && monster.z > rival.z + 4) {
+      rivalEaten = true;
+      rivalEatenAt = 2.6;
+    }
+
+    if (gap < EAT_RANGE) { race = 'done'; result = 'EATEN'; }
+  }
+
+  let rivalEaten = false;
+  let rivalEatenAt = 0;
+
+  function drawMonster() {
+    const m = monster;
+    const co = Math.cos(m.yaw), si = Math.sin(m.yaw);
+
+    // Put one box on the monster, measured in ITS directions rather
+    // than the world's. Exactly the same idea as bobBox() in Bob.
+    function part(ox, oy, oz, w, h, d, rgb) {
+      addBox(m.x + ox * co + oz * si, oy,
+             m.z - ox * si + oz * co, w, h, d, rgb, m.yaw);
+    }
+
+    const stride = Math.sin(m.step) * 3.2;      // one leg forward...
+    const bounce = Math.abs(Math.sin(m.step)) * 0.9;
+
+    // ---- LEGS -------------------------------------------------------
+    part(-5.5, 5 + bounce,  stride, 5.0, 11, 5.5, MON_DARK);
+    part( 5.5, 5 + bounce, -stride, 5.0, 11, 5.5, MON_DARK);
+    part(-5.5, 1.0,  stride + 1.5, 5.6, 2.0, 8.0, MON_DARK);   // foot
+    part( 5.5, 1.0, -stride + 1.5, 5.6, 2.0, 8.0, MON_DARK);
+
+    // ---- BODY -------------------------------------------------------
+    part(0, 16 + bounce, 0, 15.0, 12.0, 11.0, MON_SKIN);
+    part(0, 14 + bounce, -5.6, 10.0, 8.0, 1.2, MON_BELLY);
+
+    // Spines down its back. A loop, because eight of these by hand
+    // would be eight chances to typo a number.
+    for (let i = 0; i < 8; i++) {
+      part(0, 22 + bounce - i * 0.4, 4.5 - i * 1.4,
+           1.2, 3.0 + i * 0.35, 1.2, MON_DARK);
+    }
+
+    // ---- ARMS, reaching for you -------------------------------------
+    for (const side of [-1, 1]) {
+      const swing = Math.sin(m.step + (side > 0 ? Math.PI : 0)) * 2.4;
+      part(side * 9.5, 19 + bounce, 2.0 + swing, 4.0, 4.0, 12.0, MON_SKIN);
+
+      // Three claws on each hand.
+      for (let c = -1; c <= 1; c++) {
+        part(side * 9.5 + c * 1.3, 18 + bounce, 8.6 + swing,
+             0.8, 0.8, 3.4, MON_TOOTH);
+      }
+    }
+
+    // ---- HEAD -------------------------------------------------------
+    const jaw = 1.4 + Math.sin(m.step * 0.7) * 1.1;   // chewing the air
+
+    part(0, 25 + bounce, 2.0, 11.0, 7.5, 12.0, MON_SKIN);       // skull
+    part(0, 22 + bounce - jaw, 3.5, 9.0, 2.6, 9.5, MON_DARK);   // lower jaw
+
+    // Teeth, top row and bottom row.
+    for (let i = 0; i < 7; i++) {
+      const tx = -3.6 + i * 1.2;
+      part(tx, 23.2 + bounce, 7.4, 0.9, 2.2, 0.9, MON_TOOTH);
+      part(tx, 21.4 + bounce - jaw, 7.2, 0.9, 2.0, 0.9, MON_TOOTH);
+    }
+
+    // ---- EYES -------------------------------------------------------
+    // Its front is its own +z, so the eyes go at a POSITIVE z. Put them
+    // at minus and it stares backwards and looks like it's fleeing.
+    for (const ex of [-2.8, 2.8]) {
+      part(ex, 27 + bounce, 7.6, 2.6, 2.0, 0.6, [20, 10, 10]);
+      part(ex, 27 + bounce, 7.9, 1.8, 1.3, 0.5, MON_EYE);
+    }
+
+    // Horns.
+    part(-3.8, 30 + bounce, 3.0, 1.4, 4.5, 1.4, MON_TOOTH);
+    part( 3.8, 30 + bounce, 3.0, 1.4, 4.5, 1.4, MON_TOOTH);
+  }
+
+
+// -------------------------------------------------------------------
+//  THE SOUND OF IT
+// -------------------------------------------------------------------
+//  One low note, playing forever, whose volume is just the danger
+//  number. No timers, no triggers, nothing to remember to switch off -
+//  it gets louder because it got closer, and that's all.
+// -------------------------------------------------------------------
+
+  let audio = null, growlGain = null;
+
+  function startAudio() {
+    if (audio) return;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+
+    audio = new AC();
+
+    const osc = audio.createOscillator();
+    const wob = audio.createOscillator();   // a second, slower note to
+    const wobGain = audio.createGain();     // make it growl instead of hum
+
+    growlGain = audio.createGain();
+    growlGain.gain.value = 0;
+
+    osc.type = 'sawtooth';
+    osc.frequency.value = 42;
+
+    wob.type = 'sine';
+    wob.frequency.value = 5.5;
+    wobGain.gain.value = 14;
+    wob.connect(wobGain);
+    wobGain.connect(osc.frequency);   // wobble the PITCH of the low note
+
+    osc.connect(growlGain);
+    growlGain.connect(audio.destination);
+
+    osc.start();
+    wob.start();
+  }
+
+  function updateGrowl() {
+    if (!growlGain) return;
+    const want = (race === 'racing') ? danger * danger * 0.22 : 0;
+    // Ramp instead of jumping, or it clicks horribly every frame.
+    growlGain.gain.setTargetAtTime(want, audio.currentTime, 0.08);
+  }
+
+
+// -------------------------------------------------------------------
 //  THE RACE
 // -------------------------------------------------------------------
 
@@ -329,6 +517,10 @@
     car.airTime = 0;
 
     rival.x = 6; rival.z = 0; rival.yaw = 0; rival.speed = 0;
+    rivalEaten = false; rivalEatenAt = 0;
+
+    monster.x = 0; monster.z = -MONSTER_START; monster.yaw = 0;
+    danger = 0;
 
     mouseSteer = 0;
     shake = 0;
@@ -726,8 +918,8 @@
   const keys = {};
   window.addEventListener('keydown', function (e) {
     keys[e.key.toLowerCase()] = true;
-    // Stop the arrow keys scrolling the page out from under you.
-    if (e.key.startsWith('Arrow')) e.preventDefault();
+    // Stop the arrow keys and space scrolling the page out from under you.
+    if (e.key.startsWith('Arrow') || e.key === ' ') e.preventDefault();
   });
   window.addEventListener('keyup', function (e) {
     keys[e.key.toLowerCase()] = false;
@@ -768,6 +960,10 @@
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
   canvas.addEventListener('click', function () {
+    // Browsers refuse to make noise until you've clicked on the page
+    // at least once - a rule that exists because of adverts. So the
+    // sound starts here, on the same click that grabs the mouse.
+    startAudio();
     if (!locked && canvas.requestPointerLock) canvas.requestPointerLock();
   });
 
@@ -786,6 +982,7 @@
 // -------------------------------------------------------------------
 
   function update(dt) {
+    clock += dt;
 
     // ---- THE LIGHTS ------------------------------------------------
     if (race === 'countdown') {
@@ -793,7 +990,12 @@
       if (countdown <= 0) race = 'racing';
     }
 
-    if (race === 'racing') updateRival(dt);
+    if (race === 'racing') {
+      if (!rivalEaten) updateRival(dt);
+      updateMonster(dt);
+    }
+    if (rivalEatenAt > 0) rivalEatenAt -= dt;
+    updateGrowl();
 
     // R puts everything back to the start line.
     if (keys['r'] && race === 'done') resetRace();
@@ -925,6 +1127,15 @@
     cam.y = 3.1 + car.y;      // ...including upwards. You SEE the jump.
     cam.yaw = car.yaw;
 
+    // ---- LOOK BEHIND YOU --------------------------------------------
+    // Half a turn is Math.PI. Spin the camera by that and you're
+    // looking backwards - and because the whole world is drawn from
+    // wherever the camera happens to point, that is the entire feature.
+    // You still steer, you still accelerate. You just can't see where
+    // you're going, which is the price.
+    lookingBack = held('b', ' ');
+    if (lookingBack) cam.yaw += Math.PI;
+
     // ---- HAS ANYBODY CROSSED THE LINE? ------------------------------
     if (race === 'racing') {
       if (car.z >= RACE_LENGTH)        { race = 'done'; result = 'WIN'; }
@@ -954,7 +1165,8 @@
     drawShortcuts();
     drawRamps();
     drawFinish();
-    drawRival();
+    if (!rivalEaten) drawRival();
+    drawMonster();
 
     // Furthest away gets painted FIRST, so close things end up on top.
     faces.sort(function (a, b) { return b.depth - a.depth; });
@@ -984,6 +1196,80 @@
   function drawRaceHud() {
     ctx.textAlign = 'center';
 
+    // ---- IT IS BEHIND YOU -------------------------------------------
+    // You can't see it, so the screen has to tell you. Everything here
+    // is driven by the ONE danger number, so it all swells together
+    // and nothing can ever disagree with anything else.
+    if (danger > 0.01 && race === 'racing') {
+      const d = danger;
+
+      // Darkness creeping in from the edges. Squaring it (d*d) keeps
+      // it out of your way when it's far off and makes it pile on fast
+      // when it's close - that's what makes it feel like panic.
+      const dark = ctx.createRadialGradient(W / 2, H / 2, H * (0.55 - d * 0.3),
+                                            W / 2, H / 2, H * 0.95);
+      dark.addColorStop(0, 'rgba(30,0,0,0)');
+      dark.addColorStop(1, 'rgba(40,0,0,' + (d * d * 0.92) + ')');
+      ctx.fillStyle = dark;
+      ctx.fillRect(0, 0, W, H);
+
+      // Claws raking in at the sides once it's really close.
+      if (d > 0.55) {
+        const reach = (d - 0.55) / 0.45;
+        ctx.fillStyle = 'rgba(18,26,16,' + (reach * 0.9) + ')';
+        for (const side of [0, 1]) {
+          for (let i = 0; i < 3; i++) {
+            const top = H * (0.30 + i * 0.17);
+            const len = W * 0.16 * reach;
+            ctx.beginPath();
+            if (side === 0) {
+              ctx.moveTo(0, top);
+              ctx.lineTo(len, top + H * 0.05);
+              ctx.lineTo(0, top + H * 0.11);
+            } else {
+              ctx.moveTo(W, top);
+              ctx.lineTo(W - len, top + H * 0.05);
+              ctx.lineTo(W, top + H * 0.11);
+            }
+            ctx.closePath();
+            ctx.fill();
+          }
+        }
+      }
+
+      // The warning, flashing faster the closer it gets.
+      if (d > 0.3) {
+        // Blink off a REAL clock, not off how far you've driven. Tie it
+        // to distance and the warning stops blinking the moment you
+        // stop moving - which is exactly the moment you need it most.
+        const flash = Math.sin(clock * (6 + d * 22)) > -0.2;
+        if (flash) {
+          ctx.font = 'bold ' + Math.min(W * 0.055, 34) + 'px system-ui, sans-serif';
+          ctx.fillStyle = 'rgba(255,90,60,' + Math.min(1, d * 1.4) + ')';
+          ctx.fillText('GO FASTER', W / 2, H * 0.27);
+        }
+      }
+
+      // A bar showing how much room you've got left.
+      const bw = W * 0.34, bx = W / 2 - bw / 2, by = H * 0.20, bh = 9;
+      ctx.fillStyle = 'rgba(0,0,0,0.45)';
+      ctx.fillRect(bx, by, bw, bh);
+      ctx.fillStyle = d > 0.7 ? '#ff4a3c' : d > 0.4 ? '#ffa23c' : '#ffe08a';
+      ctx.fillRect(bx, by, bw * d, bh);
+    }
+
+    if (rivalEatenAt > 0) {
+      ctx.font = 'bold ' + Math.min(W * 0.05, 30) + 'px system-ui, sans-serif';
+      ctx.fillStyle = 'rgba(255,200,120,' + Math.min(1, rivalEatenAt) + ')';
+      ctx.fillText('IT ATE THE OTHER GUY', W / 2, H * 0.36);
+    }
+
+    if (lookingBack && race === 'racing') {
+      ctx.font = 'bold ' + Math.min(W * 0.04, 24) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#ff8a6a';
+      ctx.fillText('LOOKING BACK', W / 2, H * 0.70);
+    }
+
     // ---- HOW FAR AHEAD OR BEHIND ARE YOU? --------------------------
     // Both of you are measured by how far down the track you've got,
     // so comparing is just a subtraction. Nothing clever needed.
@@ -991,12 +1277,14 @@
     const ahead = gap >= 0;
 
     ctx.font = 'bold ' + Math.min(W * 0.05, 30) + 'px system-ui, sans-serif';
-    ctx.fillStyle = ahead ? '#8cf0a0' : '#ff8a6a';
-    ctx.fillText(ahead ? '1st' : '2nd', W / 2, H * 0.075);
+    ctx.fillStyle = rivalEaten ? '#cfd6e6' : ahead ? '#8cf0a0' : '#ff8a6a';
+    ctx.fillText(rivalEaten ? 'ALONE' : ahead ? '1st' : '2nd', W / 2, H * 0.075);
 
-    ctx.font = Math.min(W * 0.03, 18) + 'px system-ui, sans-serif';
-    ctx.fillStyle = '#cfd6e6';
-    ctx.fillText((ahead ? '+' : '') + Math.round(gap) + 'm', W / 2, H * 0.115);
+    if (!rivalEaten) {
+      ctx.font = Math.min(W * 0.03, 18) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#cfd6e6';
+      ctx.fillText((ahead ? '+' : '') + Math.round(gap) + 'm', W / 2, H * 0.115);
+    }
 
     // How far to the flag.
     const left = Math.max(0, RACE_LENGTH - car.z);
@@ -1020,22 +1308,29 @@
 
     // ---- THE RESULT -------------------------------------------------
     if (race === 'done') {
-      const won = (result === 'WIN');
+      const won   = (result === 'WIN');
+      const eaten = (result === 'EATEN');
 
-      ctx.fillStyle = won ? 'rgba(255,190,60,0.20)' : 'rgba(150,20,20,0.35)';
+      const word = eaten ? 'IT ATE YOU' : won ? 'YOU WIN' : 'HE GOT YOU';
+      const line = eaten ? 'you got ' + (car.z / 100).toFixed(1) +
+                           ' km before it caught up'
+                 : won   ? 'you beat him by ' + Math.round(gap) + ' metres'
+                 :         'he beat you by ' + Math.round(-gap) + ' metres';
+
+      ctx.fillStyle = eaten ? 'rgba(40,4,4,0.72)'
+                    : won   ? 'rgba(255,190,60,0.20)'
+                    :         'rgba(150,20,20,0.35)';
       ctx.fillRect(0, 0, W, H);
 
       ctx.font = 'bold ' + Math.min(W * 0.13, 92) + 'px system-ui, sans-serif';
       ctx.fillStyle = '#000';
-      ctx.fillText(won ? 'YOU WIN' : 'HE GOT YOU', W / 2 + 5, H * 0.42 + 5);
-      ctx.fillStyle = won ? '#ffe08a' : '#ffc0b0';
-      ctx.fillText(won ? 'YOU WIN' : 'HE GOT YOU', W / 2, H * 0.42);
+      ctx.fillText(word, W / 2 + 5, H * 0.42 + 5);
+      ctx.fillStyle = eaten ? '#ff7a5a' : won ? '#ffe08a' : '#ffc0b0';
+      ctx.fillText(word, W / 2, H * 0.42);
 
       ctx.font = Math.min(W * 0.035, 21) + 'px system-ui, sans-serif';
       ctx.fillStyle = '#eef0f4';
-      ctx.fillText(won ? 'you beat him by ' + Math.round(gap) + ' metres'
-                       : 'he beat you by ' + Math.round(-gap) + ' metres',
-                   W / 2, H * 0.53);
+      ctx.fillText(line, W / 2, H * 0.53);
       ctx.fillText('press R to race again', W / 2, H * 0.60);
     }
 
