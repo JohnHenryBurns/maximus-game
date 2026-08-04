@@ -83,6 +83,87 @@
 
 
 // -------------------------------------------------------------------
+//  SHORTCUTS
+// -------------------------------------------------------------------
+//  A shortcut is a straight dirt line that leaves the road, cuts
+//  across the inside of a bend, and rejoins it further on.
+//
+//  We don't place them by hand. Both ends sit ON the road - we just
+//  ask roadX() where the road is at the start and at the end, and run
+//  a straight line between. Straight beats curved every time, so it's
+//  automatically a shortcut, on every corner, forever.
+//
+//  The dirt is slower than tarmac. That's the deal: shorter, but less
+//  grip. Change SHORT_SPEED to 105 if you'd rather they were free.
+// -------------------------------------------------------------------
+
+  const SHORT_EVERY = 748;   // one shortcut per bend
+  const SHORT_START = 114;   // where the first one begins
+  const SHORT_LEN   = 520;   // how long each one is
+  const SHORT_HALF  = 7;     // half the width of the dirt
+  const SHORT_SPEED = 88;    // top speed on dirt (tarmac is 105)
+
+  // Where does shortcut number n start and end?
+  function shortcutEnds(n) {
+    const z0 = SHORT_START + n * SHORT_EVERY;
+    const z1 = z0 + SHORT_LEN;
+    return { z0: z0, z1: z1, x0: roadX(z0), x1: roadX(z1) };
+  }
+
+  // Where is shortcut n, sideways, at this distance down the track?
+  // Straight line, so it's the same slide-between-two-things sum that
+  // moved Bob's cannon onto his shoulder.
+  function shortcutX(s, z) {
+    const p = (z - s.z0) / (s.z1 - s.z0);
+    return s.x0 + (s.x1 - s.x0) * p;
+  }
+
+  // Are you on a shortcut right now? Returns which one, or null.
+  function shortcutUnder(x, z) {
+    const n = Math.floor((z - SHORT_START) / SHORT_EVERY);
+    for (const which of [n, n + 1]) {       // check this one and the next
+      if (which < 0) continue;
+      const s = shortcutEnds(which);
+      if (z < s.z0 || z > s.z1) continue;
+      if (Math.abs(x - shortcutX(s, z)) < SHORT_HALF) return s;
+    }
+    return null;
+  }
+
+
+// -------------------------------------------------------------------
+//  RAMPS
+// -------------------------------------------------------------------
+//  A wedge sitting in the middle of the road. Drive up it and you get
+//  thrown into the sky. It's narrower than the road on purpose, so
+//  hitting one is always your choice.
+// -------------------------------------------------------------------
+
+  const RAMP_EVERY = 340;    // one every this many units of road
+  const RAMP_LEN   = 26;     // how long the slope is
+  const RAMP_H     = 5.5;    // how high the lip is
+  const RAMP_HALF  = 5;      // half the width
+
+  // HOW HIGH IS THE GROUND at this exact spot?
+  //
+  // Almost everywhere the answer is 0. On a ramp it's however far up
+  // the slope you are. That one number is all the jumping needs -
+  // drive along, follow the ground, and when the ground suddenly
+  // isn't there any more, you're flying.
+  function groundHeightAt(x, z) {
+    const n = Math.round(z / RAMP_EVERY);
+    if (n < 1) return 0;                    // no ramp right on the start line
+    const rz = n * RAMP_EVERY;              // where this ramp starts
+
+    const along = z - rz;
+    if (along < 0 || along > RAMP_LEN) return 0;     // not on it lengthways
+    if (Math.abs(x - roadX(rz)) > RAMP_HALF) return 0;  // not on it sideways
+
+    return RAMP_H * (along / RAMP_LEN);     // partway up the slope
+  }
+
+
+// -------------------------------------------------------------------
 //  THE CAR - that's you
 // -------------------------------------------------------------------
 
@@ -98,7 +179,20 @@
                    // come back. That delay is most of what makes driving
                    // feel like driving instead of like sliding a box.
 
-    onRoad: true
+    onRoad: true,
+    surface: 'road',   // 'road', 'dirt' or 'grass'
+
+    // ---- LEAVING THE GROUND ----------------------------------------
+    y: 0,              // how high off the ground you are
+    vy: 0,             // how fast you're going UP. Gravity eats this.
+    airborne: false,
+    climb: 0,          // how fast the ground was lifting you a moment
+                       // ago. THIS is what you launch with - the ramp
+                       // doesn't throw you, it just stops being there
+                       // while you're still going up.
+
+    airTime: 0,        // how long this jump has lasted
+    bestAir: 0         // your longest ever
   };
 
   const TOP_SPEED   = 105;   // how fast you can go on tarmac
@@ -106,6 +200,13 @@
   const ACCEL       = 34;    // how hard you pull away
   const BRAKE       = 90;    // how hard the brakes bite
   const DRAG        = 9;     // slowing down when you touch nothing
+  // HOW HARD THE SKY DROPS YOU.
+  //
+  // Real gravity is about 10. This is 34, because a racing game at
+  // real gravity feels like driving on the moon. Games lie about
+  // physics constantly - what matters is how it FEELS, not whether a
+  // scientist would agree. Set it to 10 and try it, it's very funny.
+  const GRAVITY     = 34;
 
   let shake = 0;             // rattles the camera on the grass
 
@@ -211,6 +312,10 @@
   const RUMBLE_B = [238, 238, 238];
   const STRIPE   = '#eef0f4';
   const POST     = [230, 232, 238];
+  const DIRT_A   = [150, 116, 74];
+  const DIRT_B   = [136, 104, 66];
+  const RAMP_C   = [226, 142, 44];
+  const RAMP_LIP = [250, 214, 96];
 
 
 // -------------------------------------------------------------------
@@ -272,6 +377,79 @@
         addBox(x0 - ROAD_HALF - 6, 1.7, z0, 0.7, 3.4, 0.7, POST);
         addBox(x0 + ROAD_HALF + 6, 1.7, z0, 0.7, 3.4, 0.7, POST);
       }
+    }
+  }
+
+
+// -------------------------------------------------------------------
+//  DRAWING THE SHORTCUTS
+// -------------------------------------------------------------------
+//  Chopped into slabs like the road is, for two reasons: the light and
+//  dark bands give you the same rush of speed, and one enormous flat
+//  shape would sort badly against the grass and flicker.
+// -------------------------------------------------------------------
+
+  function drawShortcuts() {
+    const from = Math.floor((car.z - SHORT_LEN - SHORT_START) / SHORT_EVERY);
+    const to   = Math.floor((car.z + VIEW * SEG - SHORT_START) / SHORT_EVERY);
+
+    for (let n = Math.max(0, from); n <= to; n++) {
+      const s = shortcutEnds(n);
+
+      for (let z0 = s.z0; z0 < s.z1; z0 += SEG) {
+        const z1 = Math.min(z0 + SEG, s.z1);
+        if (z1 < car.z - SEG * 2) continue;          // already behind you
+
+        const x0 = shortcutX(s, z0);
+        const x1 = shortcutX(s, z1);
+        const flip = (Math.floor(z0 / SEG) % 2 === 0);
+
+        addFace([[x0 - SHORT_HALF, 0, z0], [x0 + SHORT_HALF, 0, z0],
+                 [x1 + SHORT_HALF, 0, z1], [x1 - SHORT_HALF, 0, z1]],
+                shade(flip ? DIRT_A : DIRT_B, 1), 0.08);
+      }
+
+      // A marker post at each end, so you can spot the turning.
+      addBox(s.x0, 1.4, s.z0, 0.6, 2.8, 0.6, [240, 190, 60]);
+      addBox(s.x1, 1.4, s.z1, 0.6, 2.8, 0.6, [240, 190, 60]);
+    }
+  }
+
+
+// -------------------------------------------------------------------
+//  DRAWING THE RAMPS
+// -------------------------------------------------------------------
+
+  function drawRamps() {
+    const from = Math.round(car.z / RAMP_EVERY) - 1;
+    const to   = Math.round((car.z + VIEW * SEG) / RAMP_EVERY);
+
+    for (let n = Math.max(1, from); n <= to; n++) {
+      const rz = n * RAMP_EVERY;
+      const rx = roadX(rz);
+
+      const zA = rz, zB = rz + RAMP_LEN;
+      const xL = rx - RAMP_HALF, xR = rx + RAMP_HALF;
+
+      // The slope you drive up.
+      addFace([[xL, 0, zA], [xR, 0, zA], [xR, RAMP_H, zB], [xL, RAMP_H, zB]],
+              shade(RAMP_C, 1.12), 0.3);
+
+      // The sheer drop at the far end. This is the bit that stops
+      // being under you.
+      addFace([[xL, 0, zB], [xR, 0, zB], [xR, RAMP_H, zB], [xL, RAMP_H, zB]],
+              shade(RAMP_C, 0.62), 0.3);
+
+      // The two triangular sides. addFace takes any shape, not just
+      // four-cornered ones - three corners is perfectly fine.
+      addFace([[xL, 0, zA], [xL, 0, zB], [xL, RAMP_H, zB]], shade(RAMP_C, 0.75), 0.3);
+      addFace([[xR, 0, zA], [xR, 0, zB], [xR, RAMP_H, zB]], shade(RAMP_C, 0.92), 0.3);
+
+      // A bright lip along the top edge, so you can see it coming from
+      // a long way off and decide whether you want it.
+      addFace([[xL, RAMP_H, zB - 1.6], [xR, RAMP_H, zB - 1.6],
+               [xR, RAMP_H, zB], [xL, RAMP_H, zB]],
+              shade(RAMP_LIP, 1), 0.45);
     }
   }
 
@@ -346,7 +524,9 @@
 
     ctx.textAlign = 'center';
     ctx.font = 'bold ' + Math.min(W * 0.11, 70) + 'px system-ui, sans-serif';
-    ctx.fillStyle = car.onRoad ? '#ffe08a' : '#ff8a6a';
+    ctx.fillStyle = car.airborne ? '#8ce0ff'
+                  : car.onRoad   ? '#ffe08a'
+                  :                '#ff8a6a';
     ctx.fillText(mph, W / 2, dashTop + H * 0.10);
 
     ctx.font = Math.min(W * 0.026, 15) + 'px system-ui, sans-serif';
@@ -359,10 +539,24 @@
     ctx.fillStyle = '#8c94aa';
     ctx.fillText((car.z / 100).toFixed(1) + ' km', W * 0.05, dashTop + H * 0.115);
 
-    // Shout at you when you're in the grass, because the speedo
-    // dropping is easy to miss when you're busy panicking.
-    if (!car.onRoad) {
-      ctx.textAlign = 'right';
+    // Your longest jump, kept forever.
+    if (car.bestAir > 0.15) {
+      ctx.fillStyle = '#8c94aa';
+      ctx.fillText('best air ' + car.bestAir.toFixed(2) + 's',
+                   W * 0.05, dashTop + H * 0.135);
+    }
+
+    // Shout at you about the surface, because the speedo dropping is
+    // easy to miss when you're busy panicking.
+    ctx.textAlign = 'right';
+    if (car.airborne) {
+      ctx.fillStyle = '#8ce0ff';
+      ctx.fillText('AIRBORNE  ' + car.airTime.toFixed(2) + 's',
+                   W * 0.95, dashTop + H * 0.115);
+    } else if (car.surface === 'dirt') {
+      ctx.fillStyle = '#e0b070';
+      ctx.fillText('SHORTCUT', W * 0.95, dashTop + H * 0.115);
+    } else if (car.surface === 'grass') {
       ctx.fillStyle = '#ff8a6a';
       ctx.fillText('OFF TRACK', W * 0.95, dashTop + H * 0.115);
     }
@@ -392,14 +586,26 @@
 
   function update(dt) {
 
-    // ---- ARE YOU ON THE ROAD? --------------------------------------
+    // ---- WHAT ARE YOU STANDING ON? ---------------------------------
     // Compare where you are with where the road is at your distance.
-    // That's the whole check, and it's why the track being one function
-    // is so handy - we can just ASK it.
+    // Then, if you're not on tarmac, ask the shortcuts the same
+    // question. It's why having the track as a function pays off - we
+    // never search anything, we just ASK.
     const centre = roadX(car.z);
-    car.onRoad = Math.abs(car.x - centre) < ROAD_HALF;
 
-    const limit = car.onRoad ? TOP_SPEED : GRASS_SPEED;
+    if (Math.abs(car.x - centre) < ROAD_HALF)      car.surface = 'road';
+    else if (shortcutUnder(car.x, car.z))          car.surface = 'dirt';
+    else                                           car.surface = 'grass';
+
+    car.onRoad = (car.surface !== 'grass');
+
+    // IN THE AIR, THE GROUND CAN'T SLOW YOU DOWN. That's the whole
+    // reward for taking a ramp - for a second and a bit you can sail
+    // straight over grass at full speed.
+    const limit = car.airborne ? TOP_SPEED
+                : car.surface === 'road'  ? TOP_SPEED
+                : car.surface === 'dirt'  ? SHORT_SPEED
+                :                           GRASS_SPEED;
 
     // ---- THE PEDALS -------------------------------------------------
     if (held('w', 'arrowup')) {
@@ -436,14 +642,55 @@
     car.x += Math.sin(car.yaw) * car.speed * dt;
     car.z += Math.cos(car.yaw) * car.speed * dt;
 
+    // ---- UP AND DOWN --------------------------------------------------
+    // The ramp never throws you. Read that again, because it's the
+    // whole trick: all a ramp does is BE higher. You follow the ground
+    // up it, gaining height fast - and then at the lip the ground
+    // vanishes while you're still rising, and you carry on rising.
+    // That's a jump. Real ones work exactly the same way.
+    const ground = groundHeightAt(car.x, car.z);
+
+    if (car.airborne) {
+      car.vy -= GRAVITY * dt;
+      car.y  += car.vy * dt;
+      car.airTime += dt;
+
+      if (car.y <= ground) {           // BANG. Back on the deck.
+        car.y = ground;
+        car.vy = 0;
+        car.airborne = false;
+        car.climb = 0;
+        shake = Math.min(1, shake + 0.55);
+        if (car.airTime > car.bestAir) car.bestAir = car.airTime;
+        car.airTime = 0;
+      }
+    } else {
+      // How fast is the ground lifting us right now?
+      const climb = (ground - car.y) / dt;
+
+      if (climb < -1) {
+        // It just fell away underneath us. Take off - with the speed we
+        // were climbing at a moment ago, not with anything the ramp
+        // "gave" us. There is no such thing.
+        car.airborne = true;
+        car.vy = car.climb;
+        car.airTime = 0;
+      } else {
+        car.y = ground;
+        car.climb = Math.max(0, climb);
+      }
+    }
+
     // Rattle the camera when you're bouncing over grass, harder the
-    // faster you're going.
-    shake = car.onRoad ? Math.max(0, shake - dt * 5)
-                       : Math.min(1, shake + dt * 4) * (car.speed / TOP_SPEED);
+    // faster you're going. Not in mid-air though - up there it's calm.
+    const rough = !car.onRoad && !car.airborne;
+    shake = rough ? Math.min(1, shake + dt * 4) * (car.speed / TOP_SPEED)
+                  : Math.max(0, shake - dt * 5);
 
     // ---- THE CAMERA GOES WHERE YOU GO -------------------------------
     cam.x = car.x;
     cam.z = car.z;
+    cam.y = 3.1 + car.y;      // ...including upwards. You SEE the jump.
     cam.yaw = car.yaw;
 
     // Lean the view a touch into the corner. Tiny effect, and you will
@@ -466,6 +713,8 @@
 
     faces = [];
     drawRoad();
+    drawShortcuts();
+    drawRamps();
 
     // Furthest away gets painted FIRST, so close things end up on top.
     faces.sort(function (a, b) { return b.depth - a.depth; });
@@ -497,7 +746,13 @@
     // dt is how long the last frame took, in seconds. Everything moves
     // by speed * dt, so the game runs at the same pace on a fast
     // computer and a slow one.
-    const dt = Math.min(0.05, (now - last) / 1000 || 0);
+    //
+    // It is never allowed to be ZERO. The jump code divides by dt to
+    // work out how fast the ground is lifting you, and dividing by
+    // zero gives NaN - "not a number" - which then spreads into your
+    // height, your speed, your position, and the car quietly vanishes
+    // from the universe with no error message at all.
+    const dt = Math.min(0.05, Math.max(0.0005, (now - last) / 1000 || 0.016));
     last = now;
 
     update(dt);
