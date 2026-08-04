@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>MAX'S RACER</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: #10131c; overflow: hidden;
+    font-family: system-ui, sans-serif;
+  }
+  canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+  #hud {
+    position: fixed; left: 0; right: 0; bottom: 10px;
+    text-align: center; color: #cfd6e6; font-size: 14px;
+    pointer-events: none; text-shadow: 0 2px 6px #000;
+    transition: opacity .4s;
+  }
+</style>
+</head>
+<body>
+<canvas id="screen"></canvas>
+<div id="hud">W / UP = go &nbsp;&nbsp; S / DOWN = brake &nbsp;&nbsp; A D / LEFT RIGHT = steer</div>
+
+<script>
+// ===================================================================
+//  MAX'S RACER
+// ===================================================================
+//  First person. You're in the seat. There is no car on screen because
+//  you ARE the car - all you see is your dashboard and the road coming
+//  at you very fast.
+//
+//  The 3D maths in here is the SAME maths you wrote for Bob. project(),
+//  addFace(), the face list, the painter's sort - all of it came
+//  straight across from boss.html and worked first time. That's what
+//  building an engine gets you: the second game is much faster than
+//  the first.
+// ===================================================================
+
+  const canvas = document.getElementById('screen');
+  const ctx = canvas.getContext('2d');
+
+  let W = 0, H = 0;
+
+  function fitScreen() {
+    // Match the canvas to the window, allowing for retina screens so
+    // everything stays sharp instead of going fuzzy.
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    W = canvas.clientWidth;
+    H = canvas.clientHeight;
+    canvas.width  = W * dpr;
+    canvas.height = H * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  window.addEventListener('resize', fitScreen);
+
+
+// -------------------------------------------------------------------
+//  THE TRACK - and this is the best bit
+// -------------------------------------------------------------------
+//  The whole track is ONE FUNCTION. Give it a distance down the road
+//  and it tells you how far sideways the road has wandered by then.
+//
+//  Two sine waves added together: one long lazy one and one tighter
+//  one. Adding waves of different sizes is how you get something that
+//  feels designed instead of repetitive - and it never ends, because
+//  sin() never runs out.
+//
+//  CHANGE THESE NUMBERS. Bigger multipliers = wider swings. Bigger
+//  numbers next to z = tighter, twistier corners. This one line is the
+//  entire course, so it's the most fun line in the file.
+// -------------------------------------------------------------------
+
+  function roadX(z) {
+    return Math.sin(z * 0.0042) * 46 +
+           Math.sin(z * 0.0131) * 15;
+  }
+
+  const ROAD_HALF = 12;     // half the width of the tarmac
+  const SEG       = 7;      // how long one slab of road is
+  const VIEW      = 95;     // how many slabs ahead you can see
+
+
+// -------------------------------------------------------------------
+//  THE CAR - that's you
+// -------------------------------------------------------------------
+
+  const car = {
+    x: 0,          // where you are, left to right
+    z: 0,          // how far down the track you've got
+    yaw: 0,        // which way you're pointing. 0 = straight down the road.
+    speed: 0,      // how fast you're actually going
+
+    steer: 0,      // which way the wheel is turned right now, -1 to 1.
+                   // This is NOT the same as which key you're holding -
+                   // the wheel takes a moment to turn, and a moment to
+                   // come back. That delay is most of what makes driving
+                   // feel like driving instead of like sliding a box.
+
+    onRoad: true
+  };
+
+  const TOP_SPEED   = 105;   // how fast you can go on tarmac
+  const GRASS_SPEED = 32;    // ...and how fast the grass lets you go
+  const ACCEL       = 34;    // how hard you pull away
+  const BRAKE       = 90;    // how hard the brakes bite
+  const DRAG        = 9;     // slowing down when you touch nothing
+
+  let shake = 0;             // rattles the camera on the grass
+
+
+// -------------------------------------------------------------------
+//  PROJECT - the most important function in the whole game.
+//  Give it a point in the 3D world, it tells you where that point
+//  lands on your flat screen. This is Bob's, word for word.
+// -------------------------------------------------------------------
+
+  const cam = { x: 0, y: 3.1, z: 0, yaw: 0, pitch: -0.055 };
+
+  function project(x, y, z) {
+    const dx = x - cam.x;
+    const dy = y - cam.y;
+    const dz = z - cam.z;
+
+    // Spin it by the camera's yaw, so "forwards" really means the way
+    // the camera is looking.
+    const cy = Math.cos(cam.yaw), sy = Math.sin(cam.yaw);
+    const rx = dx * cy - dz * sy;   // how far to the RIGHT of the camera
+    const rz = dx * sy + dz * cy;   // how far IN FRONT of the camera
+    const ry = dy;                  // how far ABOVE the camera
+
+    // Tilt it by the camera's pitch (looking up or down).
+    const cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch);
+    const fz = rz * cp + ry * sp;
+    const fy = ry * cp - rz * sp;
+
+    // THE MAGIC LINE. Divide by how far in front it is.
+    return {
+      x: W / 2 + rx * focal() / fz,
+      y: H / 2 - fy * focal() / fz,
+      depth: fz
+    };
+  }
+
+  function focal() { return H * 0.9; }
+
+
+// -------------------------------------------------------------------
+//  THE FACE LIST - furthest away gets painted first, so near things
+//  cover far things. The painter's algorithm, same as Bob.
+// -------------------------------------------------------------------
+
+  let faces = [];
+
+  function addFace(points3d, colour, lift) {
+    const flat = [];
+    let total = 0;
+
+    for (const p of points3d) {
+      const s = project(p[0], p[1], p[2]);
+      // Any corner behind the camera and the maths goes haywire, so skip.
+      if (s.depth < 0.4) return;
+      flat.push(s);
+      total += s.depth;
+    }
+
+    faces.push({
+      points: flat,
+      depth: total / flat.length - (lift || 0),
+      colour: colour
+    });
+  }
+
+  function shade(rgb, amount) {
+    return 'rgb(' + (rgb[0] * amount | 0) + ',' +
+                    (rgb[1] * amount | 0) + ',' +
+                    (rgb[2] * amount | 0) + ')';
+  }
+
+  // A box, for the posts down the side of the track.
+  function addBox(cx, cy, cz, w, h, d, rgb) {
+    const hw = w / 2, hh = h / 2, hd = d / 2;
+
+    const c = [
+      [cx - hw, cy - hh, cz - hd], [cx + hw, cy - hh, cz - hd],
+      [cx + hw, cy - hh, cz + hd], [cx - hw, cy - hh, cz + hd],
+      [cx - hw, cy + hh, cz - hd], [cx + hw, cy + hh, cz - hd],
+      [cx + hw, cy + hh, cz + hd], [cx - hw, cy + hh, cz + hd]
+    ];
+
+    // Each side gets its own brightness. That difference is the whole
+    // reason your brain sees a solid object and not a flat blob.
+    addFace([c[4], c[5], c[6], c[7]], shade(rgb, 1.15));   // top
+    addFace([c[0], c[1], c[5], c[4]], shade(rgb, 0.80));   // back
+    addFace([c[3], c[2], c[6], c[7]], shade(rgb, 1.00));   // front
+    addFace([c[0], c[3], c[7], c[4]], shade(rgb, 0.66));   // left
+    addFace([c[1], c[2], c[6], c[5]], shade(rgb, 0.90));   // right
+  }
+
+
+// -------------------------------------------------------------------
+//  COLOURS - all in one place so they're easy to fiddle with
+// -------------------------------------------------------------------
+
+  const TARMAC_A = [58, 60, 68];
+  const TARMAC_B = [50, 52, 60];
+  const GRASS_A  = [58, 122, 62];
+  const GRASS_B  = [50, 108, 55];
+  const RUMBLE_A = [214, 62, 58];
+  const RUMBLE_B = [238, 238, 238];
+  const STRIPE   = '#eef0f4';
+  const POST     = [230, 232, 238];
+
+
+// -------------------------------------------------------------------
+//  DRAWING THE ROAD
+// -------------------------------------------------------------------
+//  We don't store a track anywhere. We work out, every single frame,
+//  which slabs are in front of you right now and build just those.
+//  The road doesn't exist until you can see it - which is why it can
+//  go on forever without using up any memory at all.
+// -------------------------------------------------------------------
+
+  function drawRoad() {
+    const first = Math.floor(car.z / SEG) - 2;
+
+    for (let i = VIEW; i >= 0; i--) {
+      const n  = first + i;             // which slab number this is
+      const z0 = n * SEG;
+      const z1 = z0 + SEG;
+
+      const x0 = roadX(z0);
+      const x1 = roadX(z1);
+
+      // Every other slab is a slightly different shade. Nothing else in
+      // this game does as much work for as little code - those bands
+      // flying underneath you ARE the feeling of speed.
+      const flip = (n % 2 === 0);
+
+      // The grass, stretching away either side.
+      addFace([[x0 - 400, -0.02, z0], [x0 + 400, -0.02, z0],
+               [x1 + 400, -0.02, z1], [x1 - 400, -0.02, z1]],
+              shade(flip ? GRASS_A : GRASS_B, 1));
+
+      // The red and white kerb down each edge.
+      const rum = flip ? RUMBLE_A : RUMBLE_B;
+      addFace([[x0 - ROAD_HALF - 3.4, 0, z0], [x0 - ROAD_HALF, 0, z0],
+               [x1 - ROAD_HALF, 0, z1], [x1 - ROAD_HALF - 3.4, 0, z1]],
+              shade(rum, 1), 0.1);
+      addFace([[x0 + ROAD_HALF, 0, z0], [x0 + ROAD_HALF + 3.4, 0, z0],
+               [x1 + ROAD_HALF + 3.4, 0, z1], [x1 + ROAD_HALF, 0, z1]],
+              shade(rum, 1), 0.1);
+
+      // The tarmac itself.
+      addFace([[x0 - ROAD_HALF, 0, z0], [x0 + ROAD_HALF, 0, z0],
+               [x1 + ROAD_HALF, 0, z1], [x1 - ROAD_HALF, 0, z1]],
+              shade(flip ? TARMAC_A : TARMAC_B, 1), 0.05);
+
+      // Dashed white line down the middle. Every fourth slab, so it
+      // comes out as dash-gap-gap-gap instead of a solid stripe.
+      if (n % 4 === 0) {
+        addFace([[x0 - 0.7, 0, z0], [x0 + 0.7, 0, z0],
+                 [x1 + 0.7, 0, z1], [x1 - 0.7, 0, z1]],
+                STRIPE, 0.2);
+      }
+
+      // A post every eighth slab, on both sides. Something standing UP
+      // is what tells you how fast you're going - flat things sliding
+      // past never look as quick as tall things whipping by.
+      if (n % 8 === 0) {
+        addBox(x0 - ROAD_HALF - 6, 1.7, z0, 0.7, 3.4, 0.7, POST);
+        addBox(x0 + ROAD_HALF + 6, 1.7, z0, 0.7, 3.4, 0.7, POST);
+      }
+    }
+  }
+
+
+// -------------------------------------------------------------------
+//  THE SKY - two flat rectangles, no maths, painted before everything
+// -------------------------------------------------------------------
+
+  function drawSky() {
+    // Where is the horizon? If you tilt the camera down, the horizon
+    // slides UP the screen - so it has to move with the pitch or the
+    // sky and the ground come apart.
+    const horizon = H / 2 + focal() * Math.tan(cam.pitch);
+
+    const sky = ctx.createLinearGradient(0, 0, 0, Math.max(1, horizon));
+    sky.addColorStop(0, '#1d3f78');
+    sky.addColorStop(1, '#8fc0e8');
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, W, horizon);
+
+    ctx.fillStyle = '#3c7a44';
+    ctx.fillRect(0, horizon, W, H - horizon);
+  }
+
+
+// -------------------------------------------------------------------
+//  THE DASHBOARD - the only bit of "your car" you ever see
+// -------------------------------------------------------------------
+
+  function drawDash() {
+    const dashTop = H * 0.74;
+
+    // The dash itself.
+    ctx.fillStyle = '#171a24';
+    ctx.beginPath();
+    ctx.moveTo(0, H);
+    ctx.lineTo(0, dashTop + H * 0.06);
+    ctx.quadraticCurveTo(W / 2, dashTop - H * 0.05, W, dashTop + H * 0.06);
+    ctx.lineTo(W, H);
+    ctx.closePath();
+    ctx.fill();
+
+    // ---- THE STEERING WHEEL ----------------------------------------
+    // It leans the way you're steering. This is the single cheapest
+    // thing in the whole file and it does more for "I am driving this"
+    // than anything else on screen.
+    const wx = W / 2, wy = H * 1.02, r = Math.min(W * 0.26, H * 0.34);
+    const tilt = car.steer * 0.5;
+
+    ctx.save();
+    ctx.translate(wx, wy);
+    ctx.rotate(tilt);
+
+    ctx.lineWidth = Math.max(8, r * 0.11);
+    ctx.strokeStyle = '#2b2f3d';
+    ctx.beginPath();
+    ctx.arc(0, 0, r, Math.PI * 1.12, Math.PI * 1.88);
+    ctx.stroke();
+
+    ctx.strokeStyle = '#454b60';
+    ctx.lineWidth = Math.max(5, r * 0.07);
+    ctx.beginPath();
+    ctx.moveTo(-r * 0.72, -r * 0.30);
+    ctx.lineTo(0, -r * 0.06);
+    ctx.lineTo(r * 0.72, -r * 0.30);
+    ctx.stroke();
+
+    ctx.restore();
+
+    // ---- THE SPEEDO -------------------------------------------------
+    const mph = Math.round(car.speed);
+
+    ctx.textAlign = 'center';
+    ctx.font = 'bold ' + Math.min(W * 0.11, 70) + 'px system-ui, sans-serif';
+    ctx.fillStyle = car.onRoad ? '#ffe08a' : '#ff8a6a';
+    ctx.fillText(mph, W / 2, dashTop + H * 0.10);
+
+    ctx.font = Math.min(W * 0.026, 15) + 'px system-ui, sans-serif';
+    ctx.fillStyle = '#8c94aa';
+    ctx.fillText('MPH', W / 2, dashTop + H * 0.135);
+
+    // How far you've driven.
+    ctx.textAlign = 'left';
+    ctx.font = Math.min(W * 0.03, 17) + 'px system-ui, sans-serif';
+    ctx.fillStyle = '#8c94aa';
+    ctx.fillText((car.z / 100).toFixed(1) + ' km', W * 0.05, dashTop + H * 0.115);
+
+    // Shout at you when you're in the grass, because the speedo
+    // dropping is easy to miss when you're busy panicking.
+    if (!car.onRoad) {
+      ctx.textAlign = 'right';
+      ctx.fillStyle = '#ff8a6a';
+      ctx.fillText('OFF TRACK', W * 0.95, dashTop + H * 0.115);
+    }
+  }
+
+
+// -------------------------------------------------------------------
+//  CONTROLS
+// -------------------------------------------------------------------
+
+  const keys = {};
+  window.addEventListener('keydown', function (e) {
+    keys[e.key.toLowerCase()] = true;
+    // Stop the arrow keys scrolling the page out from under you.
+    if (e.key.startsWith('Arrow')) e.preventDefault();
+  });
+  window.addEventListener('keyup', function (e) {
+    keys[e.key.toLowerCase()] = false;
+  });
+
+  function held(a, b) { return keys[a] || keys[b]; }
+
+
+// -------------------------------------------------------------------
+//  DRIVING
+// -------------------------------------------------------------------
+
+  function update(dt) {
+
+    // ---- ARE YOU ON THE ROAD? --------------------------------------
+    // Compare where you are with where the road is at your distance.
+    // That's the whole check, and it's why the track being one function
+    // is so handy - we can just ASK it.
+    const centre = roadX(car.z);
+    car.onRoad = Math.abs(car.x - centre) < ROAD_HALF;
+
+    const limit = car.onRoad ? TOP_SPEED : GRASS_SPEED;
+
+    // ---- THE PEDALS -------------------------------------------------
+    if (held('w', 'arrowup')) {
+      car.speed += ACCEL * dt;
+    } else if (held('s', 'arrowdown')) {
+      car.speed -= BRAKE * dt;
+    } else {
+      car.speed -= DRAG * dt;      // let go and you coast to a stop
+    }
+
+    // The grass doesn't stop you dead - it drags you down to ITS limit.
+    if (car.speed > limit) car.speed -= (car.speed - limit) * 2.6 * dt;
+
+    car.speed = Math.max(0, Math.min(TOP_SPEED, car.speed));
+
+    // ---- THE WHEEL --------------------------------------------------
+    // Holding left doesn't snap the wheel to full lock - it winds
+    // TOWARDS full lock, and letting go winds it back. Try setting both
+    // of those speeds to 99 and drive: it feels like a bar of soap.
+    let want = 0;
+    if (held('a', 'arrowleft'))  want -= 1;
+    if (held('d', 'arrowright')) want += 1;
+
+    const windSpeed = (want === 0) ? 6 : 4;
+    car.steer += (want - car.steer) * Math.min(1, windSpeed * dt);
+
+    // ---- TURNING ----------------------------------------------------
+    // Multiplying by speed is the important part. Standing still you
+    // can't turn at all, which is exactly right - a car turns because
+    // it's MOVING, not because the wheel is round.
+    car.yaw += car.steer * 1.5 * (car.speed / TOP_SPEED) * dt;
+
+    // ---- GO -----------------------------------------------------------
+    car.x += Math.sin(car.yaw) * car.speed * dt;
+    car.z += Math.cos(car.yaw) * car.speed * dt;
+
+    // Rattle the camera when you're bouncing over grass, harder the
+    // faster you're going.
+    shake = car.onRoad ? Math.max(0, shake - dt * 5)
+                       : Math.min(1, shake + dt * 4) * (car.speed / TOP_SPEED);
+
+    // ---- THE CAMERA GOES WHERE YOU GO -------------------------------
+    cam.x = car.x;
+    cam.z = car.z;
+    cam.yaw = car.yaw;
+
+    // Lean the view a touch into the corner. Tiny effect, and you will
+    // absolutely feel it if you delete it.
+    cam.yaw += car.steer * 0.03;
+  }
+
+
+// -------------------------------------------------------------------
+//  DRAW EVERYTHING
+// -------------------------------------------------------------------
+
+  function draw() {
+    const savedY = cam.y;
+    if (shake > 0) {
+      cam.y += (Math.random() - 0.5) * shake * 0.9;
+    }
+
+    drawSky();
+
+    faces = [];
+    drawRoad();
+
+    // Furthest away gets painted FIRST, so close things end up on top.
+    faces.sort(function (a, b) { return b.depth - a.depth; });
+
+    for (const f of faces) {
+      ctx.beginPath();
+      ctx.moveTo(f.points[0].x, f.points[0].y);
+      for (let i = 1; i < f.points.length; i++) {
+        ctx.lineTo(f.points[i].x, f.points[i].y);
+      }
+      ctx.closePath();
+      ctx.fillStyle = f.colour;
+      ctx.fill();
+    }
+
+    cam.y = savedY;
+
+    drawDash();
+  }
+
+
+// -------------------------------------------------------------------
+//  THE GAME LOOP - update, draw, do it again. Sixty times a second.
+// -------------------------------------------------------------------
+
+  let last = 0;
+
+  function loop(now) {
+    // dt is how long the last frame took, in seconds. Everything moves
+    // by speed * dt, so the game runs at the same pace on a fast
+    // computer and a slow one.
+    const dt = Math.min(0.05, (now - last) / 1000 || 0);
+    last = now;
+
+    update(dt);
+    draw();
+
+    requestAnimationFrame(loop);
+  }
+
+  fitScreen();
+  requestAnimationFrame(loop);
+
+</script>
+</body>
+</html>
