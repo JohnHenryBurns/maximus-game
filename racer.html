@@ -226,7 +226,9 @@
 //  That's a racing driver.
 // -------------------------------------------------------------------
 
-  const RIVAL_TOP  = 97;     // he's slower than you flat out (you get 105)
+  const RIVAL_TOP  = 86;     // he's slower than you flat out (you get 105).
+                             // Maximus asked for this - was 97. Put it
+                             // back up if he ever gets too easy.
   const RIVAL_LOOK = 42;     // how far up the road he's looking
   const RIVAL_TURN = 1.7;    // how fast he can swing the wheel
 
@@ -749,8 +751,16 @@
 //  not something that happens on its own.
 // -------------------------------------------------------------------
 
-  const MOUSE_SENS   = 0.0055;   // how twitchy the mouse is. Try 0.02.
-  const MOUSE_RETURN = 0.7;      // how eagerly the wheel self-centres
+  const MOUSE_SENS   = 0.008;    // how twitchy the mouse is. Try 0.02.
+
+  // ---- HOW HARD THE WHEEL FIGHTS BACK -------------------------------
+  // A real steering wheel doesn't stay where you leave it. It pushes
+  // back towards straight, and it pushes HARDER the further round you
+  // have it - which is why a tiny correction is easy and full lock is
+  // actual work. These three numbers are that feeling.
+  const MOUSE_RETURN = 1.5;      // how eagerly it winds back to straight
+  const MOUSE_HEAVY  = 2.0;      // how much heavier it gets at full lock
+  const MOUSE_GRIP   = 0.9;      // how much heavier it gets at speed
 
   let mouseSteer = 0;
   let locked = false;
@@ -830,15 +840,28 @@
     // Holding left doesn't snap the wheel to full lock - it winds
     // TOWARDS full lock, and letting go winds it back. Try setting both
     // of those speeds to 99 and drive: it feels like a bar of soap.
-    // The mouse creeps back towards straight on its own, slowly.
-    mouseSteer -= mouseSteer * Math.min(1, MOUSE_RETURN * dt);
+    // ---- THE WHEEL FIGHTS BACK --------------------------------------
+    // Two things make it heavy, and they multiply together:
+    //
+    //   1. HOW FAR ROUND IT IS. Near straight it barely resists. At
+    //      full lock it's shoving hard. So little corrections stay
+    //      easy and big ones have to be held.
+    //
+    //   2. HOW FAST YOU'RE GOING. Standing still it's light; flat out
+    //      it's heavy. That's real - and it also quietly stops you
+    //      flicking the wheel at 100mph and spinning off the planet.
+    const heavy = 1 + Math.abs(mouseSteer) * MOUSE_HEAVY;
+    const grip  = 0.5 + (car.speed / TOP_SPEED) * MOUSE_GRIP;
+
+    mouseSteer -= mouseSteer * Math.min(1, MOUSE_RETURN * heavy * grip * dt);
 
     let want = mouseSteer;
     if (held('a', 'arrowleft'))  want -= 1;
     if (held('d', 'arrowright')) want += 1;
     want = clamp(want, -1, 1);
 
-    const windSpeed = (want === 0) ? 6 : 4;
+    // And the wheel itself is heavier to turn than it is to let go of.
+    const windSpeed = (want === 0) ? 6 : 2.8;
     car.steer += (want - car.steer) * Math.min(1, windSpeed * dt);
 
     // ---- TURNING ----------------------------------------------------
