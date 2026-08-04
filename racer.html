@@ -507,9 +507,89 @@
 
   const RACE_LENGTH = 5000;   // how far to the finish line
 
-  let race = 'countdown';     // 'countdown', 'racing' or 'done'
+  let race = 'countdown';     // 'name', 'countdown', 'racing' or 'done'
   let countdown = 3.8;
   let result = '';
+  let raceTime = 0;           // how long this run has taken
+
+
+// -------------------------------------------------------------------
+//  THE BEST TIMES
+// -------------------------------------------------------------------
+//  Everything else in this game forgets itself the moment you close
+//  the tab. This doesn't.
+//
+//  localStorage is a little notepad the browser keeps for each website,
+//  on YOUR computer. Write to it and it's still there tomorrow, next
+//  week, after the computer's been off. It only holds text, so we turn
+//  the list into text going in (stringify) and back into a list coming
+//  out (parse).
+//
+//  Every read and write is wrapped in try/catch, because localStorage
+//  is allowed to just refuse - some browsers switch it off in private
+//  windows. If it does refuse we shrug and carry on with an empty
+//  list, instead of the whole game falling over about it.
+// -------------------------------------------------------------------
+
+  const SAVE_NAME  = 'maxracer.name';
+  const SAVE_TIMES = 'maxracer.times';
+  // Six, not ten. On a short window ten rows run off the bottom of the
+  // screen and collide with the text underneath - and a leaderboard you
+  // can't read the end of is worse than a shorter one.
+  const KEEP_TIMES = 6;
+
+  let playerName = '';
+  let bestTimes  = [];
+  let lastEntry  = null;      // the run you just did, so we can point at it
+
+  function loadTimes() {
+    try {
+      const raw = localStorage.getItem(SAVE_TIMES);
+      const list = raw ? JSON.parse(raw) : [];
+      return Array.isArray(list) ? list : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function storeTimes(list) {
+    try { localStorage.setItem(SAVE_TIMES, JSON.stringify(list)); } catch (e) {}
+  }
+
+  function loadName() {
+    try { return localStorage.getItem(SAVE_NAME) || ''; } catch (e) { return ''; }
+  }
+
+  function storeName(n) {
+    try { localStorage.setItem(SAVE_NAME, n); } catch (e) {}
+  }
+
+  // Seconds into something a person can read. 74.3 becomes 1:14.3
+  function formatTime(t) {
+    const mins = Math.floor(t / 60);
+    const secs = t - mins * 60;
+    return mins + ':' + (secs < 10 ? '0' : '') + secs.toFixed(1);
+  }
+
+  function recordTime(t) {
+    const entry = { name: playerName || 'NOBODY', time: t };
+
+    const list = loadTimes();
+    list.push(entry);
+
+    // Fastest first. sort() hands your function two of them and asks
+    // "which goes first?" - a negative answer means a, positive means
+    // b. So a.time - b.time puts the smaller time first, every time.
+    list.sort(function (a, b) { return a.time - b.time; });
+
+    bestTimes = list.slice(0, KEEP_TIMES);
+    storeTimes(bestTimes);
+
+    // Did this run make the board? indexOf finds the SAME OBJECT, not
+    // just one with matching numbers - so two identical times can't be
+    // confused with each other.
+    lastEntry = bestTimes.indexOf(entry) >= 0 ? entry : null;
+  }
 
   function resetRace() {
     car.x = -6; car.z = 0; car.yaw = 0; car.speed = 0; car.steer = 0;
@@ -526,6 +606,8 @@
     shake = 0;
     countdown = 3.8;
     result = '';
+    raceTime = 0;
+    lastEntry = null;
     race = 'countdown';
   }
 
@@ -917,6 +999,36 @@
 
   const keys = {};
   window.addEventListener('keydown', function (e) {
+
+    // ---- TYPING YOUR NAME ------------------------------------------
+    // While the name screen is up, the keyboard means letters, not
+    // driving. So we deal with it here and RETURN - which stops any of
+    // it reaching the driving controls below. One keyboard, two jobs,
+    // and the return is what keeps them apart.
+    if (race === 'name') {
+      if (e.key === 'Backspace') {
+        playerName = playerName.slice(0, -1);
+      } else if (e.key === 'Enter') {
+        if (playerName.trim()) {
+          playerName = playerName.trim();
+          storeName(playerName);
+          resetRace();
+        }
+      } else if (e.key.length === 1 && playerName.length < 9 &&
+                 /[a-zA-Z0-9 ]/.test(e.key)) {
+        playerName += e.key.toUpperCase();
+      }
+      e.preventDefault();
+      return;
+    }
+
+    // N on the results screen lets you be somebody else.
+    if (e.key.toLowerCase() === 'n' && race === 'done') {
+      race = 'name';
+      e.preventDefault();
+      return;
+    }
+
     keys[e.key.toLowerCase()] = true;
     // Stop the arrow keys and space scrolling the page out from under you.
     if (e.key.startsWith('Arrow') || e.key === ' ') e.preventDefault();
@@ -983,6 +1095,10 @@
 
   function update(dt) {
     clock += dt;
+
+    if (race === 'name') return;      // nothing moves while you're typing
+
+    if (race === 'racing') raceTime += dt;
 
     // ---- THE LIGHTS ------------------------------------------------
     if (race === 'countdown') {
@@ -1138,8 +1254,14 @@
 
     // ---- HAS ANYBODY CROSSED THE LINE? ------------------------------
     if (race === 'racing') {
-      if (car.z >= RACE_LENGTH)        { race = 'done'; result = 'WIN'; }
-      else if (rival.z >= RACE_LENGTH) { race = 'done'; result = 'LOSE'; }
+      if (car.z >= RACE_LENGTH) {
+        race = 'done';
+        result = 'WIN';
+        recordTime(raceTime);      // only a finished lap counts as a time
+      } else if (rival.z >= RACE_LENGTH) {
+        race = 'done';
+        result = 'LOSE';
+      }
     }
 
     // Lean the view a touch into the corner. Tiny effect, and you will
@@ -1193,8 +1315,69 @@
 //  THE RACE INFORMATION - who's winning, how far to go
 // -------------------------------------------------------------------
 
+  // The board itself. Draws wherever you put it, so the name screen and
+  // the results screen can both use it without a word being repeated.
+  function drawBoard(topY) {
+    const row = Math.min(H * 0.038, 25);
+
+    ctx.textAlign = 'center';
+    ctx.font = 'bold ' + Math.min(W * 0.032, 19) + 'px system-ui, sans-serif';
+    ctx.fillStyle = '#8c94aa';
+    ctx.fillText('FASTEST LAPS', W / 2, topY);
+
+    if (bestTimes.length === 0) {
+      ctx.font = Math.min(W * 0.03, 18) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#6c7488';
+      ctx.fillText('nobody has finished yet', W / 2, topY + row);
+      return;
+    }
+
+    const left = W / 2 - Math.min(W * 0.20, 150);
+    const right = W / 2 + Math.min(W * 0.20, 150);
+
+    ctx.font = Math.min(W * 0.032, 19) + 'px system-ui, sans-serif';
+
+    for (let i = 0; i < bestTimes.length; i++) {
+      const e = bestTimes[i];
+      const y = topY + row * (i + 1.4);
+      const mine = (e === lastEntry);      // the run you just did
+
+      ctx.fillStyle = mine ? '#ffe08a' : '#cfd6e6';
+      ctx.textAlign = 'left';
+      ctx.fillText((i + 1) + '.  ' + e.name, left, y);
+      ctx.textAlign = 'right';
+      ctx.fillText(formatTime(e.time), right, y);
+    }
+
+    ctx.textAlign = 'center';
+  }
+
   function drawRaceHud() {
     ctx.textAlign = 'center';
+
+    // ---- TYPE YOUR NAME ---------------------------------------------
+    if (race === 'name') {
+      ctx.fillStyle = 'rgba(10,14,24,0.86)';
+      ctx.fillRect(0, 0, W, H);
+
+      ctx.font = 'bold ' + Math.min(W * 0.06, 38) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#cfd6e6';
+      ctx.fillText('WHO ARE YOU?', W / 2, H * 0.22);
+
+      // A cursor that blinks off the clock, so it's alive even though
+      // nothing else on this screen is moving.
+      const bar = (Math.sin(clock * 5) > 0) ? '_' : ' ';
+      ctx.font = 'bold ' + Math.min(W * 0.11, 74) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#ffe08a';
+      ctx.fillText(playerName + bar, W / 2, H * 0.36);
+
+      ctx.font = Math.min(W * 0.032, 19) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#8c94aa';
+      ctx.fillText('type your name, then press ENTER', W / 2, H * 0.44);
+
+      drawBoard(H * 0.56);
+      return;
+    }
 
     // ---- IT IS BEHIND YOU -------------------------------------------
     // You can't see it, so the screen has to tell you. Everything here
@@ -1292,6 +1475,29 @@
     ctx.fillText(left > 0 ? (left / 100).toFixed(1) + ' km to go' : 'FINISH',
                  W / 2, H * 0.15);
 
+    // ---- THE CLOCK, and the time to beat ----------------------------
+    ctx.textAlign = 'right';
+    ctx.font = 'bold ' + Math.min(W * 0.045, 28) + 'px system-ui, sans-serif';
+    ctx.fillStyle = '#eef0f4';
+    ctx.fillText(formatTime(raceTime), W * 0.95, H * 0.075);
+
+    if (bestTimes.length > 0) {
+      const target = bestTimes[0];
+      // Green while you're beating it, red once you're not. You never
+      // have to do the subtraction yourself.
+      ctx.font = Math.min(W * 0.028, 17) + 'px system-ui, sans-serif';
+      ctx.fillStyle = (raceTime < target.time) ? '#8cf0a0' : '#ff8a6a';
+      ctx.fillText('beat ' + target.name + '  ' + formatTime(target.time),
+                   W * 0.95, H * 0.115);
+    }
+
+    ctx.textAlign = 'left';
+    ctx.font = Math.min(W * 0.028, 17) + 'px system-ui, sans-serif';
+    ctx.fillStyle = '#8c94aa';
+    ctx.fillText(playerName, W * 0.05, H * 0.075);
+
+    ctx.textAlign = 'center';
+
     // ---- THE LIGHTS ------------------------------------------------
     if (race === 'countdown') {
       // Math.ceil turns 2.4 seconds left into the number "3", so it
@@ -1330,12 +1536,24 @@
 
       ctx.font = Math.min(W * 0.035, 21) + 'px system-ui, sans-serif';
       ctx.fillStyle = '#eef0f4';
-      ctx.fillText(line, W / 2, H * 0.53);
-      ctx.fillText('press R to race again', W / 2, H * 0.60);
+      ctx.fillText(line, W / 2, H * 0.50);
+
+      if (won) {
+        ctx.font = 'bold ' + Math.min(W * 0.05, 30) + 'px system-ui, sans-serif';
+        ctx.fillStyle = lastEntry ? '#ffe08a' : '#cfd6e6';
+        ctx.fillText(formatTime(raceTime) +
+                     (lastEntry ? '   ON THE BOARD' : ''), W / 2, H * 0.575);
+      }
+
+      drawBoard(H * 0.63);
+
+      ctx.font = Math.min(W * 0.03, 18) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#8c94aa';
+      ctx.fillText('R to race again      N to change your name', W / 2, H * 0.955);
     }
 
     // ---- CLICK TO STEER --------------------------------------------
-    if (!locked && race !== 'done') {
+    if (!locked && race !== 'done' && race !== 'name') {
       ctx.font = Math.min(W * 0.032, 19) + 'px system-ui, sans-serif';
       ctx.fillStyle = '#cfd6e6';
       ctx.fillText('click to steer with the mouse', W / 2, H * 0.66);
@@ -1370,6 +1588,13 @@
 
   fitScreen();
   resetRace();          // put both cars on the line before the first frame
+
+  // Dig out whatever this computer remembers about you. If it's never
+  // met you, ask - otherwise get straight on with the race.
+  bestTimes = loadTimes();
+  playerName = loadName();
+  if (!playerName) race = 'name';
+
   requestAnimationFrame(loop);
 
 </script>
