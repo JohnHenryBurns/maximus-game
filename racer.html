@@ -164,6 +164,92 @@
 
 
 // -------------------------------------------------------------------
+//  WRECKS - burnt-out cars strewn down the road
+// -------------------------------------------------------------------
+//  Hit one and it doesn't kill you. It takes your SPEED - and there's
+//  already something behind you that feeds on you being slow. So we
+//  don't need crash damage, or lives, or a health bar. The monster is
+//  the punishment. One rule doing two jobs.
+//
+//  And you can't hit one while you're in the air, which turns every
+//  ramp into an escape hatch.
+// -------------------------------------------------------------------
+
+  const WRECK_EVERY = 165;   // one every this far down the road
+  const WRECK_FIRST = 80;    // and the first one this far in
+  const WRECK_HIT_Z = 5.5;   // how close, front to back, counts as a hit
+  const WRECK_HIT_X = 4.2;   // ...and side to side
+  const CRASH_KEEP  = 0.34;  // how much speed you keep. Ouch.
+
+  const WRECK_BODY = [92, 74, 68];
+  const WRECK_BURN = [44, 38, 40];
+  const WRECK_RUST = [128, 78, 48];
+
+  // A RANDOM NUMBER THAT IS ALWAYS THE SAME.
+  //
+  // Math.random() gives a different answer every time, which would move
+  // the wrecks around while you were looking at them. This gives a
+  // scrambled-looking number that never changes for the same input - so
+  // wreck number 7 is in the same place today, tomorrow, and on your
+  // cousin's computer. You can actually LEARN the track.
+  //
+  // The trick: take a big ugly number and throw away everything before
+  // the decimal point. What's left is unpredictable but repeatable.
+  function hash(n) {
+    const x = Math.sin(n * 12.9898) * 43758.5453;
+    return x - Math.floor(x);
+  }
+
+  function wreckZ(n) { return WRECK_FIRST + n * WRECK_EVERY; }
+
+  function wreckX(n) {
+    // Anywhere across the road, but never hanging off the edge.
+    return roadX(wreckZ(n)) + (hash(n) - 0.5) * 2 * (ROAD_HALF - 3.5);
+  }
+
+  function wreckSpin(n) { return hash(n + 31) * Math.PI * 2; }
+
+  function drawWrecks() {
+    const from = Math.floor((car.z - WRECK_FIRST) / WRECK_EVERY) - 1;
+    const to   = Math.floor((car.z + VIEW * SEG - WRECK_FIRST) / WRECK_EVERY);
+
+    for (let n = Math.max(0, from); n <= to; n++) {
+      const wx = wreckX(n), wz = wreckZ(n), s = wreckSpin(n);
+      const co = Math.cos(s), si = Math.sin(s);
+
+      // A car that has had a very bad day: squashed low, sitting
+      // crooked, scorched black on top.
+      addBox(wx, 1.1, wz, 4.4, 1.6, 8.0, WRECK_BODY, s);
+      addBox(wx, 2.2, wz + 0.6, 3.4, 1.0, 3.6, WRECK_BURN, s);
+      addBox(wx, 1.9, wz - 2.6, 4.0, 0.9, 2.0, WRECK_RUST, s);
+
+      // Three wheels on, one lying next to it.
+      for (const ox of [-2.2, 2.2]) {
+        addBox(wx + ox * co + 2.6 * si, 0.7, wz - ox * si + 2.6 * co,
+               0.8, 1.4, 1.8, WRECK_BURN, s);
+      }
+      addBox(wx - 2.2 * co - 2.8 * si, 0.7, wz + 2.2 * si - 2.8 * co,
+             0.8, 1.4, 1.8, WRECK_BURN, s);
+      addBox(wx + 3.6 * co - 3.4 * si, 0.5, wz - 3.6 * si - 3.4 * co,
+             1.6, 0.8, 1.6, WRECK_BURN, s);   // the one that came off
+
+      // Smoke, still going up. Each puff climbs and fades on its own
+      // little loop, and the +n means no two wrecks puff in time with
+      // each other - which would look like a machine, not a fire.
+      for (let p = 0; p < 3; p++) {
+        const age = (clock * 0.45 + p * 0.33 + n * 0.17) % 1;
+        const grey = 70 + age * 70;
+        addBox(wx + Math.sin(age * 6 + n) * 1.6,
+               2.6 + age * 9,
+               wz + Math.cos(age * 5 + n) * 1.0,
+               1.4 + age * 3.4, 1.4 + age * 3.4, 1.4 + age * 3.4,
+               [grey, grey, grey + 8]);
+      }
+    }
+  }
+
+
+// -------------------------------------------------------------------
 //  THE CAR - that's you
 // -------------------------------------------------------------------
 
@@ -210,6 +296,22 @@
 
   let shake = 0;             // rattles the camera on the grass
   let clock = 0;             // seconds since the page loaded, for blinking
+
+  let crashFlash = 0;        // white bang on the screen when you hit one
+  let crashCool  = 0;        // stops one wreck counting sixty times a second
+
+  function crash() {
+    car.speed *= CRASH_KEEP;
+    crashCool  = 0.7;
+    crashFlash = 1;
+    shake = 1;
+
+    // Knock you sideways a bit, so a crash also puts you somewhere you
+    // didn't choose to be.
+    car.yaw += (Math.random() - 0.5) * 0.35;
+
+    playCrash();
+  }
 
 
 // -------------------------------------------------------------------
@@ -263,7 +365,18 @@
   function updateRival(dt) {
     // Where will the road be, up ahead?
     const aheadZ = rival.z + RIVAL_LOOK;
-    const wantYaw = Math.atan2(roadX(aheadZ) + RIVAL_LINE - rival.x,
+    // HE DODGES TOO. Same look-ahead trick, asking a different question:
+    // is there a wreck near where I'm about to be? If it's sitting on
+    // his usual line he swaps to the other side of the road. One "if",
+    // and he stops being the only driver who can't see.
+    let line = RIVAL_LINE;
+    const wn = Math.round((aheadZ - WRECK_FIRST) / WRECK_EVERY);
+
+    if (wn >= 0 && Math.abs(wreckZ(wn) - aheadZ) < 55) {
+      if (Math.abs(wreckX(wn) - (roadX(aheadZ) + line)) < 7) line = -RIVAL_LINE;
+    }
+
+    const wantYaw = Math.atan2(roadX(aheadZ) + line - rival.x,
                                aheadZ - rival.z);
 
     // How much turning has he got to do? Work this out BEFORE steering,
@@ -493,6 +606,38 @@
     wob.start();
   }
 
+  // A crash is just NOISE - every frequency at once - fading fast, with
+  // the high end filtered off so it thumps instead of hissing. That's
+  // genuinely what a crash sounds like.
+  function playCrash() {
+    if (!audio) return;
+
+    const dur = 0.55;
+    const buf = audio.createBuffer(1, Math.floor(audio.sampleRate * dur),
+                                   audio.sampleRate);
+    const data = buf.getChannelData(0);
+
+    for (let i = 0; i < data.length; i++) {
+      // Random between -1 and 1, quieter the further through we get.
+      data[i] = (Math.random() * 2 - 1) * (1 - i / data.length);
+    }
+
+    const src = audio.createBufferSource();
+    src.buffer = buf;
+
+    const low = audio.createBiquadFilter();
+    low.type = 'lowpass';
+    low.frequency.value = 850;
+
+    const g = audio.createGain();
+    g.gain.value = 0.4;
+
+    src.connect(low);
+    low.connect(g);
+    g.connect(audio.destination);
+    src.start();
+  }
+
   function updateGrowl() {
     if (!growlGain) return;
     const want = (race === 'racing') ? danger * danger * 0.22 : 0;
@@ -604,6 +749,8 @@
 
     mouseSteer = 0;
     shake = 0;
+    crashFlash = 0;
+    crashCool = 0;
     countdown = 3.8;
     result = '';
     raceTime = 0;
@@ -1096,6 +1243,9 @@
   function update(dt) {
     clock += dt;
 
+    // Fades on its own, from wherever it is, always.
+    if (crashFlash > 0) crashFlash = Math.max(0, crashFlash - dt * 2.4);
+
     if (race === 'name') return;      // nothing moves while you're typing
 
     if (race === 'racing') raceTime += dt;
@@ -1231,6 +1381,26 @@
       }
     }
 
+    // ---- DID YOU HIT A WRECK? ---------------------------------------
+    // We don't look at every wreck on the road. We work out which one
+    // you'd be nearest and check THAT one, and its neighbours. Two
+    // checks instead of thirty, and it stays two no matter how long
+    // the road gets.
+    if (crashCool > 0) crashCool -= dt;
+
+    if (!car.airborne && crashCool <= 0) {
+      const near = Math.round((car.z - WRECK_FIRST) / WRECK_EVERY);
+
+      for (const n of [near - 1, near, near + 1]) {
+        if (n < 0) continue;
+        if (Math.abs(car.z - wreckZ(n)) > WRECK_HIT_Z) continue;
+        if (Math.abs(car.x - wreckX(n)) > WRECK_HIT_X) continue;
+
+        crash();
+        break;
+      }
+    }
+
     // Rattle the camera when you're bouncing over grass, harder the
     // faster you're going. Not in mid-air though - up there it's calm.
     const rough = !car.onRoad && !car.airborne;
@@ -1286,6 +1456,7 @@
     drawRoad();
     drawShortcuts();
     drawRamps();
+    drawWrecks();
     drawFinish();
     if (!rivalEaten) drawRival();
     drawMonster();
@@ -1354,6 +1525,16 @@
 
   function drawRaceHud() {
     ctx.textAlign = 'center';
+
+    // ---- YOU HIT SOMETHING -------------------------------------------
+    if (crashFlash > 0.01 && race === 'racing') {
+      ctx.fillStyle = 'rgba(255,235,215,' + (crashFlash * 0.55) + ')';
+      ctx.fillRect(0, 0, W, H);
+
+      ctx.font = 'bold ' + Math.min(W * 0.09, 58) + 'px system-ui, sans-serif';
+      ctx.fillStyle = 'rgba(190,30,20,' + Math.min(1, crashFlash * 1.6) + ')';
+      ctx.fillText('CRASH!', W / 2, H * 0.38);
+    }
 
     // ---- TYPE YOUR NAME ---------------------------------------------
     if (race === 'name') {
