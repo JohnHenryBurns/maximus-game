@@ -162,6 +162,53 @@
     return RAMP_H * (along / RAMP_LEN);     // partway up the slope
   }
 
+  // GRAVITY, RAMPS AND LANDING - for anything that drives on this road.
+  //
+  // This lived inside the player's update until the rival wanted to
+  // jump too. The moment you need the same thing twice, it stops being
+  // a lump of code in the middle of something and becomes a function
+  // with a name. Now both cars obey exactly the same physics, and they
+  // always will, because there's only one copy of it.
+  //
+  // "who" is any object with x, z, y, vy, airborne and climb on it. It
+  // doesn't care whether that's you or him.
+  //
+  // Returns true on the one frame it lands, so whoever called it can
+  // do their own thump.
+  function fallAndFly(who, dt) {
+    const ground = groundHeightAt(who.x, who.z);
+    let landed = false;
+
+    if (who.airborne) {
+      who.vy -= GRAVITY * dt;
+      who.y  += who.vy * dt;
+
+      if (who.y <= ground) {          // BANG. Back on the deck.
+        who.y = ground;
+        who.vy = 0;
+        who.airborne = false;
+        who.climb = 0;
+        landed = true;
+      }
+    } else {
+      // How fast is the ground lifting them right now?
+      const climb = (ground - who.y) / dt;
+
+      if (climb < -1) {
+        // It just fell away underneath them. Take off with the speed
+        // they were climbing at a moment ago, not with anything the
+        // ramp "gave" them. There is no such thing.
+        who.airborne = true;
+        who.vy = who.climb;
+      } else {
+        who.y = ground;
+        who.climb = Math.max(0, climb);
+      }
+    }
+
+    return landed;
+  }
+
 
 // -------------------------------------------------------------------
 //  WRECKS - burnt-out cars strewn down the road
@@ -348,7 +395,10 @@
   const RIVAL_DARK  = [28, 30, 40];
   const RIVAL_LIGHT = [255, 120, 90];
 
-  const rival = { x: 6, z: 0, yaw: 0, speed: 0 };
+  const rival = {
+    x: 6, z: 0, yaw: 0, speed: 0,
+    y: 0, vy: 0, airborne: false, climb: 0   // he flies now too
+  };
 
   // Turn from one angle towards another, but never further than "rate"
   // lets you in one frame. The wrapping is the fiddly bit: going from
@@ -365,15 +415,27 @@
   function updateRival(dt) {
     // Where will the road be, up ahead?
     const aheadZ = rival.z + RIVAL_LOOK;
-    // HE DODGES TOO. Same look-ahead trick, asking a different question:
-    // is there a wreck near where I'm about to be? If it's sitting on
-    // his usual line he swaps to the other side of the road. One "if",
-    // and he stops being the only driver who can't see.
     let line = RIVAL_LINE;
-    const wn = Math.round((aheadZ - WRECK_FIRST) / WRECK_EVERY);
 
-    if (wn >= 0 && Math.abs(wreckZ(wn) - aheadZ) < 55) {
-      if (Math.abs(wreckX(wn) - (roadX(aheadZ) + line)) < 7) line = -RIVAL_LINE;
+    // ---- IS THERE A RAMP COMING? ------------------------------------
+    // He doesn't take every one, or it'd stop being a surprise. hash()
+    // decides - so ramp 6 is one he goes for, every single race, on
+    // every computer. He's got favourites, and you can learn them.
+    const rn = Math.round(aheadZ / RAMP_EVERY);
+    const goingForRamp = rn >= 1 &&
+                         Math.abs(rn * RAMP_EVERY - aheadZ) < 70 &&
+                         hash(rn + 200) > 0.42;
+
+    if (goingForRamp) {
+      line = 0;              // ramps sit dead in the middle of the road
+    } else {
+      // HE DODGES WRECKS TOO. Same look-ahead trick, different question:
+      // is there a wreck near where I'm about to be? If it's sitting on
+      // his usual line he swaps to the other side of the road.
+      const wn = Math.round((aheadZ - WRECK_FIRST) / WRECK_EVERY);
+      if (wn >= 0 && Math.abs(wreckZ(wn) - aheadZ) < 55) {
+        if (Math.abs(wreckX(wn) - (roadX(aheadZ) + line)) < 7) line = -RIVAL_LINE;
+      }
     }
 
     const wantYaw = Math.atan2(roadX(aheadZ) + line - rival.x,
@@ -388,31 +450,50 @@
 
     rival.yaw = turnTowards(rival.yaw, wantYaw, RIVAL_TURN, dt);
 
-    // Big corner coming? Lift off. Straight bit? Foot down.
-    const target = RIVAL_TOP * (1 - Math.min(0.42, bend * 1.7));
-    rival.speed += (target - rival.speed) * Math.min(1, 1.9 * dt);
+    // Big corner coming? Lift off. Straight bit? Foot down. But in
+    // MID-AIR he can't slow down, because there's nothing to brake
+    // against - so he keeps whatever he took off with.
+    if (!rival.airborne) {
+      const target = RIVAL_TOP * (1 - Math.min(0.42, bend * 1.7));
+      rival.speed += (target - rival.speed) * Math.min(1, 1.9 * dt);
+    }
 
     rival.x += Math.sin(rival.yaw) * rival.speed * dt;
     rival.z += Math.cos(rival.yaw) * rival.speed * dt;
+
+    // The exact same physics you get. One function, two cars.
+    fallAndFly(rival, dt);
   }
 
   function drawRival() {
     const s = rival.yaw;
     const co = Math.cos(s), si = Math.sin(s);
 
-    addBox(rival.x, 1.5, rival.z, 4.6, 1.5, 9.0, RIVAL_BODY, s);      // body
-    addBox(rival.x, 2.7, rival.z + 0.5, 3.6, 1.3, 4.2, RIVAL_CAB, s); // cabin
+    // EVERY height gets rival.y added to it. Miss one and that piece
+    // stays on the ground while the rest of the car flies off without
+    // it - which does at least look funny before you fix it.
+    const y = rival.y;
+
+    // Nose up while climbing, nose down while dropping. It's only a
+    // small tilt and it's the difference between a car jumping and a
+    // brick being thrown.
+    const tilt = clamp(rival.vy * 0.012, -0.2, 0.2);
+
+    addBox(rival.x, y + 1.5, rival.z, 4.6, 1.5, 9.0, RIVAL_BODY, s);      // body
+    addBox(rival.x, y + 2.7 + tilt * 2, rival.z + 0.5,
+           3.6, 1.3, 4.2, RIVAL_CAB, s);                                  // cabin
 
     // Spoiler on the back. The car faces its own +z, so the back of it
     // is NEGATIVE z - that's why these numbers are minus.
-    addBox(rival.x, 3.1, rival.z - 4.3, 5.0, 0.35, 1.2, RIVAL_DARK, s);
+    addBox(rival.x, y + 3.1 - tilt * 2, rival.z - 4.3,
+           5.0, 0.35, 1.2, RIVAL_DARK, s);
 
     // Four wheels. Each one has to be placed in the CAR'S directions,
     // not the world's - so we spin the corner offsets the same way the
     // box itself gets spun.
     for (const wx of [-2.5, 2.5]) {
       for (const wz of [-3.0, 3.2]) {
-        addBox(rival.x + wx * co + wz * si, 0.9,
+        addBox(rival.x + wx * co + wz * si, y + 0.9,
                rival.z - wx * si + wz * co,
                0.9, 1.8, 2.2, RIVAL_DARK, s);
       }
@@ -420,7 +501,7 @@
 
     // Tail lights, so you can tell instantly which way he's pointing.
     for (const lx of [-1.5, 1.5]) {
-      addBox(rival.x + lx * co - 4.4 * si, 1.9,
+      addBox(rival.x + lx * co - 4.4 * si, y + 1.9,
              rival.z - lx * si - 4.4 * co,
              1.1, 0.6, 0.3, RIVAL_LIGHT, s);
     }
@@ -744,12 +825,15 @@
     car.airTime = 0;
 
     rival.x = 6; rival.z = 0; rival.yaw = 0; rival.speed = 0;
+    rival.y = 0; rival.vy = 0; rival.airborne = false; rival.climb = 0;
     rivalEaten = false; rivalEatenAt = 0;
 
     monster.x = 0; monster.z = -MONSTER_START; monster.yaw = 0;
     danger = 0;
 
     mouseSteer = 0;
+    pedal.go = pedal.brake = pedal.look = false;
+    steerId = null;
     shake = 0;
     crashFlash = 0;
     crashCool = 0;
@@ -1367,6 +1451,8 @@
   });
 
   canvas.addEventListener('click', function () {
+    if (touchMode) return;     // a tap already dealt with this
+
     // Browsers refuse to make noise until you've clicked on the page
     // at least once - a rule that exists because of adverts. So the
     // sound starts here, on the same click that grabs the mouse.
@@ -1400,6 +1486,168 @@
     if (!locked) return;
     mouseSteer = clamp(mouseSteer + e.movementX * MOUSE_SENS, -1, 1);
   });
+
+
+// -------------------------------------------------------------------
+//  PHONES AND TABLETS
+// -------------------------------------------------------------------
+//  There's no keyboard and no mouse, so:
+//
+//    GO and BRAKE are big round buttons under your thumbs
+//    LOOK is a smaller one above the brake
+//    STEERING is dragging anywhere else on the screen
+//
+//  The steering reuses mouseSteer exactly as it is. A finger sliding
+//  right and a mouse moving right are the same thing as far as the
+//  wheel is concerned, so there was nothing new to write - which is
+//  the reward for having put the steering in its own variable instead
+//  of reading the keyboard directly.
+// -------------------------------------------------------------------
+
+  const TOUCH_SENS = 0.011;      // fingers are less precise than mice
+
+  let touchMode = false;
+  const pedal = { go: false, brake: false, look: false };
+
+  let steerId = null, steerX = 0;
+
+  // Where the buttons live. Worked out from the screen size every time
+  // it's asked, so it stays right when you turn the phone sideways.
+  function padButtons() {
+    const r = Math.min(W, H) * 0.115;
+    return {
+      go:    { x: W - r * 1.35, y: H - r * 1.35, r: r,       label: 'GO' },
+      brake: { x: r * 1.35,     y: H - r * 1.35, r: r,       label: 'STOP' },
+      look:  { x: r * 1.35,     y: H - r * 3.5,  r: r * 0.7, label: 'LOOK' }
+    };
+  }
+
+  function inCircle(px, py, b) {
+    // Pythagoras: a point is inside a circle if it's closer to the
+    // middle than the radius. No square roots needed if you compare
+    // the squares instead - but hypot reads better and nobody will
+    // ever notice the difference at sixty frames a second.
+    return Math.hypot(px - b.x, py - b.y) < b.r;
+  }
+
+  function touchPoint(t) {
+    const box = canvas.getBoundingClientRect();
+    return { x: t.clientX - box.left, y: t.clientY - box.top };
+  }
+
+  // Work out ALL the button states from ALL the fingers currently down,
+  // every single time anything changes. No remembering which finger did
+  // what, no leftover buttons stuck on when a finger slides off.
+  function readTouches(e) {
+    const b = padButtons();
+    pedal.go = pedal.brake = pedal.look = false;
+
+    let steering = null;
+
+    for (const t of e.touches) {
+      const p = touchPoint(t);
+      if      (inCircle(p.x, p.y, b.go))    pedal.go = true;
+      else if (inCircle(p.x, p.y, b.brake)) pedal.brake = true;
+      else if (inCircle(p.x, p.y, b.look))  pedal.look = true;
+      else steering = { id: t.identifier, x: p.x };
+    }
+
+    if (steering) {
+      if (steerId !== steering.id) {
+        steerId = steering.id;         // a NEW finger - start from here
+        steerX = steering.x;
+      } else {
+        mouseSteer = clamp(mouseSteer + (steering.x - steerX) * TOUCH_SENS, -1, 1);
+        steerX = steering.x;
+      }
+    } else {
+      steerId = null;
+    }
+  }
+
+  function onTouchStart(e) {
+    if (!touchMode) {
+      touchMode = true;
+      // Hide the keyboard hint - it's wrong now, and it's sitting
+      // exactly where the STOP button wants to be.
+      const h = document.getElementById('hud');
+      if (h) h.style.display = 'none';
+    }
+    startAudio();
+
+    const p = touchPoint(e.changedTouches[0]);
+
+    // ---- MENUS: a tap is a choice, not a steer ----------------------
+    if (race === 'menu') {
+      for (let i = 0; i < THEME_LIST.length; i++) {
+        const box = menuRowBox(i);
+        if (p.y >= box.y && p.y <= box.y + box.h) { menuPick = i; resetRace(); }
+      }
+      e.preventDefault();
+      return;
+    }
+
+    if (race === 'name') {
+      // No keyboard on a phone, so we borrow the browser's own box.
+      const typed = window.prompt('What is your name?', playerName || '');
+      if (typed && typed.trim()) {
+        playerName = typed.trim().toUpperCase().slice(0, 9);
+        storeName(playerName);
+        car.z = 0;
+        race = 'menu';
+      }
+      e.preventDefault();
+      return;
+    }
+
+    if (race === 'done') {
+      // Left half goes back to the tracks, right half races again.
+      if (p.x < W / 2) { race = 'menu'; car.z = 0; } else { resetRace(); }
+      e.preventDefault();
+      return;
+    }
+
+    readTouches(e);
+    e.preventDefault();
+  }
+
+  function onTouchMoveOrEnd(e) {
+    if (race === 'racing' || race === 'countdown') readTouches(e);
+    e.preventDefault();
+  }
+
+  canvas.addEventListener('touchstart', onTouchStart, { passive: false });
+  canvas.addEventListener('touchmove',  onTouchMoveOrEnd, { passive: false });
+  canvas.addEventListener('touchend',   onTouchMoveOrEnd, { passive: false });
+  canvas.addEventListener('touchcancel', onTouchMoveOrEnd, { passive: false });
+
+
+  // Draw the thumb pad. Only appears once you've actually touched the
+  // screen - so it never clutters up a computer that doesn't need it.
+  function drawPad() {
+    if (!touchMode) return;
+    if (race !== 'racing' && race !== 'countdown') return;
+
+    const b = padButtons();
+
+    for (const key of ['go', 'brake', 'look']) {
+      const btn = b[key];
+      const on = pedal[key];
+
+      ctx.beginPath();
+      ctx.arc(btn.x, btn.y, btn.r, 0, Math.PI * 2);
+      ctx.fillStyle = on ? 'rgba(255,224,138,0.34)' : 'rgba(0,0,0,0.34)';
+      ctx.fill();
+      ctx.lineWidth = on ? 4 : 2;
+      ctx.strokeStyle = on ? '#ffe08a' : 'rgba(255,255,255,0.42)';
+      ctx.stroke();
+
+      ctx.textAlign = 'center';
+      ctx.font = 'bold ' + (btn.r * 0.36) + 'px system-ui, sans-serif';
+      ctx.fillStyle = on ? '#ffe08a' : '#dfe4ee';
+      ctx.fillText(btn.label, btn.x, btn.y + btn.r * 0.13);
+    }
+  }
 
 
 // -------------------------------------------------------------------
@@ -1475,10 +1723,15 @@
                 :                           GRASS_SPEED;
 
     // ---- THE PEDALS -------------------------------------------------
+    // Keyboard OR thumb - the rest of the game never needs to know
+    // which, so there's only ever one accelerating rule to get right.
+    const goPedal    = held('w', 'arrowup')   || pedal.go;
+    const brakePedal = held('s', 'arrowdown') || pedal.brake;
+
     // No throttle before the lights go, and none after you've finished.
-    if (driving && held('w', 'arrowup')) {
+    if (driving && goPedal) {
       car.speed += ACCEL * dt;
-    } else if (driving && held('s', 'arrowdown')) {
+    } else if (driving && brakePedal) {
       car.speed -= BRAKE * dt;
     } else {
       car.speed -= DRAG * dt;      // let go and you coast to a stop
@@ -1533,37 +1786,14 @@
     // up it, gaining height fast - and then at the lip the ground
     // vanishes while you're still rising, and you carry on rising.
     // That's a jump. Real ones work exactly the same way.
-    const ground = groundHeightAt(car.x, car.z);
+    const landed = fallAndFly(car, dt);
 
-    if (car.airborne) {
-      car.vy -= GRAVITY * dt;
-      car.y  += car.vy * dt;
-      car.airTime += dt;
+    if (car.airborne) car.airTime += dt;
 
-      if (car.y <= ground) {           // BANG. Back on the deck.
-        car.y = ground;
-        car.vy = 0;
-        car.airborne = false;
-        car.climb = 0;
-        shake = Math.min(1, shake + 0.55);
-        if (car.airTime > car.bestAir) car.bestAir = car.airTime;
-        car.airTime = 0;
-      }
-    } else {
-      // How fast is the ground lifting us right now?
-      const climb = (ground - car.y) / dt;
-
-      if (climb < -1) {
-        // It just fell away underneath us. Take off - with the speed we
-        // were climbing at a moment ago, not with anything the ramp
-        // "gave" us. There is no such thing.
-        car.airborne = true;
-        car.vy = car.climb;
-        car.airTime = 0;
-      } else {
-        car.y = ground;
-        car.climb = Math.max(0, climb);
-      }
+    if (landed) {
+      shake = Math.min(1, shake + 0.55);
+      if (car.airTime > car.bestAir) car.bestAir = car.airTime;
+      car.airTime = 0;
     }
 
     // ---- DID YOU HIT A WRECK? ---------------------------------------
@@ -1604,7 +1834,7 @@
     // wherever the camera happens to point, that is the entire feature.
     // You still steer, you still accelerate. You just can't see where
     // you're going, which is the price.
-    lookingBack = held('b', ' ');
+    lookingBack = held('b', ' ') || pedal.look;
     if (lookingBack) cam.yaw += Math.PI;
 
     // ---- HAS ANYBODY CROSSED THE LINE? ------------------------------
@@ -1665,6 +1895,7 @@
     // No steering wheel on the menus - you aren't driving yet.
     if (race !== 'menu' && race !== 'name') drawDash();
     drawRaceHud();
+    drawPad();
   }
 
 
@@ -1760,7 +1991,8 @@
 
     ctx.font = Math.min(W * 0.03, 18) + 'px system-ui, sans-serif';
     ctx.fillStyle = '#8c94aa';
-    ctx.fillText('UP / DOWN to look, ENTER to drive  -  or click one',
+    ctx.fillText(touchMode ? 'tap a track to drive it'
+                           : 'UP / DOWN to look, ENTER to drive  -  or click one',
                  W / 2, H * 0.80);
 
     // Just the record, not the whole board. Six rows here would have run
@@ -1815,7 +2047,9 @@
 
       ctx.font = Math.min(W * 0.032, 19) + 'px system-ui, sans-serif';
       ctx.fillStyle = '#8c94aa';
-      ctx.fillText('type your name, then press ENTER', W / 2, H * 0.44);
+      ctx.fillText(touchMode ? 'tap the screen to type your name'
+                             : 'type your name, then press ENTER',
+                   W / 2, H * 0.44);
 
       drawBoard(H * 0.58);
       return;
@@ -1991,12 +2225,14 @@
 
       ctx.font = Math.min(W * 0.03, 18) + 'px system-ui, sans-serif';
       ctx.fillStyle = '#8c94aa';
-      ctx.fillText('R race again      M pick a track      N change your name',
-                   W / 2, H * 0.955);
+      ctx.fillText(touchMode
+        ? 'tap the left side for tracks, the right side to race again'
+        : 'R race again      M pick a track      N change your name',
+        W / 2, H * 0.955);
     }
 
     // ---- CLICK TO STEER --------------------------------------------
-    if (!locked && race !== 'done' && race !== 'name') {
+    if (!locked && !touchMode && race !== 'done' && race !== 'name') {
       ctx.font = Math.min(W * 0.032, 19) + 'px system-ui, sans-serif';
       ctx.fillStyle = '#cfd6e6';
       ctx.fillText('click to steer with the mouse', W / 2, H * 0.66);
