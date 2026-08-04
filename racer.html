@@ -652,7 +652,8 @@
 
   const RACE_LENGTH = 5000;   // how far to the finish line
 
-  let race = 'countdown';     // 'name', 'countdown', 'racing' or 'done'
+  let race = 'countdown';     // 'name', 'menu', 'countdown', 'racing', 'done'
+  let menuPick = 0;           // which track is highlighted
   let countdown = 3.8;
   let result = '';
   let raceTime = 0;           // how long this run has taken
@@ -678,6 +679,7 @@
 
   const SAVE_NAME  = 'maxracer.name';
   const SAVE_TIMES = 'maxracer.times';
+  const SAVE_TRACK = 'maxracer.track';
   // Six, not ten. On a short window ten rows run off the bottom of the
   // screen and collide with the text underneath - and a leaderboard you
   // can't read the end of is worse than a shorter one.
@@ -756,6 +758,9 @@
     raceTime = 0;
     lastEntry = null;
     race = 'countdown';
+
+    // Remember which track you liked, so the menu opens on it next time.
+    try { localStorage.setItem(SAVE_TRACK, themeKey); } catch (e) {}
   }
 
   // The chequered line, and a post either side of it.
@@ -881,18 +886,119 @@
 //  COLOURS - all in one place so they're easy to fiddle with
 // -------------------------------------------------------------------
 
-  const TARMAC_A = [58, 60, 68];
-  const TARMAC_B = [50, 52, 60];
-  const GRASS_A  = [58, 122, 62];
-  const GRASS_B  = [50, 108, 55];
-  const RUMBLE_A = [214, 62, 58];
-  const RUMBLE_B = [238, 238, 238];
-  const STRIPE   = '#eef0f4';
-  const POST     = [230, 232, 238];
-  const DIRT_A   = [150, 116, 74];
-  const DIRT_B   = [136, 104, 66];
-  const RAMP_C   = [226, 142, 44];
-  const RAMP_LIP = [250, 214, 96];
+  const RAMP_C   = [226, 142, 44];    // ramps stay orange everywhere, so
+  const RAMP_LIP = [250, 214, 96];    // you always know what one looks like
+
+
+// -------------------------------------------------------------------
+//  THE THREE TRACKS
+// -------------------------------------------------------------------
+//  All three are the SAME ROAD. Same corners, same wrecks, same ramps,
+//  same shortcuts - so a lap time on one means the same as a lap time
+//  on another. What changes is every colour, the sky, and what's
+//  growing beside the road.
+//
+//  Every colour used to be its own const scattered about. Now they
+//  live in three boxes and the game just reads whichever box is
+//  switched on. Adding a fourth track is now writing one more box -
+//  no hunting through the drawing code at all.
+// -------------------------------------------------------------------
+
+  const THEMES = {
+
+    original: {
+      name: 'ORIGINAL',
+      blurb: 'grey road, green fields, white posts',
+      skyTop: '#1d3f78', skyLow: '#8fc0e8', far: '#3c7a44',
+      tarmacA: [58, 60, 68],  tarmacB: [50, 52, 60],
+      groundA: [58, 122, 62], groundB: [50, 108, 55],
+      rumbleA: [214, 62, 58], rumbleB: [238, 238, 238],
+      dirtA: [150, 116, 74],  dirtB: [136, 104, 66],
+      stripe: '#eef0f4',
+      propEvery: 8, prop: drawPost
+    },
+
+    woods: {
+      name: 'WOODS',
+      blurb: 'dark pines crowding both sides of the road',
+      skyTop: '#0d2436', skyLow: '#5d8ba0', far: '#1e3a26',
+      tarmacA: [48, 50, 56],  tarmacB: [41, 43, 49],
+      groundA: [38, 82, 44],  groundB: [30, 68, 38],
+      rumbleA: [188, 74, 48], rumbleB: [222, 220, 208],
+      dirtA: [104, 82, 56],   dirtB: [92, 72, 50],
+      stripe: '#e6e8dc',
+      propEvery: 3, prop: drawTree      // three times as many
+    },
+
+    desert: {
+      name: 'DESERT',
+      blurb: 'cactus, red rock, and a sky like an oven',
+      skyTop: '#7a4a1e', skyLow: '#f0c07a', far: '#c69a5e',
+      tarmacA: [96, 88, 80],  tarmacB: [86, 79, 72],
+      groundA: [208, 162, 96], groundB: [192, 148, 86],
+      rumbleA: [200, 78, 50],  rumbleB: [246, 232, 206],
+      dirtA: [186, 140, 84],   dirtB: [172, 128, 76],
+      stripe: '#fff4dc',
+      propEvery: 7, prop: drawCactus
+    }
+  };
+
+  const THEME_LIST = ['original', 'woods', 'desert'];
+
+  let themeKey = 'original';
+  let T = THEMES.original;      // the box we're currently reading from
+
+
+// -------------------------------------------------------------------
+//  WHAT GROWS BESIDE THE ROAD
+// -------------------------------------------------------------------
+//  Each one gets the same three things: where to stand, and which
+//  number it is. That number goes through hash() so every tree is a
+//  different height - but the SAME different height every time you
+//  drive past it.
+// -------------------------------------------------------------------
+
+  function drawPost(x, z, n) {
+    addBox(x, 1.7, z, 0.7, 3.4, 0.7, [230, 232, 238]);
+  }
+
+  function drawTree(x, z, n) {
+    const h = 5 + hash(n) * 6;
+    addBox(x, h * 0.5, z, 1.3, h, 1.3, [64, 44, 30]);        // trunk
+
+    // Three slabs of leaves, each narrower than the one below. That's
+    // all a pine tree is, really.
+    for (let i = 0; i < 3; i++) {
+      const w = 7.5 - i * 2.0;
+      addBox(x, h + i * 2.1, z, w, 2.6, w,
+             i === 2 ? [30, 78, 40] : [38, 94, 46]);
+    }
+  }
+
+  function drawCactus(x, z, n) {
+    // Every fifth one is a rock instead, so it isn't just cactus,
+    // cactus, cactus all the way to the finish line.
+    if (hash(n + 3) > 0.72) {
+      const s = 2.4 + hash(n + 11) * 3.4;
+      addBox(x, s * 0.4, z, s * 2, s * 0.9, s * 1.6, [148, 88, 62]);
+      addBox(x + s * 0.4, s * 0.9, z - s * 0.2, s, s * 0.7, s, [126, 74, 52]);
+      return;
+    }
+
+    const h = 4.5 + hash(n) * 4;
+    const green = [58, 116, 66];
+
+    addBox(x, h * 0.5, z, 1.7, h, 1.7, green);
+
+    if (hash(n + 5) > 0.38) {                    // an arm on the left
+      addBox(x - 1.7, h * 0.62, z, 2.2, 1.3, 1.3, green);
+      addBox(x - 2.6, h * 0.85, z, 1.3, 2.8, 1.3, green);
+    }
+    if (hash(n + 9) > 0.52) {                    // and maybe one right
+      addBox(x + 1.7, h * 0.48, z, 2.2, 1.3, 1.3, green);
+      addBox(x + 2.6, h * 0.72, z, 1.3, 2.8, 1.3, green);
+    }
+  }
 
 
 // -------------------------------------------------------------------
@@ -920,13 +1026,13 @@
       // flying underneath you ARE the feeling of speed.
       const flip = (n % 2 === 0);
 
-      // The grass, stretching away either side.
+      // The ground, stretching away either side.
       addFace([[x0 - 400, -0.02, z0], [x0 + 400, -0.02, z0],
                [x1 + 400, -0.02, z1], [x1 - 400, -0.02, z1]],
-              shade(flip ? GRASS_A : GRASS_B, 1));
+              shade(flip ? T.groundA : T.groundB, 1));
 
       // The red and white kerb down each edge.
-      const rum = flip ? RUMBLE_A : RUMBLE_B;
+      const rum = flip ? T.rumbleA : T.rumbleB;
       addFace([[x0 - ROAD_HALF - 3.4, 0, z0], [x0 - ROAD_HALF, 0, z0],
                [x1 - ROAD_HALF, 0, z1], [x1 - ROAD_HALF - 3.4, 0, z1]],
               shade(rum, 1), 0.1);
@@ -937,22 +1043,25 @@
       // The tarmac itself.
       addFace([[x0 - ROAD_HALF, 0, z0], [x0 + ROAD_HALF, 0, z0],
                [x1 + ROAD_HALF, 0, z1], [x1 - ROAD_HALF, 0, z1]],
-              shade(flip ? TARMAC_A : TARMAC_B, 1), 0.05);
+              shade(flip ? T.tarmacA : T.tarmacB, 1), 0.05);
 
       // Dashed white line down the middle. Every fourth slab, so it
       // comes out as dash-gap-gap-gap instead of a solid stripe.
       if (n % 4 === 0) {
         addFace([[x0 - 0.7, 0, z0], [x0 + 0.7, 0, z0],
                  [x1 + 0.7, 0, z1], [x1 - 0.7, 0, z1]],
-                STRIPE, 0.2);
+                T.stripe, 0.2);
       }
 
-      // A post every eighth slab, on both sides. Something standing UP
+      // Whatever this track grows, on both sides. Something standing UP
       // is what tells you how fast you're going - flat things sliding
-      // past never look as quick as tall things whipping by.
-      if (n % 8 === 0) {
-        addBox(x0 - ROAD_HALF - 6, 1.7, z0, 0.7, 3.4, 0.7, POST);
-        addBox(x0 + ROAD_HALF + 6, 1.7, z0, 0.7, 3.4, 0.7, POST);
+      // past never look as quick as tall things whipping by. Which is
+      // why the woods, with three times as many trees, feels faster on
+      // exactly the same road.
+      if (n % T.propEvery === 0) {
+        const out = ROAD_HALF + 6 + hash(n) * 5;
+        T.prop(x0 - out, z0, n);
+        T.prop(x0 + out, z0, n + 500);
       }
     }
   }
@@ -983,7 +1092,7 @@
 
         addFace([[x0 - SHORT_HALF, 0, z0], [x0 + SHORT_HALF, 0, z0],
                  [x1 + SHORT_HALF, 0, z1], [x1 - SHORT_HALF, 0, z1]],
-                shade(flip ? DIRT_A : DIRT_B, 1), 0.08);
+                shade(flip ? T.dirtA : T.dirtB, 1), 0.08);
       }
 
       // A marker post at each end, so you can spot the turning.
@@ -1042,12 +1151,12 @@
     const horizon = H / 2 + focal() * Math.tan(cam.pitch);
 
     const sky = ctx.createLinearGradient(0, 0, 0, Math.max(1, horizon));
-    sky.addColorStop(0, '#1d3f78');
-    sky.addColorStop(1, '#8fc0e8');
+    sky.addColorStop(0, T.skyTop);
+    sky.addColorStop(1, T.skyLow);
     ctx.fillStyle = sky;
     ctx.fillRect(0, 0, W, horizon);
 
-    ctx.fillStyle = '#3c7a44';
+    ctx.fillStyle = T.far;
     ctx.fillRect(0, horizon, W, H - horizon);
   }
 
@@ -1159,7 +1268,8 @@
         if (playerName.trim()) {
           playerName = playerName.trim();
           storeName(playerName);
-          resetRace();
+          car.z = 0;
+          race = 'menu';        // name first, then pick where you're driving
         }
       } else if (e.key.length === 1 && playerName.length < 9 &&
                  /[a-zA-Z0-9 ]/.test(e.key)) {
@@ -1169,9 +1279,39 @@
       return;
     }
 
+    // ---- CHOOSING A TRACK ------------------------------------------
+    if (race === 'menu') {
+      const k = e.key.toLowerCase();
+
+      // The % wraps you round the ends, so pressing up on the top one
+      // takes you to the bottom instead of nothing happening.
+      if (k === 'arrowup' || k === 'w') {
+        menuPick = (menuPick + THEME_LIST.length - 1) % THEME_LIST.length;
+      } else if (k === 'arrowdown' || k === 's') {
+        menuPick = (menuPick + 1) % THEME_LIST.length;
+      } else if (k === 'enter' || k === ' ') {
+        startAudio();
+        resetRace();
+      } else if (k >= '1' && k <= String(THEME_LIST.length)) {
+        menuPick = Number(k) - 1;
+        startAudio();
+        resetRace();
+      }
+      e.preventDefault();
+      return;
+    }
+
     // N on the results screen lets you be somebody else.
     if (e.key.toLowerCase() === 'n' && race === 'done') {
       race = 'name';
+      e.preventDefault();
+      return;
+    }
+
+    // M takes you back to pick a different track.
+    if (e.key.toLowerCase() === 'm' && race === 'done') {
+      race = 'menu';
+      car.z = 0;
       e.preventDefault();
       return;
     }
@@ -1218,11 +1358,37 @@
 
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
+  let pointerY = 0;
+
+  canvas.addEventListener('mousemove', function (e) {
+    if (locked) return;                 // locked means no cursor to track
+    const box = canvas.getBoundingClientRect();
+    pointerY = e.clientY - box.top;
+  });
+
   canvas.addEventListener('click', function () {
     // Browsers refuse to make noise until you've clicked on the page
     // at least once - a rule that exists because of adverts. So the
     // sound starts here, on the same click that grabs the mouse.
     startAudio();
+
+    // On the menu a click means "this track", NOT "grab my mouse".
+    // Grabbing it here would hide the cursor on the one screen you
+    // actually need it.
+    if (race === 'menu') {
+      for (let i = 0; i < THEME_LIST.length; i++) {
+        const b = menuRowBox(i);      // the very same box that got drawn
+        if (pointerY >= b.y && pointerY <= b.y + b.h) {
+          menuPick = i;
+          resetRace();
+          return;
+        }
+      }
+      return;
+    }
+
+    if (race === 'done' || race === 'name') return;
+
     if (!locked && canvas.requestPointerLock) canvas.requestPointerLock();
   });
 
@@ -1247,6 +1413,25 @@
     if (crashFlash > 0) crashFlash = Math.max(0, crashFlash - dt * 2.4);
 
     if (race === 'name') return;      // nothing moves while you're typing
+
+    // ---- THE MENU ---------------------------------------------------
+    // The track you're pointing at is switched on RIGHT NOW, so the
+    // whole world behind the menu is the actual track, not a picture of
+    // it. Move the highlight and the sky changes. That costs us nothing
+    // extra - we were drawing a road anyway, so it may as well be the
+    // right one.
+    if (race === 'menu') {
+      themeKey = THEME_LIST[menuPick];
+      T = THEMES[themeKey];
+
+      // Drift slowly forwards so the preview is alive, not a photo.
+      car.z += 26 * dt;
+      cam.x = car.x = roadX(car.z);
+      cam.z = car.z;
+      cam.y = 3.1;
+      cam.yaw = 0;
+      return;
+    }
 
     if (race === 'racing') raceTime += dt;
 
@@ -1477,7 +1662,8 @@
 
     cam.y = savedY;
 
-    drawDash();
+    // No steering wheel on the menus - you aren't driving yet.
+    if (race !== 'menu' && race !== 'name') drawDash();
     drawRaceHud();
   }
 
@@ -1523,8 +1709,83 @@
     ctx.textAlign = 'center';
   }
 
+  // WHERE ROW i SITS ON THE SCREEN.
+  //
+  // Both the drawing and the clicking ask this one function. If they
+  // each worked it out for themselves, one of them would eventually be
+  // slightly wrong and the menu would highlight one track while
+  // starting a different one - a bug that looks like magic.
+  function menuRowY(i) { return H * 0.40 + i * H * 0.115; }
+
+  function drawMenu() {
+    // Only a light wash - the whole point is that you can see the track
+    // you're about to choose, right through it.
+    ctx.fillStyle = 'rgba(6,10,18,0.52)';
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.textAlign = 'center';
+    ctx.font = 'bold ' + Math.min(W * 0.07, 46) + 'px system-ui, sans-serif';
+    ctx.fillStyle = '#000';
+    ctx.fillText('PICK YOUR TRACK', W / 2 + 3, H * 0.19 + 3);
+    ctx.fillStyle = '#ffe08a';
+    ctx.fillText('PICK YOUR TRACK', W / 2, H * 0.19);
+
+    ctx.font = Math.min(W * 0.03, 18) + 'px system-ui, sans-serif';
+    ctx.fillStyle = '#aeb6c8';
+    ctx.fillText('same road, same corners, same wrecks - only the world changes',
+                 W / 2, H * 0.26);
+
+    for (let i = 0; i < THEME_LIST.length; i++) {
+      const t = THEMES[THEME_LIST[i]];
+      const y = menuRowY(i);
+      const on = (i === menuPick);
+
+      const b = menuRowBox(i);
+
+      ctx.fillStyle = on ? 'rgba(255,224,138,0.16)' : 'rgba(0,0,0,0.34)';
+      ctx.fillRect(b.x, b.y, b.w, b.h);
+
+      ctx.strokeStyle = on ? '#ffe08a' : 'rgba(255,255,255,0.16)';
+      ctx.lineWidth = on ? 3 : 1;
+      ctx.strokeRect(b.x, b.y, b.w, b.h);
+
+      ctx.font = 'bold ' + Math.min(W * 0.045, 28) + 'px system-ui, sans-serif';
+      ctx.fillStyle = on ? '#ffe08a' : '#cfd6e6';
+      ctx.fillText((i + 1) + '.  ' + t.name, W / 2, y);
+
+      ctx.font = Math.min(W * 0.027, 16) + 'px system-ui, sans-serif';
+      ctx.fillStyle = on ? '#eef0f4' : '#8c94aa';
+      ctx.fillText(t.blurb, W / 2, y + H * 0.032);
+    }
+
+    ctx.font = Math.min(W * 0.03, 18) + 'px system-ui, sans-serif';
+    ctx.fillStyle = '#8c94aa';
+    ctx.fillText('UP / DOWN to look, ENTER to drive  -  or click one',
+                 W / 2, H * 0.80);
+
+    // Just the record, not the whole board. Six rows here would have run
+    // straight off the bottom of the screen - there simply isn't room
+    // once the three tracks have had theirs.
+    if (bestTimes.length > 0) {
+      ctx.fillStyle = '#cfd6e6';
+      ctx.fillText('record: ' + bestTimes[0].name + '  ' +
+                   formatTime(bestTimes[0].time), W / 2, H * 0.87);
+    }
+  }
+
+  // The rectangle drawn behind menu row i. Used BOTH for drawing it and
+  // for working out whether you clicked it, so the thing you see and
+  // the thing you hit are the same rectangle by construction.
+  function menuRowBox(i) {
+    const bw = Math.min(W * 0.62, 460);
+    const bh = H * 0.088;
+    return { x: W / 2 - bw / 2, y: menuRowY(i) - bh * 0.62, w: bw, h: bh };
+  }
+
   function drawRaceHud() {
     ctx.textAlign = 'center';
+
+    if (race === 'menu') { drawMenu(); return; }
 
     // ---- YOU HIT SOMETHING -------------------------------------------
     if (crashFlash > 0.01 && race === 'racing') {
@@ -1556,7 +1817,7 @@
       ctx.fillStyle = '#8c94aa';
       ctx.fillText('type your name, then press ENTER', W / 2, H * 0.44);
 
-      drawBoard(H * 0.56);
+      drawBoard(H * 0.58);
       return;
     }
 
@@ -1730,7 +1991,8 @@
 
       ctx.font = Math.min(W * 0.03, 18) + 'px system-ui, sans-serif';
       ctx.fillStyle = '#8c94aa';
-      ctx.fillText('R to race again      N to change your name', W / 2, H * 0.955);
+      ctx.fillText('R race again      M pick a track      N change your name',
+                   W / 2, H * 0.955);
     }
 
     // ---- CLICK TO STEER --------------------------------------------
@@ -1774,7 +2036,16 @@
   // met you, ask - otherwise get straight on with the race.
   bestTimes = loadTimes();
   playerName = loadName();
-  if (!playerName) race = 'name';
+
+  // Open the menu on whichever track you drove last. indexOf gives -1
+  // if it's not in the list - which is exactly what happens if the
+  // saved name is rubbish - so we fall back to the first one.
+  try {
+    const saved = THEME_LIST.indexOf(localStorage.getItem(SAVE_TRACK));
+    if (saved >= 0) menuPick = saved;
+  } catch (e) {}
+
+  race = playerName ? 'menu' : 'name';
 
   requestAnimationFrame(loop);
 
