@@ -414,7 +414,11 @@
 //  in two directions instead of one.
 // -------------------------------------------------------------------
 
-  const CELL = 34;            // how big one invisible square is
+  // How big one invisible square is. This went up from 34 when the
+  // bunkers became settlements - a compound 60 across simply doesn't
+  // fit in a 34 square, and its walls would have swallowed whatever was
+  // standing in the next one along.
+  const CELL = 48;
 
   const RUBBLE = [104, 94, 84];
   const CONCRETE = [138, 128, 116];
@@ -492,7 +496,10 @@
     } else if (r < 0.26) {
       p.kind = 'bunker';
       p.solid = 0;              // not one lump - see parts, below
+      p.half  = 20 + hash2(gx + 17, gz) * 10;    // 40 to 60 across
+      p.souls = 50 + Math.floor(hash2(gx + 21, gz + 21) * 51);
       p.parts = bunkerParts(p);
+      p.guards = bunkerGuards(p);
     } else if (r < 0.38) {
       p.kind = 'wreck';  p.solid = 4.4;
     } else if (r < 0.48) {
@@ -521,41 +528,189 @@
 //  it a building instead of a rock.
 // -------------------------------------------------------------------
 
-  // Where the wall posts go, as fractions of the way out from the
-  // middle. Used BOTH to build the walls you can see and the lumps you
-  // bump into - so the doorway you can see is always the doorway you
-  // can walk through.
-  const BUNKER_SPOTS = [-1, -0.66, -0.33, 0, 0.33, 0.66, 1];
-  const BUNKER_HALF  = 6.4;
-  const POST_R       = 1.7;
+  const POST_STEP = 5.6;     // how far apart the wall panels stand
+  const POST_R    = 3.0;     // and how fat each one is
 
-  // Each wall of the bunker, as a list of local (x, z) posts.
-  function bunkerPosts() {
-    const S = BUNKER_HALF;
+  // THE WALL, as a list of local (x, z) posts.
+  //
+  // The posts overlap slightly on purpose - 5.6 apart with a radius of
+  // 3 each means no gap anywhere, so nothing can squeeze between two
+  // panels. Everything gets in through the gate or not at all.
+  function bunkerPosts(p) {
+    const S = p.half;
+    const n = Math.max(6, Math.round(S * 2 / POST_STEP));
     const out = [];
 
-    for (const t of BUNKER_SPOTS) out.push([t * S, -S]);          // back
-    for (const t of BUNKER_SPOTS) {
-      if (Math.abs(t) === 1) continue;                            // corners done
-      out.push([-S, t * S]);                                      // left
-      out.push([ S, t * S]);                                      // right
-    }
-    for (const t of BUNKER_SPOTS) {
-      if (Math.abs(t) < 0.5) continue;    // THE DOORWAY - leave it out
-      out.push([t * S, S]);                                       // front
+    for (let i = 0; i <= n; i++) {
+      const t = -S + (i / n) * S * 2;
+
+      out.push([t, -S]);                                 // back wall
+
+      // The front wall has a GATE in the middle of it. That gap is the
+      // whole reason this is a settlement and not a lump of rock.
+      if (Math.abs(t) > S * 0.26) out.push([t, S]);
+
+      if (i > 0 && i < n) {                              // the two sides
+        out.push([-S, t]);
+        out.push([ S, t]);
+      }
     }
     return out;
   }
 
   function bunkerParts(p) {
     const co = Math.cos(p.spin), si = Math.sin(p.spin);
-    return bunkerPosts().map(function (q) {
+    return bunkerPosts(p).map(function (q) {
       return {
         x: p.x + q[0] * co + q[1] * si,
         z: p.z - q[0] * si + q[1] * co,
         r: POST_R
       };
     });
+  }
+
+
+// -------------------------------------------------------------------
+//  THE GUARDS
+// -------------------------------------------------------------------
+//  Somebody has to be keeping fifty to a hundred people alive out here,
+//  and it isn't luck. Every settlement has people on the wall with
+//  rifles, and anything that shambles too close gets dropped.
+//
+//  They stand at fixed posts just inside the wall. They pick the
+//  nearest thing in range, turn to it, and fire. That's the whole
+//  brain - simpler than the racing rival's.
+//
+//  Stand near a wall and let the zombies come to you. It's the closest
+//  thing to a safe place in the whole game.
+// -------------------------------------------------------------------
+
+  const GUARD_RANGE = 62;
+  const GUARD_COOL  = 0.5;     // seconds between shots
+  const GUARD_HURT  = 2;       // damage per shot
+  const GUARD_EVERY = 3;       // one guard per this many wall posts
+
+  function bunkerGuards(p) {
+    const posts = bunkerPosts(p);
+    const co = Math.cos(p.spin), si = Math.sin(p.spin);
+    const out = [];
+
+    for (let i = 0; i < posts.length; i += GUARD_EVERY) {
+      // Stand them just INSIDE the wall, not on top of it.
+      const lx = posts[i][0] * 0.88, lz = posts[i][1] * 0.88;
+
+      out.push({
+        x: p.x + lx * co + lz * si,
+        z: p.z - lx * si + lz * co,
+        yaw: p.spin,
+        cool: hash2(p.gx + i, p.gz + i) * GUARD_COOL,   // not all at once
+        flash: 0,
+        bob: hash2(p.gx, p.gz + i) * 6
+      });
+    }
+    return out;
+  }
+
+  let tracers = [];
+
+  function updateGuards(dt) {
+    for (const t of tracers) t.life -= dt;
+    tracers = tracers.filter(function (t) { return t.life > 0; });
+
+    if (enemies.length === 0) return;
+
+    const reach = Math.ceil(FOG_FAR / CELL) + 1;
+    const cx = Math.round(player.x / CELL), cz = Math.round(player.z / CELL);
+
+    for (let gx = cx - reach; gx <= cx + reach; gx++) {
+      for (let gz = cz - reach; gz <= cz + reach; gz++) {
+        const p = propAt(gx, gz);
+        if (!p || p.kind !== 'bunker' || !p.guards) continue;
+
+        // Far-off settlements are defending nothing - the enemies all
+        // live near you. Skipping them costs nothing and saves plenty.
+        if (Math.hypot(p.x - player.x, p.z - player.z) > FOG_FAR) continue;
+
+        for (const g of p.guards) {
+          g.flash = Math.max(0, g.flash - dt * 9);
+          g.cool -= dt;
+          g.bob += dt * 0.7;
+
+          // Nearest thing worth shooting.
+          let best = null, bestD = GUARD_RANGE;
+          for (const e of enemies) {
+            if (e.dead) continue;
+            const d = Math.hypot(e.x - g.x, e.z - g.z);
+            if (d < bestD) { bestD = d; best = e; }
+          }
+          if (!best) continue;
+
+          g.yaw = Math.atan2(best.x - g.x, best.z - g.z);
+
+          if (g.cool > 0) continue;
+          g.cool = GUARD_COOL;
+          g.flash = 1;
+
+          tracers.push({
+            x1: g.x, y1: 2.7, z1: g.z,
+            x2: best.x, y2: best.k.height * 0.6, z2: best.z,
+            life: 0.07
+          });
+
+          best.hp -= GUARD_HURT;
+          best.hitFlash = 1;
+          burst(best.x, best.k.height * 0.6, best.z, best.k.gib, 5, 6);
+
+          // The kill goes to the guard, not to you. Your counter is for
+          // things YOU shot - handing you other people's work would
+          // make the number a lie.
+          if (best.hp <= 0 && !best.dead) {
+            best.dead = true;
+            burst(best.x, best.k.height * 0.5, best.z, best.k.gib, 26, 17);
+            playKill();
+          }
+        }
+      }
+    }
+  }
+
+  function drawTracers() {
+    for (const t of tracers) {
+      const dx = t.x2 - t.x1, dz = t.z2 - t.z1;
+      const len = Math.hypot(dx, dz);
+      if (len < 0.5) continue;
+
+      // One long thin box lying along the shot. It's only on screen for
+      // seven hundredths of a second, which is exactly why you believe
+      // it was a bullet.
+      addBox((t.x1 + t.x2) * 0.5, (t.y1 + t.y2) * 0.5, (t.z1 + t.z2) * 0.5,
+             0.2, 0.2, len, [255, 238, 176], Math.atan2(dx, dz));
+    }
+  }
+
+  // One person with a rifle. Used for the guards; the civilians inside
+  // are the same body with the gun left off.
+  function drawPerson(x, y, z, yaw, coat, armed, flash) {
+    const co = Math.cos(yaw), si = Math.sin(yaw);
+
+    function bit(ox, oy, oz, w, h, d, rgb) {
+      addBox(x + ox * co + oz * si, y + oy, z - ox * si + oz * co,
+             w, h, d, rgb, yaw);
+    }
+
+    bit(-0.42, 0.55, 0, 0.55, 1.1, 0.55, [52, 46, 42]);      // legs
+    bit( 0.42, 0.55, 0, 0.55, 1.1, 0.55, [52, 46, 42]);
+    bit(0, 1.72, 0, 1.5, 1.3, 0.95, coat);                    // body
+    bit(0, 2.62, 0, 0.85, 0.75, 0.85, [188, 152, 118]);       // head
+    bit(0, 3.02, 0, 1.05, 0.28, 1.05, [64, 58, 48]);          // hat
+
+    if (armed) {
+      bit(0.75, 1.95, -1.1, 0.3, 0.3, 2.4, [42, 38, 36]);     // rifle
+      if (flash > 0.1) {
+        bit(0.75, 1.95, -2.5, 0.9 * flash, 0.9 * flash, 0.9 * flash,
+            [255, 232, 150]);                                  // muzzle flash
+      }
+    }
   }
 
   // IS THIS SPOT INSIDE SOMETHING SOLID?
@@ -664,7 +819,7 @@
 
   function drawBunker(p) {
     const co = Math.cos(p.spin), si = Math.sin(p.spin);
-    const S = BUNKER_HALF;
+    const S = p.half;
 
     // ---- HOW MUCH DETAIL IS WORTH IT? -------------------------------
     // A fully detailed bunker is about 460 flat shapes. Three of them
@@ -675,8 +830,8 @@
     // the ribbing and the sandbags. You genuinely cannot see the
     // difference at 60 paces - and the ones you can't see are free.
     const away  = Math.hypot(p.x - player.x, p.z - player.z);
-    const near  = away < 88;     // tyres, pipe, the lean-to
-    const close = away < 46;     // corrugation and sandbags
+    const near  = away < 88;     // tyres, the lean-to, people inside
+    const close = away < 40;     // corrugation and sandbags
 
     function part(lx, lz, y, w, h, d, rgb, lean) {
       addBox(p.x + lx * co + lz * si, y, p.z - lx * si + lz * co,
@@ -684,7 +839,7 @@
     }
 
     // ---- THE WALLS --------------------------------------------------
-    const posts = bunkerPosts();
+    const posts = bunkerPosts(p);
 
     for (let i = 0; i < posts.length; i++) {
       const lx = posts[i][0], lz = posts[i][1];
@@ -724,17 +879,9 @@
       }
     }
 
-    // ---- THE ROOF ---------------------------------------------------
-    // Deliberately incomplete. A finished roof is a shed; a roof with
-    // holes in it is somewhere people were desperate.
-    for (let i = 0; i < 4; i++) {
-      if (hash2(p.gx + i * 7, p.gz + 2) < 0.32) continue;    // this sheet's gone
-      const lz = -S + 1.6 + i * (S * 0.66);
-      const col = SCRAP[Math.floor(hash2(p.gx, p.gz + i * 5) * SCRAP.length)];
-      part(0, lz, 9.9 + hash2(p.gx + i, p.gz) * 0.5,
-           S * 2.1, 0.35, S * 0.6, shade(col, 0.9),
-           (hash2(p.gx + i, p.gz + 1) - 0.5) * 0.1);
-    }
+    // NO ROOF. It's a walled compound, not a shed - you're meant to be
+    // able to see down into it from outside, and the people living in
+    // there need the sky.
 
     // ---- THE BEACON -------------------------------------------------
     // Every bunker gets one, and it is drawn AT ANY DISTANCE - it's the
@@ -774,7 +921,57 @@
 
     fogResist = 0;      // back to normal for everything after this
 
+    // ---- THE GUARDS ON THE WALL -------------------------------------
+    // Drawn a fair way out, because armed people on a wall is the thing
+    // that tells you this place is alive rather than abandoned.
+    if (away < 115) {
+      for (const g of p.guards) {
+        drawPerson(g.x, 0, g.z, g.yaw, [86, 92, 66], true, g.flash);
+      }
+    }
+
     if (!near) return;
+
+    // ---- THE PEOPLE INSIDE ------------------------------------------
+    // We draw about a dozen. There are fifty to a hundred in there -
+    // the rest are in the shelters, or asleep, or round the back. You
+    // cannot draw a hundred people at sixty frames a second, and you
+    // don't have to: a busy dozen reads as a crowd.
+    // Ten, not fourteen. Every person is 25 flat shapes and a settlement
+    // was pushing 2,700 of them - which is a lot of work for a machine
+    // to get through sixty times a second. Ten still reads as a crowd.
+    const shown = 10;
+    for (let i = 0; i < shown; i++) {
+      // Each one drifts slowly round its own circle, at its own speed
+      // and its own distance out. Nobody walks in step with anybody.
+      const speed = 0.10 + hash2(p.gx + i, p.gz + i * 2) * 0.16;
+      const dir   = hash2(p.gx + i * 5, p.gz) > 0.5 ? 1 : -1;
+      const a     = hash2(p.gx + i * 3, p.gz + i) * 6.28 + clock * speed * dir;
+      const rad   = S * (0.18 + hash2(p.gx + i, p.gz + 9) * 0.55);
+
+      const lx = Math.cos(a) * rad, lz = Math.sin(a) * rad;
+      const coat = SCRAP[Math.floor(hash2(p.gx + i * 7, p.gz + i) * SCRAP.length)];
+
+      drawPerson(p.x + lx * co + lz * si, 0, p.z - lx * si + lz * co,
+                 a + Math.PI * 0.5 * dir, shade(coat, 0.8), false, 0);
+    }
+
+    // ---- SHELTERS AND A FIRE ----------------------------------------
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * 6.28 + hash2(p.gx, p.gz + i) * 0.7;
+      const rad = S * 0.66;
+      const lx = Math.cos(a) * rad, lz = Math.sin(a) * rad;
+      const col = SCRAP[Math.floor(hash2(p.gx + i * 11, p.gz) * SCRAP.length)];
+
+      part(lx, lz, 1.6, 5.0, 3.2, 4.4, shade(col, 0.85), a);      // shack
+      part(lx, lz, 3.5, 5.6, 0.4, 5.0, shade(col, 1.05), a);      // its roof
+    }
+
+    // A cooking fire in the middle, breathing.
+    const fire = 0.6 + Math.sin(clock * 5 + p.gx) * 0.4;
+    part(0, 0, 0.4, 2.6, 0.5, 2.6, [46, 40, 36]);
+    part(0, 0, 1.1 + fire * 0.4, 1.3 + fire, 1.6 + fire, 1.3 + fire,
+         [220, 120 + 90 * fire, 40]);
 
     // ---- THE JUNK ROUND THE OUTSIDE ---------------------------------
     // Tyres stacked at the corners.
@@ -1456,6 +1653,7 @@
     }
 
     updateEnemies(dt);
+    updateGuards(dt);
     updateBolts(dt);
 
     enemies = enemies.filter(function (e) { return !e.dead; });
@@ -1564,6 +1762,21 @@
     }
   }
 
+  // Which settlement are you standing at, if any? Only the nine squares
+  // around you can possibly be close enough.
+  function nearestSettlement() {
+    const gx = Math.round(player.x / CELL), gz = Math.round(player.z / CELL);
+
+    for (let ax = gx - 1; ax <= gx + 1; ax++) {
+      for (let az = gz - 1; az <= gz + 1; az++) {
+        const p = propAt(ax, az);
+        if (!p || p.kind !== 'bunker') continue;
+        if (Math.hypot(p.x - player.x, p.z - player.z) < p.half + 26) return p;
+      }
+    }
+    return null;
+  }
+
   function drawHud() {
     // ---- CROSSHAIR --------------------------------------------------
     const mx = W / 2, my = H / 2, gap = 6, arm = 11;
@@ -1606,6 +1819,21 @@
     ctx.fillStyle = '#b8a68c';
     ctx.fillText('KILLS', W * 0.95, H - 28);
     ctx.fillText(Math.floor(clock) + 's survived', W * 0.95, H - 62);
+
+    // ---- ARE YOU AT A SETTLEMENT? ------------------------------------
+    // Walk close enough and it tells you how many people are in there.
+    const camp = nearestSettlement();
+    if (camp) {
+      ctx.textAlign = 'center';
+      ctx.font = 'bold ' + Math.min(W * 0.038, 23) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#ffd9a0';
+      ctx.fillText('SETTLEMENT', W / 2, H * 0.085);
+
+      ctx.font = Math.min(W * 0.03, 18) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#cbb894';
+      ctx.fillText(camp.souls + ' people inside  -  the guards will cover you',
+                   W / 2, H * 0.12);
+    }
 
     // ---- GETTING HURT ------------------------------------------------
     if (player.hurtFlash > 0) {
@@ -1660,6 +1888,7 @@
     drawDust();
     for (const e of enemies) drawEnemy(e);
     drawBolts();
+    drawTracers();
     drawGibs();
 
     // Furthest away painted FIRST, so near things cover far things.
