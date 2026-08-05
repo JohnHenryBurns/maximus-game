@@ -80,8 +80,7 @@
   const SKY_TOP  = '#3a2214';
   const SKY_LOW  = '#c9955a';
 
-  const GROUND_A = [126, 100, 66];
-  const GROUND_B = [112, 88, 58];
+  const GROUND_TAN = [186, 156, 112];   // the tan Maximus asked for
 
   const EYE_H = 3.4;                  // how tall you are
 
@@ -100,8 +99,9 @@
     hurtFlash: 0
   };
 
-  const WALK   = 20;
-  const RUN    = 33;
+  const WALK     = 20;
+  const RUN      = 33;
+  const PLAYER_R = 1.7;      // how fat you are, for bumping into things
   const GUN_COOL  = 0.16;    // seconds between shots
   const GUN_RANGE = 150;
   const GUN_AIM   = 0.20;    // how forgiving the aim is, up and down
@@ -229,10 +229,132 @@
 //  around with you like a carpet glued to your feet.
 // -------------------------------------------------------------------
 
-  const RINGS = [0, 9, 20, 34, 54, 82, 120, FOG_FAR];
-  const SPOKES = 28;
+// -------------------------------------------------------------------
+//  SMOOTH RANDOMNESS - the same stone as Cursed Cavern
+// -------------------------------------------------------------------
+//  Straight from cavern.html. Plain Math.random() gives you TV static:
+//  every dot unrelated to the one beside it. Rock isn't like that -
+//  it's lumpy, and the lumps have a size.
+//
+//  So: scatter random dots on a coarse grid, then for any spot in
+//  between, BLEND the four nearest dots. Nearby spots blend almost the
+//  same four, so they come out almost the same - and that's smooth
+//  instead of static.
+//
+//  Then stack three of those at different sizes: big slow lumps, medium
+//  lumps, fine grain. Adding them is what turns "blobs" into "stone".
+//
+//  The cavern paints this onto pixels. We use it to pick the SHADE of
+//  each patch of ground instead - same maths, different job.
+// -------------------------------------------------------------------
+
+  function makeNoiseGrid(size) {
+    const grid = new Float32Array(size * size);
+    for (let i = 0; i < grid.length; i++) grid[i] = Math.random();
+    return grid;
+  }
+
+  function noiseAt(grid, size, x, y) {
+    const fx = x * size, fy = y * size;
+    const x0 = Math.floor(fx), y0 = Math.floor(fy);
+
+    let tx = fx - x0, ty = fy - y0;
+
+    // This curve eases the blend in and out. Blending in a straight
+    // line leaves visible diamond shapes - this one line is the
+    // difference between "rock" and "quilt".
+    tx = tx * tx * (3 - 2 * tx);
+    ty = ty * ty * (3 - 2 * ty);
+
+    // Wrap at the edges so the pattern tiles with no seam.
+    function corner(cx, cy) {
+      const wx = ((cx % size) + size) % size;
+      const wy = ((cy % size) + size) % size;
+      return grid[wy * size + wx];
+    }
+
+    const a = corner(x0,     y0);
+    const b = corner(x0 + 1, y0);
+    const c = corner(x0,     y0 + 1);
+    const d = corner(x0 + 1, y0 + 1);
+
+    const top = a + (b - a) * tx;
+    const bot = c + (d - c) * tx;
+    return top + (bot - top) * ty;
+  }
+
+  // Three layers: big lumps, medium lumps, fine grit.
+  const STONE = [
+    { grid: makeNoiseGrid(6),  size: 6,  weight: 0.50 },
+    { grid: makeNoiseGrid(14), size: 14, weight: 0.32 },
+    { grid: makeNoiseGrid(34), size: 34, weight: 0.18 }
+  ];
+
+  const STONE_REPEAT = 220;    // how far before the pattern comes round again
+
+  function stoneAt(wx, wz) {
+    const x = wx / STONE_REPEAT, y = wz / STONE_REPEAT;
+    let total = 0;
+    for (const layer of STONE) {
+      total += noiseAt(layer.grid, layer.size, x, y) * layer.weight;
+    }
+    return total;               // roughly 0 to 1
+  }
+
+
+// -------------------------------------------------------------------
+//  THE GROUND
+// -------------------------------------------------------------------
+//  TWO different grounds joined at 52 paces, and the reason is subtle.
+//
+//  Close up it's a grid of squares FIXED IN THE WORLD. It has to be
+//  fixed, because the shade comes from the stone pattern - and if the
+//  squares moved with you while the pattern stayed put, the ground
+//  would crawl and shimmer under your feet like a bad carpet.
+//
+//  Far away it's rings around you, which move with you - but out there
+//  the fog has eaten almost all the colour anyway, so nobody can tell.
+//
+//  Cheap where it doesn't matter, correct where it does.
+// -------------------------------------------------------------------
+
+  const TILE      = 5;      // one near-ground square
+  const NEAR_EDGE = 52;     // where squares stop and rings take over
+
+  const RINGS  = [NEAR_EDGE, 74, 104, 138, FOG_FAR];
+  const SPOKES = 26;
+
+  function groundShade(wx, wz) {
+    // 0.72 to 1.20 - dark dips and pale raised bits, like weathered rock.
+    return shade(GROUND_TAN, 0.72 + stoneAt(wx, wz) * 0.48);
+  }
 
   function drawGround() {
+    const fx = Math.sin(player.yaw), fz = Math.cos(player.yaw);
+
+    // ---- NEAR: world-locked squares --------------------------------
+    const gx0 = Math.floor((player.x - NEAR_EDGE) / TILE);
+    const gx1 = Math.floor((player.x + NEAR_EDGE) / TILE);
+    const gz0 = Math.floor((player.z - NEAR_EDGE) / TILE);
+    const gz1 = Math.floor((player.z + NEAR_EDGE) / TILE);
+
+    for (let gx = gx0; gx <= gx1; gx++) {
+      for (let gz = gz0; gz <= gz1; gz++) {
+        const x0 = gx * TILE, z0 = gz * TILE;
+        const mx = x0 + TILE * 0.5, mz = z0 + TILE * 0.5;
+
+        const dx = mx - player.x, dz = mz - player.z;
+        if (Math.hypot(dx, dz) > NEAR_EDGE) continue;      // outside the disc
+        if (dx * fx + dz * fz < -TILE * 2) continue;       // behind your head
+
+        addFace([
+          [x0, 0, z0], [x0 + TILE, 0, z0],
+          [x0 + TILE, 0, z0 + TILE], [x0, 0, z0 + TILE]
+        ], groundShade(mx, mz));
+      }
+    }
+
+    // ---- FAR: rings ------------------------------------------------
     for (let r = 0; r < RINGS.length - 1; r++) {
       const r0 = RINGS[r], r1 = RINGS[r + 1];
 
@@ -243,23 +365,19 @@
         const c0 = Math.cos(a0), s0 = Math.sin(a0);
         const c1 = Math.cos(a1), s1 = Math.sin(a1);
 
-        const px = player.x, pz = player.z;
-
-        // Where is the middle of this patch, in the world?
         const mr = (r0 + r1) * 0.5, ma = (a0 + a1) * 0.5;
-        const wx = px + Math.cos(ma) * mr;
-        const wz = pz + Math.sin(ma) * mr;
+        const wx = player.x + Math.cos(ma) * mr;
+        const wz = player.z + Math.sin(ma) * mr;
 
-        // Shade it by its world position, quantised into 7-unit squares.
-        const tone = 0.86 + hash2(Math.floor(wx / 7), Math.floor(wz / 7)) * 0.28;
-        const base = (Math.floor(wx / 7) + Math.floor(wz / 7)) % 2 ? GROUND_A : GROUND_B;
+        if ((wx - player.x) * fx + (wz - player.z) * fz < -r1 * 0.4) continue;
 
+        const px = player.x, pz = player.z;
         addFace([
           [px + c0 * r0, 0, pz + s0 * r0],
           [px + c1 * r0, 0, pz + s1 * r0],
           [px + c1 * r1, 0, pz + s1 * r1],
           [px + c0 * r1, 0, pz + s0 * r1]
-        ], shade(base, tone));
+        ], groundShade(wx, wz));
       }
     }
   }
@@ -285,6 +403,65 @@
   const DEADWOOD = [78, 62, 46];
   const RUST = [128, 74, 44];
 
+  // WHAT IS IN SQUARE (gx, gz)? Returns null for empty, or everything
+  // there is to know about the thing standing there.
+  //
+  // This used to be worked out inside the drawing loop. It had to come
+  // out, because now TWO things need the answer: the drawing, and
+  // walking into it. If they each worked it out for themselves they
+  // would drift apart, and you'd get invisible walls in empty ground
+  // and towers you could stroll through. One function, one answer.
+  //
+  // "solid" is how far out you're stopped. Zero means walk right over
+  // it - rubble and barrels aren't worth blocking on.
+  function propAt(gx, gz) {
+    const r = hash2(gx, gz);
+    if (r > 0.62) return null;               // most squares are empty
+
+    // Jiggle it off the exact grid corner, or the whole wasteland
+    // looks like graph paper.
+    const p = {
+      gx: gx, gz: gz,
+      x: gx * CELL + (hash2(gx + 7, gz) - 0.5) * CELL * 0.8,
+      z: gz * CELL + (hash2(gx, gz + 7) - 0.5) * CELL * 0.8,
+      spin: hash2(gx + 3, gz + 3) * Math.PI * 2
+    };
+
+    if (r < 0.16) {
+      p.kind = 'tower';
+      p.w = 8 + hash2(gx, gz + 1) * 6;
+      p.solid = p.w * 0.62;
+    } else if (r < 0.30) {
+      p.kind = 'wreck';  p.solid = 4.4;
+    } else if (r < 0.44) {
+      p.kind = 'tree';   p.solid = 1.4;
+    } else if (r < 0.55) {
+      p.kind = 'rubble'; p.solid = 0;
+    } else {
+      p.kind = 'barrels'; p.solid = 0;
+    }
+
+    return p;
+  }
+
+  // IS THIS SPOT INSIDE SOMETHING SOLID?
+  //
+  // We only ask the nine squares around the spot. Nothing can reach in
+  // from further than one square away, so checking the whole wasteland
+  // would be nine answers and several thousand wasted questions.
+  function blockedAt(x, z, radius) {
+    const gx = Math.round(x / CELL), gz = Math.round(z / CELL);
+
+    for (let ax = gx - 1; ax <= gx + 1; ax++) {
+      for (let az = gz - 1; az <= gz + 1; az++) {
+        const p = propAt(ax, az);
+        if (!p || p.solid <= 0) continue;
+        if (Math.hypot(x - p.x, z - p.z) < p.solid + radius) return p;
+      }
+    }
+    return null;
+  }
+
   function drawScenery() {
     const reach = Math.ceil(FOG_FAR / CELL);
     const cx = Math.round(player.x / CELL);
@@ -293,15 +470,10 @@
     for (let gx = cx - reach; gx <= cx + reach; gx++) {
       for (let gz = cz - reach; gz <= cz + reach; gz++) {
 
-        const r = hash2(gx, gz);
-        if (r > 0.62) continue;               // most squares are empty
+        const p = propAt(gx, gz);
+        if (!p) continue;
 
-        // Jiggle it off the exact grid corner, or the whole wasteland
-        // looks like graph paper.
-        const x = gx * CELL + (hash2(gx + 7, gz) - 0.5) * CELL * 0.8;
-        const z = gz * CELL + (hash2(gx, gz + 7) - 0.5) * CELL * 0.8;
-
-        const dx = x - player.x, dz = z - player.z;
+        const dx = p.x - player.x, dz = p.z - player.z;
 
         // Don't bother if it's past the fog.
         if (Math.hypot(dx, dz) > FOG_FAR) continue;
@@ -312,22 +484,21 @@
         // anything, skips about half the entire wasteland for free.
         if (dx * Math.sin(player.yaw) + dz * Math.cos(player.yaw) < -26) continue;
 
-        const spin = hash2(gx + 3, gz + 3) * Math.PI * 2;
-
-        if (r < 0.16)      drawTower(x, z, gx, gz, spin);
-        else if (r < 0.30) drawWreck(x, z, gx, gz, spin);
-        else if (r < 0.44) drawDeadTree(x, z, gx, gz);
-        else if (r < 0.55) drawRubble(x, z, gx, gz, spin);
-        else               drawBarrels(x, z, gx, gz);
+        if      (p.kind === 'tower')  drawTower(p);
+        else if (p.kind === 'wreck')  drawWreck(p);
+        else if (p.kind === 'tree')   drawDeadTree(p);
+        else if (p.kind === 'rubble') drawRubble(p);
+        else                          drawBarrels(p);
       }
     }
   }
 
   // A tower with its top blown off. The break is what makes it a ruin -
   // a neat box is a building, a jagged one is a war.
-  function drawTower(x, z, gx, gz, spin) {
+  function drawTower(p) {
+    const x = p.x, z = p.z, gx = p.gx, gz = p.gz, spin = p.spin;
     const h = 14 + hash2(gx + 1, gz) * 26;
-    const w = 8 + hash2(gx, gz + 1) * 6;
+    const w = p.w;                 // the SAME width collision uses
 
     addBox(x, h * 0.5, z, w, h, w, CONCRETE, spin);
 
@@ -349,7 +520,8 @@
     }
   }
 
-  function drawWreck(x, z, gx, gz, spin) {
+  function drawWreck(p) {
+    const x = p.x, z = p.z, gx = p.gx, gz = p.gz, spin = p.spin;
     addBox(x, 1.3, z, 4.4, 2.0, 8.6, RUST, spin);
     addBox(x, 2.8, z + 0.6, 3.6, 1.2, 3.8, [46, 40, 38], spin);
 
@@ -363,7 +535,8 @@
     }
   }
 
-  function drawDeadTree(x, z, gx, gz) {
+  function drawDeadTree(p) {
+    const x = p.x, z = p.z, gx = p.gx, gz = p.gz;
     const h = 7 + hash2(gx + 2, gz) * 9;
     addBox(x, h * 0.5, z, 1.4, h, 1.4, DEADWOOD);
 
@@ -376,7 +549,8 @@
     }
   }
 
-  function drawRubble(x, z, gx, gz, spin) {
+  function drawRubble(p) {
+    const x = p.x, z = p.z, gx = p.gx, gz = p.gz;
     const lumps = 3 + Math.floor(hash2(gx + 4, gz) * 4);
     for (let i = 0; i < lumps; i++) {
       const a = hash2(gx + i, gz + i * 3) * Math.PI * 2;
@@ -387,7 +561,8 @@
     }
   }
 
-  function drawBarrels(x, z, gx, gz) {
+  function drawBarrels(p) {
+    const x = p.x, z = p.z, gx = p.gx, gz = p.gz;
     const n = 1 + Math.floor(hash2(gx + 6, gz) * 3);
     for (let i = 0; i < n; i++) {
       const a = hash2(gx + i * 4, gz + i) * Math.PI * 2;
@@ -514,6 +689,20 @@
         e.x += (dx / gap) * e.k.speed * dt;
         e.z += (dz / gap) * e.k.speed * dt;
         e.step += dt * (e.k.speed * 0.55);
+      }
+
+      // ---- THEY CAN'T WALK THROUGH TOWERS EITHER ------------------
+      // No clever route-finding - if he ends up inside something, we
+      // shove him back out along the line from its middle. He's still
+      // aiming at you every frame, so he shuffles round the edge on
+      // his own. Looks like he's going round it. Close enough.
+      const wall = blockedAt(e.x, e.z, e.k.radius);
+      if (wall) {
+        const wx = e.x - wall.x, wz = e.z - wall.z;
+        const wg = Math.hypot(wx, wz) || 1;
+        const want = wall.solid + e.k.radius;
+        e.x = wall.x + (wx / wg) * want;
+        e.z = wall.z + (wz / wg) * want;
       }
 
       // ---- PUSH EACH OTHER APART ----------------------------------
@@ -870,9 +1059,38 @@
     player.pitch = clamp(player.pitch - e.movementY * LOOK, -0.9, 0.9);
   });
 
+  // IF YOU'RE STANDING INSIDE SOMETHING, GET OUT.
+  //
+  // You start at 0,0 - and hash2(0,0) works out to exactly zero, which
+  // is below the tower threshold. So square (0,0) is ALWAYS a tower,
+  // every single game, and you can spawn buried in solid concrete.
+  //
+  // A number that happens to be zero landing in the "yes" end of every
+  // range is a classic. Worth remembering next time a random world has
+  // something odd at its very middle.
+  function pushOutOfWalls() {
+    for (let i = 0; i < 8; i++) {
+      const w = blockedAt(player.x, player.z, PLAYER_R);
+      if (!w) return;
+
+      const dx = player.x - w.x, dz = player.z - w.z;
+      const g = Math.hypot(dx, dz);
+
+      // Dead centre? Then there's no direction to push along, so pick
+      // one. Otherwise we'd divide by zero and you'd become NaN.
+      const ux = g > 0.01 ? dx / g : 1;
+      const uz = g > 0.01 ? dz / g : 0;
+
+      const want = w.solid + PLAYER_R + 0.6;
+      player.x = w.x + ux * want;
+      player.z = w.z + uz * want;
+    }
+  }
+
   function restart() {
     player.x = 0; player.z = 0;
     player.yaw = 0; player.pitch = 0;
+    pushOutOfWalls();
     player.health = 100;
     player.kills = 0;
     player.hurtFlash = 0;
@@ -925,8 +1143,21 @@
       mx /= len; mz /= len;
 
       const speed = (keys['shift'] ? RUN : WALK);
-      player.x += mx * speed * dt;
-      player.z += mz * speed * dt;
+      const nx = player.x + mx * speed * dt;
+      const nz = player.z + mz * speed * dt;
+
+      // ---- WALKING INTO THINGS ------------------------------------
+      // Try the whole move. If something's in the way, try it one
+      // direction at a time - and whichever half is clear still
+      // happens. That's why you SLIDE along a wall instead of
+      // sticking to it the moment you brush it, and it's three lines.
+      if (!blockedAt(nx, nz, PLAYER_R)) {
+        player.x = nx; player.z = nz;
+      } else {
+        if (!blockedAt(nx, player.z, PLAYER_R)) player.x = nx;
+        if (!blockedAt(player.x, nz, PLAYER_R)) player.z = nz;
+      }
+
       player.bob += dt * speed * 0.36;
     }
 
@@ -977,45 +1208,76 @@
     ctx.fillRect(0, Math.max(0, horizon), W, H);
   }
 
+// -------------------------------------------------------------------
+//  YOUR RIFLE
+// -------------------------------------------------------------------
+//  It used to lie across the corner of the screen at an angle, which
+//  looked like a gun somebody had dropped. Now it POINTS - the butt is
+//  down near your shoulder, and the barrel runs away from you towards
+//  the crosshair.
+//
+//  The trick is that we don't draw a rectangle. We walk from the butt
+//  to the muzzle, and at each step the gun is NARROWER than the step
+//  before. Things shrink as they get further away, so a shape that
+//  shrinks along its length reads as pointing away from you - even
+//  though it's flat 2D shapes painted on the screen.
+// -------------------------------------------------------------------
+
   function drawGun() {
-    // Your rifle, poking into the bottom right of the screen. It kicks
-    // when you fire and sways as you walk.
-    const kick = flash * 22;
-    const swayX = Math.sin(player.bob) * 7;
-    const swayY = Math.abs(Math.cos(player.bob)) * 5;
+    const u = Math.min(W, H) * 0.055;
 
-    const gx = W * 0.70 + swayX;
-    const gy = H + swayY + kick;
+    const sway  = Math.sin(player.bob) * u * 0.16;
+    const sway2 = Math.abs(Math.cos(player.bob)) * u * 0.12;
+    const kick  = flash * u * 1.1;        // shoved back towards you
 
-    ctx.save();
-    ctx.translate(gx, gy);
-    ctx.rotate(-0.22);
+    // The two ends of the gun. The muzzle sits just below and right of
+    // the crosshair, which is what makes it feel aimed at what you're
+    // pointing at.
+    const buttX = W * 0.62 + sway,       buttY = H * 1.06 + sway2 + kick;
+    const tipX  = W * 0.532 + sway * 0.3, tipY = H * 0.545 + sway2 * 0.3 + kick * 0.35;
 
-    const u = Math.min(W, H) * 0.06;     // one "unit" of gun
+    // The line from butt to muzzle, and the direction across it.
+    const ax = tipX - buttX, ay = tipY - buttY;
+    const alen = Math.hypot(ax, ay) || 1;
+    const px = -ay / alen, py = ax / alen;      // perpendicular
 
-    ctx.fillStyle = '#2e2a26';
-    ctx.fillRect(-u * 0.8, -u * 6.2, u * 1.5, u * 6.4);      // body
-    ctx.fillStyle = '#413a33';
-    ctx.fillRect(-u * 0.45, -u * 9.0, u * 0.8, u * 3.0);     // barrel
-    ctx.fillStyle = '#5a5048';
-    ctx.fillRect(-u * 0.6, -u * 5.4, u * 1.1, u * 0.5);      // detail
-    ctx.fillStyle = '#241f1c';
-    ctx.fillRect(u * 0.2, -u * 3.2, u * 1.3, u * 3.4);       // stock
+    // A slice of gun: from t0 to t1 along the barrel, w0 wide at the
+    // near end and w1 at the far end. One function draws every part of
+    // it, because every part is the same shape.
+    function slice(t0, t1, w0, w1, colour, offset) {
+      const o = (offset || 0) * u;
 
-    ctx.restore();
+      const x0 = buttX + ax * t0 + px * o, y0 = buttY + ay * t0 + py * o;
+      const x1 = buttX + ax * t1 + px * o, y1 = buttY + ay * t1 + py * o;
 
-    // Muzzle flash, drawn where the barrel ends.
-    if (flash > 0.15) {
-      const r = u * (1.2 + flash * 1.4);
-      const fx2 = gx + Math.sin(-0.22) * -u * 9.2;
-      const fy2 = gy + Math.cos(-0.22) * -u * 9.2;
+      ctx.beginPath();
+      ctx.moveTo(x0 - px * w0 * u, y0 - py * w0 * u);
+      ctx.lineTo(x0 + px * w0 * u, y0 + py * w0 * u);
+      ctx.lineTo(x1 + px * w1 * u, y1 + py * w1 * u);
+      ctx.lineTo(x1 - px * w1 * u, y1 - py * w1 * u);
+      ctx.closePath();
+      ctx.fillStyle = colour;
+      ctx.fill();
+    }
 
-      const g = ctx.createRadialGradient(fx2, fy2, 0, fx2, fy2, r);
-      g.addColorStop(0, 'rgba(255,240,190,' + flash + ')');
-      g.addColorStop(1, 'rgba(255,150,40,0)');
+    slice(0.00, 0.30, 1.05, 0.85, '#241f1c');          // stock, against you
+    slice(0.26, 0.62, 0.88, 0.60, '#332e29');          // body
+    slice(0.40, 0.52, 1.30, 1.05, '#2b2622', -0.55);   // magazine, hanging down
+    slice(0.60, 1.00, 0.40, 0.17, '#4a423a');          // the barrel itself
+    slice(0.62, 0.70, 0.20, 0.18, '#6a5f54', 0.45);    // a sight on top
+
+    // ---- MUZZLE FLASH ------------------------------------------------
+    // Right at the tip, so the bang happens where you're looking rather
+    // than down in the corner where you aren't.
+    if (flash > 0.12) {
+      const r = u * (1.0 + flash * 2.2);
+      const g = ctx.createRadialGradient(tipX, tipY, 0, tipX, tipY, r);
+      g.addColorStop(0, 'rgba(255,244,205,' + flash + ')');
+      g.addColorStop(0.45, 'rgba(255,170,50,' + (flash * 0.7) + ')');
+      g.addColorStop(1, 'rgba(255,120,20,0)');
       ctx.fillStyle = g;
       ctx.beginPath();
-      ctx.arc(fx2, fy2, r, 0, Math.PI * 2);
+      ctx.arc(tipX, tipY, r, 0, Math.PI * 2);
       ctx.fill();
     }
   }
@@ -1156,6 +1418,7 @@
   }
 
   fitScreen();
+  pushOutOfWalls();      // don't start the game inside a building
   requestAnimationFrame(loop);
 
 </script>
