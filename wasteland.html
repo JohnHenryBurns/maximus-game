@@ -529,18 +529,22 @@
     // The old bunker band is gone from here, so the 13% it used to take
     // is shared out among everything else. Leave it out and one square
     // in eight would quietly become bare ground.
+    // "tall" is how high the solid part reaches. A bolt flying under
+    // that gets stopped; one flying over it sails past. Without it,
+    // every burnt-out car in the wasteland would be a force field.
     if (r < 0.15) {
       p.kind = 'tower';
       p.w = 8 + hash2(gx, gz + 1) * 6;
       p.solid = p.w * 0.62;
+      p.tall = 14 + hash2(gx + 1, gz) * 26;    // drawTower uses this too
     } else if (r < 0.30) {
-      p.kind = 'wreck';  p.solid = 4.4;
+      p.kind = 'wreck';  p.solid = 4.4;  p.tall = 2.4;
     } else if (r < 0.44) {
-      p.kind = 'tree';   p.solid = 1.4;
+      p.kind = 'tree';   p.solid = 1.4;  p.tall = 7 + hash2(gx + 2, gz) * 9;
     } else if (r < 0.54) {
-      p.kind = 'rubble'; p.solid = 0;
+      p.kind = 'rubble'; p.solid = 0;    p.tall = 0;
     } else {
-      p.kind = 'barrels'; p.solid = 0;
+      p.kind = 'barrels'; p.solid = 0;   p.tall = 0;
     }
 
     return p;
@@ -563,6 +567,7 @@
 
   const POST_STEP = 5.6;     // how far apart the wall panels stand
   const POST_R    = 3.0;     // and how fat each one is
+  const WALL_TALL = 5.4;     // the height of the SHORTEST panel
 
   // THE WALL, as a list of local (x, z) posts.
   //
@@ -770,7 +775,11 @@
         if (p.parts) {
           for (const q of p.parts) {
             if (Math.hypot(x - q.x, z - q.z) < q.r + radius) {
-              return { x: q.x, z: q.z, solid: q.r };
+              // WALL_TALL, not the panel's own height. Panels vary from
+              // 5.4 to 9.6 and we want the SHORTEST one - a wall is only
+              // as high as its lowest bit, and promising cover the wall
+              // doesn't actually have would be worse than no cover.
+              return { x: q.x, z: q.z, solid: q.r, tall: WALL_TALL };
             }
           }
           continue;
@@ -895,8 +904,8 @@
   // a neat box is a building, a jagged one is a war.
   function drawTower(p) {
     const x = p.x, z = p.z, gx = p.gx, gz = p.gz, spin = p.spin;
-    const h = 14 + hash2(gx + 1, gz) * 26;
-    const w = p.w;                 // the SAME width collision uses
+    const h = p.tall;              // the SAME height bolts are stopped by
+    const w = p.w;                 // and the SAME width collision uses
 
     addBox(x, h * 0.5, z, w, h, w, CONCRETE, spin);
 
@@ -1445,12 +1454,32 @@
       b.z += b.vz * dt;
       b.life -= dt;
 
+      // ---- DID IT HIT A WALL? -----------------------------------------
+      // Solid things now know how HIGH they are, and that matters: a
+      // bolt flying at head height should be stopped by a settlement
+      // wall and should sail straight over a burnt-out car. Without the
+      // height check every wreck in the wasteland becomes a force field.
+      const wall = blockedAt(b.x, b.z, 0.4);
+      if (wall && b.y < wall.tall) {
+        b.life = 0;
+        sparkBolt(b);
+        continue;                 // it's gone - it can't also hit you
+      }
+
       if (Math.hypot(b.x - player.x, b.z - player.z) < 2.2) {
         b.life = 0;
         hurtPlayer(b.hurt);
       }
     }
     bolts = bolts.filter(function (b) { return b.life > 0; });
+  }
+
+  // A bolt splashing off something solid. Reusing the gib system again -
+  // it's just bits flying, and bits flying is bits flying.
+  function sparkBolt(b) {
+    burst(b.x, b.y, b.z, [[150, 230, 255], [90, 190, 240], [230, 250, 255]],
+          8, 7);
+    tone(720, 200, 0.09, 0.10, 'square');
   }
 
   function drawBolts() {
