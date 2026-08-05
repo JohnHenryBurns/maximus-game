@@ -119,7 +119,14 @@
 
   const cam = { x: 0, y: EYE_H, z: 0, yaw: 0, pitch: 0 };
 
-  function focal() { return H * 0.9; }
+  // HOW WIDE YOU CAN SEE.
+  //
+  // This was H * 0.9, which works out to about 80 degrees across. That
+  // is NARROW - most first-person games use 90 to 100 - and it's why
+  // Maximus kept missing bunkers that were only 69 degrees off centre.
+  // They were real, they were drawn, they were simply past the edge of
+  // the screen. A smaller number here means a wider view.
+  function focal() { return H * 0.72; }
 
   function project(x, y, z) {
     const dx = x - cam.x, dy = y - cam.y, dz = z - cam.z;
@@ -157,8 +164,20 @@
 
   let faces = [];
 
+  // SOME THINGS PUNCH THROUGH THE HAZE.
+  //
+  // Set this to 0.8 and whatever gets drawn next only takes a fifth of
+  // the fog it should. That's not cheating - it's how a bright light in
+  // fog actually behaves. Everything else out there fades because it's
+  // only reflecting a dim sky; a lamp is making its own.
+  //
+  // Without it, a beacon 150 paces off comes out as [187,147,92]
+  // against a fog of [178,136,88]. Nine points of difference. Invisible.
+  let fogResist = 0;
+
   function fogMix(rgb, depth) {
-    const t = clamp((depth - FOG_NEAR) / (FOG_FAR - FOG_NEAR), 0, 1);
+    const t = clamp((depth - FOG_NEAR) / (FOG_FAR - FOG_NEAR), 0, 1)
+              * (1 - fogResist);
     return 'rgb(' +
       ((rgb[0] + (FOG[0] - rgb[0]) * t) | 0) + ',' +
       ((rgb[1] + (FOG[1] - rgb[1]) * t) | 0) + ',' +
@@ -444,6 +463,19 @@
     const r = hash2(gx, gz);
     if (r > 0.62) return null;               // most squares are empty
 
+    // ---- KEEP THE STARTING PATCH CLEAR ------------------------------
+    // hash2(0, 0) is exactly zero, which lands in the tower band. So
+    // EVERY game began with a forty-foot slab of concrete shoved
+    // against your face, hiding most of what was nearby.
+    //
+    // This is what Maximus was really hitting. He wasn't missing
+    // bunkers - he was standing behind a wall, looking at it. Pushing
+    // him out of the tower fixed being stuck inside it and did nothing
+    // whatever about the view.
+    const home = Math.max(Math.abs(gx), Math.abs(gz));
+    if (home === 0) return null;                  // somewhere to stand
+    if (home === 1 && r < 0.13) return null;      // and no towers next door
+
     // Jiggle it off the exact grid corner, or the whole wasteland
     // looks like graph paper.
     const p = {
@@ -713,14 +745,21 @@
     // else. Whoever built this wanted it found. So do we.
     const mastX = (hash2(p.gx, p.gz + 11) - 0.5) * S * 0.8;
 
-    part(mastX, -S * 0.55, 14.0, 0.45, 8.4, 0.45, [86, 90, 96]);   // mast
+    // THE MAST GOES UP TO 30. Towers are 14 to 40, so this stands with
+    // them on the skyline instead of hiding behind the rubble. A
+    // landmark you have to already be near is not a landmark.
+    fogResist = 0.86;
+
+    // Thick, not thin. A half-unit mast is a hairline at a hundred
+    // paces - one pixel wide, which may as well be nothing at all.
+    part(mastX, -S * 0.55, 20.0, 1.2, 21.0, 1.2, [104, 108, 118]);
 
     // A rag of a flag, swinging. Tied to the clock so every bunker's
     // flag moves, which catches your eye from much further off than a
     // still one would.
     const flap = Math.sin(clock * 1.8 + p.gx) * 0.28;
-    part(mastX + 1.5, -S * 0.55, 16.4, 2.6, 1.9, 0.25,
-         [196, 74, 48], flap);
+    part(mastX + 2.1, -S * 0.55, 27.4, 4.0, 2.8, 0.3,
+         [214, 72, 46], flap);
 
     // And a lamp on top that breathes. Movement in the corner of your
     // eye is what actually makes you turn your head.
@@ -730,8 +769,10 @@
     // means the lamp would stop pulsing at the top end and you'd never
     // be told why.
     const pulse = 0.55 + Math.sin(clock * 2.2 + p.gz) * 0.45;
-    part(mastX, -S * 0.55, 18.4, 1.0, 1.0, 1.0,
-         [120 + 135 * pulse, 58 + 150 * pulse, 28 + 42 * pulse]);
+    part(mastX, -S * 0.55, 31.4, 4.2, 4.2, 4.2,
+         [150 + 105 * pulse, 70 + 150 * pulse, 30 + 40 * pulse]);
+
+    fogResist = 0;      // back to normal for everything after this
 
     if (!near) return;
 
