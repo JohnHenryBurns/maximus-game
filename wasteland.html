@@ -96,6 +96,8 @@
     maxHealth: 100,      // quests can raise this
     gunDamage: 1,        // ...and this
     scrap: 0,            // salvage off the things you kill. Buys guards.
+    marineRifle: false,  // bought at a marine fort - faster, harder gun
+    marineArmour: false, // bought at a marine fort - halves all damage
     bob: 0,              // ticks up while walking, to nod the camera
     kills: 0,
     cool: 0,             // counts down between shots
@@ -113,6 +115,9 @@
 
   let quest     = null;      // the job you're on, or nothing
   let atBoard   = null;      // the settlement whose board you're stood at
+  let atRadio     = null;    // the radio tower you're stood at
+  let nearRecruit = null;    // the waiting marine you're stood next to
+  let atGear      = null;    // the fort armoury station you're stood at
   let questFlash = 0;        // "job done" message
   let questWord  = '';
   let deadTimer = 0;
@@ -439,6 +444,8 @@
   // the wasteland is empty, and a light on the horizon is worth going
   // to look at. Maximus picked the number.
   const BUNKER_CHANCE = 1 / 300;
+  const RADIO_CHANCE  = 1 / 130;   // radio towers - commoner than settlements
+  const FORT_CHANCE   = 1 / 450;   // marine forts - rarer than ANYTHING
 
   const RUBBLE = [104, 94, 84];
   const CONCRETE = [138, 128, 116];
@@ -511,6 +518,37 @@
       b.manned = Math.ceil(b.guards.length / GUARD_EVERY);   // the rest are hires
       b.quests = questsFor(gx, gz);
       return b;
+    }
+
+    // ---- OR A MARINE FORT? ------------------------------------------
+    // The rarest thing on the map. A neat steel compound the marines
+    // built when they first landed, with an armoury inside: a rifle
+    // rack and an armour stand, and both are FOR SALE for scrap.
+    if (home > 1 && hash2(gx + 6427, gz + 1861) < FORT_CHANCE) {
+      const f = {
+        gx: gx, gz: gz, kind: 'fort', solid: 0,
+        x: gx * CELL + (hash2(gx + 7, gz) - 0.5) * CELL * 0.8,
+        z: gz * CELL + (hash2(gx, gz + 7) - 0.5) * CELL * 0.8,
+        spin: hash2(gx + 3, gz + 3) * Math.PI * 2,
+        half: 16
+      };
+      f.parts = fortParts(f);
+      return f;
+    }
+
+    // ---- OR A RADIO TOWER? ------------------------------------------
+    // Same trick as the settlements: its own coin toss out of its own
+    // corner of the hash, so it can land on any square. Stand at one
+    // and you can radio the marines in orbit to send a drop pod down.
+    if (home > 1 && hash2(gx + 3313, gz + 7717) < RADIO_CHANCE) {
+      return {
+        gx: gx, gz: gz, kind: 'radio',
+        x: gx * CELL + (hash2(gx + 7, gz) - 0.5) * CELL * 0.8,
+        z: gz * CELL + (hash2(gx, gz + 7) - 0.5) * CELL * 0.8,
+        spin: hash2(gx + 3, gz + 3) * Math.PI * 2,
+        solid: 2.4, tall: 20,
+        podReadyAt: 0            // when the tower can call the NEXT pod
+      };
     }
 
     if (r > 0.62) return null;               // most squares are empty
@@ -972,7 +1010,8 @@
     for (let gx = cx - reach; gx <= cx + reach; gx++) {
       for (let gz = cz - reach; gz <= cz + reach; gz++) {
         const p = propAt(gx, gz);
-        if (!p || p.kind !== 'bunker') continue;
+        if (!p || (p.kind !== 'bunker' && p.kind !== 'radio' &&
+                   p.kind !== 'fort')) continue;
 
         const dx = p.x - player.x, dz = p.z - player.z;
         const d = Math.hypot(dx, dz);
@@ -981,7 +1020,7 @@
         if (dx * fx + dz * fz < 0) continue;            // behind you
 
         const pulse = 0.55 + Math.sin(clock * 2.2 + p.gz) * 0.45;
-        const size = 3 + d * 0.036;
+        const size = (p.kind === 'radio' ? 2.2 : 3) + d * 0.036;
 
         // Which way is it from you? We need this to shove the outline
         // slightly further away than the light, so the sorting puts it
@@ -1013,9 +1052,22 @@
 
         // The light itself: almost white-hot, because the sky out there
         // is already orange and an orange lamp against it is nothing.
+        // Radio towers burn RED instead - red against orange still
+        // stands out, and it tells you which kind of light it is
+        // before you've walked a single pace towards it.
         fogResist = 0.96;
-        addBox(p.x, 31, p.z, size, size, size,
-               [225 + 30 * pulse, 205 + 45 * pulse, 140 + 90 * pulse]);
+        if (p.kind === 'radio') {
+          addBox(p.x, 31, p.z, size, size, size,
+                 [255, 60 + 70 * pulse, 40 + 30 * pulse]);
+        } else if (p.kind === 'fort') {
+          // Marine forts burn a cold blue-white. Amber = shelter,
+          // red = reinforcements, blue = shopping.
+          addBox(p.x, 31, p.z, size, size, size,
+                 [150 + 60 * pulse, 190 + 50 * pulse, 255]);
+        } else {
+          addBox(p.x, 31, p.z, size, size, size,
+                 [225 + 30 * pulse, 205 + 45 * pulse, 140 + 90 * pulse]);
+        }
 
         fogResist = 0;
         seeFar = false;
@@ -1047,12 +1099,49 @@
 
         if      (p.kind === 'tower')  drawTower(p);
         else if (p.kind === 'bunker') drawBunker(p);
+        else if (p.kind === 'radio')  drawRadio(p);
+        else if (p.kind === 'fort')   drawFort(p);
         else if (p.kind === 'wreck')  drawWreck(p);
         else if (p.kind === 'tree')   drawDeadTree(p);
         else if (p.kind === 'rubble') drawRubble(p);
         else                          drawBarrels(p);
       }
     }
+  }
+
+  // THE RADIO TOWER. A skinny lattice mast someone welded back together
+  // after the war, with a generator shack at the bottom and a red light
+  // on top. Red on purpose - settlements blink AMBER, so from half the
+  // map away you can already tell which kind of light you're walking to.
+  //
+  // The light is the message: blinking red = ready to call a pod.
+  // Dim = it's recharging, come back in a bit.
+  function drawRadio(p) {
+    const x = p.x, z = p.z, spin = p.spin;
+
+    // The mast: four stacked segments, each thinner than the last.
+    for (let s = 0; s < 4; s++) {
+      const w = 2.2 - s * 0.42;
+      addBox(x, s * 5 + 2.5, z, w, 5, w, s % 2 ? RUST : METAL, spin);
+      // A crossbar arm at each joint, so it reads as a radio mast and
+      // not a flag pole.
+      addBox(x, s * 5 + 4.6, z, 3.6 - s * 0.5, 0.4, 0.4, METAL, spin + 0.4 * s);
+    }
+
+    // The generator shack and the dish leaning against it.
+    addBox(x + 3.4 * Math.cos(spin), 1.4, z - 3.4 * Math.sin(spin),
+           3.2, 2.8, 2.6, DEADWOOD, spin);
+    addBox(x - 3.0 * Math.cos(spin), 1.6, z + 3.0 * Math.sin(spin),
+           0.5, 3.2, 3.2, METAL, spin + 0.5);
+
+    // The light on top. fogResist so it glows through the haze - that
+    // is its whole job.
+    const ready = clock >= p.podReadyAt;
+    const pulse = 0.55 + Math.sin(clock * 3.1 + p.gx) * 0.45;
+    fogResist = 0.9;
+    if (ready) addBox(x, 21.2, z, 1.4, 1.4, 1.4, [255, 40 + 80 * pulse, 36]);
+    else       addBox(x, 21.2, z, 1.1, 1.1, 1.1, [110, 42, 34]);
+    fogResist = 0;
   }
 
   // A tower with its top blown off. The break is what makes it a ruin -
@@ -1941,7 +2030,8 @@
 
   function shoot() {
     if (state !== 'play' || player.cool > 0) return;
-    player.cool = GUN_COOL;
+    // The marine rifle cycles half again as fast as the scrap gun.
+    player.cool = player.marineRifle ? 0.10 : GUN_COOL;
 
     flash = 1;
     shake = Math.max(shake, 0.16);
@@ -2044,6 +2134,10 @@
   function hurtPlayer(amount) {
     if (state !== 'play') return;
 
+    // Marine armour halves EVERYTHING - bites, bolts, all of it. One
+    // line, right at the front door where all the damage comes in.
+    if (player.marineArmour) amount *= 0.5;
+
     player.health -= amount;
     player.hurtFlash = 1;
     shake = Math.max(shake, 0.5);
@@ -2054,6 +2148,500 @@
       state = 'dead';
       deadTimer = 0;
     }
+  }
+
+
+// -------------------------------------------------------------------
+//  SPACE MARINES
+// -------------------------------------------------------------------
+//  There are marines in orbit, and a working radio tower can ask them
+//  for help. Ask, and a drop pod falls out of the sky and SLAMS into
+//  the dirt, and one marine climbs out.
+//
+//  He doesn't work for you yet. He stands by his pod until you walk up
+//  and recruit him - then he's in your squad: he follows you around
+//  the wasteland and shoots what you're being chased by.
+//
+//  Maximus designed all of this. One marine per pod, allies not
+//  enemies, recruited not automatic.
+// -------------------------------------------------------------------
+
+  const MARINE = {
+    height: 4.8,       // taller and much wider than a wasteland local
+    radius: 2.0,
+    range: 80,         // how far his rifle reaches
+    fireEvery: 0.45,   // seconds between shots
+    hurt: 3,           // damage per shot - three zombies a second, ish
+    follow: 14         // how far away his personal spot is - Maximus
+                       // said 9 was too crowded
+  };
+
+  // The squad's leash. Inside NEAR of his spot a marine STOPS - he
+  // doesn't shuffle after your every step, and if you stand still, so
+  // does he. Past FAR he jogs to catch up. And he'll never chase an
+  // enemy further than LEASH from you - he's your squad, not a stray.
+  const MARINE_NEAR  = 12;
+  const MARINE_FAR   = 24;
+  const MARINE_LEASH = 48;
+
+  const MARINE_MAX  = 4;     // a full squad - find more towers to refill
+  const POD_COOL    = 45;    // seconds before a tower can call again
+  const POD_FALL    = 170;   // paces per second, straight down
+  const POD_START_Y = 340;   // where the fall begins - about a 2s drop
+
+  const ARMOUR      = [64, 78, 94];      // steel blue plate
+  const ARMOUR_DARK = [46, 56, 70];
+  const VISOR       = [255, 150, 40];    // the glowing orange eye slit
+
+  let pods    = [];   // pods falling or sitting where they landed
+  let marines = [];   // every marine, waiting or in the squad
+
+  function squadSize() {
+    let n = 0;
+    for (const m of marines) if (m.state === 'squad') n++;
+    return n;
+  }
+
+  // ---- CALLING ONE DOWN ---------------------------------------------
+  // The pod aims for open dirt NEAR the tower, never on top of you -
+  // being landed on by ten tons of pod would be a rude way to lose.
+  function summonPod(tower) {
+    tower.podReadyAt = clock + POD_COOL;
+
+    let px = tower.x + 14, pz = tower.z;
+    for (let tries = 0; tries < 8; tries++) {
+      const a = Math.random() * Math.PI * 2;
+      const d = 12 + Math.random() * 8;
+      const tx = tower.x + Math.sin(a) * d;
+      const tz = tower.z + Math.cos(a) * d;
+      if (Math.hypot(tx - player.x, tz - player.z) < 9) continue;  // not on you
+      if (blockedAt(tx, tz, 3)) continue;                          // not in a wall
+      px = tx; pz = tz;
+      break;
+    }
+
+    pods.push({ x: px, z: pz, y: POD_START_Y, landed: false,
+                spin: Math.random() * Math.PI * 2 });
+
+    // Old landed pods past the fog get swept away, so a long game
+    // doesn't slowly fill the map with empty tins.
+    if (pods.length > 10) {
+      pods = pods.filter(function (p) {
+        return !p.landed ||
+               Math.hypot(p.x - player.x, p.z - player.z) < FOG_FAR ||
+               pods.indexOf(p) >= pods.length - 10;
+      });
+    }
+
+    questWord = 'DROP POD INBOUND  -  watch the sky';
+    questFlash = 4;
+    playPodCall();
+  }
+
+  function updatePods(dt) {
+    for (const p of pods) {
+      if (p.landed) continue;
+
+      p.y -= POD_FALL * dt;
+
+      // A little fire streaming off it on the way down.
+      burst(p.x, p.y - 2, p.z,
+            [[255, 180, 60], [255, 120, 40], [120, 110, 100]], 2, 4);
+
+      if (p.y <= 3.1) {
+        p.y = 3.1;
+        p.landed = true;
+
+        // THE SLAM. Dust everywhere, the screen kicks, and the closer
+        // you're standing the harder it kicks.
+        const away = Math.hypot(p.x - player.x, p.z - player.z);
+        shake = Math.max(shake, Math.max(0.4, 1.4 - away / 120));
+        burst(p.x, 1, p.z,
+              [GROUND_TAN, [150, 122, 88], [110, 96, 76]], 30, 16);
+        playPodSlam();
+
+        // And out he climbs.
+        const a = Math.random() * Math.PI * 2;
+        marines.push({
+          x: p.x + Math.sin(a) * 4.5,
+          z: p.z + Math.cos(a) * 4.5,
+          yaw: 0, step: 0, cool: 0, flash: 0,
+          state: 'wait'
+        });
+      }
+    }
+  }
+
+  // ---- RECRUITING ---------------------------------------------------
+  function recruitMarine(m) {
+    if (squadSize() >= MARINE_MAX) return;
+    m.state = 'squad';
+    m.seed = Math.random();   // picks his personal spot around you
+    m.moving = false;
+    questWord = 'MARINE RECRUITED  -  squad of ' + squadSize();
+    questFlash = 4;
+    playRecruit();
+  }
+
+  // ---- THE SQUAD, EVERY FRAME ---------------------------------------
+  function updateMarines(dt) {
+    for (const m of marines) {
+      m.flash = Math.max(0, m.flash - dt * 9);
+      m.cool -= dt;
+
+      if (m.state === 'wait') {
+        // Standing by his pod. He turns to watch you if you're close -
+        // a little thing, but it makes him feel awake.
+        const d = Math.hypot(player.x - m.x, player.z - m.z);
+        if (d < 40) m.yaw = Math.atan2(player.x - m.x, player.z - m.z);
+        continue;
+      }
+
+      const toYou = Math.hypot(player.x - m.x, player.z - m.z);
+
+      // ---- WHO'S HE FIGHTING? -----------------------------------
+      // Nearest live enemy in rifle range. Same hunt the guards do.
+      let best = null, bestD = MARINE.range;
+      for (const e of enemies) {
+        if (e.dead) continue;
+        const d = Math.hypot(e.x - m.x, e.z - m.z);
+        if (d < bestD) { bestD = d; best = e; }
+      }
+
+      // ---- WHERE SHOULD HE STAND? -------------------------------
+      // His own spot AROUND you, picked from his seed - not a slot
+      // glued to your back. The spot doesn't care which way you're
+      // FACING, so turning your head doesn't send the squad
+      // scurrying. Only actually walking away does.
+      const offA = (m.seed || 0) * Math.PI * 2;
+      const offR = MARINE.follow * (0.7 + (m.seed || 0) * 0.6);
+      const dx = player.x + Math.sin(offA) * offR - m.x;
+      const dz = player.z + Math.cos(offA) * offR - m.z;
+      const gap = Math.hypot(dx, dz);
+
+      // The leash, with slack in it. Past FAR he starts jogging, but
+      // he doesn't STOP jogging until he's inside NEAR - so he
+      // arrives and stands easy, instead of hovering on the line
+      // taking one fussy step every time you shift your feet.
+      if (!m.moving && gap > MARINE_FAR) m.moving = true;
+      if (m.moving && gap < MARINE_NEAR) m.moving = false;
+
+      let mvx = 0, mvz = 0, speed = 0;
+
+      if (m.moving) {
+        // Catching up. Faster the further behind he is.
+        speed = clamp(gap * 2.2, 10, 46);
+        mvx = dx / gap; mvz = dz / gap;
+
+      } else if (best) {
+        // ---- COMBAT FOOTWORK ----------------------------------
+        // Not chasing, so he fights with his feet as well as his
+        // rifle: too close and he backs off, firing the whole way;
+        // barely in range and he pushes forward to engage - but
+        // never further from you than the leash allows. In between
+        // he plants his boots and holds the line.
+        const ex = best.x - m.x, ez = best.z - m.z;
+        if (bestD < 10 && toYou < MARINE_FAR) {
+          speed = 18;
+          mvx = -ex / bestD; mvz = -ez / bestD;      // give ground
+        } else if (bestD > MARINE.range * 0.8 && toYou < MARINE_LEASH) {
+          speed = 13;
+          mvx = ex / bestD; mvz = ez / bestD;        // press forward
+        }
+      }
+
+      if (speed > 0) {
+        m.x += mvx * speed * dt;
+        m.z += mvz * speed * dt;
+        m.step += dt * speed * 0.55;
+        m.yaw = Math.atan2(mvx, mvz);
+      }
+      // No speed means no movement AND no walking animation - if you
+      // stand still, the whole squad stands still. That was the bug
+      // Maximus called out: a marine should hold a position, not
+      // orbit you like a nervous moon.
+
+      // Walls stop marines the same way they stop everything else.
+      const wall = blockedAt(m.x, m.z, MARINE.radius);
+      if (wall) {
+        const wx = m.x - wall.x, wz = m.z - wall.z;
+        const wg = Math.hypot(wx, wz) || 1;
+        const want = wall.solid + MARINE.radius;
+        m.x = wall.x + (wx / wg) * want;
+        m.z = wall.z + (wz / wg) * want;
+      }
+
+      // And they don't stand inside each other.
+      for (const o of marines) {
+        if (o === m || o.state !== 'squad') continue;
+        const ox = m.x - o.x, oz = m.z - o.z;
+        const og = Math.hypot(ox, oz);
+        if (og < MARINE.radius * 2 && og > 0.01) {
+          const push = (MARINE.radius * 2 - og) * 0.5;
+          m.x += (ox / og) * push;
+          m.z += (oz / og) * push;
+        }
+      }
+
+      // ---- SHOOT WHAT'S COMING ----------------------------------
+      if (!best) continue;
+
+      m.yaw = Math.atan2(best.x - m.x, best.z - m.z);   // face the target
+
+      if (m.cool > 0) continue;
+      m.cool = MARINE.fireEvery;
+      m.flash = 1;
+
+      tracers.push({
+        x1: m.x, y1: MARINE.height * 0.6, z1: m.z,
+        x2: best.x, y2: best.k.height * 0.6, z2: best.z,
+        life: 0.07
+      });
+
+      best.hp -= MARINE.hurt;
+      best.hitFlash = 1;
+      burst(best.x, best.k.height * 0.6, best.z, best.k.gib, 4, 6);
+
+      // Unlike the settlement guards, a squad kill IS your kill - it
+      // counts for scrap, the counter, and the job you're on. You
+      // found the tower, you called the pod, you recruited him. He's
+      // working for you.
+      if (best.hp <= 0 && !best.dead) killEnemy(best);
+    }
+  }
+
+  // ---- DRAWING A POD ------------------------------------------------
+  // A fat metal seed with fins, scorched from the fall. While it's
+  // falling it gets fogResist, because a thing on fire in the sky
+  // should be visible from anywhere.
+  function drawPod(p) {
+    const away = Math.hypot(p.x - player.x, p.z - player.z);
+    if (p.landed && away > FOG_FAR) return;
+
+    if (!p.landed) fogResist = 0.7;
+
+    addBox(p.x, p.y - 1.2, p.z, 4.6, 3.4, 4.6, [58, 54, 52], p.spin);       // base
+    addBox(p.x, p.y + 1.0, p.z, 3.6, 2.2, 3.6, [88, 82, 78], p.spin);       // middle
+    addBox(p.x, p.y + 2.6, p.z, 2.2, 1.6, 2.2, [122, 70, 46], p.spin);      // nose
+    for (let f = 0; f < 4; f++) {                                            // fins
+      const fa = p.spin + f * Math.PI / 2;
+      addBox(p.x + Math.sin(fa) * 2.6, p.y - 1.4, p.z + Math.cos(fa) * 2.6,
+             0.4, 2.6, 1.6, ARMOUR_DARK, fa);
+    }
+
+    if (!p.landed) {
+      // The flame under a falling pod.
+      addBox(p.x, p.y - 3.4, p.z, 3.0, 2.4, 3.0, [255, 170, 60], p.spin);
+      addBox(p.x, p.y - 4.6, p.z, 1.8, 1.8, 1.8, [255, 236, 150], p.spin);
+      fogResist = 0;
+    }
+  }
+
+  // ---- DRAWING A MARINE ---------------------------------------------
+  // Big shoulders, orange visor, rifle. Built from boxes like everyone
+  // else, just MORE of them, because armour is bulk.
+  function drawMarine(m) {
+    const away = Math.hypot(m.x - player.x, m.z - player.z);
+    if (away > FOG_FAR) return;
+
+    const co = Math.cos(m.yaw), si = Math.sin(m.yaw);
+    const h = MARINE.height;
+
+    function bit(ox, oy, oz, w, hh, d, rgb) {
+      addBox(m.x + ox * co + oz * si, oy, m.z - ox * si + oz * co,
+             w, hh, d, rgb, m.yaw);
+    }
+
+    // Far away: three boxes, same trick as the enemies.
+    if (away > 90) {
+      bit(0, h * 0.3, 0, 2.4, h * 0.6, 1.8, ARMOUR_DARK);
+      bit(0, h * 0.68, 0, 3.2, h * 0.3, 2.0, ARMOUR);
+      bit(0, h * 0.9, 0, 1.6, 1.4, 1.6, ARMOUR_DARK);
+      return;
+    }
+
+    const swing = Math.sin(m.step) * 0.9;
+
+    bit(-0.8, h * 0.21, swing * 0.4, 1.0, h * 0.42, 1.0, ARMOUR_DARK);   // legs
+    bit( 0.8, h * 0.21, -swing * 0.4, 1.0, h * 0.42, 1.0, ARMOUR_DARK);
+    bit(0, h * 0.58, 0, 3.0, h * 0.34, 2.0, ARMOUR);                     // chest
+    bit(-1.9, h * 0.72, 0, 1.3, 1.2, 1.4, ARMOUR);                       // pauldrons
+    bit( 1.9, h * 0.72, 0, 1.3, 1.2, 1.4, ARMOUR);
+    bit(0, h * 0.62, 1.2, 2.0, h * 0.24, 0.8, ARMOUR_DARK);              // backpack
+    bit(0, h * 0.9, 0, 1.5, 1.4, 1.5, ARMOUR_DARK);                      // helmet
+    bit(0, h * 0.9, -0.78, 1.1, 0.34, 0.12, VISOR);                      // the visor
+
+    bit(0.9, h * 0.62, -1.3, 0.4, 0.4, 2.8, [40, 42, 46]);               // rifle
+    if (m.flash > 0.1) {
+      bit(0.9, h * 0.62, -2.9, m.flash, m.flash, m.flash, [255, 232, 150]);
+    }
+
+    // A waiting marine gets a little bouncing "!" of light over his
+    // head - the wasteland version of a video game quest marker.
+    if (m.state === 'wait') {
+      const bob = Math.sin(clock * 3) * 0.4;
+      fogResist = 0.6;
+      addBox(m.x, h + 1.6 + bob, m.z, 0.5, 1.0, 0.5, VISOR);
+      addBox(m.x, h + 0.7 + bob, m.z, 0.5, 0.45, 0.5, VISOR);
+      fogResist = 0;
+    }
+  }
+
+  function playPodCall() {
+    tone(880, 880, 0.07, 0.14, 'square');
+    tone(1180, 1180, 0.07, 0.12, 'square');
+    tone(660, 90, 1.6, 0.16, 'sawtooth');
+  }
+
+  function playPodSlam() {
+    noise(0.6, 400, 40, 0.5);
+    tone(80, 24, 0.8, 0.4, 'sawtooth');
+  }
+
+  function playRecruit() {
+    tone(440, 660, 0.16, 0.18, 'triangle');
+    tone(660, 990, 0.2, 0.14, 'triangle');
+  }
+
+// -------------------------------------------------------------------
+//  MARINE FORTS
+// -------------------------------------------------------------------
+//  Scrap settlements are welded junk. A marine fort is the opposite:
+//  straight steel walls, everything square, orange stripes painted on.
+//  The marines built it; they build like they fight - tidily.
+//
+//  Inside is the armoury. A rifle rack and an armour stand, and if
+//  you've got the scrap, what's on them is yours:
+//    - MARINE RIFLE:  your gun fires faster AND hits harder
+//    - MARINE ARMOUR: everything that hurts you hurts HALF as much
+// -------------------------------------------------------------------
+
+  const GEAR_COST = { rifle: 60, armour: 90 };
+
+  // The wall: a square ring of steel panels with a gate gap in the
+  // front side. Same shape of answer as bunkerPosts - a list of solid
+  // lumps for blockedAt - plus which SIDE each panel is on, so the
+  // drawing knows which way to turn it.
+  function fortParts(f) {
+    const S = f.half;
+    const n = Math.round(S * 2 / 4.4);   // panels per side
+    const co = Math.cos(f.spin), si = Math.sin(f.spin);
+    const out = [];
+
+    for (let side = 0; side < 4; side++) {
+      for (let i = 0; i < n; i++) {
+        // The gate: the middle of the front wall stays open.
+        if (side === 0 && i >= n * 0.33 && i <= n * 0.62) continue;
+
+        const t = -S + ((i + 0.5) / n) * S * 2;
+        let lx, lz;
+        if      (side === 0) { lx = t;  lz = -S; }
+        else if (side === 1) { lx = t;  lz = S;  }
+        else if (side === 2) { lx = -S; lz = t;  }
+        else                 { lx = S;  lz = t;  }
+
+        out.push({
+          x: f.x + lx * co + lz * si,
+          z: f.z - lx * si + lz * co,
+          r: 2.3, side: side, lx: lx, lz: lz
+        });
+      }
+    }
+    return out;
+  }
+
+  // Where the two shopping spots stand inside the walls.
+  function fortStations(f) {
+    const co = Math.cos(f.spin), si = Math.sin(f.spin);
+    function w(lx, lz) {
+      return { x: f.x + lx * co + lz * si, z: f.z - lx * si + lz * co };
+    }
+    return { rifle:  w(-f.half * 0.45, f.half * 0.3),
+             armour: w( f.half * 0.45, f.half * 0.3) };
+  }
+
+  function drawFort(p) {
+    const co = Math.cos(p.spin), si = Math.sin(p.spin);
+    const away = Math.hypot(p.x - player.x, p.z - player.z);
+    const near = away < 88;
+
+    // The wall panels - uniform height, because soldiers built them.
+    // Compare drawBunker, where every panel is a different bit of junk.
+    for (const q of p.parts) {
+      const flat = (q.side < 2);      // front/back panels lie along x
+      addBox(q.x, 3.1, q.z, flat ? 4.6 : 1.2, 6.2, flat ? 1.2 : 4.6,
+             ARMOUR_DARK, p.spin);
+      // The orange stripe along the top of every panel.
+      addBox(q.x, 6.0, q.z, flat ? 4.6 : 0.8, 0.5, flat ? 0.8 : 4.6,
+             VISOR, p.spin);
+    }
+
+    // Corner pylons, taller than the wall, with a lamp each.
+    for (const c of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+      const lx = c[0] * p.half, lz = c[1] * p.half;
+      const wx = p.x + lx * co + lz * si, wz = p.z - lx * si + lz * co;
+      addBox(wx, 4.5, wz, 2.6, 9, 2.6, METAL, p.spin);
+      addBox(wx, 9.4, wz, 1.2, 0.9, 1.2, [170, 200, 240], p.spin);
+    }
+
+    // The beacon mast: a cool blue-white light, nothing like the amber
+    // settlements or the red radios. Three kinds of light, three
+    // different promises.
+    const pulse = 0.55 + Math.sin(clock * 2.6 + p.gx) * 0.45;
+    addBox(p.x, 7, p.z, 0.7, 14, 0.7, METAL);
+    fogResist = 0.9;
+    addBox(p.x, 14.6, p.z, 1.5, 1.5, 1.5,
+           [150 + 60 * pulse, 190 + 50 * pulse, 255]);
+    fogResist = 0;
+
+    if (!near) return;
+
+    // ---- THE ARMOURY, when you're close enough to shop --------------
+    const st = fortStations(p);
+
+    // The rifle rack: a stand with three rifles leaning in it.
+    addBox(st.rifle.x, 0.6, st.rifle.z, 3.4, 1.2, 1.2, [40, 36, 34], p.spin);
+    for (let i = -1; i <= 1; i++) {
+      addBox(st.rifle.x + i * co, 2.0, st.rifle.z - i * si,
+             0.35, 2.8, 0.35, [46, 50, 56], p.spin + 0.1 * i);
+      addBox(st.rifle.x + i * co, 3.2, st.rifle.z - i * si,
+             0.3, 0.3, 0.3, VISOR, p.spin);
+    }
+
+    // The armour stand: a headless marine shape on a post, waiting for
+    // somebody your size.
+    addBox(st.armour.x, 1.1, st.armour.z, 0.5, 2.2, 0.5, [40, 36, 34], p.spin);
+    addBox(st.armour.x, 2.6, st.armour.z, 2.6, 1.6, 1.6, ARMOUR, p.spin);
+    addBox(st.armour.x - 1.6 * co, 3.2, st.armour.z + 1.6 * si,
+           1.0, 0.9, 1.1, ARMOUR, p.spin);
+    addBox(st.armour.x + 1.6 * co, 3.2, st.armour.z - 1.6 * si,
+           1.0, 0.9, 1.1, ARMOUR, p.spin);
+    addBox(st.armour.x, 3.9, st.armour.z, 1.3, 1.1, 1.3, ARMOUR_DARK, p.spin);
+    addBox(st.armour.x - 0.66 * si, 3.9, st.armour.z - 0.66 * co,
+           0.9, 0.3, 0.1, VISOR, p.spin);
+  }
+
+  // ---- BUYING -------------------------------------------------------
+  function buyGear() {
+    if (!atGear || player.scrap < atGear.cost) return;
+    player.scrap -= atGear.cost;
+
+    if (atGear.kind === 'rifle') {
+      player.marineRifle = true;
+      player.gunDamage += 3;
+      questWord = 'MARINE RIFLE  -  faster, harder, meaner';
+    } else {
+      player.marineArmour = true;
+      questWord = 'MARINE ARMOUR  -  everything hurts half as much';
+    }
+    questFlash = 5;
+    atGear = null;
+    playGear();
+  }
+
+  function playGear() {
+    tone(170, 80, 0.28, 0.3, 'square');       // the heavy CLUNK
+    tone(520, 880, 0.3, 0.14, 'triangle');    // and the shine on top
   }
 
 
@@ -2138,9 +2726,28 @@
       return;
     }
 
+    // E does whatever you're stood next to: a tower calls a pod, a
+    // waiting marine joins the squad. The board got first dibs above.
+    if (k === 'e' && state === 'play') {
+      if (nearRecruit)                            recruitMarine(nearRecruit);
+      else if (atGear)                            buyGear();
+      else if (atRadio && clock >= atRadio.podReadyAt &&
+               squadSize() < MARINE_MAX)          summonPod(atRadio);
+    }
+
     keys[k] = true;
     if (e.key.startsWith('Arrow') || e.key === ' ') e.preventDefault();
     if (k === 'r' && state === 'dead') restart();
+
+    // SECRET TEST KEY (just while we build the marines): press M and a
+    // pod drops 30 paces dead ahead, no tower needed. Handy for testing,
+    // and Maximus can delete it when it feels like cheating.
+    if (k === 'm' && state === 'play') {
+      pods.push({ x: player.x + Math.sin(player.yaw) * 30,
+                  z: player.z + Math.cos(player.yaw) * 30,
+                  y: POD_START_Y, landed: false,
+                  spin: Math.random() * Math.PI * 2 });
+    }
   });
 
   function takeQuest(i) {
@@ -2304,10 +2911,17 @@
         break;
       }
 
-      // Tapping the bottom-middle at a board opens it.
-      if (atBoard && p.y > H * 0.55 && p.y < H * 0.72 &&
+      // Tapping the bottom-middle does whatever you're stood at: the
+      // board, a radio tower, or a marine waiting to be recruited.
+      if ((atBoard || atRadio || nearRecruit || atGear) &&
+          p.y > H * 0.55 && p.y < H * 0.72 &&
           Math.abs(p.x - W / 2) < W * 0.25) {
-        state = 'board';
+        if (atBoard)          state = 'board';
+        else if (nearRecruit) recruitMarine(nearRecruit);
+        else if (atGear)      buyGear();
+        else if (clock >= atRadio.podReadyAt && squadSize() < MARINE_MAX) {
+          summonPod(atRadio);
+        }
         break;
       }
 
@@ -2444,6 +3058,8 @@
     pushOutOfWalls();
     player.maxHealth = 100;      // upgrades were earned by the last life
     player.gunDamage = 1;
+    player.marineRifle = false;  // the gear died with you too
+    player.marineArmour = false;
     player.scrap = 0;
     player.health = player.maxHealth;
     player.kills = 0;
@@ -2454,6 +3070,12 @@
     // died would make the whole board meaningless.
     quest = null; atBoard = null; questFlash = 0;
     enemies = []; bolts = []; gibs = []; tracers = [];
+
+    // The squad dies with you - marines are something you EARN each
+    // life, like your kills. But the radio towers stay found, and the
+    // ones you already used stay on cooldown.
+    pods = []; marines = [];
+    atRadio = null; nearRecruit = null;
     healing = false; healGlow = 0;
     spawnTimer = 1.5;
     hordeTimer = HORDE_FIRST; hordeWarn = 0;
@@ -2567,6 +3189,53 @@
       if (Math.hypot(player.x - bd.x, player.z - bd.z) < 7) atBoard = camp;
     }
 
+    // ---- OR AT A RADIO TOWER? OR NEXT TO A WAITING MARINE? ----------
+    // Worked out fresh every frame, same as the board. The E key and
+    // the on-screen hint both read these instead of hunting again.
+    atRadio = null;
+    {
+      const gx0 = Math.round(player.x / CELL), gz0 = Math.round(player.z / CELL);
+      for (let gx = gx0 - 1; gx <= gx0 + 1 && !atRadio; gx++) {
+        for (let gz = gz0 - 1; gz <= gz0 + 1; gz++) {
+          const p = propAt(gx, gz);
+          if (p && p.kind === 'radio' &&
+              Math.hypot(player.x - p.x, player.z - p.z) < 16) {
+            atRadio = p;
+            break;
+          }
+        }
+      }
+    }
+
+    nearRecruit = null;
+    for (const m of marines) {
+      if (m.state !== 'wait') continue;
+      if (Math.hypot(player.x - m.x, player.z - m.z) < 7) {
+        nearRecruit = m;
+        break;
+      }
+    }
+
+    // ---- OR SHOPPING AT A FORT ARMOURY? -----------------------------
+    atGear = null;
+    {
+      const gx0 = Math.round(player.x / CELL), gz0 = Math.round(player.z / CELL);
+      for (let gx = gx0 - 1; gx <= gx0 + 1 && !atGear; gx++) {
+        for (let gz = gz0 - 1; gz <= gz0 + 1 && !atGear; gz++) {
+          const p = propAt(gx, gz);
+          if (!p || p.kind !== 'fort') continue;
+          const st = fortStations(p);
+          if (!player.marineRifle &&
+              Math.hypot(player.x - st.rifle.x, player.z - st.rifle.z) < 6) {
+            atGear = { kind: 'rifle', cost: GEAR_COST.rifle };
+          } else if (!player.marineArmour &&
+              Math.hypot(player.x - st.armour.x, player.z - st.armour.z) < 6) {
+            atGear = { kind: 'armour', cost: GEAR_COST.armour };
+          }
+        }
+      }
+    }
+
     // ---- PATCHED UP INSIDE THE WALLS --------------------------------
     // Ten health a second while you're inside a settlement. Somebody in
     // there knows what they're doing with a bandage.
@@ -2605,6 +3274,8 @@
 
     updateEnemies(dt);
     updateGuards(dt);
+    updatePods(dt);
+    updateMarines(dt);
     updateBolts(dt);
 
     enemies = enemies.filter(function (e) { return !e.dead; });
@@ -2691,11 +3362,15 @@
       ctx.fill();
     }
 
-    slice(0.00, 0.30, 1.05, 0.85, '#241f1c');          // stock, against you
-    slice(0.26, 0.62, 0.88, 0.60, '#332e29');          // body
-    slice(0.40, 0.52, 1.30, 1.05, '#2b2622', -0.55);   // magazine, hanging down
-    slice(0.60, 1.00, 0.40, 0.17, '#4a423a');          // the barrel itself
-    slice(0.62, 0.70, 0.20, 0.18, '#6a5f54', 0.45);    // a sight on top
+    // Two paint jobs, one gun shape. Buy the marine rifle and the
+    // rusty scrap colours swap for marine steel with an orange stripe.
+    const mr = player.marineRifle;
+    slice(0.00, 0.30, 1.05, 0.85, mr ? '#232a33' : '#241f1c');   // stock
+    slice(0.26, 0.62, 0.88, 0.60, mr ? '#39434f' : '#332e29');   // body
+    slice(0.40, 0.52, 1.30, 1.05, mr ? '#2c343e' : '#2b2622', -0.55); // magazine
+    slice(0.60, 1.00, 0.40, 0.17, mr ? '#55636f' : '#4a423a');   // barrel
+    slice(0.62, 0.70, 0.20, 0.18, mr ? '#e08a30' : '#6a5f54', 0.45); // sight
+    if (mr) slice(0.28, 0.60, 0.10, 0.08, '#e08a30', 0.30);      // the stripe
 
     // ---- MUZZLE FLASH ------------------------------------------------
     // Right at the tip, so the bang happens where you're looking rather
@@ -2829,7 +3504,41 @@
     for (let gx = gx0 - reach; gx <= gx0 + reach; gx++) {
       for (let gz = gz0 - reach; gz <= gz0 + reach; gz++) {
         const p = propAt(gx, gz);
-        if (!p || p.kind !== 'bunker') continue;
+        if (!p) continue;
+
+        // ---- MARINE FORTS: a steel-blue square, drawn at real size.
+        if (p.kind === 'fort') {
+          const m = toMap(p.x, p.z);
+          if (m.d > MAP_RANGE) continue;
+          const s = Math.max(4, p.half * scale);
+          ctx.fillStyle = 'rgba(130,170,230,0.20)';
+          ctx.fillRect(m.x - s, m.y - s, s * 2, s * 2);
+          ctx.lineWidth = 1.5;
+          ctx.strokeStyle = '#9ec4f0';
+          ctx.strokeRect(m.x - s, m.y - s, s * 2, s * 2);
+          continue;
+        }
+
+        // ---- RADIO TOWERS: a little red triangle, like an antenna.
+        // Bright when it's charged, grey while it's recharging.
+        if (p.kind === 'radio') {
+          const m = toMap(p.x, p.z);
+          if (m.d > MAP_RANGE) continue;
+
+          ctx.beginPath();
+          ctx.moveTo(m.x, m.y - 4.5);
+          ctx.lineTo(m.x + 4, m.y + 3.5);
+          ctx.lineTo(m.x - 4, m.y + 3.5);
+          ctx.closePath();
+          ctx.fillStyle = clock >= p.podReadyAt ? '#ff5a4a' : '#7a5a52';
+          ctx.fill();
+          ctx.lineWidth = 1;
+          ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+          ctx.stroke();
+          continue;
+        }
+
+        if (p.kind !== 'bunker') continue;
 
         const m = toMap(p.x, p.z);
         if (m.d > MAP_RANGE) continue;
@@ -2846,6 +3555,35 @@
         ctx.strokeStyle = (p === home) ? '#ffe08a' : 'rgba(255,200,90,0.75)';
         ctx.stroke();
       }
+    }
+
+    // ---- YOUR SQUAD -------------------------------------------------
+    // Marines are visor-orange. A waiting one BLINKS, so a fresh drop
+    // is easy to walk back to.
+    for (const mn of marines) {
+      const m = toMap(mn.x, mn.z);
+      if (m.d > MAP_RANGE) continue;
+      if (mn.state === 'wait' && Math.sin(clock * 6) < 0) continue;
+
+      ctx.beginPath();
+      ctx.arc(m.x, m.y, 2.6, 0, Math.PI * 2);
+      ctx.fillStyle = '#ffb444';
+      ctx.fill();
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+      ctx.stroke();
+    }
+
+    // A pod still falling is a white blink - something incoming.
+    for (const pd of pods) {
+      if (pd.landed) continue;
+      if (Math.sin(clock * 12) < 0) continue;
+      const m = toMap(pd.x, pd.z);
+      if (m.d > MAP_RANGE) continue;
+      ctx.beginPath();
+      ctx.arc(m.x, m.y, 3.2, 0, Math.PI * 2);
+      ctx.fillStyle = '#ffffff';
+      ctx.fill();
     }
 
     // ---- EVERYTHING THAT WANTS YOU ----------------------------------
@@ -3079,14 +3817,18 @@
     ctx.fillStyle = frac > 0.5 ? '#7fc45c' : frac > 0.25 ? '#e0a83c' : '#d64a3c';
     ctx.fillRect(bx, by, bw * frac, 16);
 
-    ctx.strokeStyle = 'rgba(255,255,255,0.3)';
-    ctx.lineWidth = 1;
+    // Wearing marine armour? The bar gets a steel-blue case around it,
+    // so you can always see you've got it on.
+    ctx.strokeStyle = player.marineArmour ? '#8fb8e8' : 'rgba(255,255,255,0.3)';
+    ctx.lineWidth = player.marineArmour ? 2.5 : 1;
     ctx.strokeRect(bx, by, bw, 16);
 
     ctx.textAlign = 'left';
     ctx.font = 'bold 13px system-ui, sans-serif';
     ctx.fillStyle = '#e8dcc8';
-    ctx.fillText(Math.ceil(player.health) + ' HP', bx, by - 6);
+    ctx.fillText(Math.ceil(player.health) + ' HP' +
+                 (player.marineArmour ? '  +  MARINE ARMOUR' : ''),
+                 bx, by - 6);
 
     // ---- KILLS AND TIME ---------------------------------------------
     ctx.textAlign = 'right';
@@ -3145,12 +3887,39 @@
       ctx.fillText(questWord, W / 2, H * 0.42);
     }
 
-    if (atBoard && state === 'play') {
-      ctx.textAlign = 'center';
-      ctx.font = 'bold ' + Math.min(W * 0.034, 21) + 'px system-ui, sans-serif';
-      ctx.fillStyle = '#ffd9a0';
-      ctx.fillText(touchMode ? 'TAP HERE FOR JOBS' : 'PRESS E FOR JOBS',
-                   W / 2, H * 0.63);
+    if (state === 'play') {
+      // One hint line, bottom-middle. Whatever you're stood at gets it.
+      let hint = null;
+      if (atBoard) {
+        hint = touchMode ? 'TAP HERE FOR JOBS' : 'PRESS E FOR JOBS';
+      } else if (nearRecruit) {
+        hint = squadSize() >= MARINE_MAX
+          ? 'SQUAD FULL  -  four is plenty'
+          : (touchMode ? 'TAP HERE TO RECRUIT THE MARINE'
+                       : 'PRESS E TO RECRUIT THE MARINE');
+      } else if (atGear) {
+        const name = atGear.kind === 'rifle' ? 'MARINE RIFLE' : 'MARINE ARMOUR';
+        hint = player.scrap < atGear.cost
+          ? name + '  -  need ' + atGear.cost + ' scrap, you have ' + player.scrap
+          : (touchMode ? 'TAP HERE TO TAKE THE ' : 'PRESS E TO TAKE THE ') +
+            name + '  -  ' + atGear.cost + ' scrap';
+      } else if (atRadio) {
+        if (squadSize() >= MARINE_MAX)      hint = 'SQUAD FULL  -  four is plenty';
+        else if (clock < atRadio.podReadyAt) {
+          hint = 'TOWER RECHARGING  -  ' +
+                 Math.ceil(atRadio.podReadyAt - clock) + 's';
+        } else {
+          hint = touchMode ? 'TAP HERE TO CALL A DROP POD'
+                           : 'PRESS E TO CALL A DROP POD';
+        }
+      }
+
+      if (hint) {
+        ctx.textAlign = 'center';
+        ctx.font = 'bold ' + Math.min(W * 0.034, 21) + 'px system-ui, sans-serif';
+        ctx.fillStyle = '#ffd9a0';
+        ctx.fillText(hint, W / 2, H * 0.63);
+      }
     }
 
     // ---- HEALTH BARS OVER THE BIG ONES -------------------------------
@@ -3306,6 +4075,8 @@
     drawFarBeacons();
     drawScenery();
     drawDust();
+    for (const p of pods) drawPod(p);
+    for (const m of marines) drawMarine(m);
     for (const e of enemies) drawEnemy(e);
     drawBolts();
     drawTracers();
