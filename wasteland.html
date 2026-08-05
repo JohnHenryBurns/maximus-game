@@ -2434,6 +2434,163 @@
     return null;
   }
 
+// -------------------------------------------------------------------
+//  THE MINIMAP
+// -------------------------------------------------------------------
+//  Top right. You're the arrow in the middle, always, and the WORLD
+//  turns around you - so straight up the map is straight ahead, and a
+//  blip above the arrow is a thing in front of your face.
+//
+//  That's why the compass letters move. If the map turned and N stayed
+//  put, N would be lying. Everything that's stuck to the world has to
+//  turn with the world, letters included.
+//
+//  It reaches 320 paces, which is further than you can see through the
+//  fog on purpose. A horde forms at about 250, so you get to watch it
+//  gather as a smear of dots before there's anything to look at.
+// -------------------------------------------------------------------
+
+  const MAP_RANGE = 320;
+
+  const MAP_COLOUR = {
+    zombie: '#7ad05a',
+    robot:  '#6ecdff',
+    giant:  '#ff5a3c'
+  };
+
+  function drawMiniMap() {
+    const r  = Math.min(W, H) * 0.135;
+    const cx = W - r - 16;
+    const cy = r + 16;
+    const scale = r / MAP_RANGE;
+
+    const sy = Math.sin(player.yaw), cyaw = Math.cos(player.yaw);
+
+    // TURN A SPOT IN THE WORLD INTO A SPOT ON THE MAP.
+    //
+    // The same two sums as the 3D camera: how far in FRONT of you it is,
+    // and how far to the RIGHT. Forward goes up the screen, which is why
+    // it's subtracted - screen y grows downwards.
+    function toMap(wx, wz) {
+      const dx = wx - player.x, dz = wz - player.z;
+      return {
+        x: cx + (dx * cyaw - dz * sy) * scale,
+        y: cy - (dx * sy + dz * cyaw) * scale,
+        d: Math.hypot(dx, dz)
+      };
+    }
+
+    // ---- THE DISC ---------------------------------------------------
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(24,16,10,0.62)';
+    ctx.fill();
+
+    // Everything from here until restore() is trimmed to that circle, so
+    // a settlement half off the edge gets cut instead of spilling out
+    // across the sky.
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.clip();
+
+    // ---- SETTLEMENTS ------------------------------------------------
+    const reach = Math.ceil(MAP_RANGE / CELL);
+    const gx0 = Math.round(player.x / CELL), gz0 = Math.round(player.z / CELL);
+    const home = insideSettlement();
+
+    for (let gx = gx0 - reach; gx <= gx0 + reach; gx++) {
+      for (let gz = gz0 - reach; gz <= gz0 + reach; gz++) {
+        const p = propAt(gx, gz);
+        if (!p || p.kind !== 'bunker') continue;
+
+        const m = toMap(p.x, p.z);
+        if (m.d > MAP_RANGE) continue;
+
+        // Drawn at its REAL size, so a big compound looks big. The ring
+        // is the wall; you can see whether you're inside it.
+        const wall = Math.max(4, p.half * scale);
+
+        ctx.beginPath();
+        ctx.arc(m.x, m.y, wall, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255,200,90,0.20)';
+        ctx.fill();
+        ctx.lineWidth = (p === home) ? 3 : 1.5;
+        ctx.strokeStyle = (p === home) ? '#ffe08a' : 'rgba(255,200,90,0.75)';
+        ctx.stroke();
+      }
+    }
+
+    // ---- EVERYTHING THAT WANTS YOU ----------------------------------
+    for (const e of enemies) {
+      if (e.dead) continue;
+
+      const m = toMap(e.x, e.z);
+      if (m.d > MAP_RANGE) continue;
+
+      const size = e.k.big ? 4.2 : 2.1;
+
+      ctx.beginPath();
+      ctx.arc(m.x, m.y, size, 0, Math.PI * 2);
+      ctx.fillStyle = MAP_COLOUR[e.kind] || '#ffffff';
+      ctx.fill();
+
+      // A ring round the giants, so one is never lost in a crowd.
+      if (e.k.big) {
+        ctx.lineWidth = 1.4;
+        ctx.strokeStyle = '#ffd0c0';
+        ctx.stroke();
+      }
+    }
+
+    ctx.restore();
+
+    // ---- YOU ---------------------------------------------------------
+    // An arrow, pointing up, always. You never turn on this map - the
+    // world does.
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - 7);
+    ctx.lineTo(cx + 5, cy + 6);
+    ctx.lineTo(cx, cy + 3);
+    ctx.lineTo(cx - 5, cy + 6);
+    ctx.closePath();
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+    ctx.stroke();
+
+    // ---- THE RIM AND THE COMPASS -------------------------------------
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(255,217,160,0.55)';
+    ctx.stroke();
+
+    // North is +z in this world - the way you're facing when the game
+    // starts. Each letter goes through the SAME turning as everything
+    // else, which is what keeps them honest as you spin.
+    const COMPASS = [
+      { s: 'N', x:  0, z:  1 },
+      { s: 'E', x:  1, z:  0 },
+      { s: 'S', x:  0, z: -1 },
+      { s: 'W', x: -1, z:  0 }
+    ];
+
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 12px system-ui, sans-serif';
+
+    for (const c of COMPASS) {
+      const px = cx + (c.x * cyaw - c.z * sy) * r * 0.84;
+      const py = cy - (c.x * sy + c.z * cyaw) * r * 0.84;
+
+      ctx.fillStyle = 'rgba(0,0,0,0.65)';
+      ctx.fillText(c.s, px + 1, py + 5);
+      ctx.fillStyle = (c.s === 'N') ? '#ffd9a0' : 'rgba(230,214,190,0.8)';
+      ctx.fillText(c.s, px, py + 4);
+    }
+  }
+
   function drawHud() {
     // ---- CROSSHAIR --------------------------------------------------
     const mx = W / 2, my = H / 2, gap = 6, arm = 11;
@@ -2488,6 +2645,8 @@
         ? 'HORDE IN ' + Math.ceil(hordeTimer)
         : 'next horde ' + Math.ceil(hordeTimer) + 's', W * 0.95, H - 78);
     }
+
+    if (state === 'play') drawMiniMap();
 
     // ---- HEALTH BARS OVER THE BIG ONES -------------------------------
     // Fifty hits is eight seconds of shooting. Without a bar you have
