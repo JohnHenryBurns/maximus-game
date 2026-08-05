@@ -1502,6 +1502,26 @@
       knock: 0.7, shove: 0.8, scrap: 4
     },
 
+    // ZOMBIE MARINE. Maximus asked for them "as strong as space
+    // marines, except evil" - a marine who didn't make it, still
+    // walking around inside his armour. Twenty hits, because the
+    // armour doesn't care that its owner died. His rifle still works
+    // and its bolts fly at 70 - nearly twice a robot's - so strolling
+    // sideways out of the way stops being a plan.
+    //
+    // Rotten green where the armour's torn, one red visor instead of
+    // eyes, and knock 0.12: shooting him barely staggers him. Calm,
+    // armoured, and coming. Your own squad will pick fights with him -
+    // marine against dead marine.
+    zombieMarine: {
+      hp: 20, speed: 7.5, radius: 2.5, height: 6.4, reach: 3.2,
+      body: [52, 64, 76], limb: [70, 86, 56], head: [104, 120, 84],
+      eye: [255, 44, 40], visor: true, boltColour: [255, 90, 60],
+      gib: [[80, 96, 114], [96, 128, 62], [52, 62, 76], [255, 90, 60]],
+      bite: 0, biteEvery: 1, ranged: true, fireEvery: 1.3, bolt: 70, boltHurt: 8,
+      knock: 0.12, shove: 0.45, scrap: 8
+    },
+
     // FIFTY HITS. At a sixth of a second between shots that's eight
     // solid seconds of shooting one thing, which is a very long time
     // when there are ninety others walking at you.
@@ -1566,6 +1586,10 @@
 
     // Robots get commoner the longer you last. At the start it's almost
     // all zombies; after two minutes it's about half and half.
+    //
+    // Zombie marines are NOT in this mix - Maximus ruled they only
+    // march in with hordes, like officers leading the crowd. spawnHorde
+    // asks for them by name.
     const robotChance = Math.min(0.5, clock / 240);
     const kind = forceKind ||
                  (Math.random() < robotChance ? 'robot' : 'zombie');
@@ -1689,6 +1713,19 @@
       }
     }
 
+    // ---- AND, LATE ON, THE CORRUPTED SQUAD --------------------------
+    // After two and a half minutes, half of all hordes march in with
+    // two or three zombie marines at the front. A wall of shamblers is
+    // a problem for your trigger finger; a wall of shamblers with
+    // armoured riflemen in it is a problem for your BRAIN.
+    if (clock > 150 && Math.random() < 0.5) {
+      const dead = 2 + (Math.random() < 0.4 ? 1 : 0);
+      for (let i = 0; i < dead; i++) {
+        spawnEnemy(205 + Math.random() * 25,
+                   from + (Math.random() - 0.5) * 0.7, 'zombieMarine');
+      }
+    }
+
     // HOW MANY ACTUALLY TURNED UP, not how many we asked for. With
     // hordes this frequent the 150 cap gets hit constantly, and
     // spawnEnemy quietly declines once it's full. Announcing "90 of
@@ -1803,7 +1840,8 @@
       vx: (dx / gap) * e.k.bolt,
       vz: (dz / gap) * e.k.bolt,
       hurt: e.k.boltHurt,
-      life: 3.5
+      col: e.k.boltColour,      // zombie marines shoot RED. Robots
+      life: 3.5                 // leave this empty and get the old blue.
     });
     playZap();
   }
@@ -1844,8 +1882,13 @@
 
   function drawBolts() {
     for (const b of bolts) {
-      addBox(b.x, b.y, b.z, 0.9, 0.9, 0.9, [140, 230, 255]);
-      addBox(b.x, b.y, b.z, 1.5, 0.4, 1.5, [80, 180, 240]);
+      if (b.col) {
+        addBox(b.x, b.y, b.z, 0.9, 0.9, 0.9, [255, 200, 160]);
+        addBox(b.x, b.y, b.z, 1.5, 0.4, 1.5, b.col);
+      } else {
+        addBox(b.x, b.y, b.z, 0.9, 0.9, 0.9, [140, 230, 255]);
+        addBox(b.x, b.y, b.z, 1.5, 0.4, 1.5, [80, 180, 240]);
+      }
     }
   }
 
@@ -1922,10 +1965,16 @@
       addBox(e.x, k.height * 0.58 + sw * 0.05, e.z,
              3.0, k.height * 0.36, 1.9, k.body, s);
       addBox(e.x, k.height * 0.86, e.z, 1.9, 1.8, 1.8, k.head, s);
-      addBox(e.x - 0.5 * co - 0.95 * si, k.height * 0.88,
-             e.z + 0.5 * si - 0.95 * co, 0.42, 0.34, 0.16, k.eye, s);
-      addBox(e.x + 0.5 * co - 0.95 * si, k.height * 0.88,
-             e.z - 0.5 * si - 0.95 * co, 0.42, 0.34, 0.16, k.eye, s);
+      if (k.visor) {
+        // One glowing strip instead of two eyes.
+        addBox(e.x - 0.95 * si, k.height * 0.88, e.z - 0.95 * co,
+               1.2, 0.34, 0.16, k.eye, s);
+      } else {
+        addBox(e.x - 0.5 * co - 0.95 * si, k.height * 0.88,
+               e.z + 0.5 * si - 0.95 * co, 0.42, 0.34, 0.16, k.eye, s);
+        addBox(e.x + 0.5 * co - 0.95 * si, k.height * 0.88,
+               e.z - 0.5 * si - 0.95 * co, 0.42, 0.34, 0.16, k.eye, s);
+      }
       return;
     }
 
@@ -1967,10 +2016,17 @@
     part(sway, h * 0.86, 0, 1.9, 1.8, 1.8, k.head);
 
     // eyes - not lit(), because a glowing eye shouldn't wash out white
-    for (const ex of [-0.5, 0.5]) {
-      addBox(e.x + (ex * co) + (-0.95 * si), h * 0.88,
-             e.z - (ex * si) + (-0.95 * co),
-             0.42, 0.34, 0.16, k.eye, s);
+    if (k.visor) {
+      // A single red visor strip. The whole difference between "dead
+      // guy" and "dead SOLDIER" is this one box.
+      addBox(e.x + (-0.95 * si), h * 0.88, e.z + (-0.95 * co),
+             1.2, 0.34, 0.16, k.eye, s);
+    } else {
+      for (const ex of [-0.5, 0.5]) {
+        addBox(e.x + (ex * co) + (-0.95 * si), h * 0.88,
+               e.z - (ex * si) + (-0.95 * co),
+               0.42, 0.34, 0.16, k.eye, s);
+      }
     }
   }
 
@@ -3455,9 +3511,10 @@
   const MAP_RANGE = 320;
 
   const MAP_COLOUR = {
-    zombie: '#7ad05a',
-    robot:  '#6ecdff',
-    giant:  '#ff5a3c'
+    zombie:       '#7ad05a',
+    robot:        '#6ecdff',
+    giant:        '#ff5a3c',
+    zombieMarine: '#d05aff'    // evil purple - nothing else on the map has it
   };
 
   function drawMiniMap() {
