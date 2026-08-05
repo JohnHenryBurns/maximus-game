@@ -414,7 +414,33 @@
   //
   // "solid" is how far out you're stopped. Zero means walk right over
   // it - rubble and barrels aren't worth blocking on.
+  // REMEMBER THE ANSWERS.
+  //
+  // propAt now gets asked hundreds of times a frame - once per square
+  // on screen for the drawing, plus nine more every time you or any
+  // enemy takes a step. And a bunker builds a list of twenty-one wall
+  // posts each time it's asked.
+  //
+  // But the answer for a given square NEVER CHANGES. It's all worked
+  // out from hash(), which is the whole point of hash(). So work it out
+  // once, keep it, and hand back the same answer forever.
+  //
+  // The clear-out stops it eating memory as you walk. Losing the
+  // answers costs nothing - we just work them out again.
+  const propCache = new Map();
+
   function propAt(gx, gz) {
+    const key = gx + ',' + gz;
+    if (propCache.has(key)) return propCache.get(key);
+
+    if (propCache.size > 6000) propCache.clear();
+
+    const p = buildProp(gx, gz);
+    propCache.set(key, p);
+    return p;
+  }
+
+  function buildProp(gx, gz) {
     const r = hash2(gx, gz);
     if (r > 0.62) return null;               // most squares are empty
 
@@ -427,21 +453,77 @@
       spin: hash2(gx + 3, gz + 3) * Math.PI * 2
     };
 
-    if (r < 0.16) {
+    if (r < 0.13) {
       p.kind = 'tower';
       p.w = 8 + hash2(gx, gz + 1) * 6;
       p.solid = p.w * 0.62;
-    } else if (r < 0.30) {
+    } else if (r < 0.26) {
+      p.kind = 'bunker';
+      p.solid = 0;              // not one lump - see parts, below
+      p.parts = bunkerParts(p);
+    } else if (r < 0.38) {
       p.kind = 'wreck';  p.solid = 4.4;
-    } else if (r < 0.44) {
+    } else if (r < 0.48) {
       p.kind = 'tree';   p.solid = 1.4;
-    } else if (r < 0.55) {
+    } else if (r < 0.56) {
       p.kind = 'rubble'; p.solid = 0;
     } else {
       p.kind = 'barrels'; p.solid = 0;
     }
 
     return p;
+  }
+
+
+// -------------------------------------------------------------------
+//  SCRAP BUNKERS
+// -------------------------------------------------------------------
+//  Somebody welded whatever they could find into a box and hid in it.
+//  Corrugated sheet, a car door, road signs, planks, sandbags, tyres.
+//
+//  It is HOLLOW, with a doorway - so it's real cover. Duck inside and a
+//  robot's bolt hits the wall instead of you.
+//
+//  Which means one solid circle won't do. A bunker's walls are a RING
+//  of solid lumps with a hole in one side, and the hole is what makes
+//  it a building instead of a rock.
+// -------------------------------------------------------------------
+
+  // Where the wall posts go, as fractions of the way out from the
+  // middle. Used BOTH to build the walls you can see and the lumps you
+  // bump into - so the doorway you can see is always the doorway you
+  // can walk through.
+  const BUNKER_SPOTS = [-1, -0.66, -0.33, 0, 0.33, 0.66, 1];
+  const BUNKER_HALF  = 6.4;
+  const POST_R       = 1.7;
+
+  // Each wall of the bunker, as a list of local (x, z) posts.
+  function bunkerPosts() {
+    const S = BUNKER_HALF;
+    const out = [];
+
+    for (const t of BUNKER_SPOTS) out.push([t * S, -S]);          // back
+    for (const t of BUNKER_SPOTS) {
+      if (Math.abs(t) === 1) continue;                            // corners done
+      out.push([-S, t * S]);                                      // left
+      out.push([ S, t * S]);                                      // right
+    }
+    for (const t of BUNKER_SPOTS) {
+      if (Math.abs(t) < 0.5) continue;    // THE DOORWAY - leave it out
+      out.push([t * S, S]);                                       // front
+    }
+    return out;
+  }
+
+  function bunkerParts(p) {
+    const co = Math.cos(p.spin), si = Math.sin(p.spin);
+    return bunkerPosts().map(function (q) {
+      return {
+        x: p.x + q[0] * co + q[1] * si,
+        z: p.z - q[0] * si + q[1] * co,
+        r: POST_R
+      };
+    });
   }
 
   // IS THIS SPOT INSIDE SOMETHING SOLID?
@@ -455,7 +537,21 @@
     for (let ax = gx - 1; ax <= gx + 1; ax++) {
       for (let az = gz - 1; az <= gz + 1; az++) {
         const p = propAt(ax, az);
-        if (!p || p.solid <= 0) continue;
+        if (!p) continue;
+
+        // A bunker isn't one lump, it's a ring of them with a gap. Check
+        // each post, and hand back whichever one you're inside - shaped
+        // like a solid so the pushing-out code can't tell the difference.
+        if (p.parts) {
+          for (const q of p.parts) {
+            if (Math.hypot(x - q.x, z - q.z) < q.r + radius) {
+              return { x: q.x, z: q.z, solid: q.r };
+            }
+          }
+          continue;
+        }
+
+        if (p.solid <= 0) continue;
         if (Math.hypot(x - p.x, z - p.z) < p.solid + radius) return p;
       }
     }
@@ -485,6 +581,7 @@
         if (dx * Math.sin(player.yaw) + dz * Math.cos(player.yaw) < -26) continue;
 
         if      (p.kind === 'tower')  drawTower(p);
+        else if (p.kind === 'bunker') drawBunker(p);
         else if (p.kind === 'wreck')  drawWreck(p);
         else if (p.kind === 'tree')   drawDeadTree(p);
         else if (p.kind === 'rubble') drawRubble(p);
@@ -517,6 +614,115 @@
     // Dark holes where the windows were.
     for (let f = 1; f * 6 < h - 3; f++) {
       addBox(x, f * 6, z - w * 0.51, w * 0.5, 2.2, 0.3, [26, 22, 20], spin);
+    }
+  }
+
+  // Everything anybody could scavenge, in one list. Picking randomly
+  // from it is what stops the walls looking manufactured - real scrap
+  // is mismatched, and mismatched is the whole look.
+  const SCRAP = [
+    [128, 84, 52],    // rust
+    [146, 146, 152],  // galvanised sheet
+    [92, 96, 104],    // dark steel
+    [126, 66, 56],    // faded red paint
+    [74, 90, 104],    // faded blue paint
+    [110, 88, 60],    // old plank
+    [150, 138, 96]    // road sign
+  ];
+
+  function drawBunker(p) {
+    const co = Math.cos(p.spin), si = Math.sin(p.spin);
+    const S = BUNKER_HALF;
+
+    // ---- HOW MUCH DETAIL IS WORTH IT? -------------------------------
+    // A fully detailed bunker is about 460 flat shapes. Three of them
+    // on screen at once would be more work than the entire rest of the
+    // wasteland put together.
+    //
+    // So: two tiers. Far off you get walls and a roof. Up close you get
+    // the ribbing and the sandbags. You genuinely cannot see the
+    // difference at 60 paces - and the ones you can't see are free.
+    const away  = Math.hypot(p.x - player.x, p.z - player.z);
+    const near  = away < 88;     // tyres, pipe, the lean-to
+    const close = away < 46;     // corrugation and sandbags
+
+    function part(lx, lz, y, w, h, d, rgb, lean) {
+      addBox(p.x + lx * co + lz * si, y, p.z - lx * si + lz * co,
+             w, h, d, rgb, p.spin + (lean || 0));
+    }
+
+    // ---- THE WALLS --------------------------------------------------
+    const posts = bunkerPosts();
+
+    for (let i = 0; i < posts.length; i++) {
+      const lx = posts[i][0], lz = posts[i][1];
+
+      // Every panel is a different height, a different colour and
+      // slightly crooked. Three tiny wobbles, and it stops being a box.
+      const h    = 3.8 + hash2(p.gx + i, p.gz) * 3.2;
+      const lean = (hash2(p.gx, p.gz + i) - 0.5) * 0.16;
+      const col  = SCRAP[Math.floor(hash2(p.gx + i * 3, p.gz + i) * SCRAP.length)];
+
+      // Which way is this panel facing? Along the wall it sits on.
+      const flat = Math.abs(lz) > Math.abs(lx);
+      const w = flat ? 4.6 : 1.0;
+      const d = flat ? 1.0 : 4.6;
+
+      part(lx, lz, h * 0.5, w, h, d, col, lean);
+
+      // Corrugation - two darker ribs down the face. Cheap, and it's
+      // what makes flat metal look like sheet metal.
+      if (close) {
+        for (const rib of [-1.2, 1.2]) {
+          part(lx + (flat ? rib : 0), lz + (flat ? 0 : rib),
+               h * 0.5, flat ? 0.35 : 1.1, h * 0.92, flat ? 1.1 : 0.35,
+               shade(col, 0.78), lean);
+        }
+      }
+
+      // A sandbag or two shoved against the bottom.
+      if (close && hash2(p.gx + i, p.gz + 5) > 0.45) {
+        part(lx * 1.16, lz * 1.16, 0.5, 2.2, 1.0, 1.6,
+             [104, 96, 74], lean * 2);
+      }
+    }
+
+    // ---- THE ROOF ---------------------------------------------------
+    // Deliberately incomplete. A finished roof is a shed; a roof with
+    // holes in it is somewhere people were desperate.
+    for (let i = 0; i < 4; i++) {
+      if (hash2(p.gx + i * 7, p.gz + 2) < 0.32) continue;    // this sheet's gone
+      const lz = -S + 1.6 + i * (S * 0.66);
+      const col = SCRAP[Math.floor(hash2(p.gx, p.gz + i * 5) * SCRAP.length)];
+      part(0, lz, 6.6 + hash2(p.gx + i, p.gz) * 0.5,
+           S * 2.1, 0.35, S * 0.6, shade(col, 0.9),
+           (hash2(p.gx + i, p.gz + 1) - 0.5) * 0.1);
+    }
+
+    if (!near) return;
+
+    // ---- THE JUNK ROUND THE OUTSIDE ---------------------------------
+    // Tyres stacked at the corners.
+    for (const c of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+      if (hash2(p.gx + c[0] * 3, p.gz + c[1] * 3) < 0.4) continue;
+      const stack = 1 + Math.floor(hash2(p.gx + c[0], p.gz + c[1]) * 3);
+      for (let t = 0; t < stack; t++) {
+        part(c[0] * (S + 1.9), c[1] * (S + 1.9), 0.5 + t * 0.9,
+             2.8, 0.9, 2.8, [40, 38, 40], t * 0.4);
+      }
+    }
+
+    // A pipe or aerial poking out of the roof.
+    if (hash2(p.gx + 11, p.gz) > 0.4) {
+      const px2 = (hash2(p.gx, p.gz + 11) - 0.5) * S;
+      part(px2, -S * 0.5, 8.6, 0.4, 4.4, 0.4, [86, 90, 96]);
+      part(px2, -S * 0.5, 10.9, 1.6, 0.3, 1.6, [72, 76, 82]);
+    }
+
+    // Something propped against the outside of the back wall.
+    if (hash2(p.gx + 13, p.gz + 13) > 0.5) {
+      part(S * 0.4, -S - 1.3, 2.0, 3.2, 4.0, 0.4,
+           SCRAP[Math.floor(hash2(p.gx, p.gz + 13) * SCRAP.length)], 0.22);
     }
   }
 
