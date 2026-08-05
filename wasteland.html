@@ -1922,6 +1922,7 @@
   function held(a, b) { return keys[a] || keys[b]; }
 
   canvas.addEventListener('mousedown', function () {
+    if (touchMode) return;      // a thumb already dealt with this
     startAudio();
     if (!locked) {
       if (canvas.requestPointerLock) canvas.requestPointerLock();
@@ -1946,6 +1947,164 @@
     player.yaw += e.movementX * LOOK;
     player.pitch = clamp(player.pitch - e.movementY * LOOK, -0.9, 0.9);
   });
+
+
+// -------------------------------------------------------------------
+//  PHONES AND TABLETS
+// -------------------------------------------------------------------
+//  A first-person shooter needs three things happening AT ONCE - look,
+//  move, and shoot - and you have two thumbs. So:
+//
+//    LEFT THUMB, anywhere on the left half: a stick that appears where
+//    you put your thumb down. Drag away from that spot to walk. Push it
+//    right out to run.
+//
+//    RIGHT THUMB, anywhere on the right: drag to look, exactly like the
+//    mouse. Same numbers, same feel.
+//
+//    FIRE: the big circle, bottom right.
+//
+//  Unlike the racer, this can't rebuild everything from all the fingers
+//  each event - a stick has to remember WHERE IT STARTED, and "look"
+//  needs to know where that finger was last frame. So every touch gets
+//  filed under its own identifier and keeps its own notes.
+// -------------------------------------------------------------------
+
+  const TOUCH_LOOK = 0.0042;    // thumbs are coarser than mice
+  const STICK_MAX  = 55;        // pixels from the origin for full speed
+  const STICK_RUN  = 0.75;      // push past this much and you run
+
+  let touchMode = false;
+  const roles = {};             // touch identifier -> what that finger is doing
+
+  const stick = { on: false, ox: 0, oy: 0, dx: 0, dy: 0, push: 0 };
+  let touchFire = false;
+
+  function fireButton() {
+    const r = Math.min(W, H) * 0.115;
+    return { x: W - r * 1.35, y: H - r * 1.35, r: r };
+  }
+
+  function touchPoint(t) {
+    const box = canvas.getBoundingClientRect();
+    return { x: t.clientX - box.left, y: t.clientY - box.top };
+  }
+
+  function inCircle(px, py, b) {
+    return Math.hypot(px - b.x, py - b.y) < b.r;
+  }
+
+  function onTouchStart(e) {
+    if (!touchMode) {
+      touchMode = true;
+      const h = document.getElementById('hud');
+      if (h) h.style.display = 'none';    // that hint is wrong now
+    }
+    startAudio();
+
+    for (const t of e.changedTouches) {
+      const p = touchPoint(t);
+
+      if (state === 'dead') { restart(); break; }
+
+      if (inCircle(p.x, p.y, fireButton())) {
+        roles[t.identifier] = { role: 'fire' };
+        touchFire = true;
+        shoot();
+      } else if (p.x < W * 0.5) {
+        // THE STICK APPEARS WHERE YOUR THUMB LANDS, rather than sitting
+        // in a fixed spot you have to find. You never have to look down.
+        roles[t.identifier] = { role: 'move' };
+        stick.on = true;
+        stick.ox = p.x; stick.oy = p.y;
+        stick.dx = 0; stick.dy = 0; stick.push = 0;
+      } else {
+        roles[t.identifier] = { role: 'look', lx: p.x, ly: p.y };
+      }
+    }
+    e.preventDefault();
+  }
+
+  function onTouchMove(e) {
+    for (const t of e.changedTouches) {
+      const r = roles[t.identifier];
+      if (!r) continue;
+      const p = touchPoint(t);
+
+      if (r.role === 'move') {
+        let dx = p.x - stick.ox, dy = p.y - stick.oy;
+        const len = Math.hypot(dx, dy);
+
+        // Clamp to the edge of the ring, so shoving your thumb to the
+        // corner of the screen isn't faster than a normal push.
+        if (len > STICK_MAX) { dx *= STICK_MAX / len; dy *= STICK_MAX / len; }
+
+        stick.dx = dx; stick.dy = dy;
+        stick.push = Math.min(1, len / STICK_MAX);
+
+      } else if (r.role === 'look') {
+        player.yaw += (p.x - r.lx) * TOUCH_LOOK;
+        player.pitch = clamp(player.pitch - (p.y - r.ly) * TOUCH_LOOK, -0.9, 0.9);
+        r.lx = p.x; r.ly = p.y;
+      }
+    }
+    e.preventDefault();
+  }
+
+  function onTouchEnd(e) {
+    for (const t of e.changedTouches) {
+      const r = roles[t.identifier];
+      if (!r) continue;
+
+      if (r.role === 'move') { stick.on = false; stick.push = 0; }
+      if (r.role === 'fire') touchFire = false;
+
+      delete roles[t.identifier];
+    }
+    e.preventDefault();
+  }
+
+  canvas.addEventListener('touchstart',  onTouchStart, { passive: false });
+  canvas.addEventListener('touchmove',   onTouchMove,  { passive: false });
+  canvas.addEventListener('touchend',    onTouchEnd,   { passive: false });
+  canvas.addEventListener('touchcancel', onTouchEnd,   { passive: false });
+
+  function drawThumbPad() {
+    if (!touchMode || state !== 'play') return;
+
+    // ---- THE STICK, only while a thumb is down --------------------
+    if (stick.on) {
+      ctx.beginPath();
+      ctx.arc(stick.ox, stick.oy, STICK_MAX, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(stick.ox + stick.dx, stick.oy + stick.dy, STICK_MAX * 0.38,
+              0, Math.PI * 2);
+      ctx.fillStyle = stick.push > STICK_RUN
+        ? 'rgba(255,217,160,0.42)' : 'rgba(255,255,255,0.24)';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+      ctx.stroke();
+    }
+
+    // ---- FIRE -------------------------------------------------------
+    const b = fireButton();
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+    ctx.fillStyle = touchFire ? 'rgba(255,120,60,0.38)' : 'rgba(0,0,0,0.32)';
+    ctx.fill();
+    ctx.lineWidth = touchFire ? 4 : 2;
+    ctx.strokeStyle = touchFire ? '#ffb070' : 'rgba(255,255,255,0.42)';
+    ctx.stroke();
+
+    ctx.textAlign = 'center';
+    ctx.font = 'bold ' + (b.r * 0.34) + 'px system-ui, sans-serif';
+    ctx.fillStyle = touchFire ? '#ffd9a0' : '#dfe4ee';
+    ctx.fillText('FIRE', b.x, b.y + b.r * 0.12);
+  }
 
   // IF YOU'RE STANDING INSIDE SOMETHING, GET OUT.
   //
@@ -2041,13 +2200,26 @@
     if (held('d', 'arrowright')) { mx += rx; mz += rz; }
     if (held('a', 'arrowleft'))  { mx -= rx; mz -= rz; }
 
+    // The thumb stick pushes in the SAME two directions the keys do -
+    // forwards and sideways from where you're looking. On screen it's
+    // up/down/left/right; in the world it's whichever way you're facing.
+    // Up on the stick is up the screen, which is why dy is subtracted.
+    if (stick.on && stick.push > 0.06) {
+      const sx = stick.dx / STICK_MAX, sy = -stick.dy / STICK_MAX;
+      mx += fx * sy + rx * sx;
+      mz += fz * sy + rz * sx;
+    }
+
     const len = Math.hypot(mx, mz);
     if (len > 0) {
       // Divide by the length, or walking diagonally would be 1.4 times
       // faster than walking straight - which is a bug in a LOT of games.
       mx /= len; mz /= len;
 
-      const speed = (keys['shift'] ? RUN : WALK);
+      // Shove the stick right out to the edge and you run. One control
+      // doing two jobs, so there's no second button to hunt for.
+      const running = keys['shift'] || (stick.on && stick.push > STICK_RUN);
+      const speed = running ? RUN : WALK;
       const nx = player.x + mx * speed * dt;
       const nz = player.z + mz * speed * dt;
 
@@ -2066,7 +2238,7 @@
       player.bob += dt * speed * 0.36;
     }
 
-    if (firing) shoot();
+    if (firing || touchFire) shoot();
 
     // ---- PATCHED UP INSIDE THE WALLS --------------------------------
     // Ten health a second while you're inside a settlement. Somebody in
@@ -2427,7 +2599,7 @@
     }
 
     // ---- CLICK TO PLAY ------------------------------------------------
-    if (!locked && state === 'play') {
+    if (!locked && !touchMode && state === 'play') {
       ctx.textAlign = 'center';
       ctx.font = 'bold ' + Math.min(W * 0.045, 28) + 'px system-ui, sans-serif';
       ctx.fillStyle = '#ffd9a0';
@@ -2450,7 +2622,9 @@
       ctx.fillStyle = '#f0e2ce';
       ctx.fillText(player.kills + ' put down in ' + Math.floor(clock) + ' seconds',
                    W / 2, H * 0.53);
-      ctx.fillText('press R or click to go again', W / 2, H * 0.60);
+      ctx.fillText(touchMode ? 'tap anywhere to go again'
+                             : 'press R or click to go again',
+                   W / 2, H * 0.60);
     }
   }
 
@@ -2491,6 +2665,7 @@
 
     if (state === 'play') drawGun();
     drawHud();
+    drawThumbPad();
   }
 
 
