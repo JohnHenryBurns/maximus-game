@@ -1,0 +1,1163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>THE WASTELAND</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: #1a120c; overflow: hidden;
+    font-family: system-ui, sans-serif;
+  }
+  canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+  #hud {
+    position: fixed; left: 0; right: 0; bottom: 10px;
+    text-align: center; color: #d8c4a8; font-size: 14px;
+    pointer-events: none; text-shadow: 0 2px 6px #000;
+  }
+</style>
+</head>
+<body>
+<canvas id="screen"></canvas>
+<div id="hud">MOUSE = look &nbsp;&nbsp; W A S D = move &nbsp;&nbsp; CLICK = shoot &nbsp;&nbsp; SHIFT = run</div>
+
+<script>
+// ===================================================================
+//  THE WASTELAND
+// ===================================================================
+//  Dead open ground under a sick orange sky. Ruined towers, burnt-out
+//  cars, dust you can taste. Zombies shamble at you. Robots walk at you
+//  and shoot back.
+//
+//  The 3D is the same engine as Bob and the racer - project(), the face
+//  list, the painter's sort. Third game on it now, and it hasn't needed
+//  changing once.
+//
+//  The ONE new thing here is FOG, and it does two jobs at the same time:
+//  it makes the place feel enormous and choking, and it hides the fact
+//  that the world stops about 170 paces away.
+// ===================================================================
+
+  const canvas = document.getElementById('screen');
+  const ctx = canvas.getContext('2d');
+
+  let W = 0, H = 0;
+
+  function fitScreen() {
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    W = canvas.clientWidth;
+    H = canvas.clientHeight;
+    canvas.width  = W * dpr;
+    canvas.height = H * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  window.addEventListener('resize', fitScreen);
+
+  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+  // A random number that is always the same for the same input. This is
+  // what lets the whole wasteland exist without being stored anywhere -
+  // every ruin, every wreck, every tree is worked out fresh each frame
+  // and comes out identical every time.
+  function hash(n) {
+    const x = Math.sin(n * 12.9898) * 43758.5453;
+    return x - Math.floor(x);
+  }
+
+  // Two numbers in, one out. For grid squares, which need an x AND a z.
+  function hash2(a, b) { return hash(a * 374.761 + b * 668.265); }
+
+
+// -------------------------------------------------------------------
+//  THE LOOK OF THE PLACE
+// -------------------------------------------------------------------
+
+  const FOG      = [178, 136, 88];    // the colour everything fades into
+  const FOG_NEAR = 22;                // fog starts biting here
+  const FOG_FAR  = 168;               // and swallows everything by here
+
+  const SKY_TOP  = '#3a2214';
+  const SKY_LOW  = '#c9955a';
+
+  const GROUND_A = [126, 100, 66];
+  const GROUND_B = [112, 88, 58];
+
+  const EYE_H = 3.4;                  // how tall you are
+
+
+// -------------------------------------------------------------------
+//  YOU
+// -------------------------------------------------------------------
+
+  const player = {
+    x: 0, z: 0,
+    yaw: 0, pitch: 0,
+    health: 100,
+    bob: 0,              // ticks up while walking, to nod the camera
+    kills: 0,
+    cool: 0,             // counts down between shots
+    hurtFlash: 0
+  };
+
+  const WALK   = 20;
+  const RUN    = 33;
+  const GUN_COOL  = 0.16;    // seconds between shots
+  const GUN_RANGE = 150;
+  const GUN_AIM   = 0.20;    // how forgiving the aim is, up and down
+
+  let state = 'play';        // 'play' or 'dead'
+  let deadTimer = 0;
+  let clock = 0;
+  let shake = 0;
+  let flash = 0;             // muzzle flash
+
+
+// -------------------------------------------------------------------
+//  PROJECT - Bob's, unchanged, for the third time
+// -------------------------------------------------------------------
+
+  const cam = { x: 0, y: EYE_H, z: 0, yaw: 0, pitch: 0 };
+
+  function focal() { return H * 0.9; }
+
+  function project(x, y, z) {
+    const dx = x - cam.x, dy = y - cam.y, dz = z - cam.z;
+
+    const cy = Math.cos(cam.yaw), sy = Math.sin(cam.yaw);
+    const rx = dx * cy - dz * sy;
+    const rz = dx * sy + dz * cy;
+    const ry = dy;
+
+    const cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch);
+    const fz = rz * cp + ry * sp;
+    const fy = ry * cp - rz * sp;
+
+    return {
+      x: W / 2 + rx * focal() / fz,
+      y: H / 2 - fy * focal() / fz,
+      depth: fz
+    };
+  }
+
+
+// -------------------------------------------------------------------
+//  THE FACE LIST, NOW WITH FOG
+// -------------------------------------------------------------------
+//  Fog is one line of maths done to a colour: the further away a thing
+//  is, the more of it we replace with the colour of the haze.
+//
+//     mixed = colour + (fog - colour) * howFarAway
+//
+//  That's the same slide-between-two-things sum as everything else in
+//  every one of your games. At 0 you get the real colour, at 1 you get
+//  pure haze, and the whole feeling of standing in a huge dusty dead
+//  place falls out of it for free.
+// -------------------------------------------------------------------
+
+  let faces = [];
+
+  function fogMix(rgb, depth) {
+    const t = clamp((depth - FOG_NEAR) / (FOG_FAR - FOG_NEAR), 0, 1);
+    return 'rgb(' +
+      ((rgb[0] + (FOG[0] - rgb[0]) * t) | 0) + ',' +
+      ((rgb[1] + (FOG[1] - rgb[1]) * t) | 0) + ',' +
+      ((rgb[2] + (FOG[2] - rgb[2]) * t) | 0) + ')';
+  }
+
+  function shade(rgb, amount) {
+    return [rgb[0] * amount, rgb[1] * amount, rgb[2] * amount];
+  }
+
+  function addFace(points3d, rgb, lift) {
+    const flat = [];
+    let total = 0;
+
+    for (const p of points3d) {
+      const s = project(p[0], p[1], p[2]);
+      if (s.depth < 0.4) return;      // behind the camera - the maths breaks
+      flat.push(s);
+      total += s.depth;
+    }
+
+    const depth = total / flat.length;
+    if (depth > FOG_FAR) return;      // past the fog it's invisible anyway,
+                                      // so don't waste time drawing it
+
+    faces.push({
+      points: flat,
+      depth: depth - (lift || 0),
+      colour: fogMix(rgb, depth)
+    });
+  }
+
+  function addBox(cx, cy, cz, w, h, d, rgb, spin) {
+    spin = spin || 0;
+    const hw = w / 2, hh = h / 2, hd = d / 2;
+    const co = Math.cos(spin), si = Math.sin(spin);
+
+    const local = [
+      [-hw, -hh, -hd], [ hw, -hh, -hd], [ hw, -hh,  hd], [-hw, -hh,  hd],
+      [-hw,  hh, -hd], [ hw,  hh, -hd], [ hw,  hh,  hd], [-hw,  hh,  hd]
+    ];
+
+    const c = local.map(function (v) {
+      return [cx + v[0] * co + v[2] * si, cy + v[1], cz - v[0] * si + v[2] * co];
+    });
+
+    addFace([c[4], c[5], c[6], c[7]], shade(rgb, 1.18));   // top
+    addFace([c[0], c[1], c[5], c[4]], shade(rgb, 0.78));   // back
+    addFace([c[3], c[2], c[6], c[7]], shade(rgb, 1.00));   // front
+    addFace([c[0], c[3], c[7], c[4]], shade(rgb, 0.64));   // left
+    addFace([c[1], c[2], c[6], c[5]], shade(rgb, 0.88));   // right
+  }
+
+
+// -------------------------------------------------------------------
+//  THE GROUND
+// -------------------------------------------------------------------
+//  Drawn as RINGS around you rather than a flat grid, because a grid
+//  would need thousands of squares to reach the fog and most of them
+//  would be behind your head.
+//
+//  Rings get wider the further out they go - which is exactly right,
+//  because distant things are small on screen and nobody can tell that
+//  the far ones are enormous.
+//
+//  The COLOUR comes from the square's place IN THE WORLD, not from
+//  which ring it is. If we shaded it by ring, the pattern would slide
+//  around with you like a carpet glued to your feet.
+// -------------------------------------------------------------------
+
+  const RINGS = [0, 9, 20, 34, 54, 82, 120, FOG_FAR];
+  const SPOKES = 28;
+
+  function drawGround() {
+    for (let r = 0; r < RINGS.length - 1; r++) {
+      const r0 = RINGS[r], r1 = RINGS[r + 1];
+
+      for (let s = 0; s < SPOKES; s++) {
+        const a0 = (s / SPOKES) * Math.PI * 2;
+        const a1 = ((s + 1) / SPOKES) * Math.PI * 2;
+
+        const c0 = Math.cos(a0), s0 = Math.sin(a0);
+        const c1 = Math.cos(a1), s1 = Math.sin(a1);
+
+        const px = player.x, pz = player.z;
+
+        // Where is the middle of this patch, in the world?
+        const mr = (r0 + r1) * 0.5, ma = (a0 + a1) * 0.5;
+        const wx = px + Math.cos(ma) * mr;
+        const wz = pz + Math.sin(ma) * mr;
+
+        // Shade it by its world position, quantised into 7-unit squares.
+        const tone = 0.86 + hash2(Math.floor(wx / 7), Math.floor(wz / 7)) * 0.28;
+        const base = (Math.floor(wx / 7) + Math.floor(wz / 7)) % 2 ? GROUND_A : GROUND_B;
+
+        addFace([
+          [px + c0 * r0, 0, pz + s0 * r0],
+          [px + c1 * r0, 0, pz + s1 * r0],
+          [px + c1 * r1, 0, pz + s1 * r1],
+          [px + c0 * r1, 0, pz + s0 * r1]
+        ], shade(base, tone));
+      }
+    }
+  }
+
+
+// -------------------------------------------------------------------
+//  THE RUINS
+// -------------------------------------------------------------------
+//  The world is divided into big invisible squares. For each square
+//  near you we ask hash2: is there something here, and what? Nothing is
+//  stored, nothing is generated in advance, and it goes on forever in
+//  every direction.
+//
+//  This is the same trick as the wrecks in the racer, except now it's
+//  in two directions instead of one.
+// -------------------------------------------------------------------
+
+  const CELL = 34;            // how big one invisible square is
+
+  const RUBBLE = [104, 94, 84];
+  const CONCRETE = [138, 128, 116];
+  const METAL = [104, 96, 92];
+  const DEADWOOD = [78, 62, 46];
+  const RUST = [128, 74, 44];
+
+  function drawScenery() {
+    const reach = Math.ceil(FOG_FAR / CELL);
+    const cx = Math.round(player.x / CELL);
+    const cz = Math.round(player.z / CELL);
+
+    for (let gx = cx - reach; gx <= cx + reach; gx++) {
+      for (let gz = cz - reach; gz <= cz + reach; gz++) {
+
+        const r = hash2(gx, gz);
+        if (r > 0.62) continue;               // most squares are empty
+
+        // Jiggle it off the exact grid corner, or the whole wasteland
+        // looks like graph paper.
+        const x = gx * CELL + (hash2(gx + 7, gz) - 0.5) * CELL * 0.8;
+        const z = gz * CELL + (hash2(gx, gz + 7) - 0.5) * CELL * 0.8;
+
+        const dx = x - player.x, dz = z - player.z;
+
+        // Don't bother if it's past the fog.
+        if (Math.hypot(dx, dz) > FOG_FAR) continue;
+
+        // ...or if it's behind your head. addFace would throw these
+        // away anyway, but only after doing all the maths for every
+        // corner of every box. Checking once here, before we build
+        // anything, skips about half the entire wasteland for free.
+        if (dx * Math.sin(player.yaw) + dz * Math.cos(player.yaw) < -26) continue;
+
+        const spin = hash2(gx + 3, gz + 3) * Math.PI * 2;
+
+        if (r < 0.16)      drawTower(x, z, gx, gz, spin);
+        else if (r < 0.30) drawWreck(x, z, gx, gz, spin);
+        else if (r < 0.44) drawDeadTree(x, z, gx, gz);
+        else if (r < 0.55) drawRubble(x, z, gx, gz, spin);
+        else               drawBarrels(x, z, gx, gz);
+      }
+    }
+  }
+
+  // A tower with its top blown off. The break is what makes it a ruin -
+  // a neat box is a building, a jagged one is a war.
+  function drawTower(x, z, gx, gz, spin) {
+    const h = 14 + hash2(gx + 1, gz) * 26;
+    const w = 8 + hash2(gx, gz + 1) * 6;
+
+    addBox(x, h * 0.5, z, w, h, w, CONCRETE, spin);
+
+    // Broken teeth around the top.
+    for (let i = 0; i < 4; i++) {
+      const t = hash2(gx + i, gz + i);
+      if (t < 0.35) continue;
+      const ox = (i < 2 ? -1 : 1) * w * 0.33;
+      const oz = (i % 2 ? -1 : 1) * w * 0.33;
+      addBox(x + ox * Math.cos(spin) + oz * Math.sin(spin),
+             h + t * 3.0,
+             z - ox * Math.sin(spin) + oz * Math.cos(spin),
+             w * 0.3, t * 6, w * 0.3, shade(CONCRETE, 0.9), spin);
+    }
+
+    // Dark holes where the windows were.
+    for (let f = 1; f * 6 < h - 3; f++) {
+      addBox(x, f * 6, z - w * 0.51, w * 0.5, 2.2, 0.3, [26, 22, 20], spin);
+    }
+  }
+
+  function drawWreck(x, z, gx, gz, spin) {
+    addBox(x, 1.3, z, 4.4, 2.0, 8.6, RUST, spin);
+    addBox(x, 2.8, z + 0.6, 3.6, 1.2, 3.8, [46, 40, 38], spin);
+
+    const co = Math.cos(spin), si = Math.sin(spin);
+    for (const ox of [-2.1, 2.1]) {
+      for (const oz of [-2.8, 3.0]) {
+        if (hash2(gx + ox, gz + oz) < 0.25) continue;    // some wheels gone
+        addBox(x + ox * co + oz * si, 0.8, z - ox * si + oz * co,
+               0.8, 1.6, 2.0, [38, 34, 34], spin);
+      }
+    }
+  }
+
+  function drawDeadTree(x, z, gx, gz) {
+    const h = 7 + hash2(gx + 2, gz) * 9;
+    addBox(x, h * 0.5, z, 1.4, h, 1.4, DEADWOOD);
+
+    // Three bare branches, each pointing a different way.
+    for (let i = 0; i < 3; i++) {
+      const a = hash2(gx + i * 5, gz + i) * Math.PI * 2;
+      const up = h * (0.55 + i * 0.14);
+      addBox(x + Math.cos(a) * 2.2, up, z + Math.sin(a) * 2.2,
+             4.5, 0.7, 0.7, DEADWOOD, -a);
+    }
+  }
+
+  function drawRubble(x, z, gx, gz, spin) {
+    const lumps = 3 + Math.floor(hash2(gx + 4, gz) * 4);
+    for (let i = 0; i < lumps; i++) {
+      const a = hash2(gx + i, gz + i * 3) * Math.PI * 2;
+      const d = hash2(gx + i * 2, gz) * 6;
+      const s = 1.6 + hash2(gx, gz + i) * 3.4;
+      addBox(x + Math.cos(a) * d, s * 0.35, z + Math.sin(a) * d,
+             s * 1.6, s * 0.7, s * 1.4, RUBBLE, a);
+    }
+  }
+
+  function drawBarrels(x, z, gx, gz) {
+    const n = 1 + Math.floor(hash2(gx + 6, gz) * 3);
+    for (let i = 0; i < n; i++) {
+      const a = hash2(gx + i * 4, gz + i) * Math.PI * 2;
+      const d = hash2(gx, gz + i * 4) * 4;
+      const fallen = hash2(gx + i, gz + 9) > 0.7;
+      if (fallen) {
+        addBox(x + Math.cos(a) * d, 0.9, z + Math.sin(a) * d,
+               1.8, 1.8, 3.2, RUST, a);
+      } else {
+        addBox(x + Math.cos(a) * d, 1.6, z + Math.sin(a) * d,
+               2.0, 3.2, 2.0, RUST, a);
+        addBox(x + Math.cos(a) * d, 3.3, z + Math.sin(a) * d,
+               2.2, 0.3, 2.2, shade(RUST, 0.75), a);
+      }
+    }
+  }
+
+
+// -------------------------------------------------------------------
+//  DUST
+// -------------------------------------------------------------------
+//  Specks hanging in the air right in front of your face. There aren't
+//  many and they're tiny, but without them the air is empty glass and
+//  the place looks clean. Cheapest atmosphere there is.
+// -------------------------------------------------------------------
+
+  const MOTES = 55;
+
+  function drawDust() {
+    for (let i = 0; i < MOTES; i++) {
+      // Each speck drifts on its own little loop, and wraps round a
+      // 40-unit box that follows you - so you're always inside the dust
+      // and it never runs out.
+      const dx = ((hash(i) * 40 + clock * 2.4) % 40) - 20;
+      const dz = ((hash(i + 99) * 40 + clock * 1.1) % 40) - 20;
+      const dy = ((hash(i + 55) * 12 + clock * 0.7) % 12);
+
+      // ANYTHING TOO CLOSE TO YOUR EYE HAS TO GO.
+      //
+      // Things get bigger on screen the nearer they are - that's the
+      // divide in project(). A speck this small half a pace from your
+      // face works out at over two hundred pixels across. A grey slab
+      // would slap over the screen and you'd never guess it was dust.
+      if (Math.hypot(dx, dz) < 3.5) continue;
+
+      addBox(player.x + dx, dy + 0.5, player.z + dz,
+             0.16, 0.16, 0.16, [206, 176, 130]);
+    }
+  }
+
+
+// -------------------------------------------------------------------
+//  THE THINGS THAT WANT YOU
+// -------------------------------------------------------------------
+//  One system, two kinds. The difference between a zombie and a robot
+//  is a box of numbers - not a second lot of code. Want a third enemy?
+//  Write a third box.
+// -------------------------------------------------------------------
+
+  const KINDS = {
+    zombie: {
+      hp: 3, speed: 8.5, radius: 2.2, height: 5.4, reach: 3.0,
+      body: [84, 102, 66], limb: [70, 86, 56], head: [132, 142, 100],
+      eye: [214, 66, 48], gib: [[96, 128, 62], [72, 100, 50], [140, 150, 104]],
+      bite: 9, biteEvery: 0.9, ranged: false
+    },
+
+    robot: {
+      hp: 7, speed: 6.0, radius: 2.6, height: 6.8, reach: 3.4,
+      body: [124, 128, 136], limb: [92, 96, 104], head: [104, 108, 118],
+      eye: [96, 216, 255], gib: [[150, 154, 162], [96, 100, 108], [255, 210, 120]],
+      bite: 0, biteEvery: 1, ranged: true, fireEvery: 2.2, bolt: 44, boltHurt: 11
+    }
+  };
+
+  let enemies = [];
+  let bolts   = [];
+  let gibs    = [];
+
+  const SPAWN_MIN = 70;      // never closer than this
+  const SPAWN_MAX = 130;     // never further than the fog
+  let spawnTimer = 1.5;
+
+  function spawnEnemy() {
+    // Somewhere on a ring around you. Angle at random so they don't all
+    // come from one side.
+    const a = Math.random() * Math.PI * 2;
+    const d = SPAWN_MIN + Math.random() * (SPAWN_MAX - SPAWN_MIN);
+
+    // Robots get commoner the longer you last. At the start it's almost
+    // all zombies; after two minutes it's about half and half.
+    const robotChance = Math.min(0.5, clock / 240);
+    const kind = Math.random() < robotChance ? 'robot' : 'zombie';
+    const k = KINDS[kind];
+
+    enemies.push({
+      kind: kind, k: k,
+      x: player.x + Math.cos(a) * d,
+      z: player.z + Math.sin(a) * d,
+      yaw: 0,
+      hp: k.hp,
+      step: Math.random() * 6,      // so they aren't all in lockstep
+      hitFlash: 0,
+      cool: Math.random() * 2
+    });
+  }
+
+  function updateEnemies(dt) {
+    for (const e of enemies) {
+      // Already dead? Then he doesn't get to keep walking and biting
+      // just because we haven't swept him off the list yet.
+      if (e.dead) continue;
+
+      e.hitFlash = Math.max(0, e.hitFlash - dt * 4);
+
+      const dx = player.x - e.x, dz = player.z - e.z;
+      const gap = Math.hypot(dx, dz) || 1;
+
+      e.yaw = Math.atan2(dx, dz);           // always facing you
+
+      // ---- WALK AT YOU --------------------------------------------
+      // Stop at arm's length instead of climbing inside you.
+      if (gap > e.k.reach) {
+        e.x += (dx / gap) * e.k.speed * dt;
+        e.z += (dz / gap) * e.k.speed * dt;
+        e.step += dt * (e.k.speed * 0.55);
+      }
+
+      // ---- PUSH EACH OTHER APART ----------------------------------
+      // Without this they stack into one thick zombie and you can't
+      // tell how many you're actually fighting.
+      for (const o of enemies) {
+        if (o === e) continue;
+        const ox = e.x - o.x, oz = e.z - o.z;
+        const og = Math.hypot(ox, oz);
+        const want = e.k.radius + o.k.radius;
+        if (og < want && og > 0.01) {
+          const push = (want - og) * 0.5;
+          e.x += (ox / og) * push;
+          e.z += (oz / og) * push;
+        }
+      }
+
+      e.cool -= dt;
+
+      // ---- HURT YOU -----------------------------------------------
+      if (e.k.ranged) {
+        if (gap < 90 && e.cool <= 0) {
+          e.cool = e.k.fireEvery;
+          fireBolt(e);
+        }
+      } else if (gap <= e.k.reach + 0.6 && e.cool <= 0) {
+        e.cool = e.k.biteEvery;
+        hurtPlayer(e.k.bite);
+      }
+    }
+  }
+
+  function fireBolt(e) {
+    const dx = player.x - e.x, dz = player.z - e.z;
+    const gap = Math.hypot(dx, dz) || 1;
+
+    bolts.push({
+      x: e.x, y: e.k.height * 0.62, z: e.z,
+      vx: (dx / gap) * e.k.bolt,
+      vz: (dz / gap) * e.k.bolt,
+      hurt: e.k.boltHurt,
+      life: 3.5
+    });
+    playZap();
+  }
+
+  function updateBolts(dt) {
+    for (const b of bolts) {
+      b.x += b.vx * dt;
+      b.z += b.vz * dt;
+      b.life -= dt;
+
+      if (Math.hypot(b.x - player.x, b.z - player.z) < 2.2) {
+        b.life = 0;
+        hurtPlayer(b.hurt);
+      }
+    }
+    bolts = bolts.filter(function (b) { return b.life > 0; });
+  }
+
+  function drawBolts() {
+    for (const b of bolts) {
+      addBox(b.x, b.y, b.z, 0.9, 0.9, 0.9, [140, 230, 255]);
+      addBox(b.x, b.y, b.z, 1.5, 0.4, 1.5, [80, 180, 240]);
+    }
+  }
+
+  // ---- DRAWING ONE OF THEM ------------------------------------------
+  // Both kinds are drawn by the SAME function. It reads the sizes and
+  // colours out of e.k, so a zombie and a robot are the same shape put
+  // together from different numbers - which is why adding a third kind
+  // needs no drawing code at all.
+  function drawEnemy(e) {
+    const k = e.k;
+    const s = e.yaw;
+    const co = Math.cos(s), si = Math.sin(s);
+
+    // Hit flash: mix the colour towards white by however much is left.
+    function lit(rgb) {
+      const f = e.hitFlash;
+      return [rgb[0] + (255 - rgb[0]) * f,
+              rgb[1] + (255 - rgb[1]) * f,
+              rgb[2] + (255 - rgb[2]) * f];
+    }
+
+    function part(ox, oy, oz, w, h, d, rgb) {
+      addBox(e.x + ox * co + oz * si, oy, e.z - ox * si + oz * co,
+             w, h, d, lit(rgb), s);
+    }
+
+    const swing = Math.sin(e.step) * 1.1;
+    const sway  = Math.sin(e.step * 0.5) * (k.ranged ? 0.05 : 0.3);
+    const h = k.height;
+
+    // legs
+    part(-0.9, h * 0.20, swing * 0.5, 1.1, h * 0.42, 1.1, k.limb);
+    part( 0.9, h * 0.20, -swing * 0.5, 1.1, h * 0.42, 1.1, k.limb);
+
+    // body
+    part(sway * 0.4, h * 0.58, 0, 3.0, h * 0.36, 1.9, k.body);
+
+    // arms - a zombie holds them out in front, a robot lets them hang
+    if (k.ranged) {
+      part(-2.0, h * 0.56, 0.2, 0.9, h * 0.30, 0.9, k.limb);
+      part( 2.0, h * 0.56, -0.2, 0.9, h * 0.30, 0.9, k.limb);
+      part( 2.0, h * 0.50, -1.6, 1.2, 1.2, 2.6, k.body);      // the gun
+    } else {
+      part(-1.8, h * 0.62, -1.4 + swing * 0.3, 0.9, 0.9, 3.4, k.limb);
+      part( 1.8, h * 0.62, -1.4 - swing * 0.3, 0.9, 0.9, 3.4, k.limb);
+    }
+
+    // head
+    part(sway, h * 0.86, 0, 1.9, 1.8, 1.8, k.head);
+
+    // eyes - not lit(), because a glowing eye shouldn't wash out white
+    for (const ex of [-0.5, 0.5]) {
+      addBox(e.x + (ex * co) + (-0.95 * si), h * 0.88,
+             e.z - (ex * si) + (-0.95 * co),
+             0.42, 0.34, 0.16, k.eye, s);
+    }
+  }
+
+
+// -------------------------------------------------------------------
+//  BITS FLYING OFF
+// -------------------------------------------------------------------
+
+  function burst(x, y, z, colours, count, power) {
+    for (let i = 0; i < count; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const p = power * (0.4 + Math.random());
+      gibs.push({
+        x: x, y: y, z: z,
+        vx: Math.cos(a) * p,
+        vy: 6 + Math.random() * 16,
+        vz: Math.sin(a) * p,
+        size: 0.35 + Math.random() * 1.1,
+        life: 0.6 + Math.random() * 0.8,
+        spin: Math.random() * 6,
+        colour: colours[Math.floor(Math.random() * colours.length)]
+      });
+    }
+  }
+
+  function updateGibs(dt) {
+    for (const g of gibs) {
+      g.x += g.vx * dt;
+      g.y += g.vy * dt;
+      g.z += g.vz * dt;
+      g.vy -= 34 * dt;
+      g.spin += dt * 5;
+      g.life -= dt;
+      if (g.y < 0.2) { g.y = 0.2; g.vy = 0; g.vx *= 0.7; g.vz *= 0.7; }
+    }
+    gibs = gibs.filter(function (g) { return g.life > 0; });
+  }
+
+  function drawGibs() {
+    for (const g of gibs) {
+      addBox(g.x, g.y, g.z, g.size, g.size, g.size, g.colour, g.spin);
+    }
+  }
+
+
+// -------------------------------------------------------------------
+//  SHOOTING
+// -------------------------------------------------------------------
+//  There is no bullet. Nothing flies through the air. The instant you
+//  pull the trigger we ask "what is the crosshair pointing at?" and
+//  whatever's nearest takes the hit.
+//
+//  That's called a HITSCAN, and it's how nearly every gun in nearly
+//  every shooter works. It feels right because a real bullet arrives
+//  faster than you could ever notice.
+// -------------------------------------------------------------------
+
+  function shoot() {
+    if (state !== 'play' || player.cool > 0) return;
+    player.cool = GUN_COOL;
+
+    flash = 1;
+    shake = Math.max(shake, 0.16);
+    playShot();
+
+    // An arrow pointing exactly where the crosshair is.
+    const fx = Math.sin(player.yaw), fz = Math.cos(player.yaw);
+
+    let best = null, bestAlong = Infinity;
+
+    for (const e of enemies) {
+      if (e.dead) continue;            // no shooting a corpse
+
+      const dx = e.x - player.x, dz = e.z - player.z;
+
+      // HOW FAR IN FRONT is he? (dot product again - the same sum that
+      // worked out whether you rammed the other car head-on.)
+      const along = dx * fx + dz * fz;
+      if (along <= 0 || along > GUN_RANGE) continue;    // behind, or too far
+
+      // HOW FAR OFF THE LINE is he? Miss by more than his width and it
+      // sails past him. The 1.3 is deliberate generosity - a hitbox
+      // slightly bigger than the thing you can see feels fair, and one
+      // slightly smaller feels broken, even though both are "wrong".
+      const across = Math.abs(dx * fz - dz * fx);
+      if (across > e.k.radius * 1.3) continue;
+
+      // And are you aiming at roughly the right HEIGHT?
+      const rise = e.k.height * 0.6 - EYE_H;
+      if (Math.abs(Math.atan2(rise, along) - player.pitch) > GUN_AIM) continue;
+
+      // Nearest one wins - you can't shoot through the front zombie.
+      if (along < bestAlong) { bestAlong = along; best = e; }
+    }
+
+    if (best) hitEnemy(best);
+  }
+
+  function hitEnemy(e) {
+    e.hp--;
+    e.hitFlash = 1;
+
+    // Knocked back a step. Small, but it's what makes the gun feel like
+    // it's actually connecting with something.
+    const dx = e.x - player.x, dz = e.z - player.z;
+    const g = Math.hypot(dx, dz) || 1;
+    e.x += (dx / g) * 1.1;
+    e.z += (dz / g) * 1.1;
+
+    burst(e.x, e.k.height * 0.6, e.z, e.k.gib, 9, 8);
+
+    if (e.hp <= 0) killEnemy(e);
+    else playHit();
+  }
+
+  function killEnemy(e) {
+    e.dead = true;
+    player.kills++;
+    burst(e.x, e.k.height * 0.5, e.z, e.k.gib, 34, 20);
+    playKill();
+  }
+
+  function hurtPlayer(amount) {
+    if (state !== 'play') return;
+
+    player.health -= amount;
+    player.hurtFlash = 1;
+    shake = Math.max(shake, 0.5);
+    playOw();
+
+    if (player.health <= 0) {
+      player.health = 0;
+      state = 'dead';
+      deadTimer = 0;
+    }
+  }
+
+
+// -------------------------------------------------------------------
+//  SOUND
+// -------------------------------------------------------------------
+
+  let audio = null;
+
+  function startAudio() {
+    if (audio) return;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (AC) audio = new AC();
+  }
+
+  function tone(freq, freq2, dur, vol, type) {
+    if (!audio) return;
+    const o = audio.createOscillator();
+    const g = audio.createGain();
+    o.type = type || 'square';
+    o.frequency.setValueAtTime(freq, audio.currentTime);
+    o.frequency.exponentialRampToValueAtTime(Math.max(1, freq2),
+                                             audio.currentTime + dur);
+    g.gain.setValueAtTime(vol, audio.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.0001, audio.currentTime + dur);
+    o.connect(g); g.connect(audio.destination);
+    o.start(); o.stop(audio.currentTime + dur + 0.02);
+  }
+
+  function noise(dur, from, to, vol) {
+    if (!audio) return;
+    const buf = audio.createBuffer(1, Math.floor(audio.sampleRate * dur),
+                                   audio.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) {
+      d[i] = (Math.random() * 2 - 1) * (1 - i / d.length);
+    }
+    const src = audio.createBufferSource();
+    src.buffer = buf;
+    const f = audio.createBiquadFilter();
+    f.type = 'lowpass';
+    f.frequency.setValueAtTime(from, audio.currentTime);
+    f.frequency.exponentialRampToValueAtTime(Math.max(60, to),
+                                             audio.currentTime + dur);
+    const g = audio.createGain();
+    g.gain.value = vol;
+    src.connect(f); f.connect(g); g.connect(audio.destination);
+    src.start();
+  }
+
+  function playShot() { tone(320, 60, 0.12, 0.22, 'square'); noise(0.16, 4000, 500, 0.3); }
+  function playHit()  { tone(500, 220, 0.08, 0.12, 'triangle'); }
+  function playKill() { tone(180, 40, 0.5, 0.28, 'sawtooth'); noise(0.5, 1800, 120, 0.28); }
+  function playZap()  { tone(900, 300, 0.18, 0.12, 'sine'); }
+  function playOw()   { tone(220, 90, 0.3, 0.24, 'sawtooth'); noise(0.3, 1200, 200, 0.22); }
+
+
+// -------------------------------------------------------------------
+//  CONTROLS
+// -------------------------------------------------------------------
+
+  const keys = {};
+  let locked = false;
+  let firing = false;
+
+  window.addEventListener('keydown', function (e) {
+    keys[e.key.toLowerCase()] = true;
+    if (e.key.startsWith('Arrow') || e.key === ' ') e.preventDefault();
+    if (e.key.toLowerCase() === 'r' && state === 'dead') restart();
+  });
+  window.addEventListener('keyup', function (e) {
+    keys[e.key.toLowerCase()] = false;
+  });
+
+  function held(a, b) { return keys[a] || keys[b]; }
+
+  canvas.addEventListener('mousedown', function () {
+    startAudio();
+    if (!locked) {
+      if (canvas.requestPointerLock) canvas.requestPointerLock();
+      return;
+    }
+    if (state === 'dead') { restart(); return; }
+    firing = true;
+    shoot();
+  });
+
+  window.addEventListener('mouseup', function () { firing = false; });
+
+  document.addEventListener('pointerlockchange', function () {
+    locked = (document.pointerLockElement === canvas);
+    if (!locked) firing = false;
+  });
+
+  const LOOK = 0.0022;
+
+  window.addEventListener('mousemove', function (e) {
+    if (!locked) return;
+    player.yaw += e.movementX * LOOK;
+    player.pitch = clamp(player.pitch - e.movementY * LOOK, -0.9, 0.9);
+  });
+
+  function restart() {
+    player.x = 0; player.z = 0;
+    player.yaw = 0; player.pitch = 0;
+    player.health = 100;
+    player.kills = 0;
+    player.hurtFlash = 0;
+    enemies = []; bolts = []; gibs = [];
+    spawnTimer = 1.5;
+    clock = 0;
+    state = 'play';
+  }
+
+
+// -------------------------------------------------------------------
+//  UPDATE
+// -------------------------------------------------------------------
+
+  function update(dt) {
+    clock += dt;
+
+    if (player.hurtFlash > 0) player.hurtFlash = Math.max(0, player.hurtFlash - dt * 1.6);
+    if (flash > 0) flash = Math.max(0, flash - dt * 9);
+    if (shake > 0) shake = Math.max(0, shake - dt * 2.2);
+    if (player.cool > 0) player.cool -= dt;
+
+    updateGibs(dt);
+
+    if (state === 'dead') {
+      deadTimer += dt;
+      cam.x = player.x; cam.z = player.z;
+      cam.y = 1.0;                     // you're on the floor now
+      cam.yaw = player.yaw;
+      cam.pitch = clamp(player.pitch, -0.9, 0.2);
+      return;
+    }
+
+    // ---- WALKING ----------------------------------------------------
+    // Forwards means "the way you're looking", so the same keys do
+    // different things depending on where the mouse has put you.
+    const fx = Math.sin(player.yaw), fz = Math.cos(player.yaw);
+    const rx = Math.cos(player.yaw), rz = -Math.sin(player.yaw);
+
+    let mx = 0, mz = 0;
+    if (held('w', 'arrowup'))    { mx += fx; mz += fz; }
+    if (held('s', 'arrowdown'))  { mx -= fx; mz -= fz; }
+    if (held('d', 'arrowright')) { mx += rx; mz += rz; }
+    if (held('a', 'arrowleft'))  { mx -= rx; mz -= rz; }
+
+    const len = Math.hypot(mx, mz);
+    if (len > 0) {
+      // Divide by the length, or walking diagonally would be 1.4 times
+      // faster than walking straight - which is a bug in a LOT of games.
+      mx /= len; mz /= len;
+
+      const speed = (keys['shift'] ? RUN : WALK);
+      player.x += mx * speed * dt;
+      player.z += mz * speed * dt;
+      player.bob += dt * speed * 0.36;
+    }
+
+    if (firing) shoot();
+
+    // ---- MORE OF THEM, ALL THE TIME ---------------------------------
+    spawnTimer -= dt;
+    if (spawnTimer <= 0) {
+      spawnEnemy();
+      // The gap between spawns shrinks the longer you live. It never
+      // quite reaches zero, so it gets harder forever without ever
+      // becoming impossible all at once.
+      spawnTimer = Math.max(0.55, 2.6 - clock * 0.012);
+    }
+
+    updateEnemies(dt);
+    updateBolts(dt);
+
+    enemies = enemies.filter(function (e) { return !e.dead; });
+
+    // ---- THE CAMERA -------------------------------------------------
+    cam.x = player.x;
+    cam.z = player.z;
+    cam.y = EYE_H + Math.sin(player.bob) * 0.14;   // head nods as you walk
+    cam.yaw = player.yaw;
+    cam.pitch = player.pitch;
+  }
+
+
+// -------------------------------------------------------------------
+//  DRAW
+// -------------------------------------------------------------------
+
+  function drawSky() {
+    const horizon = H / 2 + focal() * Math.tan(cam.pitch);
+
+    if (horizon > 0) {
+      const sky = ctx.createLinearGradient(0, 0, 0, horizon);
+      sky.addColorStop(0, SKY_TOP);
+      sky.addColorStop(1, SKY_LOW);
+      ctx.fillStyle = sky;
+      ctx.fillRect(0, 0, W, horizon);
+    }
+
+    // Below the horizon is pure fog colour, so the ground rings fade
+    // into something instead of ending at a hard edge.
+    ctx.fillStyle = 'rgb(' + FOG[0] + ',' + FOG[1] + ',' + FOG[2] + ')';
+    ctx.fillRect(0, Math.max(0, horizon), W, H);
+  }
+
+  function drawGun() {
+    // Your rifle, poking into the bottom right of the screen. It kicks
+    // when you fire and sways as you walk.
+    const kick = flash * 22;
+    const swayX = Math.sin(player.bob) * 7;
+    const swayY = Math.abs(Math.cos(player.bob)) * 5;
+
+    const gx = W * 0.70 + swayX;
+    const gy = H + swayY + kick;
+
+    ctx.save();
+    ctx.translate(gx, gy);
+    ctx.rotate(-0.22);
+
+    const u = Math.min(W, H) * 0.06;     // one "unit" of gun
+
+    ctx.fillStyle = '#2e2a26';
+    ctx.fillRect(-u * 0.8, -u * 6.2, u * 1.5, u * 6.4);      // body
+    ctx.fillStyle = '#413a33';
+    ctx.fillRect(-u * 0.45, -u * 9.0, u * 0.8, u * 3.0);     // barrel
+    ctx.fillStyle = '#5a5048';
+    ctx.fillRect(-u * 0.6, -u * 5.4, u * 1.1, u * 0.5);      // detail
+    ctx.fillStyle = '#241f1c';
+    ctx.fillRect(u * 0.2, -u * 3.2, u * 1.3, u * 3.4);       // stock
+
+    ctx.restore();
+
+    // Muzzle flash, drawn where the barrel ends.
+    if (flash > 0.15) {
+      const r = u * (1.2 + flash * 1.4);
+      const fx2 = gx + Math.sin(-0.22) * -u * 9.2;
+      const fy2 = gy + Math.cos(-0.22) * -u * 9.2;
+
+      const g = ctx.createRadialGradient(fx2, fy2, 0, fx2, fy2, r);
+      g.addColorStop(0, 'rgba(255,240,190,' + flash + ')');
+      g.addColorStop(1, 'rgba(255,150,40,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(fx2, fy2, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function drawHud() {
+    // ---- CROSSHAIR --------------------------------------------------
+    const mx = W / 2, my = H / 2, gap = 6, arm = 11;
+    for (const pass of [{ w: 4, c: 'rgba(0,0,0,0.5)' }, { w: 1.6, c: '#ffd9a0' }]) {
+      ctx.lineWidth = pass.w;
+      ctx.strokeStyle = pass.c;
+      ctx.beginPath();
+      ctx.moveTo(mx - gap - arm, my); ctx.lineTo(mx - gap, my);
+      ctx.moveTo(mx + gap, my);       ctx.lineTo(mx + gap + arm, my);
+      ctx.moveTo(mx, my - gap - arm); ctx.lineTo(mx, my - gap);
+      ctx.moveTo(mx, my + gap);       ctx.lineTo(mx, my + gap + arm);
+      ctx.stroke();
+    }
+
+    // ---- HEALTH -----------------------------------------------------
+    const bw = Math.min(W * 0.28, 260), bx = W * 0.05, by = H - 46;
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(bx, by, bw, 16);
+
+    const frac = player.health / 100;
+    ctx.fillStyle = frac > 0.5 ? '#7fc45c' : frac > 0.25 ? '#e0a83c' : '#d64a3c';
+    ctx.fillRect(bx, by, bw * frac, 16);
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(bx, by, bw, 16);
+
+    ctx.textAlign = 'left';
+    ctx.font = 'bold 13px system-ui, sans-serif';
+    ctx.fillStyle = '#e8dcc8';
+    ctx.fillText(Math.ceil(player.health) + ' HP', bx, by - 6);
+
+    // ---- KILLS AND TIME ---------------------------------------------
+    ctx.textAlign = 'right';
+    ctx.font = 'bold ' + Math.min(W * 0.05, 30) + 'px system-ui, sans-serif';
+    ctx.fillStyle = '#ffd9a0';
+    ctx.fillText(player.kills, W * 0.95, H - 46);
+
+    ctx.font = '13px system-ui, sans-serif';
+    ctx.fillStyle = '#b8a68c';
+    ctx.fillText('KILLS', W * 0.95, H - 28);
+    ctx.fillText(Math.floor(clock) + 's survived', W * 0.95, H - 62);
+
+    // ---- GETTING HURT ------------------------------------------------
+    if (player.hurtFlash > 0) {
+      const g = ctx.createRadialGradient(W / 2, H / 2, H * 0.28,
+                                         W / 2, H / 2, H * 0.8);
+      g.addColorStop(0, 'rgba(150,10,10,0)');
+      g.addColorStop(1, 'rgba(150,10,10,' + (player.hurtFlash * 0.85) + ')');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H);
+    }
+
+    // ---- CLICK TO PLAY ------------------------------------------------
+    if (!locked && state === 'play') {
+      ctx.textAlign = 'center';
+      ctx.font = 'bold ' + Math.min(W * 0.045, 28) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#ffd9a0';
+      ctx.fillText('CLICK TO LOOK AROUND', W / 2, H * 0.62);
+    }
+
+    // ---- DEAD ---------------------------------------------------------
+    if (state === 'dead') {
+      ctx.fillStyle = 'rgba(60,6,6,' + Math.min(0.72, deadTimer * 0.8) + ')';
+      ctx.fillRect(0, 0, W, H);
+
+      ctx.textAlign = 'center';
+      ctx.font = 'bold ' + Math.min(W * 0.12, 84) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#000';
+      ctx.fillText('THEY GOT YOU', W / 2 + 4, H * 0.42 + 4);
+      ctx.fillStyle = '#ffb08a';
+      ctx.fillText('THEY GOT YOU', W / 2, H * 0.42);
+
+      ctx.font = Math.min(W * 0.035, 21) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#f0e2ce';
+      ctx.fillText(player.kills + ' put down in ' + Math.floor(clock) + ' seconds',
+                   W / 2, H * 0.53);
+      ctx.fillText('press R or click to go again', W / 2, H * 0.60);
+    }
+  }
+
+  function draw() {
+    const savedX = cam.x, savedY = cam.y;
+    if (shake > 0) {
+      cam.x += (Math.random() - 0.5) * shake * 0.5;
+      cam.y += (Math.random() - 0.5) * shake * 0.5;
+    }
+
+    drawSky();
+
+    faces = [];
+    drawGround();
+    drawScenery();
+    drawDust();
+    for (const e of enemies) drawEnemy(e);
+    drawBolts();
+    drawGibs();
+
+    // Furthest away painted FIRST, so near things cover far things.
+    faces.sort(function (a, b) { return b.depth - a.depth; });
+
+    for (const f of faces) {
+      ctx.beginPath();
+      ctx.moveTo(f.points[0].x, f.points[0].y);
+      for (let i = 1; i < f.points.length; i++) {
+        ctx.lineTo(f.points[i].x, f.points[i].y);
+      }
+      ctx.closePath();
+      ctx.fillStyle = f.colour;
+      ctx.fill();
+    }
+
+    cam.x = savedX; cam.y = savedY;
+
+    if (state === 'play') drawGun();
+    drawHud();
+  }
+
+
+// -------------------------------------------------------------------
+//  THE LOOP
+// -------------------------------------------------------------------
+
+  let last = 0;
+
+  function loop(now) {
+    const dt = Math.min(0.05, Math.max(0.0005, (now - last) / 1000 || 0.016));
+    last = now;
+
+    update(dt);
+    draw();
+
+    requestAnimationFrame(loop);
+  }
+
+  fitScreen();
+  requestAnimationFrame(loop);
+
+</script>
+</body>
+</html>
