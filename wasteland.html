@@ -1235,15 +1235,35 @@
   let bolts   = [];
   let gibs    = [];
 
-  const SPAWN_MIN = 70;      // never closer than this
-  const SPAWN_MAX = 130;     // never further than the fog
+  // WHERE THEY COME FROM.
+  //
+  // These used to be 70 and 130 - both INSIDE the fog, which ends at
+  // 168. So things blinked into existence in plain sight, a hundred
+  // paces away, out of nothing. Now they start past the fog entirely,
+  // where nothing is drawn at all, and the first you know about one is
+  // a shape walking out of the haze towards you.
+  //
+  // Nothing about them changed. They were always walking at you from a
+  // distance. They were just starting that walk somewhere you could
+  // watch them appear.
+  const SPAWN_MIN = 176;
+  const SPAWN_MAX = 240;
+
+  const MAX_ENEMIES = 28;    // a ceiling, so a long game can't bury you
+
   let spawnTimer = 1.5;
 
-  function spawnEnemy() {
-    // Somewhere on a ring around you. Angle at random so they don't all
-    // come from one side.
-    const a = Math.random() * Math.PI * 2;
-    const d = SPAWN_MIN + Math.random() * (SPAWN_MAX - SPAWN_MIN);
+  function spawnEnemy(atDistance) {
+    if (enemies.length >= MAX_ENEMIES) return;
+
+    // MOSTLY IN FRONT OF YOU, so you get to see them coming out of the
+    // fog - but not always, or you could pick one direction and camp
+    // there forever.
+    const a = (Math.random() < 0.7)
+      ? player.yaw + (Math.random() - 0.5) * 2.6     // roughly where you look
+      : Math.random() * Math.PI * 2;                 // anywhere at all
+
+    const d = atDistance || (SPAWN_MIN + Math.random() * (SPAWN_MAX - SPAWN_MIN));
 
     // Robots get commoner the longer you last. At the start it's almost
     // all zombies; after two minutes it's about half and half.
@@ -1253,8 +1273,13 @@
 
     enemies.push({
       kind: kind, k: k,
-      x: player.x + Math.cos(a) * d,
-      z: player.z + Math.sin(a) * d,
+      // SIN FOR X, COS FOR Z - the same way round as everything else
+      // that has a direction in this game. It was cos/sin, which is
+      // ninety degrees out, and that never showed up while the angle
+      // was completely random. The moment it got aimed at where you're
+      // LOOKING, it started aiming ninety degrees to your right instead.
+      x: player.x + Math.sin(a) * d,
+      z: player.z + Math.cos(a) * d,
       yaw: 0,
       hp: k.hp,
       step: Math.random() * 6,      // so they aren't all in lockstep
@@ -1692,6 +1717,20 @@
     spawnTimer = 1.5;
     clock = 0;
     state = 'play';
+    seedTheField();
+  }
+
+  // A few already halfway here.
+  //
+  // Now that they set off from beyond the fog, a zombie takes about
+  // twenty-four seconds to walk in. Without this the game would open
+  // with almost half a minute of empty wasteland while the first lot
+  // trudged over, which is atmospheric exactly once.
+  //
+  // So we drop a handful in already on their way. Everything after this
+  // comes out of the haze properly.
+  function seedTheField() {
+    for (let i = 0; i < 4; i++) spawnEnemy(75 + Math.random() * 60);
   }
 
 
@@ -2117,6 +2156,7 @@
 
   fitScreen();
   pushOutOfWalls();      // don't start the game inside a building
+  seedTheField();        // and don't start it in an empty one either
   requestAnimationFrame(loop);
 
 </script>
