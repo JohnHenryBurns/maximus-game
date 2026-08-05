@@ -347,17 +347,101 @@
   let crashFlash = 0;        // white bang on the screen when you hit one
   let crashCool  = 0;        // stops one wreck counting sixty times a second
 
+  let crashWord = 'CRASH!';
+
   function crash() {
     car.speed *= CRASH_KEEP;
     crashCool  = 0.7;
     crashFlash = 1;
+    crashWord  = 'CRASH!';
     shake = 1;
 
     // Knock you sideways a bit, so a crash also puts you somewhere you
     // didn't choose to be.
     car.yaw += (Math.random() - 0.5) * 0.35;
 
-    playCrash();
+    playCrash(1);
+  }
+
+
+// -------------------------------------------------------------------
+//  HITTING THE OTHER CAR
+// -------------------------------------------------------------------
+//  Two solid objects can't be in the same place, so the first job isn't
+//  the damage - it's SHOVING THEM APART. Work out the line between the
+//  two of them, and slide each one half the overlap back along it.
+//  Neither ends up inside the other, and neither one gets to win.
+//
+//  How much it hurts depends on whether you drove INTO him or just
+//  brushed alongside. Same collision, two completely different events,
+//  and the difference is one dot product.
+//
+//  And if one of you is high in the air you sail straight over the top,
+//  which is now the third thing ramps let you skip.
+// -------------------------------------------------------------------
+
+  // How close the two cars can get. We're treating each car as a CIRCLE,
+  // which is a lie - they're long boxes - but it's a fast lie and at
+  // this speed nobody will ever catch it. 6.5 is a compromise between
+  // the 9 they're long and the 4.6 they're wide.
+  const CAR_HIT    = 6.5;
+  const CAR_CLEAR  = 4.0;    // higher than this above him and you're clear
+  const BUMP_COST  = 0.55;   // speed lost by a full head-on shunt
+
+  let bumpCool = 0;
+
+  function carVsCar(dt) {
+    if (rivalEaten) return;
+    if (bumpCool > 0) bumpCool -= dt;
+
+    // Straight over the top of him.
+    if (Math.abs(car.y - rival.y) > CAR_CLEAR) return;
+
+    const dx = car.x - rival.x;
+    const dz = car.z - rival.z;
+    const gap = Math.hypot(dx, dz);
+
+    if (gap > CAR_HIT) return;
+
+    // The line between them. "|| 1" guards the one case that would
+    // break everything: dead centre on top of each other, gap of zero,
+    // and dividing by zero turns both cars into NaN and deletes them.
+    const nx = dx / (gap || 1);
+    const nz = dz / (gap || 1);
+
+    // ---- SHOVE THEM APART -------------------------------------------
+    const overlap = (CAR_HIT - gap) * 0.5;
+    car.x   += nx * overlap;  car.z   += nz * overlap;
+    rival.x -= nx * overlap;  rival.z -= nz * overlap;
+
+    // Only make a fuss once per bump, not sixty times a second while
+    // you're grinding down his side.
+    if (bumpCool > 0) return;
+    bumpCool = 0.4;
+
+    // ---- HOW HEAD-ON WAS IT? ----------------------------------------
+    // Point an arrow the way each car is driving, and see how much it
+    // agrees with the line between them. 1 means you drove straight
+    // into him. 0 means you were side by side and merely scraped.
+    const intoHim = Math.max(0, Math.sin(car.yaw) * -nx +
+                                Math.cos(car.yaw) * -nz);
+    const intoYou = Math.max(0, Math.sin(rival.yaw) * nx +
+                                Math.cos(rival.yaw) * nz);
+
+    // Whoever did the driving-into pays the most for it.
+    car.speed   *= 1 - BUMP_COST * intoHim;
+    rival.speed *= 1 - BUMP_COST * intoYou * 0.8;
+
+    // Both get knocked off line. He'll steer his way back - he always
+    // does - but it costs him a second, and that second is yours.
+    car.yaw   += nx * 0.10 * (0.4 + intoHim);
+    rival.yaw -= nx * 0.16;
+
+    const bang = 0.35 + Math.max(intoHim, intoYou) * 0.65;
+    shake = Math.max(shake, bang * 0.8);
+    crashFlash = bang * 0.7;
+    crashWord = 'BUMP!';
+    playCrash(bang * 0.6);
   }
 
 
@@ -690,10 +774,14 @@
   // A crash is just NOISE - every frequency at once - fading fast, with
   // the high end filtered off so it thumps instead of hissing. That's
   // genuinely what a crash sounds like.
-  function playCrash() {
+  // "power" is how big a bang: 1 is hitting a burnt-out wreck, 0.5 is
+  // clipping the other car. One function instead of two nearly-identical
+  // ones - the only thing that ever changed was how loud and how long.
+  function playCrash(power) {
     if (!audio) return;
 
-    const dur = 0.55;
+    power = power || 1;
+    const dur = 0.25 + 0.3 * power;
     const buf = audio.createBuffer(1, Math.floor(audio.sampleRate * dur),
                                    audio.sampleRate);
     const data = buf.getChannelData(0);
@@ -708,10 +796,11 @@
 
     const low = audio.createBiquadFilter();
     low.type = 'lowpass';
-    low.frequency.value = 850;
+    // A small knock is brighter and tinnier; a big one is all low thump.
+    low.frequency.value = 850 + (1 - power) * 900;
 
     const g = audio.createGain();
-    g.gain.value = 0.4;
+    g.gain.value = 0.4 * power;
 
     src.connect(low);
     low.connect(g);
@@ -837,6 +926,7 @@
     shake = 0;
     crashFlash = 0;
     crashCool = 0;
+    bumpCool = 0;
     countdown = 3.8;
     result = '';
     raceTime = 0;
@@ -1816,6 +1906,10 @@
       }
     }
 
+    // And the other car. This goes AFTER you've moved, so it's checking
+    // where you actually ended up this frame, not where you were.
+    if (driving) carVsCar(dt);
+
     // Rattle the camera when you're bouncing over grass, harder the
     // faster you're going. Not in mid-air though - up there it's calm.
     const rough = !car.onRoad && !car.airborne;
@@ -2026,7 +2120,7 @@
 
       ctx.font = 'bold ' + Math.min(W * 0.09, 58) + 'px system-ui, sans-serif';
       ctx.fillStyle = 'rgba(190,30,20,' + Math.min(1, crashFlash * 1.6) + ')';
-      ctx.fillText('CRASH!', W / 2, H * 0.38);
+      ctx.fillText(crashWord, W / 2, H * 0.38);
     }
 
     // ---- TYPE YOUR NAME ---------------------------------------------
