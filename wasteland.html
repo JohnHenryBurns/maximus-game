@@ -1249,26 +1249,30 @@
   const SPAWN_MIN = 176;
   const SPAWN_MAX = 240;
 
-  const MAX_ENEMIES = 28;    // a ceiling, so a long game can't bury you
+  // A ceiling, so a long game can't bury the frame rate. It's high
+  // because a horde alone can be a hundred.
+  const MAX_ENEMIES = 150;
 
   let spawnTimer = 1.5;
 
-  function spawnEnemy(atDistance) {
+  function spawnEnemy(atDistance, atAngle, forceKind) {
     if (enemies.length >= MAX_ENEMIES) return;
 
     // MOSTLY IN FRONT OF YOU, so you get to see them coming out of the
     // fog - but not always, or you could pick one direction and camp
     // there forever.
-    const a = (Math.random() < 0.7)
-      ? player.yaw + (Math.random() - 0.5) * 2.6     // roughly where you look
-      : Math.random() * Math.PI * 2;                 // anywhere at all
+    const a = (atAngle !== undefined) ? atAngle
+      : (Math.random() < 0.7)
+        ? player.yaw + (Math.random() - 0.5) * 2.6   // roughly where you look
+        : Math.random() * Math.PI * 2;               // anywhere at all
 
     const d = atDistance || (SPAWN_MIN + Math.random() * (SPAWN_MAX - SPAWN_MIN));
 
     // Robots get commoner the longer you last. At the start it's almost
     // all zombies; after two minutes it's about half and half.
     const robotChance = Math.min(0.5, clock / 240);
-    const kind = Math.random() < robotChance ? 'robot' : 'zombie';
+    const kind = forceKind ||
+                 (Math.random() < robotChance ? 'robot' : 'zombie');
     const k = KINDS[kind];
 
     enemies.push({
@@ -1288,7 +1292,67 @@
     });
   }
 
+// -------------------------------------------------------------------
+//  HORDES
+// -------------------------------------------------------------------
+//  Every so often, forty-five to a hundred of them come over the
+//  horizon at once, all from the same direction, in a wide ragged line.
+//
+//  They start beyond the fog like everything else - but a horde is
+//  drawn out there anyway, as a crowd of dark specks on the skyline.
+//  That is the whole point of a horde: you're supposed to see it coming
+//  and have to decide what to do about it long before it arrives.
+//
+//  What you should do about it is run for a settlement.
+// -------------------------------------------------------------------
+
+  const HORDE_MIN   = 45;
+  const HORDE_MAX   = 100;
+  const HORDE_FIRST = 55;    // seconds before the first one
+  const HORDE_EVERY = 95;    // and roughly this long between them
+
+  let hordeTimer = HORDE_FIRST;
+  let hordeWarn  = 0;        // how long the warning stays on screen
+  let hordeSize  = 0;
+
+  function spawnHorde() {
+    const n = HORDE_MIN + Math.floor(Math.random() * (HORDE_MAX - HORDE_MIN + 1));
+
+    // ONE direction for the whole crowd - that's what makes it a horde
+    // and not just a busy afternoon. Slightly off from where you're
+    // looking, so you have to spot it.
+    const from = player.yaw + (Math.random() - 0.5) * 2.2;
+
+    for (let i = 0; i < n; i++) {
+      // A wide, shallow band: spread far more across than deep, so it
+      // reads as a LINE coming over a ridge rather than a blob.
+      const across = (Math.random() - 0.5) * 1.15;
+      const deep   = 215 + Math.random() * 85;
+      spawnEnemy(deep, from + across, 'zombie');
+    }
+
+    hordeSize = n;
+    hordeWarn = 5;
+    playHorde();
+  }
+
+  function playHorde() {
+    tone(90, 55, 2.6, 0.32, 'sawtooth');
+    tone(136, 82, 2.4, 0.20, 'square');
+    noise(2.2, 700, 120, 0.22);
+  }
+
   function updateEnemies(dt) {
+    // Work out ONCE, up front, who is close enough to matter. Every
+    // enemy also remembers how far away it is, because the drawing
+    // wants the same number and working it out twice is just work.
+    const nearby = [];
+    for (const e of enemies) {
+      if (e.dead) continue;
+      e.away = Math.hypot(player.x - e.x, player.z - e.z);
+      if (e.away < 90) nearby.push(e);
+    }
+
     for (const e of enemies) {
       // Already dead? Then he doesn't get to keep walking and biting
       // just because we haven't swept him off the list yet.
@@ -1297,7 +1361,7 @@
       e.hitFlash = Math.max(0, e.hitFlash - dt * 4);
 
       const dx = player.x - e.x, dz = player.z - e.z;
-      const gap = Math.hypot(dx, dz) || 1;
+      const gap = e.away || 1;
 
       e.yaw = Math.atan2(dx, dz);           // always facing you
 
@@ -1326,15 +1390,23 @@
       // ---- PUSH EACH OTHER APART ----------------------------------
       // Without this they stack into one thick zombie and you can't
       // tell how many you're actually fighting.
-      for (const o of enemies) {
-        if (o === e) continue;
-        const ox = e.x - o.x, oz = e.z - o.z;
-        const og = Math.hypot(ox, oz);
-        const want = e.k.radius + o.k.radius;
-        if (og < want && og > 0.01) {
-          const push = (want - og) * 0.5;
-          e.x += (ox / og) * push;
-          e.z += (oz / og) * push;
+      //
+      // ONLY THE CLOSE ONES. This compares every enemy against every
+      // other, which is fine for twenty and is 22,500 sums a frame for
+      // a hundred and fifty. Out past 90 paces they're a few pixels
+      // tall in the fog and nobody alive can tell whether two of them
+      // are overlapping, so we simply don't ask.
+      if (gap < 90) {
+        for (const o of nearby) {
+          if (o === e) continue;
+          const ox = e.x - o.x, oz = e.z - o.z;
+          const og = Math.hypot(ox, oz);
+          const want = e.k.radius + o.k.radius;
+          if (og < want && og > 0.01) {
+            const push = (want - og) * 0.5;
+            e.x += (ox / og) * push;
+            e.z += (oz / og) * push;
+          }
         }
       }
 
@@ -1393,10 +1465,71 @@
   // colours out of e.k, so a zombie and a robot are the same shape put
   // together from different numbers - which is why adding a third kind
   // needs no drawing code at all.
+  const HORDE_SEE = 340;     // how far a horde is visible on the skyline
+
   function drawEnemy(e) {
     const k = e.k;
     const s = e.yaw;
     const co = Math.cos(s), si = Math.sin(s);
+
+    const away = e.away !== undefined
+      ? e.away : Math.hypot(player.x - e.x, player.z - e.z);
+
+    // ---- HOW MUCH OF HIM IS WORTH DRAWING? --------------------------
+    // A full enemy is thirteen boxes, which is sixty-five flat shapes.
+    // A hundred of those is six and a half thousand, and the game would
+    // crawl. So the further off he is, the less of him gets built.
+    //
+    // At two hundred paces he's a few pixels tall. Nobody has ever been
+    // able to count a distant zombie's legs.
+
+    // BEYOND THE FOG: one dark speck, so a horde shows on the horizon.
+    // This is the only reason you get to see one coming.
+    if (away > FOG_FAR) {
+      if (away > HORDE_SEE) return;
+
+      seeFar = true;
+      fogResist = 0.35;      // mostly swallowed - a shape, not a zombie
+
+      // Grown a little with distance so it stays a visible speck.
+      const w = 1.6 + away * 0.006;
+      addBox(e.x, k.height * 0.45, e.z, w, k.height * 0.75, w,
+             shade(k.body, 0.6), s);
+
+      fogResist = 0;
+      seeFar = false;
+      return;
+    }
+
+    // FAR: body and head. Three boxes instead of thirteen.
+    if (away > 78) {
+      addBox(e.x, k.height * 0.30, e.z, 2.2, k.height * 0.6, 1.5, k.limb, s);
+      addBox(e.x, k.height * 0.68, e.z, 3.0, k.height * 0.3, 1.9, k.body, s);
+      addBox(e.x, k.height * 0.88, e.z, 1.9, 1.8, 1.8, k.head, s);
+      return;
+    }
+
+    // MIDDLE DISTANCE: legs that swing, a body, a head, and the eyes.
+    // No arms, no rust stripe, no belt. Six boxes.
+    //
+    // This tier exists because of a measurement: a hundred of them at
+    // full detail came to 4,535 shapes in one frame. Most of a horde
+    // sits in this band, so most of a horde now costs half as much.
+    if (away > 34) {
+      const sw = Math.sin(e.step) * 1.1;
+      addBox(e.x - 0.9 * co, k.height * 0.20, e.z + 0.9 * si,
+             1.1, k.height * 0.42, 1.1, k.limb, s);
+      addBox(e.x + 0.9 * co, k.height * 0.20, e.z - 0.9 * si,
+             1.1, k.height * 0.42, 1.1, k.limb, s);
+      addBox(e.x, k.height * 0.58 + sw * 0.05, e.z,
+             3.0, k.height * 0.36, 1.9, k.body, s);
+      addBox(e.x, k.height * 0.86, e.z, 1.9, 1.8, 1.8, k.head, s);
+      addBox(e.x - 0.5 * co - 0.95 * si, k.height * 0.88,
+             e.z + 0.5 * si - 0.95 * co, 0.42, 0.34, 0.16, k.eye, s);
+      addBox(e.x + 0.5 * co - 0.95 * si, k.height * 0.88,
+             e.z - 0.5 * si - 0.95 * co, 0.42, 0.34, 0.16, k.eye, s);
+      return;
+    }
 
     // Hit flash: mix the colour towards white by however much is left.
     function lit(rgb) {
@@ -1715,6 +1848,7 @@
     enemies = []; bolts = []; gibs = []; tracers = [];
     healing = false; healGlow = 0;
     spawnTimer = 1.5;
+    hordeTimer = HORDE_FIRST; hordeWarn = 0; hordeSize = 0;
     clock = 0;
     state = 'play';
     seedTheField();
@@ -1813,6 +1947,16 @@
     if (!healing) healGlow = Math.max(0, healGlow - dt * 2.5);
 
     // ---- MORE OF THEM, ALL THE TIME ---------------------------------
+    // ---- IS A HORDE DUE? --------------------------------------------
+    if (hordeWarn > 0) hordeWarn -= dt;
+
+    hordeTimer -= dt;
+    if (hordeTimer <= 0) {
+      spawnHorde();
+      // A little random, so you can never quite set your watch by it.
+      hordeTimer = HORDE_EVERY * (0.8 + Math.random() * 0.4);
+    }
+
     spawnTimer -= dt;
     if (spawnTimer <= 0) {
       spawnEnemy();
@@ -2022,6 +2166,24 @@
     ctx.fillStyle = '#b8a68c';
     ctx.fillText('KILLS', W * 0.95, H - 28);
     ctx.fillText(Math.floor(clock) + 's survived', W * 0.95, H - 62);
+
+    // ---- A HORDE IS COMING -------------------------------------------
+    if (hordeWarn > 0 && state === 'play') {
+      const beat = 0.55 + Math.sin(clock * 7) * 0.45;
+
+      ctx.textAlign = 'center';
+      ctx.font = 'bold ' + Math.min(W * 0.08, 52) + 'px system-ui, sans-serif';
+      ctx.fillStyle = 'rgba(0,0,0,' + Math.min(1, hordeWarn) + ')';
+      ctx.fillText('HORDE', W / 2 + 4, H * 0.30 + 4);
+      ctx.fillStyle = 'rgba(255,' + (70 + 60 * beat | 0) + ',50,' +
+                      Math.min(1, hordeWarn) + ')';
+      ctx.fillText('HORDE', W / 2, H * 0.30);
+
+      ctx.font = Math.min(W * 0.034, 21) + 'px system-ui, sans-serif';
+      ctx.fillStyle = 'rgba(255,210,180,' + Math.min(1, hordeWarn) + ')';
+      ctx.fillText(hordeSize + ' of them, on the horizon  -  find a settlement',
+                   W / 2, H * 0.355);
+    }
 
     // ---- ARE YOU AT A SETTLEMENT? ------------------------------------
     // Walk close enough and it tells you how many people are in there.
