@@ -618,6 +618,11 @@
 //  thing to a safe place in the whole game.
 // -------------------------------------------------------------------
 
+  const HEAL_RATE = 10;      // health per second inside the walls
+
+  let healing  = false;
+  let healGlow = 0;          // green wash, fades in and out on its own
+
   const GUARD_RANGE = 62;
   const GUARD_COOL  = 0.5;     // seconds between shots
   const GUARD_HURT  = 2;       // damage per shot
@@ -1682,7 +1687,8 @@
     player.health = 100;
     player.kills = 0;
     player.hurtFlash = 0;
-    enemies = []; bolts = []; gibs = [];
+    enemies = []; bolts = []; gibs = []; tracers = [];
+    healing = false; healGlow = 0;
     spawnTimer = 1.5;
     clock = 0;
     state = 'play';
@@ -1750,6 +1756,22 @@
     }
 
     if (firing) shoot();
+
+    // ---- PATCHED UP INSIDE THE WALLS --------------------------------
+    // Ten health a second while you're inside a settlement. Somebody in
+    // there knows what they're doing with a bandage.
+    //
+    // Multiplied by dt, like everything else that moves, so it's ten a
+    // second on a fast computer AND a slow one. Write it without the
+    // dt and it becomes ten per FRAME - six hundred a second - and you
+    // would be immortal on a good machine and not on a bad one.
+    healing = false;
+    if (insideSettlement() && player.health < 100) {
+      player.health = Math.min(100, player.health + HEAL_RATE * dt);
+      healing = true;
+      healGlow = Math.min(1, healGlow + dt * 4);
+    }
+    if (!healing) healGlow = Math.max(0, healGlow - dt * 2.5);
 
     // ---- MORE OF THEM, ALL THE TIME ---------------------------------
     spawnTimer -= dt;
@@ -1886,6 +1908,39 @@
     return null;
   }
 
+  // ARE YOU ACTUALLY INSIDE THE WALLS?
+  //
+  // Not the same question as "are you near it", and it needs different
+  // maths. A compound is a SQUARE. Measuring plain distance from the
+  // middle draws a CIRCLE - and a circle that fits inside a square
+  // misses all four corners. You'd be stood well inside the walls, in a
+  // corner, and the game would insist you were out in the wasteland.
+  //
+  // So we spin your position backwards into the settlement's own
+  // directions, which turns its tilted square into a straight one, and
+  // then it's just two easy comparisons.
+  function insideSettlement() {
+    const gx = Math.round(player.x / CELL), gz = Math.round(player.z / CELL);
+
+    for (let ax = gx - 1; ax <= gx + 1; ax++) {
+      for (let az = gz - 1; az <= gz + 1; az++) {
+        const p = propAt(ax, az);
+        if (!p || p.kind !== 'bunker') continue;
+
+        const dx = player.x - p.x, dz = player.z - p.z;
+        const co = Math.cos(p.spin), si = Math.sin(p.spin);
+
+        // The exact opposite of the spin bunkerParts does on the way out.
+        const lx = dx * co - dz * si;
+        const lz = dx * si + dz * co;
+
+        const edge = p.half - 1.5;
+        if (Math.abs(lx) < edge && Math.abs(lz) < edge) return p;
+      }
+    }
+    return null;
+  }
+
   function drawHud() {
     // ---- CROSSHAIR --------------------------------------------------
     const mx = W / 2, my = H / 2, gap = 6, arm = 11;
@@ -1942,6 +1997,28 @@
       ctx.fillStyle = '#cbb894';
       ctx.fillText(camp.souls + ' people inside  -  the guards will cover you',
                    W / 2, H * 0.12);
+
+      if (healing) {
+        // Pulsing, because a still line of text next to a health bar
+        // creeping up by ten a second is easy to miss when something is
+        // trying to eat you.
+        const beat = 0.6 + Math.sin(clock * 6) * 0.4;
+        ctx.font = 'bold ' + Math.min(W * 0.036, 22) + 'px system-ui, sans-serif';
+        ctx.fillStyle = 'rgba(140,240,150,' + beat + ')';
+        ctx.fillText('+' + HEAL_RATE + ' HEALTH A SECOND', W / 2, H * 0.155);
+      }
+    }
+
+    // ---- BEING PATCHED UP ---------------------------------------------
+    // Green from the edges - the exact opposite of the red you get when
+    // something bites you, so the two can never be confused.
+    if (healGlow > 0.01) {
+      const g = ctx.createRadialGradient(W / 2, H / 2, H * 0.34,
+                                         W / 2, H / 2, H * 0.85);
+      g.addColorStop(0, 'rgba(60,190,90,0)');
+      g.addColorStop(1, 'rgba(60,190,90,' + (healGlow * 0.34) + ')');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H);
     }
 
     // ---- GETTING HURT ------------------------------------------------
