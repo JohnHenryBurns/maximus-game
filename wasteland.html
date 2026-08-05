@@ -659,7 +659,12 @@
 
       // Every panel is a different height, a different colour and
       // slightly crooked. Three tiny wobbles, and it stops being a box.
-      const h    = 3.8 + hash2(p.gx + i, p.gz) * 3.2;
+      //
+      // These used to be 3.8 to 7.0 - barely taller than your eye at
+      // 3.4. From forty paces a bunker was a low brown lump on brown
+      // ground in brown fog, and Maximus walked straight past two of
+      // them without seeing either. Now they're properly wall-height.
+      const h    = 5.4 + hash2(p.gx + i, p.gz) * 4.2;
       const lean = (hash2(p.gx, p.gz + i) - 0.5) * 0.16;
       const col  = SCRAP[Math.floor(hash2(p.gx + i * 3, p.gz + i) * SCRAP.length)];
 
@@ -694,10 +699,39 @@
       if (hash2(p.gx + i * 7, p.gz + 2) < 0.32) continue;    // this sheet's gone
       const lz = -S + 1.6 + i * (S * 0.66);
       const col = SCRAP[Math.floor(hash2(p.gx, p.gz + i * 5) * SCRAP.length)];
-      part(0, lz, 6.6 + hash2(p.gx + i, p.gz) * 0.5,
+      part(0, lz, 9.9 + hash2(p.gx + i, p.gz) * 0.5,
            S * 2.1, 0.35, S * 0.6, shade(col, 0.9),
            (hash2(p.gx + i, p.gz + 1) - 0.5) * 0.1);
     }
+
+    // ---- THE BEACON -------------------------------------------------
+    // Every bunker gets one, and it is drawn AT ANY DISTANCE - it's the
+    // whole reason you can find these things.
+    //
+    // A vertical line breaks a flat horizon better than anything else,
+    // and a bright colour cuts through fog that has eaten everything
+    // else. Whoever built this wanted it found. So do we.
+    const mastX = (hash2(p.gx, p.gz + 11) - 0.5) * S * 0.8;
+
+    part(mastX, -S * 0.55, 14.0, 0.45, 8.4, 0.45, [86, 90, 96]);   // mast
+
+    // A rag of a flag, swinging. Tied to the clock so every bunker's
+    // flag moves, which catches your eye from much further off than a
+    // still one would.
+    const flap = Math.sin(clock * 1.8 + p.gx) * 0.28;
+    part(mastX + 1.5, -S * 0.55, 16.4, 2.6, 1.9, 0.25,
+         [196, 74, 48], flap);
+
+    // And a lamp on top that breathes. Movement in the corner of your
+    // eye is what actually makes you turn your head.
+    // pulse runs 0.1 to 1.0, and the colours are written so that even
+    // at full brightness nothing goes past 255. A colour channel over
+    // 255 doesn't error - the browser just quietly clamps it - which
+    // means the lamp would stop pulsing at the top end and you'd never
+    // be told why.
+    const pulse = 0.55 + Math.sin(clock * 2.2 + p.gz) * 0.45;
+    part(mastX, -S * 0.55, 18.4, 1.0, 1.0, 1.0,
+         [120 + 135 * pulse, 58 + 150 * pulse, 28 + 42 * pulse]);
 
     if (!near) return;
 
@@ -712,11 +746,12 @@
       }
     }
 
-    // A pipe or aerial poking out of the roof.
+    // A chimney pipe, elbowed over. (The tall mast is drawn further up,
+    // outside this block, because it has to be visible from anywhere.)
     if (hash2(p.gx + 11, p.gz) > 0.4) {
-      const px2 = (hash2(p.gx, p.gz + 11) - 0.5) * S;
-      part(px2, -S * 0.5, 8.6, 0.4, 4.4, 0.4, [86, 90, 96]);
-      part(px2, -S * 0.5, 10.9, 1.6, 0.3, 1.6, [72, 76, 82]);
+      const px2 = (hash2(p.gx + 2, p.gz) - 0.5) * S;
+      part(px2, -S * 0.2, 11.4, 0.7, 2.8, 0.7, [72, 66, 62]);
+      part(px2 + 0.9, -S * 0.2, 12.6, 2.0, 0.7, 0.7, [72, 66, 62]);
     }
 
     // Something propped against the outside of the back wall.
