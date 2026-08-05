@@ -175,6 +175,12 @@
   // against a fog of [178,136,88]. Nine points of difference. Invisible.
   let fogResist = 0;
 
+  // Normally anything past the fog isn't drawn at all - that's what
+  // makes the fog the edge of the world. Beacons are the one exception,
+  // because a settlement 800 paces away is no use to you if you can't
+  // tell it's there.
+  let seeFar = false;
+
   function fogMix(rgb, depth) {
     const t = clamp((depth - FOG_NEAR) / (FOG_FAR - FOG_NEAR), 0, 1)
               * (1 - fogResist);
@@ -200,8 +206,8 @@
     }
 
     const depth = total / flat.length;
-    if (depth > FOG_FAR) return;      // past the fog it's invisible anyway,
-                                      // so don't waste time drawing it
+    if (depth > FOG_FAR && !seeFar) return;   // past the fog it's invisible
+                                              // anyway - don't draw it
 
     faces.push({
       points: flat,
@@ -420,6 +426,12 @@
   // standing in the next one along.
   const CELL = 48;
 
+  // HOW RARE A SETTLEMENT IS. One square in 300 - which works out at
+  // roughly one every 830 paces, about 25 seconds of running. Most of
+  // the wasteland is empty, and a light on the horizon is worth going
+  // to look at. Maximus picked the number.
+  const BUNKER_CHANCE = 1 / 300;
+
   const RUBBLE = [104, 94, 84];
   const CONCRETE = [138, 128, 116];
   const METAL = [104, 96, 92];
@@ -465,6 +477,32 @@
 
   function buildProp(gx, gz) {
     const r = hash2(gx, gz);
+
+    const home = Math.max(Math.abs(gx), Math.abs(gz));
+
+    // ---- IS THIS ONE OF THE RARE ONES? ------------------------------
+    // Settlements get their OWN coin toss, out of a completely different
+    // corner of the hash, and it's checked before anything else - even
+    // before "is this square empty".
+    //
+    // Carving a one-in-300 sliver out of the r range instead would have
+    // been a band 0.0033 wide. Any small unevenness in the hash could
+    // swallow a sliver that thin whole, and settlements would vanish
+    // from whole regions of the map for no findable reason.
+    if (home > 1 && hash2(gx + 9137, gz + 4271) < BUNKER_CHANCE) {
+      const b = {
+        gx: gx, gz: gz, kind: 'bunker', solid: 0,
+        x: gx * CELL + (hash2(gx + 7, gz) - 0.5) * CELL * 0.8,
+        z: gz * CELL + (hash2(gx, gz + 7) - 0.5) * CELL * 0.8,
+        spin: hash2(gx + 3, gz + 3) * Math.PI * 2,
+        half: 20 + hash2(gx + 17, gz) * 10,         // 40 to 60 across
+        souls: 50 + Math.floor(hash2(gx + 21, gz + 21) * 51)
+      };
+      b.parts  = bunkerParts(b);
+      b.guards = bunkerGuards(b);
+      return b;
+    }
+
     if (r > 0.62) return null;               // most squares are empty
 
     // ---- KEEP THE STARTING PATCH CLEAR ------------------------------
@@ -476,9 +514,8 @@
     // bunkers - he was standing behind a wall, looking at it. Pushing
     // him out of the tower fixed being stuck inside it and did nothing
     // whatever about the view.
-    const home = Math.max(Math.abs(gx), Math.abs(gz));
     if (home === 0) return null;                  // somewhere to stand
-    if (home === 1 && r < 0.13) return null;      // and no towers next door
+    if (home === 1 && r < 0.15) return null;      // and no towers next door
 
     // Jiggle it off the exact grid corner, or the whole wasteland
     // looks like graph paper.
@@ -489,22 +526,18 @@
       spin: hash2(gx + 3, gz + 3) * Math.PI * 2
     };
 
-    if (r < 0.13) {
+    // The old bunker band is gone from here, so the 13% it used to take
+    // is shared out among everything else. Leave it out and one square
+    // in eight would quietly become bare ground.
+    if (r < 0.15) {
       p.kind = 'tower';
       p.w = 8 + hash2(gx, gz + 1) * 6;
       p.solid = p.w * 0.62;
-    } else if (r < 0.26) {
-      p.kind = 'bunker';
-      p.solid = 0;              // not one lump - see parts, below
-      p.half  = 20 + hash2(gx + 17, gz) * 10;    // 40 to 60 across
-      p.souls = 50 + Math.floor(hash2(gx + 21, gz + 21) * 51);
-      p.parts = bunkerParts(p);
-      p.guards = bunkerGuards(p);
-    } else if (r < 0.38) {
+    } else if (r < 0.30) {
       p.kind = 'wreck';  p.solid = 4.4;
-    } else if (r < 0.48) {
+    } else if (r < 0.44) {
       p.kind = 'tree';   p.solid = 1.4;
-    } else if (r < 0.56) {
+    } else if (r < 0.54) {
       p.kind = 'rubble'; p.solid = 0;
     } else {
       p.kind = 'barrels'; p.solid = 0;
@@ -743,6 +776,82 @@
       }
     }
     return null;
+  }
+
+// -------------------------------------------------------------------
+//  LIGHTS ON THE HORIZON
+// -------------------------------------------------------------------
+//  Settlements are one square in three hundred now - about 830 paces
+//  apart - which is five times further than you can see. Without this
+//  you'd be wandering blind and hoping.
+//
+//  So their beacons are drawn WAY past the fog, as a single bright
+//  speck. And the speck GROWS with distance, which is a bare-faced lie
+//  about perspective - but a lamp that shrank honestly would be a
+//  fraction of a pixel at 800 paces, which is the same as not being
+//  there. Lying to keep something visible is a normal thing for a game
+//  to do. Lying about where it IS would not be.
+// -------------------------------------------------------------------
+
+  const BEACON_FAR = 940;
+
+  function drawFarBeacons() {
+    const reach = Math.ceil(BEACON_FAR / CELL);
+    const cx = Math.round(player.x / CELL), cz = Math.round(player.z / CELL);
+    const fx = Math.sin(player.yaw), fz = Math.cos(player.yaw);
+
+    for (let gx = cx - reach; gx <= cx + reach; gx++) {
+      for (let gz = cz - reach; gz <= cz + reach; gz++) {
+        const p = propAt(gx, gz);
+        if (!p || p.kind !== 'bunker') continue;
+
+        const dx = p.x - player.x, dz = p.z - player.z;
+        const d = Math.hypot(dx, dz);
+
+        if (d <= FOG_FAR || d > BEACON_FAR) continue;   // near ones drawn normally
+        if (dx * fx + dz * fz < 0) continue;            // behind you
+
+        const pulse = 0.55 + Math.sin(clock * 2.2 + p.gz) * 0.45;
+        const size = 3 + d * 0.036;
+
+        // Which way is it from you? We need this to shove the outline
+        // slightly further away than the light, so the sorting puts it
+        // behind rather than fighting over which goes on top.
+        const ux = dx / d, uz = dz / d;
+
+        seeFar = true;
+
+        // A dark halo FIRST, then the light on top of it. Exactly the
+        // trick your crosshair in Bob uses - draw it fat and dark, then
+        // thin and bright - and for the same reason: without an outline
+        // an orange light vanishes into an orange sky.
+        // A FLAT PLATE, not a cube - and that matters. My first try was
+        // a big cube around the light, and because it was nearly twice
+        // as wide, its front face poked out CLOSER to you than the
+        // light did. The sorting did exactly as it was told and painted
+        // the dark box over the top. A plate has almost no thickness,
+        // so it can never get in front of what it's behind.
+        fogResist = 0.75;
+        addBox(p.x + ux * 2, 31, p.z + uz * 2,
+               size * 1.9, size * 1.9, 0.3, [30, 18, 12],
+               Math.atan2(ux, uz));
+
+        // A faint pole under it, so it reads as a mast with a lamp on
+        // top rather than a box hanging in the air.
+        fogResist = 0.42;
+        addBox(p.x + ux * 1.2, 15, p.z + uz * 1.2,
+               size * 0.35, 30, size * 0.35, [58, 44, 34]);
+
+        // The light itself: almost white-hot, because the sky out there
+        // is already orange and an orange lamp against it is nothing.
+        fogResist = 0.96;
+        addBox(p.x, 31, p.z, size, size, size,
+               [225 + 30 * pulse, 205 + 45 * pulse, 140 + 90 * pulse]);
+
+        fogResist = 0;
+        seeFar = false;
+      }
+    }
   }
 
   function drawScenery() {
@@ -1884,6 +1993,7 @@
 
     faces = [];
     drawGround();
+    drawFarBeacons();
     drawScenery();
     drawDust();
     for (const e of enemies) drawEnemy(e);
