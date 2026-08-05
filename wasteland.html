@@ -1317,22 +1317,65 @@
 
   const HORDE_MIN   = 45;
   const HORDE_MAX   = 100;
-  const HORDE_FIRST = 55;    // seconds before the first one
-  const HORDE_EVERY = 95;    // and roughly this long between them
+  // HOW OFTEN THEY COME. Maximus wanted them relentless, so these went
+  // from 55 and 95 down to 18 and 30.
+  //
+  // Thirty seconds between hordes, and a zombie takes about twenty-four
+  // to walk in from beyond the fog - so one lot is still arriving as the
+  // next lot sets off. There is never a moment when nothing is coming.
+  const HORDE_FIRST = 18;    // seconds before the first one
+  const HORDE_EVERY = 30;    // and roughly this long between them
 
   let hordeTimer = HORDE_FIRST;
   let hordeWarn  = 0;        // how long the warning stays on screen
   let hordeSize  = 0;
 
+  // CLEAR OUT SOME STRAGGLERS SO A HORDE CAN ACTUALLY ARRIVE.
+  //
+  // Found by simulating three minutes of play: hordes came at 30, 60,
+  // 90, 120... and the sizes went 73, 53, 0, 0, 0, 0. After two hordes
+  // the game was pinned at the 150 cap and every horde after that
+  // delivered nothing at all. "Really often" would quietly have meant
+  // "twice, then never again", with the game still cheerfully sounding
+  // the horn.
+  //
+  // So we make room - but ONLY by removing ones that are past the fog,
+  // furthest first. Nobody can watch a zombie wink out at 300 paces in
+  // thick haze. Deleting one you were looking at would be a cheat you'd
+  // notice; deleting one nobody can see is just housekeeping.
+  function makeRoomFor(n) {
+    const need = (enemies.length + n) - MAX_ENEMIES;
+    if (need <= 0) return;
+
+    const far = enemies
+      .filter(function (e) {
+        return !e.dead &&
+               Math.hypot(e.x - player.x, e.z - player.z) > FOG_FAR;
+      })
+      .sort(function (a, b) {
+        return Math.hypot(b.x - player.x, b.z - player.z) -
+               Math.hypot(a.x - player.x, a.z - player.z);
+      });
+
+    const drop = Math.min(need, far.length);
+    for (let i = 0; i < drop; i++) far[i].gone = true;
+
+    if (drop > 0) enemies = enemies.filter(function (e) { return !e.gone; });
+  }
+
   function spawnHorde() {
-    const n = HORDE_MIN + Math.floor(Math.random() * (HORDE_MAX - HORDE_MIN + 1));
+    const want = HORDE_MIN + Math.floor(Math.random() * (HORDE_MAX - HORDE_MIN + 1));
 
     // ONE direction for the whole crowd - that's what makes it a horde
     // and not just a busy afternoon. Slightly off from where you're
     // looking, so you have to spot it.
     const from = player.yaw + (Math.random() - 0.5) * 2.2;
 
-    for (let i = 0; i < n; i++) {
+    makeRoomFor(want);
+
+    const before = enemies.length;
+
+    for (let i = 0; i < want; i++) {
       // A wide, shallow band: spread far more across than deep, so it
       // reads as a LINE coming over a ridge rather than a blob.
       const across = (Math.random() - 0.5) * 1.15;
@@ -1340,9 +1383,17 @@
       spawnEnemy(deep, from + across, 'zombie');
     }
 
-    hordeSize = n;
-    hordeWarn = 5;
-    playHorde();
+    // HOW MANY ACTUALLY TURNED UP, not how many we asked for. With
+    // hordes this frequent the 150 cap gets hit constantly, and
+    // spawnEnemy quietly declines once it's full. Announcing "90 of
+    // them" while twelve walked over the hill would be the screen
+    // telling you something that isn't true.
+    hordeSize = enemies.length - before;
+
+    if (hordeSize > 0) {
+      hordeWarn = 5;
+      playHorde();
+    }
   }
 
   function playHorde() {
@@ -2195,6 +2246,18 @@
     ctx.fillStyle = '#b8a68c';
     ctx.fillText('KILLS', W * 0.95, H - 28);
     ctx.fillText(Math.floor(clock) + 's survived', W * 0.95, H - 62);
+
+    // ---- WHEN'S THE NEXT ONE? ----------------------------------------
+    // Worth showing now they come every half a minute. It turns "run
+    // around and hope" into a decision: can I get to that beacon before
+    // the next lot arrive, or do I hold here?
+    if (state === 'play') {
+      const soon = hordeTimer < 8;
+      ctx.fillStyle = soon ? '#ff8a6a' : '#8c7c66';
+      ctx.fillText(soon
+        ? 'HORDE IN ' + Math.ceil(hordeTimer)
+        : 'next horde ' + Math.ceil(hordeTimer) + 's', W * 0.95, H - 78);
+    }
 
     // ---- A HORDE IS COMING -------------------------------------------
     if (hordeWarn > 0 && state === 'play') {
