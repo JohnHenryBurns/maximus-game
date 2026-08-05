@@ -1229,14 +1229,37 @@
       hp: 3, speed: 8.5, radius: 2.2, height: 5.4, reach: 3.0,
       body: [84, 102, 66], limb: [70, 86, 56], head: [132, 142, 100],
       eye: [214, 66, 48], gib: [[96, 128, 62], [72, 100, 50], [140, 150, 104]],
-      bite: 9, biteEvery: 0.9, ranged: false
+      bite: 9, biteEvery: 0.9, ranged: false,
+      knock: 1.1, shove: 1.0
     },
 
     robot: {
       hp: 7, speed: 6.0, radius: 2.6, height: 6.8, reach: 3.4,
       body: [124, 128, 136], limb: [92, 96, 104], head: [104, 108, 118],
       eye: [96, 216, 255], gib: [[150, 154, 162], [96, 100, 108], [255, 210, 120]],
-      bite: 0, biteEvery: 1, ranged: true, fireEvery: 2.2, bolt: 44, boltHurt: 11
+      bite: 0, biteEvery: 1, ranged: true, fireEvery: 2.2, bolt: 44, boltHurt: 11,
+      knock: 0.7, shove: 0.8
+    },
+
+    // FIFTY HITS. At a sixth of a second between shots that's eight
+    // solid seconds of shooting one thing, which is a very long time
+    // when there are ninety others walking at you.
+    //
+    // Every single thing that makes it different from a zombie is a
+    // number on this list. There is no giant-drawing code anywhere -
+    // drawEnemy reads the sizes and colours out of here and builds
+    // whatever it's told. That was the whole point of doing it this way.
+    giant: {
+      hp: 50, speed: 5.2, radius: 5.6, height: 16.5, reach: 7.0,
+      body: [70, 96, 54], limb: [54, 76, 44], head: [122, 134, 88],
+      eye: [255, 92, 38],
+      gib: [[96, 128, 62], [72, 100, 50], [140, 150, 104], [58, 80, 44]],
+      bite: 26, biteEvery: 1.5, ranged: false,
+
+      // Barely flinches when you shoot it, and barely gets shoved by
+      // the little ones. Something this size should feel like weather.
+      knock: 0.12, shove: 0.10,
+      big: true
     }
   };
 
@@ -1264,8 +1287,11 @@
 
   let spawnTimer = 1.5;
 
+  // Returns true if one actually turned up. It won't when the field is
+  // full, and callers that care - like the horde - need to be told
+  // rather than left assuming.
   function spawnEnemy(atDistance, atAngle, forceKind) {
-    if (enemies.length >= MAX_ENEMIES) return;
+    if (enemies.length >= MAX_ENEMIES) return false;
 
     // MOSTLY IN FRONT OF YOU, so you get to see them coming out of the
     // fog - but not always, or you could pick one direction and camp
@@ -1299,6 +1325,8 @@
       hitFlash: 0,
       cool: Math.random() * 2
     });
+
+    return true;
   }
 
 // -------------------------------------------------------------------
@@ -1327,8 +1355,9 @@
   const HORDE_EVERY = 30;    // and roughly this long between them
 
   let hordeTimer = HORDE_FIRST;
-  let hordeWarn  = 0;        // how long the warning stays on screen
-  let hordeSize  = 0;
+  let hordeWarn   = 0;       // how long the warning stays on screen
+  let hordeSize   = 0;
+  let hordeGiants = 0;
 
   // CLEAR OUT SOME STRAGGLERS SO A HORDE CAN ACTUALLY ARRIVE.
   //
@@ -1381,6 +1410,22 @@
       const across = (Math.random() - 0.5) * 1.15;
       const deep   = 215 + Math.random() * 85;
       spawnEnemy(deep, from + across, 'zombie');
+    }
+
+    // ---- AND SOMETHING BIG AT THE FRONT -----------------------------
+    // Most hordes bring one or two giants, walking in with the crowd.
+    // At the front, not wandering about on their own - a giant on its
+    // own is a nuisance, a giant with ninety zombies behind it is a
+    // problem you have to solve.
+    hordeGiants = 0;
+    if (Math.random() < 0.7) {
+      const big = 1 + (Math.random() < 0.35 ? 1 : 0);
+      for (let i = 0; i < big; i++) {
+        if (spawnEnemy(198 + Math.random() * 30,
+                       from + (Math.random() - 0.5) * 0.5, 'giant')) {
+          hordeGiants++;
+        }
+      }
     }
 
     // HOW MANY ACTUALLY TURNED UP, not how many we asked for. With
@@ -1463,7 +1508,10 @@
           const og = Math.hypot(ox, oz);
           const want = e.k.radius + o.k.radius;
           if (og < want && og > 0.01) {
-            const push = (want - og) * 0.5;
+            // Multiplied by how shovable THIS one is. A zombie bounces
+            // off a giant; a giant walks through a crowd of zombies
+            // barely noticing. Same line of code, one extra number.
+            const push = (want - og) * 0.5 * e.k.shove;
             e.x += (ox / og) * push;
             e.z += (oz / og) * push;
           }
@@ -1581,8 +1629,17 @@
       return;
     }
 
+    // HOW BIG IS HE ON SCREEN, not how far away is he.
+    //
+    // A giant is three times a zombie's height, so at ninety paces he
+    // still fills as much screen as a zombie at thirty. Judging detail
+    // by raw distance would strip a giant down to three boxes while he
+    // was still looming over you. Dividing by his height fixes that in
+    // one line, for every kind, including any we add later.
+    const lod = away / (k.height / 5.4);
+
     // FAR: body and head. Three boxes instead of thirteen.
-    if (away > 78) {
+    if (lod > 78) {
       addBox(e.x, k.height * 0.30, e.z, 2.2, k.height * 0.6, 1.5, k.limb, s);
       addBox(e.x, k.height * 0.68, e.z, 3.0, k.height * 0.3, 1.9, k.body, s);
       addBox(e.x, k.height * 0.88, e.z, 1.9, 1.8, 1.8, k.head, s);
@@ -1595,7 +1652,7 @@
     // This tier exists because of a measurement: a hundred of them at
     // full detail came to 4,535 shapes in one frame. Most of a horde
     // sits in this band, so most of a horde now costs half as much.
-    if (away > 34) {
+    if (lod > 34) {
       const sw = Math.sin(e.step) * 1.1;
       addBox(e.x - 0.9 * co, k.height * 0.20, e.z + 0.9 * si,
              1.1, k.height * 0.42, 1.1, k.limb, s);
@@ -1759,8 +1816,8 @@
     // it's actually connecting with something.
     const dx = e.x - player.x, dz = e.z - player.z;
     const g = Math.hypot(dx, dz) || 1;
-    e.x += (dx / g) * 1.1;
-    e.z += (dz / g) * 1.1;
+    e.x += (dx / g) * e.k.knock;
+    e.z += (dz / g) * e.k.knock;
 
     burst(e.x, e.k.height * 0.6, e.z, e.k.gib, 9, 8);
 
@@ -1928,7 +1985,8 @@
     enemies = []; bolts = []; gibs = []; tracers = [];
     healing = false; healGlow = 0;
     spawnTimer = 1.5;
-    hordeTimer = HORDE_FIRST; hordeWarn = 0; hordeSize = 0;
+    hordeTimer = HORDE_FIRST; hordeWarn = 0;
+    hordeSize = 0; hordeGiants = 0;
     clock = 0;
     state = 'play';
     seedTheField();
@@ -2259,6 +2317,48 @@
         : 'next horde ' + Math.ceil(hordeTimer) + 's', W * 0.95, H - 78);
     }
 
+    // ---- HEALTH BARS OVER THE BIG ONES -------------------------------
+    // Fifty hits is eight seconds of shooting. Without a bar you have
+    // no idea whether you're winning or wasting your time, and eight
+    // seconds of not knowing is long enough to give up and run.
+    //
+    // project() is the same function that puts the whole 3D world on
+    // screen - we just ask it where the giant's head lands and paint a
+    // flat bar there. 3D thing, 2D bar, one shared answer.
+    if (state === 'play') {
+      for (const e of enemies) {
+        if (e.dead || !e.k.big) continue;
+
+        const away = e.away || Math.hypot(e.x - player.x, e.z - player.z);
+        if (away > 150) continue;
+
+        const s = project(e.x, e.k.height * 1.15, e.z);
+        if (s.depth < 2) continue;                 // behind you
+        if (s.x < -60 || s.x > W + 60) continue;   // off the side
+
+        const bw = Math.max(40, 2400 / away);
+        const bh = Math.max(5, bw * 0.10);
+        const frac = Math.max(0, e.hp / e.k.hp);
+
+        ctx.fillStyle = 'rgba(0,0,0,0.55)';
+        ctx.fillRect(s.x - bw / 2, s.y, bw, bh);
+
+        ctx.fillStyle = frac > 0.5 ? '#8fd45c' : frac > 0.22 ? '#e0a83c' : '#e04a3c';
+        ctx.fillRect(s.x - bw / 2, s.y, bw * frac, bh);
+
+        ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(s.x - bw / 2, s.y, bw, bh);
+
+        if (away < 70) {
+          ctx.textAlign = 'center';
+          ctx.font = 'bold 12px system-ui, sans-serif';
+          ctx.fillStyle = '#ffd9a0';
+          ctx.fillText('GIANT  ' + Math.ceil(e.hp), s.x, s.y - 5);
+        }
+      }
+    }
+
     // ---- A HORDE IS COMING -------------------------------------------
     if (hordeWarn > 0 && state === 'play') {
       const beat = 0.55 + Math.sin(clock * 7) * 0.45;
@@ -2273,7 +2373,9 @@
 
       ctx.font = Math.min(W * 0.034, 21) + 'px system-ui, sans-serif';
       ctx.fillStyle = 'rgba(255,210,180,' + Math.min(1, hordeWarn) + ')';
-      ctx.fillText(hordeSize + ' of them, on the horizon  -  find a settlement',
+      ctx.fillText(hordeSize + ' of them, on the horizon' +
+                   (hordeGiants ? '  -  and something big' : '') +
+                   '  -  find a settlement',
                    W / 2, H * 0.355);
     }
 
