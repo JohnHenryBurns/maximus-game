@@ -508,6 +508,7 @@
       };
       b.parts  = bunkerParts(b);
       b.guards = bunkerGuards(b);
+      b.manned = Math.ceil(b.guards.length / GUARD_EVERY);   // the rest are hires
       b.quests = questsFor(gx, gz);
       return b;
     }
@@ -746,25 +747,57 @@
   function guardCool(level)  { return Math.max(0.16, GUARD_COOL - level * 0.062); }
   function guardReach(level) { return GUARD_RANGE + level * 11; }
 
+  // EVERY WALL POST IS A GUARD POST. Most of them just aren't manned.
+  //
+  // The list is built in a deliberate ORDER: every third post first,
+  // then the ones between them, then the rest. So the guards a
+  // settlement starts with are spread evenly round the whole wall, and
+  // each one you hire quietly fills in a gap rather than clumping up in
+  // a corner. Hiring never needs to think about where to put anybody -
+  // the order already decided.
   function bunkerGuards(p) {
     const posts = bunkerPosts(p);
     const co = Math.cos(p.spin), si = Math.sin(p.spin);
-    const out = [];
 
-    for (let i = 0; i < posts.length; i += GUARD_EVERY) {
+    const order = [];
+    for (let off = 0; off < GUARD_EVERY; off++) {
+      for (let i = off; i < posts.length; i += GUARD_EVERY) order.push(i);
+    }
+
+    return order.map(function (i) {
       // Stand them just INSIDE the wall, not on top of it.
       const lx = posts[i][0] * 0.88, lz = posts[i][1] * 0.88;
 
-      out.push({
+      return {
         x: p.x + lx * co + lz * si,
         z: p.z - lx * si + lz * co,
         yaw: p.spin,
         cool: hash2(p.gx + i, p.gz + i) * GUARD_COOL,   // not all at once
         flash: 0,
         bob: hash2(p.gx, p.gz + i) * 6
-      });
-    }
-    return out;
+      };
+    });
+  }
+
+  // How many are actually on duty. Everything past this is an empty post.
+  function onDuty(p) {
+    return p.manned !== undefined ? p.manned : 0;
+  }
+
+  // How many a settlement starts with, before you've hired anybody.
+  function guardsIncluded(p) {
+    return Math.ceil(p.guards.length / GUARD_EVERY);
+  }
+
+  // PRICED ON WHAT YOU'VE HIRED, not on how many are up there.
+  //
+  // First attempt charged by total guards on the wall - and a big
+  // settlement already has thirteen, so the very first hire cost 207
+  // scrap. That's 207 zombies for one man. The maths was right and the
+  // meaning was wrong: you were being billed for the thirteen people
+  // who were already there before you arrived.
+  function hireCost(p) {
+    return 25 + (onDuty(p) - guardsIncluded(p)) * 20;
   }
 
   let tracers = [];
@@ -793,7 +826,10 @@
         const hurt  = guardHurt(lvl);
         const cool  = guardCool(lvl);
 
-        for (const g of p.guards) {
+        const manned = onDuty(p);
+
+        for (let gi = 0; gi < manned; gi++) {
+          const g = p.guards[gi];
           g.flash = Math.max(0, g.flash - dt * 9);
           g.cool -= dt;
           g.bob += dt * 0.7;
@@ -1167,7 +1203,9 @@
     // Drawn a fair way out, because armed people on a wall is the thing
     // that tells you this place is alive rather than abandoned.
     if (away < 115) {
-      for (const g of p.guards) {
+      const manned = onDuty(p);
+      for (let gi = 0; gi < manned; gi++) {
+        const g = p.guards[gi];
         drawPerson(g.x, 0, g.z, g.yaw, [86, 92, 66], true, g.flash);
       }
     }
@@ -2089,6 +2127,7 @@
       if (k === 'e' || k === 'escape') { state = 'play'; }
       else if (k >= '1' && k <= '3')   { takeQuest(Number(k) - 1); }
       else if (k === '4')              { buyGuards(); }
+      else if (k === '5')              { hireGuard(); }
       e.preventDefault();
       return;                        // reading, not shooting
     }
@@ -2116,6 +2155,24 @@
     state = 'play';
 
     tone(440, 660, 0.2, 0.16, 'triangle');
+  }
+
+  function hireGuard() {
+    if (!atBoard) return;
+
+    const manned = onDuty(atBoard);
+    if (manned >= atBoard.guards.length) return;    // every post is taken
+
+    const cost = hireCost(atBoard);
+    if (player.scrap < cost) return;
+
+    player.scrap -= cost;
+    atBoard.manned = manned + 1;
+
+    questWord = 'ANOTHER RIFLE ON THE WALL  -  ' + atBoard.manned + ' guards';
+    questFlash = 5;
+
+    tone(380, 540, 0.25, 0.18, 'square');
   }
 
   function buyGuards() {
@@ -2233,11 +2290,13 @@
         let took = false;
         const list = atBoard ? atBoard.quests : [];
 
-        // Four rows now - three jobs and the guards.
-        for (let i = 0; i < 4; i++) {
+        // Five rows - three jobs, arming, and hiring.
+        for (let i = 0; i < 5; i++) {
           const b = boardRowBox(i);      // the very same box that got drawn
           if (p.y >= b.y && p.y <= b.y + b.h && p.x >= b.x && p.x <= b.x + b.w) {
-            if (i < list.length) takeQuest(i); else buyGuards();
+            if (i < list.length)  takeQuest(i);
+            else if (i === 3)     buyGuards();
+            else                  hireGuard();
             took = true;
           }
         }
@@ -2861,10 +2920,14 @@
 
   // Where row i of the board sits. Used BOTH to draw it and to work out
   // what a thumb landed on, so the row you see is the row you get.
+  // Five rows now, not four - so the rows had to get shorter and start
+  // higher. Worked out rather than eyeballed: five rows at 0.10 of the
+  // height with 8 between them, starting at 0.24, ends at 0.74 plus 32
+  // pixels. The footer sits at 0.88. It fits, on a short window too.
   function boardRowBox(i) {
     const w = Math.min(W * 0.7, 520);
-    const h = H * 0.115;
-    return { x: W / 2 - w / 2, y: H * 0.28 + i * (h + 10), w: w, h: h };
+    const h = H * 0.10;
+    return { x: W / 2 - w / 2, y: H * 0.24 + i * (h + 8), w: w, h: h };
   }
 
   function questLine(q) {
@@ -2956,14 +3019,41 @@
       ctx.font = 'bold ' + Math.min(W * 0.03, 19) + 'px system-ui, sans-serif';
       ctx.fillStyle = canAfford ? '#a8e4ff' : '#8c7c66';
       ctx.fillText('you have ' + player.scrap, b.x + b.w - 16, b.y + b.h * 0.6);
+
+      // ---- HIRE ANOTHER GUARD ---------------------------------------
+      const manned = onDuty(atBoard);
+      const posts = atBoard.guards.length;
+      const full = manned >= posts;
+      const hc = hireCost(atBoard);
+      const canHire = !full && player.scrap >= hc;
+      const b2 = boardRowBox(4);
+
+      ctx.fillStyle = canHire ? 'rgba(140,220,120,0.16)' : 'rgba(0,0,0,0.4)';
+      ctx.fillRect(b2.x, b2.y, b2.w, b2.h);
+      ctx.lineWidth = canHire ? 3 : 1.5;
+      ctx.strokeStyle = canHire ? '#8fd45c' : 'rgba(255,255,255,0.2)';
+      ctx.strokeRect(b2.x, b2.y, b2.w, b2.h);
+
+      ctx.textAlign = 'left';
+      ctx.font = 'bold ' + Math.min(W * 0.034, 22) + 'px system-ui, sans-serif';
+      ctx.fillStyle = canHire ? '#b6e89a' : '#9a9284';
+      ctx.fillText('5.  Hire a guard  -  ' + manned + ' of ' + posts + ' posts manned',
+                   b2.x + 16, b2.y + b2.h * 0.42);
+
+      ctx.font = Math.min(W * 0.025, 15) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#a89880';
+      ctx.fillText(full ? 'every post on this wall has somebody on it'
+                        : 'costs ' + hc + ' scrap  -  one more rifle covering the gate',
+                   b2.x + 16, b2.y + b2.h * 0.76);
     }
 
     ctx.textAlign = 'center';
-    ctx.font = Math.min(W * 0.03, 18) + 'px system-ui, sans-serif';
+    ctx.font = Math.min(W * 0.028, 17) + 'px system-ui, sans-serif';
     ctx.fillStyle = '#8c7c66';
-    ctx.fillText(touchMode ? 'tap a line to choose it, or tap down here to go back'
-                           : 'press 1 2 3 for a job, 4 to arm the guards    E to go back',
-                 W / 2, H * 0.86);
+    ctx.fillText(touchMode
+      ? 'tap a line to choose it, or tap down here to go back'
+      : '1 2 3 take a job    4 arm the guards    5 hire one    E to go back',
+      W / 2, H * 0.88);
   }
 
   function drawHud() {
