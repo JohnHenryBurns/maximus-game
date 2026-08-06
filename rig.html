@@ -5903,13 +5903,59 @@
     say('IN THE CAB  -  W to pull away,  E to get out');
   }
 
+  // GETTING OUT PUTS THE WASTELAND BACK EXACTLY AS IT WAS.
+  //
+  // Everything the cab changed has to be handed back here: the truck is
+  // parked, the engine goes quiet, your boots are on real ground, and
+  // you are stood somewhere you can actually stand. Miss any one of
+  // those and it isn't "the same as the first wasteland" any more - it's
+  // the wasteland with a bug in it.
   function exitRig() {
     driving = false;
-    // Step out at the side, not into the wheels.
-    player.x = rig.x + Math.cos(rig.yaw) * 6;
-    player.z = rig.z - Math.sin(rig.yaw) * 6;
+
+    // HANDBRAKE. Left rolling, the truck would keep whatever speed it
+    // had forever - frozen mid-move, because nothing updates it now.
+    rig.speed = 0;
+    rig.steer = 0;
+
+    // ---- SOMEWHERE YOU CAN ACTUALLY STAND -----------------------------
+    // Always stepping out of the left door drops you inside a wall if
+    // you happened to park against one. So try the doors in order and
+    // take the first one that's clear: left, right, behind, in front.
+    const co = Math.cos(rig.yaw), si = Math.sin(rig.yaw);
+    // Out beside the CAB, and far enough back that the trailer isn't
+    // filling your whole view. Seven paces from the middle of a
+    // nineteen-pace lorry left you nose-to-paint with your own load.
+    const doors = [
+      [ co * 11 + si * 3, -si * 11 + co * 3],   // left door
+      [-co * 11 + si * 3,  si * 11 + co * 3],   // right door
+      [-si * 17, -co * 17],                     // out the back
+      [ si * 15,  co * 15]                      // over the bonnet
+    ];
+
+    let put = false;
+    for (const d of doors) {
+      const tx = rig.x + d[0], tz = rig.z + d[1];
+      if (!blockedAt(tx, tz, PLAYER_R)) {
+        player.x = tx; player.z = tz;
+        put = true;
+        break;
+      }
+    }
+    // Every door blocked? Stand you on the truck itself rather than
+    // inside a wall - pushOutOfWalls will sort it from there.
+    if (!put) { player.x = rig.x; player.z = rig.z; pushOutOfWalls(); }
+
+    // Boots back on the ground, not still falling from wherever the
+    // truck was, and no leftover jump.
     player.feetY = terrainAt(player.x, player.z);
+    player.vy = 0;
+    jumpQueued = false;
     player.yaw = rig.yaw;
+    player.pitch = 0;
+
+    lookYaw = 0;
+    updateEngineNote();      // and the engine shuts up
     setHelp();
     say('OUT ON FOOT');
   }
