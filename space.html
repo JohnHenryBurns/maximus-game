@@ -20,7 +20,7 @@
 </head>
 <body>
 <canvas id="screen"></canvas>
-<div id="hud">MOUSE = steer &nbsp;&nbsp; W = thrust &nbsp;&nbsp; S = brake &nbsp;&nbsp; A D = roll &nbsp;&nbsp; CLICK = shoot</div>
+<div id="hud">MOUSE = steer &nbsp;&nbsp; W = thrust &nbsp;&nbsp; S = brake &nbsp;&nbsp; A D = roll &nbsp;&nbsp; <b>Q = lock on</b> &nbsp;&nbsp; CLICK = shoot</div>
 
 <script>
 // ===================================================================
@@ -612,6 +612,78 @@
 
 
 // -------------------------------------------------------------------
+//  TARGET LOCK
+// -------------------------------------------------------------------
+//  Press Q and the computer picks whoever's most worth shooting - close,
+//  and roughly in front. Press it again to move on to the next one.
+//
+//  The box round them is the small part. The useful part is the LEAD
+//  MARKER: a second ring showing where to point so that your bolt and
+//  their ship turn up in the same place at the same moment.
+//
+//  You cannot hit a moving thing by aiming at it. By the time your shot
+//  arrives it has gone somewhere else. Every gunner in history has had
+//  to solve this, and out here it matters even more, because nothing
+//  slows down - a ship drifting sideways keeps drifting sideways.
+// -------------------------------------------------------------------
+
+  let target = null;
+  const LOCK_RANGE = 1200;
+
+  // How good a target is this? Being in front counts for more than
+  // being close, because something behind you cannot be shot at all.
+  function lockScore(e) {
+    const to = sub(e.pos, ship.pos);
+    const d = len(to);
+    if (d > LOCK_RANGE) return -1;
+
+    const ahead = dot(mul(to, 1 / (d || 1)), ship.fwd);
+    if (ahead < 0.15) return -1;          // off to the side or behind
+
+    return ahead * 2 - d / LOCK_RANGE;
+  }
+
+  function cycleTarget() {
+    const list = enemies
+      .filter(function (e) { return lockScore(e) > -1; })
+      .sort(function (a, b) { return lockScore(b) - lockScore(a); });
+
+    if (!list.length) { target = null; beep(180, 120, 0.1, 0.08); return; }
+
+    // Already locked onto one? Step to the next in the list, and wrap
+    // round the end - the same % trick as Bob's attack order.
+    const at = list.indexOf(target);
+    target = list[(at + 1) % list.length];
+
+    beep(880, 1250, 0.09, 0.11, 'triangle');
+  }
+
+  // WHERE TO AIM. Work out roughly how long a bolt takes to get there,
+  // then ask where the target will BE by then.
+  //
+  // Their speed is measured against YOURS, because your bolt is already
+  // carrying your speed with it - so what matters is how fast they're
+  // sliding relative to you, not how fast either of you is going.
+  function leadPoint(e) {
+    const to = sub(e.pos, ship.pos);
+    const dist = len(to);
+
+    const relVel = sub(e.vel, ship.vel);
+    const t = dist / BOLT_SPD;
+
+    return add(e.pos, mul(relVel, t));
+  }
+
+  function keepTargetHonest() {
+    if (!target) return;
+    // Dead, or wandered too far, and the lock drops itself.
+    if (target.hp <= 0 || len(sub(target.pos, ship.pos)) > LOCK_RANGE * 1.3) {
+      target = null;
+    }
+  }
+
+
+// -------------------------------------------------------------------
 //  SHOOTING
 // -------------------------------------------------------------------
 
@@ -761,6 +833,11 @@
     keys[e.key.toLowerCase()] = true;
     if (e.key.startsWith('Arrow') || e.key === ' ') e.preventDefault();
     if (e.key.toLowerCase() === 'r' && state === 'dead') restart();
+
+    if ((e.key.toLowerCase() === 'q' || e.key === 'Tab') && state === 'play') {
+      cycleTarget();
+      e.preventDefault();      // or Tab jumps out of the game entirely
+    }
   });
   window.addEventListener('keyup', function (e) { keys[e.key.toLowerCase()] = false; });
 
@@ -796,6 +873,7 @@
     ship.kills = 0;
     ship.hurtFlash = 0;
     enemies = []; bolts = []; bits = [];
+    target = null;
     spawnTimer = 3;
     clock = 0;
     state = 'play';
@@ -901,6 +979,7 @@
 
     updateEnemies(dt);
     updateBolts(dt);
+    keepTargetHonest();
 
     spawnTimer -= dt;
     if (spawnTimer <= 0) {
@@ -997,6 +1076,112 @@
     ctx.moveTo(W + 10, H * 0.02);
     ctx.quadraticCurveTo(W * 0.80, H * 0.52, W * 0.945, H * 0.92);
     ctx.stroke();
+  }
+
+  function drawLock() {
+    if (!target || state !== 'play') return;
+
+    const dist = len(sub(target.pos, ship.pos));
+    const s = project(target.pos);
+
+    // ---- BEHIND YOU, OR OFF THE SIDE --------------------------------
+    // An arrow pinned to the edge, pointing the way you need to turn.
+    // Space is the one place this really matters: the thing hunting you
+    // can be in a direction you have no word for.
+    const onScreen = s.depth > 1 && s.x > 30 && s.x < W - 30 &&
+                                    s.y > 30 && s.y < H - 30;
+
+    if (!onScreen) {
+      const to = sub(target.pos, ship.pos);
+      let ax = dot(to, cam.right), ay = dot(to, cam.up);
+
+      // Behind? Then flip it, or the arrow points the wrong way round.
+      if (dot(to, cam.fwd) < 0) { ax = -ax; ay = -ay; }
+
+      const l = Math.hypot(ax, ay) || 1;
+      const r = Math.min(W, H) * 0.34;
+      const ex = W / 2 + (ax / l) * r;
+      const ey = H / 2 - (ay / l) * r;
+      const ang = Math.atan2(-(ay / l), ax / l);
+
+      ctx.save();
+      ctx.translate(ex, ey);
+      ctx.rotate(ang);
+      ctx.fillStyle = '#ff8a5a';
+      ctx.beginPath();
+      ctx.moveTo(14, 0); ctx.lineTo(-8, 8); ctx.lineTo(-8, -8);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+
+      ctx.textAlign = 'center';
+      ctx.font = 'bold 12px system-ui, sans-serif';
+      ctx.fillStyle = '#ff8a5a';
+      ctx.fillText(Math.round(dist), ex, ey + 26);
+      return;
+    }
+
+    // ---- THE BOX ----------------------------------------------------
+    // Sized by distance, so it shrinks as they run and swells as they
+    // close - you can read the range without looking at the number.
+    const r = clamp(2600 / dist, 12, 90);
+
+    ctx.strokeStyle = '#ff8a5a';
+    ctx.lineWidth = 2;
+    for (const c of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+      const cx = s.x + c[0] * r, cy = s.y + c[1] * r;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - c[1] * r * 0.42);
+      ctx.lineTo(cx, cy);
+      ctx.lineTo(cx - c[0] * r * 0.42, cy);
+      ctx.stroke();
+    }
+
+    // Their hull, above the box.
+    const bw = r * 1.5, hp = Math.max(0, target.hp / ENEMY_HP);
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(s.x - bw / 2, s.y - r - 14, bw, 5);
+    ctx.fillStyle = hp > 0.5 ? '#8fd45c' : '#e04a3c';
+    ctx.fillRect(s.x - bw / 2, s.y - r - 14, bw * hp, 5);
+
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 12px system-ui, sans-serif';
+    ctx.fillStyle = '#ff8a5a';
+    ctx.fillText(Math.round(dist), s.x, s.y + r + 18);
+
+    // ---- WHERE TO ACTUALLY AIM --------------------------------------
+    const lead = project(leadPoint(target));
+    if (lead.depth <= 1) return;
+
+    // Only worth drawing when it's somewhere DIFFERENT from the target.
+    // Sat still relative to you, the lead is the target, and two rings
+    // on top of each other just look like a mistake.
+    if (Math.hypot(lead.x - s.x, lead.y - s.y) > 6) {
+      ctx.strokeStyle = 'rgba(255,240,150,0.55)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(s.x, s.y);
+      ctx.lineTo(lead.x, lead.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // PUT YOUR CROSSHAIR ON THIS RING. Not on the ship - on here.
+    const onIt = Math.hypot(lead.x - W / 2, lead.y - H / 2) < 16;
+
+    ctx.strokeStyle = onIt ? '#8fff9a' : '#ffec96';
+    ctx.lineWidth = onIt ? 3 : 2;
+    ctx.beginPath();
+    ctx.arc(lead.x, lead.y, 9, 0, 6.28);
+    ctx.stroke();
+
+    if (onIt) {
+      ctx.font = 'bold 13px system-ui, sans-serif';
+      ctx.fillStyle = '#8fff9a';
+      ctx.textAlign = 'center';
+      ctx.fillText('FIRE', lead.x, lead.y - 16);
+    }
   }
 
   function drawHud() {
@@ -1110,6 +1295,7 @@
     // Canopy first, then the readouts - so the numbers sit ON the
     // dashboard instead of underneath it.
     if (state === 'play') drawCanopy();
+    drawLock();
     drawHud();
   }
 
