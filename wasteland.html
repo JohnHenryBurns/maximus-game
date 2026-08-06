@@ -1541,6 +1541,35 @@
       // the little ones. Something this size should feel like weather.
       knock: 0.12, shove: 0.10, scrap: 15,
       big: true
+    },
+
+    // THE ZOMBIE BOSS. Maximus's design, his numbers: a giant
+    // four-armed zombie in a horned helmet, 1000 hp, 10 damage a hit.
+    //
+    // A THOUSAND hits. Twenty giants' worth. Even a marine-rifle
+    // squad-of-four pile-on takes a quarter of a minute of everyone
+    // firing at once, and he does not care AT ALL about being shot -
+    // knock 0.05 means your gun moves him about as much as rain moves
+    // a mountain. His bite is gentle for his size (10 - Maximus's
+    // call), so the fight is long instead of sudden: a siege, not an
+    // ambush.
+    // Round two of Maximus's design: longer arms (armLen), a fatter
+    // body (wide), and a GIANT SHOTGUN. Six pellets a blast, five
+    // damage each - stand close and eat all six, or keep your
+    // distance and most of the fan misses. He still bites things
+    // that get within reach, because he has two spare arms for it.
+    zombieBoss: {
+      hp: 1000, speed: 4.6, radius: 7.5, height: 20, reach: 8.5,
+      body: [64, 88, 50], limb: [50, 70, 42], head: [116, 128, 84],
+      eye: [255, 60, 30],
+      gib: [[96, 128, 62], [72, 100, 50], [140, 150, 104], [200, 190, 170]],
+      bite: 10, biteEvery: 1.2,
+      ranged: true, fireEvery: 2.4, bolt: 52, boltHurt: 5,
+      pellets: 6, boltY: 6.5, boltColour: [255, 150, 50],
+      knock: 0.05, shove: 0.06, scrap: 60,
+      big: true, arms4: true, helmet: true,
+      wide: 1.8, armLen: 5.6, shotgun: true,
+      name: 'ZOMBIE BOSS'
     }
   };
 
@@ -1643,6 +1672,7 @@
   let hordeWarn   = 0;       // how long the warning stays on screen
   let hordeSize   = 0;
   let hordeGiants = 0;
+  let hordeBoss   = false;   // did THIS horde bring the big one?
 
   // CLEAR OUT SOME STRAGGLERS SO A HORDE CAN ACTUALLY ARRIVE.
   //
@@ -1702,8 +1732,18 @@
     // At the front, not wandering about on their own - a giant on its
     // own is a nuisance, a giant with ninety zombies behind it is a
     // problem you have to solve.
+    //
+    // And after four minutes, one horde in four brings the ZOMBIE BOSS
+    // instead. A thousand hits, walking at you with the crowd around
+    // his knees. The warning text changes when it's him - if it says
+    // "something terrible", believe it.
     hordeGiants = 0;
-    if (Math.random() < 0.7) {
+    hordeBoss = false;
+    if (clock > 240 && Math.random() < 0.25) {
+      hordeBoss = spawnEnemy(205 + Math.random() * 20,
+                             from + (Math.random() - 0.5) * 0.3,
+                             'zombieBoss');
+    } else if (Math.random() < 0.7) {
       const big = 1 + (Math.random() < 0.35 ? 1 : 0);
       for (let i = 0; i < big; i++) {
         if (spawnEnemy(198 + Math.random() * 30,
@@ -1819,12 +1859,16 @@
       e.cool -= dt;
 
       // ---- HURT YOU -----------------------------------------------
-      if (e.k.ranged) {
+      // A ranged thing with a bite (the boss) uses teeth when you're
+      // inside its reach and the gun the rest of the time. Robots
+      // have bite 0, so nothing changes for them.
+      const inReach = gap <= e.k.reach + 0.6;
+      if (e.k.ranged && !(inReach && e.k.bite > 0)) {
         if (gap < 90 && e.cool <= 0) {
           e.cool = e.k.fireEvery;
           fireBolt(e);
         }
-      } else if (gap <= e.k.reach + 0.6 && e.cool <= 0) {
+      } else if (inReach && e.cool <= 0) {
         e.cool = e.k.biteEvery;
         hurtPlayer(e.k.bite);
       }
@@ -1833,17 +1877,32 @@
 
   function fireBolt(e) {
     const dx = player.x - e.x, dz = player.z - e.z;
-    const gap = Math.hypot(dx, dz) || 1;
+    const aim = Math.atan2(dx, dz);
 
-    bolts.push({
-      x: e.x, y: e.k.height * 0.62, z: e.z,
-      vx: (dx / gap) * e.k.bolt,
-      vz: (dz / gap) * e.k.bolt,
-      hurt: e.k.boltHurt,
-      col: e.k.boltColour,      // zombie marines shoot RED. Robots
-      life: 3.5                 // leave this empty and get the old blue.
-    });
-    playZap();
+    // Most things fire ONE bolt. A shotgun fires a FAN: the middle
+    // pellet flies straight at you and the rest spread half a radian
+    // wide. Stand close and all six hit; keep your distance and most
+    // of the fan sails past. The spread IS the weapon.
+    const n = e.k.pellets || 1;
+    for (let i = 0; i < n; i++) {
+      const a = aim + (n > 1 ? (i / (n - 1) - 0.5) * 0.5 : 0);
+      bolts.push({
+        x: e.x, y: e.k.boltY || e.k.height * 0.62, z: e.z,
+        vx: Math.sin(a) * e.k.bolt,
+        vz: Math.cos(a) * e.k.bolt,
+        hurt: e.k.boltHurt,
+        col: e.k.boltColour,      // zombie marines shoot RED. Robots
+        life: 3.5                 // leave this empty and get the old blue.
+      });
+    }
+
+    if (n > 1) {
+      // A shotgun does not go "zap". A shotgun goes BOOM.
+      noise(0.35, 600, 70, 0.4);
+      tone(95, 45, 0.45, 0.3, 'sawtooth');
+    } else {
+      playZap();
+    }
   }
 
   function updateBolts(dt) {
@@ -1945,7 +2004,8 @@
     // FAR: body and head. Three boxes instead of thirteen.
     if (lod > 78) {
       addBox(e.x, k.height * 0.30, e.z, 2.2, k.height * 0.6, 1.5, k.limb, s);
-      addBox(e.x, k.height * 0.68, e.z, 3.0, k.height * 0.3, 1.9, k.body, s);
+      addBox(e.x, k.height * 0.68, e.z, 3.0 * (k.wide || 1), k.height * 0.3,
+             1.9 * (k.wide || 1), k.body, s);
       addBox(e.x, k.height * 0.88, e.z, 1.9, 1.8, 1.8, k.head, s);
       return;
     }
@@ -1963,8 +2023,18 @@
       addBox(e.x + 0.9 * co, k.height * 0.20, e.z - 0.9 * si,
              1.1, k.height * 0.42, 1.1, k.limb, s);
       addBox(e.x, k.height * 0.58 + sw * 0.05, e.z,
-             3.0, k.height * 0.36, 1.9, k.body, s);
+             3.0 * (k.wide || 1), k.height * 0.36,
+             1.9 * (k.wide || 1), k.body, s);
       addBox(e.x, k.height * 0.86, e.z, 1.9, 1.8, 1.8, k.head, s);
+      if (k.helmet) {
+        // Even at half detail the boss keeps his helmet - horns are
+        // the whole point of him, and they'd pop in weirdly otherwise.
+        addBox(e.x, k.height * 0.94, e.z, 2.3, 1.3, 2.3, [72, 66, 62], s);
+        addBox(e.x - 1.6 * co, k.height * 1.0, e.z + 1.6 * si,
+               0.6, 1.6, 0.6, [222, 210, 184], s);
+        addBox(e.x + 1.6 * co, k.height * 1.0, e.z - 1.6 * si,
+               0.6, 1.6, 0.6, [222, 210, 184], s);
+      }
       if (k.visor) {
         // One glowing strip instead of two eyes.
         addBox(e.x - 0.95 * si, k.height * 0.88, e.z - 0.95 * co,
@@ -2000,20 +2070,57 @@
     part( 0.9, h * 0.20, -swing * 0.5, 1.1, h * 0.42, 1.1, k.limb);
 
     // body
-    part(sway * 0.4, h * 0.58, 0, 3.0, h * 0.36, 1.9, k.body);
+    // "wide" fattens the torso - the boss is 1.8 of everyone else.
+    part(sway * 0.4, h * 0.58, 0, 3.0 * (k.wide || 1), h * 0.36,
+         1.9 * (k.wide || 1), k.body);
 
-    // arms - a zombie holds them out in front, a robot lets them hang
-    if (k.ranged) {
+    // arms - a zombie holds them out in front, a robot lets them hang.
+    // armLen stretches them: the boss's reach further than anyone's.
+    const AL = k.armLen || 3.4;
+    if (k.ranged && !k.shotgun) {
       part(-2.0, h * 0.56, 0.2, 0.9, h * 0.30, 0.9, k.limb);
       part( 2.0, h * 0.56, -0.2, 0.9, h * 0.30, 0.9, k.limb);
       part( 2.0, h * 0.50, -1.6, 1.2, 1.2, 2.6, k.body);      // the gun
     } else {
-      part(-1.8, h * 0.62, -1.4 + swing * 0.3, 0.9, 0.9, 3.4, k.limb);
-      part( 1.8, h * 0.62, -1.4 - swing * 0.3, 0.9, 0.9, 3.4, k.limb);
+      part(-1.8, h * 0.62, 0.3 - AL / 2 + swing * 0.3, 0.9, 0.9, AL, k.limb);
+      part( 1.8, h * 0.62, 0.3 - AL / 2 - swing * 0.3, 0.9, 0.9, AL, k.limb);
+    }
+
+    // FOUR-ARMED? A second pair, lower down and swinging the other
+    // way, so all four are never in step. That out-of-step-ness is
+    // most of what makes it read as "too many arms" instead of
+    // "thick arms".
+    if (k.arms4) {
+      part(-1.9, h * 0.46, 0.4 - AL / 2 - swing * 0.3, 0.9, 0.9, AL * 0.94, k.limb);
+      part( 1.9, h * 0.46, 0.4 - AL / 2 + swing * 0.3, 0.9, 0.9, AL * 0.94, k.limb);
+    }
+
+    // THE GIANT SHOTGUN. Two fat barrels and a wooden stock, carried
+    // in the lower pair of hands, pointing at whatever he's facing -
+    // which is you.
+    if (k.shotgun) {
+      const gz = 0.3 - AL;
+      part(-0.65, h * 0.46, gz - 1.4, 1.1, 1.1, 7.0, [52, 48, 44]);
+      part( 0.65, h * 0.46, gz - 1.4, 1.1, 1.1, 7.0, [52, 48, 44]);
+      part( 0,    h * 0.46, gz + 3.2, 1.7, 1.7, 2.6, [96, 66, 42]);
     }
 
     // head
     part(sway, h * 0.86, 0, 1.9, 1.8, 1.8, k.head);
+
+    // THE HORNED HELMET. A dark metal box over the head, a brim, and
+    // a horn each side built from two stacked boxes - fat base, thin
+    // tip, tip shoved further out. Boxes can't lean sideways, but two
+    // boxes stepped outwards LOOK like a lean, and that's enough.
+    if (k.helmet) {
+      const iron = [72, 66, 62], bone = [222, 210, 184];
+      part(sway, h * 0.94, 0, 2.3, 1.3, 2.3, iron);              // the dome
+      part(sway, h * 0.87, 0, 2.7, 0.4, 2.7, iron);              // the brim
+      for (const hx of [-1, 1]) {
+        part(sway + hx * 1.5, h * 0.97, 0, 0.8, 1.2, 0.8, bone); // horn base
+        part(sway + hx * 2.0, h * 1.04, 0, 0.5, 1.3, 0.5, bone); // horn tip
+      }
+    }
 
     // eyes - not lit(), because a glowing eye shouldn't wash out white
     if (k.visor) {
@@ -2240,7 +2347,8 @@
   const MARINE_FAR   = 24;
   const MARINE_LEASH = 48;
 
-  const MARINE_MAX  = 4;     // a full squad - find more towers to refill
+  const MARINE_MAX  = 12;    // a full ARMY. Maximus kept asking for more
+                             // and honestly, who wouldn't
   const POD_COOL    = 45;    // seconds before a tower can call again
   const POD_FALL    = 170;   // paces per second, straight down
   const POD_START_Y = 340;   // where the fall begins - about a 2s drop
@@ -2334,7 +2442,7 @@
     m.state = 'squad';
     m.seed = Math.random();   // picks his personal spot around you
     m.moving = false;
-    questWord = 'MARINE RECRUITED  -  squad of ' + squadSize();
+    questWord = 'MARINE RECRUITED  -  ' + squadSize() + ' of ' + MARINE_MAX;
     questFlash = 4;
     playRecruit();
   }
@@ -3135,7 +3243,7 @@
     healing = false; healGlow = 0;
     spawnTimer = 1.5;
     hordeTimer = HORDE_FIRST; hordeWarn = 0;
-    hordeSize = 0; hordeGiants = 0;
+    hordeSize = 0; hordeGiants = 0; hordeBoss = false;
     clock = 0;
     state = 'play';
     seedTheField();
@@ -3514,7 +3622,8 @@
     zombie:       '#7ad05a',
     robot:        '#6ecdff',
     giant:        '#ff5a3c',
-    zombieMarine: '#d05aff'    // evil purple - nothing else on the map has it
+    zombieMarine: '#d05aff',   // evil purple - nothing else on the map has it
+    zombieBoss:   '#ff2a2a'    // pure alarm red
   };
 
   function drawMiniMap() {
@@ -3951,7 +4060,7 @@
         hint = touchMode ? 'TAP HERE FOR JOBS' : 'PRESS E FOR JOBS';
       } else if (nearRecruit) {
         hint = squadSize() >= MARINE_MAX
-          ? 'SQUAD FULL  -  four is plenty'
+          ? 'ARMY FULL  -  twelve marines is an army'
           : (touchMode ? 'TAP HERE TO RECRUIT THE MARINE'
                        : 'PRESS E TO RECRUIT THE MARINE');
       } else if (atGear) {
@@ -3961,7 +4070,7 @@
           : (touchMode ? 'TAP HERE TO TAKE THE ' : 'PRESS E TO TAKE THE ') +
             name + '  -  ' + atGear.cost + ' scrap';
       } else if (atRadio) {
-        if (squadSize() >= MARINE_MAX)      hint = 'SQUAD FULL  -  four is plenty';
+        if (squadSize() >= MARINE_MAX)      hint = 'ARMY FULL  -  twelve marines is an army';
         else if (clock < atRadio.podReadyAt) {
           hint = 'TOWER RECHARGING  -  ' +
                  Math.ceil(atRadio.podReadyAt - clock) + 's';
@@ -4016,7 +4125,8 @@
           ctx.textAlign = 'center';
           ctx.font = 'bold 12px system-ui, sans-serif';
           ctx.fillStyle = '#ffd9a0';
-          ctx.fillText('GIANT  ' + Math.ceil(e.hp), s.x, s.y - 5);
+          ctx.fillText((e.k.name || 'GIANT') + '  ' + Math.ceil(e.hp),
+                       s.x, s.y - 5);
         }
       }
     }
@@ -4036,7 +4146,8 @@
       ctx.font = Math.min(W * 0.034, 21) + 'px system-ui, sans-serif';
       ctx.fillStyle = 'rgba(255,210,180,' + Math.min(1, hordeWarn) + ')';
       ctx.fillText(hordeSize + ' of them, on the horizon' +
-                   (hordeGiants ? '  -  and something big' : '') +
+                   (hordeBoss ? '  -  and something TERRIBLE' :
+                    hordeGiants ? '  -  and something big' : '') +
                    '  -  find a settlement',
                    W / 2, H * 0.355);
     }
