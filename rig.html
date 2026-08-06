@@ -4221,7 +4221,9 @@
       // The seat comes first. If you're sat in it, E gets you out -
       // otherwise you could never leave without something else nearby.
       if (driving)                                exitRig();
+      else if (flying)                            exitJet();
       else if (atRig)                             enterRig();
+      else if (atJet)                             enterJet();
       else if (nearRecruit)                       recruitMarine(nearRecruit);
       else if (atGear)                            buyGear();
       else if (atPad)                             launchShip();
@@ -4654,6 +4656,10 @@
     mouseSteer = 0; rigSay = ''; rigSayT = 0;
     atMechanic = null; repairGlow = 0;
     others = []; otherTimer = 22;
+    flying = false; atJet = null;
+    jet.x = 26; jet.z = -34; jet.y = 0; jet.yaw = 0;
+    jet.speed = 0; jet.steer = 0; jet.health = jet.maxHealth;
+    jet.kills = 0; jet.hitCool = 0; jet.ramFlash = 0;
     setHelp();
 
     // The squad dies with you - marines are something you EARN each
@@ -4725,11 +4731,12 @@
     // hordes, marines, quests - carries on exactly as before, because
     // updateRig keeps player.x and player.z sat on the truck.
     if (driving) updateRig(dt);
+    if (flying)  updateJet(dt);
 
     // ---- WALKING ----------------------------------------------------
     // Forwards means "the way you're looking", so the same keys do
     // different things depending on where the mouse has put you.
-    if (!driving) {
+    if (!driving && !flying) {
     const fx = Math.sin(player.yaw), fz = Math.cos(player.yaw);
     const rx = Math.cos(player.yaw), rz = -Math.sin(player.yaw);
 
@@ -4827,9 +4834,11 @@
 
     if (firing || touchFire) shoot();
 
-    // ---- CAN YOU REACH THE CAB? -------------------------------------
-    atRig = !driving && Math.hypot(player.x - rig.x, player.z - rig.z) < 12
-            ? rig : null;
+    // ---- CAN YOU REACH A SEAT? --------------------------------------
+    atRig = !driving && !flying &&
+            Math.hypot(player.x - rig.x, player.z - rig.z) < 12 ? rig : null;
+    atJet = !driving && !flying && !atRig &&
+            Math.hypot(player.x - jet.x, player.z - jet.z) < 16 ? jet : null;
 
     // ---- HAVE YOU ARRIVED? ------------------------------------------
     checkDelivery();
@@ -4960,7 +4969,7 @@
     // Driving has its own camera (behind the truck, and it lags). If
     // this ran anyway it would snap the view back into your head every
     // single frame and the chase cam would never be seen at all.
-    if (driving) return;
+    if (driving || flying) return;
 
     cam.x = player.x;
     cam.z = player.z;
@@ -5301,6 +5310,23 @@
       ctx.fill();
     }
 
+    // ---- WHERE YOU LEFT THE JET -------------------------------------
+    if (!flying) {
+      const m = toMap(jet.x, jet.z);
+      if (m.d <= MAP_RANGE) {
+        ctx.fillStyle = jet.health > 0 ? '#9ed8ff' : '#54708a';
+        ctx.beginPath();
+        ctx.moveTo(m.x, m.y - 5);
+        ctx.lineTo(m.x + 4.5, m.y + 4);
+        ctx.lineTo(m.x - 4.5, m.y + 4);
+        ctx.closePath();
+        ctx.fill();
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+        ctx.stroke();
+      }
+    }
+
     // ---- WHERE YOU PARKED IT ----------------------------------------
     // Only worth showing when you're NOT sat in it - otherwise it's a
     // marker permanently stuck under the arrow that means "you".
@@ -5577,7 +5603,7 @@
     // No crosshair in the cab - you aren't aiming anything, and a sight
     // floating over the trailer just looks like a mistake.
     const mx = W / 2, my = H / 2, gap = 6, arm = 11;
-    for (const pass of driving ? []
+    for (const pass of (driving || flying) ? []
          : [{ w: 4, c: 'rgba(0,0,0,0.5)' }, { w: 1.6, c: '#ffd9a0' }]) {
       ctx.lineWidth = pass.w;
       ctx.strokeStyle = pass.c;
@@ -5632,6 +5658,46 @@
       ctx.fillStyle = repairGlow > 0 ? '#8fe07a' : 'rgba(255,255,255,0.55)';
       ctx.fillText(Math.round(rig.health) + ' / ' + rig.maxHealth + '  RIG',
                    lx + rw + 8, ry + 9);
+    }
+
+    // ---- WHAT THE JET IS DOING ---------------------------------------
+    if (flying) {
+      const lx = W * 0.05;
+      ctx.textAlign = 'left';
+
+      const up = Math.round(jet.y - terrainAt(jet.x, jet.z));
+      const off = up > 2;
+
+      ctx.font = Math.min(W * 0.026, 16) + 'px system-ui, sans-serif';
+      ctx.fillStyle = off ? '#9ed8ff' : '#e0a83c';
+      ctx.fillText(off ? 'AIRBORNE  -  ' + up + ' up' : 'ON THE DIRT  -  throttle up',
+                   lx, H - 118);
+
+      ctx.font = 'bold ' + Math.min(W * 0.055, 40) + 'px system-ui, sans-serif';
+      ctx.fillStyle = off ? '#9ed8ff' : '#e0a83c';
+      ctx.fillText(Math.round(jet.speed), lx, H - 82);
+
+      const rw = Math.min(W * 0.28, 260), ry = H - 68;
+      ctx.fillStyle = 'rgba(0,0,0,0.5)';
+      ctx.fillRect(lx, ry, rw, 9);
+      const jf = jet.health / jet.maxHealth;
+      ctx.fillStyle = repairGlow > 0 ? '#8fe07a'
+                    : jf > 0.5 ? '#9ed8ff' : jf > 0.25 ? '#e0a83c' : '#d64a3c';
+      ctx.fillRect(lx, ry, rw * jf, 9);
+
+      ctx.font = Math.min(W * 0.022, 13) + 'px system-ui, sans-serif';
+      ctx.fillStyle = repairGlow > 0 ? '#8fe07a' : 'rgba(255,255,255,0.55)';
+      ctx.fillText(Math.round(jet.health) + ' / ' + jet.maxHealth + '  JET',
+                   lx + rw + 8, ry + 9);
+    }
+
+    // ---- CLIMB IN THE JET ---------------------------------------------
+    if (atJet && !flying && !driving) {
+      ctx.textAlign = 'center';
+      ctx.font = Math.min(W * 0.03, 18) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#9ed8ff';
+      ctx.fillText('E  -  get in the jet', W / 2, H * 0.66);
+      ctx.textAlign = 'left';
     }
 
     // ---- THE MECHANIC HAS YOUR TRUCK ---------------------------------
@@ -5960,9 +6026,12 @@
   const HELP_DRIVE = 'W = throttle &nbsp;&nbsp; S = brake / reverse &nbsp;&nbsp; ' +
                      'MOUSE = the wheel &nbsp;&nbsp; A D = steer too &nbsp;&nbsp; E = get out';
 
+  const HELP_FLY = 'W = throttle (and it CLIMBS) &nbsp;&nbsp; S = slow down to land ' +
+                   '&nbsp;&nbsp; MOUSE = the stick &nbsp;&nbsp; E = get out';
+
   function setHelp() {
     const el = document.getElementById('hud');
-    if (el) el.innerHTML = driving ? HELP_DRIVE : HELP_FOOT;
+    if (el) el.innerHTML = flying ? HELP_FLY : driving ? HELP_DRIVE : HELP_FOOT;
   }
 
   function enterRig() {
@@ -6032,7 +6101,17 @@
 
   function say(words) { rigSay = words; rigSayT = 3.2; }
 
-  function updateRig(dt) {
+  // THE CONTROLS. ONE COPY, FOR EVERYTHING YOU CAN CLIMB INTO.
+  //
+  // Maximus asked for the jet to fly exactly the way the truck drives.
+  // The way to be SURE of that is not to write it twice carefully - it's
+  // to write it once and have both call it. Then they can't drift apart,
+  // ever, however much either vehicle changes afterwards.
+  //
+  //   v    - anything with speed, steer and yaw
+  //   top  - how fast this one goes flat out
+  //   low  - how far it'll go backwards (0 for things that can't)
+  function driveControls(v, top, low, dt) {
     // ---- THE SAME CONTROLS, WITH A THUMB ------------------------------
     // Push the stick forward for the throttle, back for the brake, and
     // sideways to steer - and the sideways part feeds the SAME
@@ -6052,16 +6131,16 @@
     const goPedal    = keys['w'] || keys['arrowup']   || pedalGo;
     const brakePedal = keys['s'] || keys['arrowdown'] || pedalBrake;
 
-    if (goPedal)         rig.speed += ACCEL * dt;
-    else if (brakePedal) rig.speed -= BRAKE * dt;
+    if (goPedal)         v.speed += ACCEL * dt;
+    else if (brakePedal) v.speed -= BRAKE * dt;
     else {
       // Coast to a stop from either direction - the racer only ever
       // rolls forwards, but this one can be backing out of a wreck.
       const slow = DRAG * dt;
-      if (Math.abs(rig.speed) < slow) rig.speed = 0;
-      else rig.speed -= Math.sign(rig.speed) * slow;
+      if (Math.abs(v.speed) < slow) v.speed = 0;
+      else v.speed -= Math.sign(v.speed) * slow;
     }
-    rig.speed = clamp(rig.speed, -REVERSE, TOP_SPEED);
+    v.speed = clamp(v.speed, low, top);
 
     // ---- THE WHEEL FIGHTS BACK ----------------------------------------
     // Two things make it heavy, and they multiply together:
@@ -6073,7 +6152,7 @@
     //   2. HOW FAST YOU'RE GOING. Standing still it's light; flat out
     //      it's heavy.
     const heavy = 1 + Math.abs(mouseSteer) * MOUSE_HEAVY;
-    const grip  = 0.5 + (Math.abs(rig.speed) / TOP_SPEED) * MOUSE_GRIP;
+    const grip  = 0.5 + (Math.abs(v.speed) / top) * MOUSE_GRIP;
 
     mouseSteer -= mouseSteer * Math.min(1, MOUSE_RETURN * heavy * grip * dt);
 
@@ -6084,13 +6163,31 @@
 
     // And the wheel itself is heavier to turn than it is to let go of.
     const windSpeed = (want === 0) ? 6 : 2.8;
-    rig.steer += (want - rig.steer) * Math.min(1, windSpeed * dt);
+    v.steer += (want - v.steer) * Math.min(1, windSpeed * dt);
 
     // ---- TURNING ------------------------------------------------------
     // Multiplying by speed is the important part. Standing still you
     // can't turn at all, which is exactly right - a truck turns because
-    // it's MOVING, not because the wheel is round.
-    rig.yaw += rig.steer * 1.5 * (rig.speed / TOP_SPEED) * dt;
+    // it's MOVING, not because the wheel is round. A jet is the same:
+    // parked on the dirt, the stick does nothing.
+    v.yaw += v.steer * 1.5 * (v.speed / top) * dt;
+  }
+
+  function updateRig(dt) {
+    // ---- THE SAME CONTROLS, WITH A THUMB ------------------------------
+    // Push the stick forward for the throttle, back for the brake, and
+    // sideways to steer - and the sideways part feeds the SAME
+    // mouseSteer the mouse does, so the wheel fights a thumb back
+    // exactly as hard as it fights a mouse. One driving model.
+    pedalGo = pedalBrake = false;
+    if (stick.on && stick.push > 0.06) {
+      const sy = -stick.dy / STICK_MAX, sx = stick.dx / STICK_MAX;
+      if (sy >  0.25) pedalGo    = true;
+      if (sy < -0.25) pedalBrake = true;
+      mouseSteer = clamp(mouseSteer + sx * 3.2 * dt, -1, 1);
+    }
+
+    driveControls(rig, TOP_SPEED, -REVERSE, dt);
 
     // ---- ACTUALLY MOVING ----------------------------------------------
     const nx = rig.x + Math.sin(rig.yaw) * rig.speed * dt;
@@ -6246,6 +6343,213 @@
     // how you drive into a tower without noticing.
     cam.yaw   = rig.yaw;
     cam.pitch = -0.02;
+  }
+
+
+// -------------------------------------------------------------------
+//  THE JET
+// -------------------------------------------------------------------
+//
+//  Same controls as the truck - literally the same function - but it
+//  leaves the ground.
+//
+//  AND THAT'S THE CLEVER BIT: there is no extra climb button, because
+//  driving hasn't got one. YOUR SPEED IS YOUR HEIGHT. Open the throttle
+//  and it lifts; ease off and it settles back onto the dirt. Two
+//  controls, exactly like the truck, and landing is just slowing down.
+
+  const JET_TOP    = 190;    // a jet is a jet
+  const JET_LIFT   = 34;     // how fast it climbs to where it wants to be
+  const JET_CEIL   = 95;     // how high it rides flat out
+  const JET_FLY    = 55;     // below this it comes down and lands
+  const JET_HP     = 800;
+
+  const jet = {
+    x: 26, z: -34, y: 0, yaw: 0,
+    speed: 0, steer: 0,
+    health: JET_HP, maxHealth: JET_HP,
+    kills: 0, hitCool: 0, ramFlash: 0
+  };
+
+  let flying = false;
+  let atJet  = null;
+
+  function enterJet() {
+    flying = true;
+    mouseSteer = 0;
+    player.pitch = 0;
+    setHelp();
+    say('IN THE JET  -  throttle up to leave the ground');
+  }
+
+  function exitJet() {
+    flying = false;
+    jet.speed = 0;
+
+    // Stepping out at four hundred feet would be a very short game, so
+    // you come down with it - the jet settles and you climb out.
+    jet.y = terrainAt(jet.x, jet.z);
+
+    const co = Math.cos(jet.yaw), si = Math.sin(jet.yaw);
+    const doors = [[co * 14, -si * 14], [-co * 14, si * 14],
+                   [-si * 20, -co * 20], [si * 20, co * 20]];
+    let put = false;
+    for (const d of doors) {
+      const tx = jet.x + d[0], tz = jet.z + d[1];
+      if (!blockedAt(tx, tz, PLAYER_R)) { player.x = tx; player.z = tz; put = true; break; }
+    }
+    if (!put) { player.x = jet.x; player.z = jet.z; pushOutOfWalls(); }
+
+    player.feetY = terrainAt(player.x, player.z);
+    player.vy = 0;
+    jumpQueued = false;
+    player.yaw = jet.yaw;
+    player.pitch = 0;
+    mouseSteer = 0;
+    setHelp();
+    say('OUT ON FOOT');
+  }
+
+  function updateJet(dt) {
+    // The truck's controls. Not "the same as" - the same code.
+    // A jet has no reverse gear, so its floor is zero.
+    driveControls(jet, JET_TOP, 0, dt);
+
+    // ---- HEIGHT COMES FROM SPEED --------------------------------------
+    const ground = terrainAt(jet.x, jet.z);
+    const fast   = Math.max(0, jet.speed - JET_FLY) / (JET_TOP - JET_FLY);
+    const wantY  = ground + fast * JET_CEIL;
+    jet.y += (wantY - jet.y) * Math.min(1, JET_LIFT / 34 * dt * 1.6);
+
+    const airborne = jet.y > ground + 2;
+
+    // ---- MOVING --------------------------------------------------------
+    const nx = jet.x + Math.sin(jet.yaw) * jet.speed * dt;
+    const nz = jet.z + Math.cos(jet.yaw) * jet.speed * dt;
+
+    // UP IN THE AIR NOTHING IS IN THE WAY. That's the whole point of
+    // flying, and it's one line: only ask about walls when you're low
+    // enough for walls to matter.
+    if (airborne || !blockedAt(nx, nz, 4)) {
+      jet.x = nx; jet.z = nz;
+    } else {
+      if (Math.abs(jet.speed) > 30 && jet.hitCool <= 0) {
+        hurtJet(Math.abs(jet.speed) * 0.4);
+        jet.hitCool = 0.5;
+        shake = Math.max(shake, 1);
+        crunch();
+      }
+      jet.speed *= 0.2;
+    }
+    if (jet.hitCool > 0) jet.hitCool -= dt;
+    if (jet.ramFlash > 0) jet.ramFlash -= dt * 2.4;
+
+    // The pilot rides with it, so every distance check in the game -
+    // spawning, hordes, settlements, the mechanic - still works with no
+    // special case for "but he's in the sky".
+    player.x = jet.x;
+    player.z = jet.z;
+    player.feetY = jet.y;
+
+    // ---- ANYTHING ON THE RUNWAY ---------------------------------------
+    // Low and fast is a strafing run. High up you fly straight over
+    // their heads, which is exactly what you'd expect.
+    if (!airborne && jet.speed >= RAM_SPEED) {
+      const co = Math.cos(jet.yaw), si = Math.sin(jet.yaw);
+      for (const e of enemies) {
+        if (e.dead) continue;
+        const dx = e.x - jet.x, dz = e.z - jet.z;
+        if (Math.abs(dx) > 26 || Math.abs(dz) > 26) continue;
+        const along  = dx * si + dz * co;
+        const across = dx * co - dz * si;
+        if (across < -7 || across > 7) continue;      // the wings are wide
+        if (along < -6 || along > 11) continue;
+        killEnemy(e);
+        jet.kills++;
+        jet.ramFlash = 1;
+        thud();
+      }
+    }
+
+    aimJetCamera(dt);
+    updateEngineNote();
+  }
+
+  function hurtJet(amount) {
+    jet.health -= amount;
+    shake = Math.max(shake, 0.5);
+    if (jet.health <= 0) {
+      jet.health = 0;
+      burst(jet.x, jet.y + 3, jet.z, [[150, 90, 40], [70, 66, 62]], 50, 30);
+      exitJet();
+      say('THE JET IS DOWN  -  you are walking now');
+    }
+  }
+
+  // Sat in the cockpit, up at the front where the glass is.
+  function aimJetCamera(dt) {
+    const co = Math.cos(jet.yaw), si = Math.sin(jet.yaw);
+    // ON TOP OF THE FUSELAGE, not inside it. The body box reaches up to
+    // 3.1 and the eye was at 3.0 - so the camera sat INSIDE its own
+    // aeroplane and the screen was a grey slab. Same mistake as the
+    // truck's cab, and the same tell: a wall of one flat colour.
+    cam.x = jet.x + 6.5 * si;
+    cam.z = jet.z + 6.5 * co;
+
+    const rough = jet.speed / JET_TOP;
+    cam.y = jet.y + 4.3 + Math.sin(clock * 24) * rough * 0.12;
+
+    cam.yaw = jet.yaw;
+    // Look down a touch, so you can see the ground going past. Flat out
+    // there's nothing but sky and it stops feeling like speed at all.
+    cam.pitch = -0.10 - rough * 0.06;
+  }
+
+  const JET_BODY = [122, 130, 138], JET_DARK = [78, 86, 96];
+  const JET_GLASS = [96, 150, 180], JET_BURN = [255, 170, 80];
+
+  function drawJet() {
+    const co = Math.cos(jet.yaw), si = Math.sin(jet.yaw);
+    function part(across, up, along, w, h, d, rgb) {
+      addBox(jet.x + across * co + along * si, jet.y + up,
+             jet.z - across * si + along * co, w, h, d, rgb, jet.yaw);
+    }
+
+    const hurt = 1 - (1 - jet.health / jet.maxHealth) * 0.5;
+
+    // Nose and body. The cockpit glass isn't drawn while you're sat
+    // inside it, same reason as the truck's cab.
+    part(0, 2.0, 2.0, 3.4, 2.2, 17.0, shade(JET_BODY, hurt));
+    part(0, 2.0, 10.4, 1.8, 1.4, 4.0, shade(JET_BODY, hurt));      // nose cone
+    if (!flying) part(0, 3.4, 5.2, 2.4, 1.4, 4.4, JET_GLASS);
+
+    // Delta wings - wide, so a low pass sweeps a proper swathe.
+    for (const s of [-1, 1]) {
+      part(s * 5.6, 1.9, -1.0, 8.0, 0.7, 7.0, shade(JET_DARK, hurt));
+      part(s * 9.2, 1.9, -3.0, 2.0, 0.6, 3.0, shade(JET_DARK, hurt));
+      part(s * 3.0, 1.2, -2.0, 1.6, 1.6, 5.0, JET_DARK);           // engine pod
+    }
+
+    // Tail fins.
+    part(0, 4.4, -7.4, 0.6, 4.0, 4.0, shade(JET_DARK, hurt));
+    for (const s of [-1, 1]) part(s * 2.6, 2.0, -7.6, 4.0, 0.6, 3.0, shade(JET_DARK, hurt));
+
+    // AFTERBURNERS. They grow with the throttle, so how hard you're
+    // pushing is something you can SEE out of the back.
+    const burn = Math.max(0, jet.speed / JET_TOP);
+    if (burn > 0.05) {
+      for (const s of [-3.0, 3.0]) {
+        part(s, 1.2, -5.0 - burn * 2.2, 1.3, 1.3, 1.0 + burn * 5.0,
+             burn > 0.6 ? [255, 240, 200] : JET_BURN);
+      }
+    }
+
+    // Undercarriage, down only when it's actually on the ground.
+    if (jet.y <= terrainAt(jet.x, jet.z) + 2.2) {
+      for (const p of [[0, 8.0], [-3.4, -2.0], [3.4, -2.0]]) {
+        part(p[0], 0.5, p[1], 0.7, 1.6, 0.7, JET_DARK);
+      }
+    }
   }
 
 
@@ -6620,13 +6924,15 @@
   }
 
   function nearestMechanic() {
-    const gx0 = Math.round(rig.x / CELL), gz0 = Math.round(rig.z / CELL);
+    // Wherever YOU are, in whatever you're sat in.
+    const me = flying ? jet : rig;
+    const gx0 = Math.round(me.x / CELL), gz0 = Math.round(me.z / CELL);
     for (let gx = gx0 - 1; gx <= gx0 + 1; gx++) {
       for (let gz = gz0 - 1; gz <= gz0 + 1; gz++) {
         const p = propAt(gx, gz);
         if (!p || (p.kind !== 'bunker' && p.kind !== 'fort')) continue;
         const m = mechanicSpot(p);
-        if (Math.hypot(rig.x - m.x, rig.z - m.z) < REPAIR_REACH) return p;
+        if (Math.hypot(me.x - m.x, me.z - m.z) < REPAIR_REACH) return p;
       }
     }
     return null;
@@ -6635,7 +6941,12 @@
   function updateMechanic(dt) {
     atMechanic = nearestMechanic();
 
-    if (atMechanic && rig.health < rig.maxHealth) {
+    // The bay takes whatever you park in it. A jet is somebody else's
+    // problem to fix, but out here they're not fussy.
+    if (atMechanic && flying && jet.health < jet.maxHealth) {
+      jet.health = Math.min(jet.maxHealth, jet.health + REPAIR_RATE * dt);
+      repairGlow = Math.min(1, repairGlow + dt * 4);
+    } else if (atMechanic && rig.health < rig.maxHealth) {
       // Multiplied by dt like everything else that changes over time,
       // so it's thirty a second on a fast computer AND a slow one.
       rig.health = Math.min(rig.maxHealth, rig.health + REPAIR_RATE * dt);
@@ -6946,6 +7257,7 @@
     for (const m of marines) drawMarine(m);
     for (const e of enemies) drawEnemy(e);
     drawRig();
+    drawJet();
     for (const o of others) {
       // Anything past the fog is a waste of a hundred faces.
       if (Math.hypot(o.x - cam.x, o.z - cam.z) > 400) continue;
@@ -6973,7 +7285,7 @@
 
     // Both hands are on the wheel. The gun (and its crosshair) belong to
     // your eyes, and while you're driving the camera isn't in your head.
-    if (state === 'play' && !driving) drawGun();
+    if (state === 'play' && !driving && !flying) drawGun();
     drawHud();
     drawThumbPad();
   }
