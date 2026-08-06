@@ -5367,11 +5367,13 @@
     for (const o of others) {
       const m = toMap(o.x, o.z);
       if (m.d > MAP_RANGE) continue;
-      ctx.fillStyle = o.side === 'marine' ? '#7fc0f0' : '#d05a4a';
-      ctx.fillRect(m.x - 4, m.y - 4, 8, 8);
-      ctx.lineWidth = 1.2;
+      const big = o.side === 'kill';
+      const r2 = big ? 7 : 4;
+      ctx.fillStyle = big ? '#bfe4ff' : o.side === 'marine' ? '#7fc0f0' : '#d05a4a';
+      ctx.fillRect(m.x - r2, m.y - r2, r2 * 2, r2 * 2);
+      ctx.lineWidth = big ? 2 : 1.2;
       ctx.strokeStyle = 'rgba(0,0,0,0.6)';
-      ctx.strokeRect(m.x - 4, m.y - 4, 8, 8);
+      ctx.strokeRect(m.x - r2, m.y - r2, r2 * 2, r2 * 2);
     }
 
     // ---- EVERYTHING THAT WANTS YOU ----------------------------------
@@ -6567,6 +6569,22 @@
 //  Both drive with the same code and the same rules you do. The only
 //  difference is what they're pointed at, which is one line each.
 
+  // -----------------------------------------------------------------
+  //  THE KILL RIG
+  // -----------------------------------------------------------------
+  //  Two giant tractors side by side, hauling a platform the size of a
+  //  house on eight wheels, with up to ten marines stood on it firing
+  //  off the sides. A moving wall. It comes out of the marine forts and
+  //  it does not stop for anything.
+  const KILL_HP      = 2600;
+  const KILL_HALF_W  = 11.0;    // how wide the platform flattens
+  const KILL_NOSE    = 26;      // how far in front the bull bars reach
+  const KILL_CREW    = 10;      // marines aboard - Maximus picked the number
+  const KILL_REACH   = 105;     // how far the crew can shoot
+  const KILL_HURT    = 3;
+  const KILL_COOL    = 0.55;    // seconds between each marine's shots
+  const KILL_TOP     = 0.42;    // how fast, as a share of your top speed
+
   const OTHER_MAX     = 4;      // never more than this on the map at once
   const OTHER_SEE     = 300;    // how far they can pick a target
   const RAM_DAMAGE    = 0.9;    // damage per unit of closing speed
@@ -6577,15 +6595,87 @@
   let otherTimer = 22;
 
   function makeOther(side, x, z, yaw) {
-    return {
-      side: side,                       // 'marine' or 'zombie'
+    const hp = side === 'kill'   ? KILL_HP
+             : side === 'marine' ? MARINE_RIG_HP : ZOMBIE_RIG_HP;
+    const o = {
+      side: side,                       // 'marine', 'zombie' or 'kill'
       x: x, z: z, yaw: yaw,
       speed: 20, steer: 0,
-      health: side === 'marine' ? MARINE_RIG_HP : ZOMBIE_RIG_HP,
-      maxHealth: side === 'marine' ? MARINE_RIG_HP : ZOMBIE_RIG_HP,
+      health: hp, maxHealth: hp,
       ramFlash: 0, hitCool: 0, kills: 0,
       runT: 0, runYaw: 0, lock: null, lockT: 0
     };
+
+    // THE CREW. Ten of them, each with their own trigger finger, so
+    // they don't all fire on the same beat like one big gun.
+    if (side === 'kill') {
+      o.crew = [];
+      for (let i = 0; i < KILL_CREW; i++) {
+        o.crew.push({
+          // Five down each side of the platform, facing outwards.
+          //
+          // The deck runs from -31 to +3 along. Spacing them 9.5 apart
+          // from -20 put the front two of each row at +8.5 and +18 -
+          // out past the end of the platform, stood on nothing, firing
+          // from mid-air above the drawbar. These numbers keep all ten
+          // of them on the boards.
+          across: (i < 5 ? -1 : 1) * 7.4,
+          along:  -28 + (i % 5) * 7.0,
+          side:   (i < 5 ? -1 : 1),
+          yaw: 0, cool: Math.random() * KILL_COOL, flash: 0, bob: Math.random() * 6
+        });
+      }
+    }
+    return o;
+  }
+
+  // WHERE A CREWMAN IS STANDING, in the world. One function, so the
+  // marine you SEE and the marine that SHOOTS are in the same place -
+  // otherwise tracers come out of thin air beside the platform.
+  function crewSpot(o, c) {
+    const co = Math.cos(o.yaw), si = Math.sin(o.yaw);
+    return { x: o.x + c.across * co + c.along * si,
+             z: o.z - c.across * si + c.along * co };
+  }
+
+  // The ten of them firing. Same rules as a settlement's wall guards -
+  // nearest thing in range, one shot each on its own cooldown.
+  function updateKillCrew(o, dt) {
+    for (const c of o.crew) {
+      c.flash = Math.max(0, c.flash - dt * 9);
+      c.cool -= dt;
+      c.bob += dt * 0.7;
+
+      const at = crewSpot(o, c);
+      let best = null, bestD = KILL_REACH;
+      for (const e of enemies) {
+        if (e.dead) continue;
+        const d = Math.hypot(e.x - at.x, e.z - at.z);
+        if (d < bestD) { bestD = d; best = e; }
+      }
+      if (!best) continue;
+
+      c.yaw = Math.atan2(best.x - at.x, best.z - at.z);
+      if (c.cool > 0) continue;
+      c.cool = KILL_COOL;
+      c.flash = 1;
+
+      tracers.push({
+        x1: at.x, y1: terrainAt(o.x, o.z) + 9.4, z1: at.z,
+        x2: best.x, y2: best.k.height * 0.6, z2: best.z,
+        life: 0.07
+      });
+
+      best.hp -= KILL_HURT;
+      best.hitFlash = 1;
+      burst(best.x, best.k.height * 0.6, best.z, best.k.gib, 5, 6);
+
+      if (best.hp <= 0 && !best.dead) {
+        best.dead = true;
+        o.kills++;
+        burst(best.x, best.k.height * 0.5, best.z, best.k.gib, 20, 16);
+      }
+    }
   }
 
   // Marine rigs come OUT OF a fort if there's one about; zombie rigs
@@ -6593,7 +6683,7 @@
   function spawnOther(side) {
     if (others.length >= OTHER_MAX) return;
 
-    if (side === 'marine') {
+    if (side === 'marine' || side === 'kill') {
       const forts = placesNear(rig.x, rig.z, 5).filter(function (p) {
         return p.kind === 'fort';
       });
@@ -6619,6 +6709,7 @@
     // zombie rig keeps tracking you instead of charging the spot you
     // were standing in three seconds ago.
     if (o.side === 'zombie') return rig;
+    // A kill rig hunts the same things a marine rig does.
 
     // A marine rig goes for the nearest zombie rig, and failing that
     // the crowd.
@@ -6664,6 +6755,14 @@
     // More of them as the game goes on, same as everything else here.
     otherTimer -= dt;
     if (otherTimer <= 0) {
+      // ONE kill rig at a time, ever. Two would stop being a sight and
+      // start being traffic.
+      const haveKill = others.some(function (q) { return q.side === 'kill'; });
+      if (!haveKill && Math.random() < 0.3) {
+        spawnOther('kill');
+        otherTimer = 40 + Math.random() * 30;
+        return;
+      }
       // Zombie rigs get commoner the longer you last; marine rigs don't.
       spawnOther(Math.random() < Math.min(0.7, 0.3 + clock / 400) ? 'zombie' : 'marine');
       otherTimer = 26 + Math.random() * 22;
@@ -6766,7 +6865,8 @@
 
       // ---- FOOT DOWN -------------------------------------------------
       // Slower than you flat out, so a chase is always winnable.
-      let top = o.side === 'zombie' ? TOP_SPEED * 0.86 : TOP_SPEED * 0.78;
+      let top = o.side === 'kill'   ? TOP_SPEED * KILL_TOP
+              : o.side === 'zombie' ? TOP_SPEED * 0.86 : TOP_SPEED * 0.78;
 
       // EASE OFF FOR A HARD TURN, like anybody driving something this
       // big would. Slower means a tighter circle - but never below the
@@ -6777,8 +6877,10 @@
 
       const nx = o.x + Math.sin(o.yaw) * o.speed * dt;
       const nz = o.z + Math.cos(o.yaw) * o.speed * dt;
-      const R = RIG_HALF_W + 1.5;
-      if (!blockedAt(nx, nz, R)) {
+      // A KILL RIG DOES NOT GO ROUND THINGS. It weighs as much as a
+      // building and it is not turning aside for a dead tree.
+      const R = o.side === 'kill' ? 0 : RIG_HALF_W + 1.5;
+      if (o.side === 'kill' || !blockedAt(nx, nz, R)) {
         o.x = nx; o.z = nz;
       } else {
         // Same slide-or-bounce rule your truck gets, so they can't
@@ -6790,6 +6892,12 @@
 
       // ---- MARINE RIGS FLATTEN THE DEAD -------------------------------
       if (o.side === 'marine') otherRunsThemDown(o, dt);
+
+      // ---- AND A KILL RIG DOES BOTH -----------------------------------
+      if (o.side === 'kill') {
+        otherRunsThemDown(o, dt, KILL_HALF_W, KILL_NOSE);
+        updateKillCrew(o, dt);
+      }
 
       // ---- RAMMING ----------------------------------------------------
       otherRams(o, dt);
@@ -6809,30 +6917,36 @@
     others = others.filter(function (o) {
       // Anything a long way behind you is gone - it isn't part of the
       // game any more and it costs a frame to keep pretending.
-      return o.health > 0 && Math.hypot(o.x - rig.x, o.z - rig.z) < 620;
+      return o.health > 0 &&
+             Math.hypot(o.x - rig.x, o.z - rig.z) < (o.side === 'kill' ? 900 : 620);
     });
   }
 
   // A marine rig ploughing through the crowd. Same rectangle test as
   // yours, so it obeys the same speed-is-armour rule you do.
-  function otherRunsThemDown(o, dt) {
+  function otherRunsThemDown(o, dt, halfW, nose) {
+    // A kill rig's platform is three times as wide as a lorry, so the
+    // rectangle it sweeps has to be passed in rather than assumed.
+    halfW = halfW || RIG_HALF_W;
+    nose  = nose  || RIG_NOSE;
     const co = Math.cos(o.yaw), si = Math.sin(o.yaw);
     for (const e of enemies) {
       if (e.dead) continue;
       const dx = e.x - o.x, dz = e.z - o.z;
-      if (Math.abs(dx) > 24 || Math.abs(dz) > 24) continue;
+      if (Math.abs(dx) > nose + 26 || Math.abs(dz) > nose + 26) continue;
 
       const along  = dx * si + dz * co;
       const across = dx * co - dz * si;
-      const wide = RIG_HALF_W + (e.k.radius || 1.4);
+      const wide = halfW + (e.k.radius || 1.4);
       if (across < -wide || across > wide) continue;
-      if (along < -9 || along > RIG_NOSE) continue;
+      if (along < -halfW * 2.6 || along > nose) continue;
 
       if (Math.abs(o.speed) >= RAM_SPEED) {
         e.dead = true;
         o.kills++;
         o.ramFlash = 1;
-        o.speed *= (e.k.hp > 40 ? 0.86 : 0.985);
+        o.speed *= o.side === 'kill' ? (e.k.hp > 40 ? 0.97 : 0.998)
+                                     : (e.k.hp > 40 ? 0.86 : 0.985);
         burst(e.x, e.k.height * 0.5, e.z, e.k.gib, 22, 18);
       }
     }
@@ -7236,6 +7350,89 @@
   function drawRig() { drawTruck(rig, SKIN_YOU, true); }
 
 
+  // THE KILL RIG.
+  //
+  // Two giant tractors side by side with a platform slung between and
+  // behind them, on eight wheels, with ten marines stood on it. It is
+  // drawn at TWICE the scale of everything else on the map, which is
+  // the whole point - you should be able to tell what it is from the
+  // horizon, and be glad it's on your side.
+  const KILL_STEEL = [118, 128, 140], KILL_DARK = [54, 62, 72];
+  const KILL_PLATE = [86, 96, 108],   KILL_TYRE = [38, 36, 34];
+
+  function drawKillRig(o) {
+    const co = Math.cos(o.yaw), si = Math.sin(o.yaw);
+    const base = terrainAt(o.x, o.z);
+
+    function part(across, up, along, w, h, d, rgb) {
+      addBox(o.x + across * co + along * si, base + up,
+             o.z - across * si + along * co, w, h, d, rgb, o.yaw);
+    }
+
+    const hurt = 1 - (1 - o.health / o.maxHealth) * 0.45;
+
+    // ---- THE TWO TRACTORS ---------------------------------------------
+    // Side by side out in front, each one about twice your lorry.
+    for (const s of [-1, 1]) {
+      const a = s * 7.0;
+
+      // Bull bars, and they are enormous.
+      const bar = o.ramFlash > 0 ? shade(KILL_STEEL, 1 + o.ramFlash * 0.6) : KILL_STEEL;
+      part(a, 3.6, 25.0, 11.0, 1.6, 1.8, bar);
+      part(a, 6.6, 25.0, 11.0, 1.6, 1.8, bar);
+      for (const k of [-3.6, 0, 3.6]) part(a + k, 5.1, 25.0, 1.6, 4.6, 1.8, bar);
+
+      part(a, 4.8, 17.0, 9.4, 6.2, 15.0, shade([96, 106, 118], hurt));   // bonnet
+      part(a, 9.6, 14.0, 8.6, 5.0, 9.0, shade(KILL_PLATE, hurt));        // cab
+      part(a, 10.2, 18.2, 7.4, 3.2, 0.8, [110, 160, 190]);               // glass
+      for (const k of [-2.4, 2.4]) part(a + k, 13.4, 12.0, 0.8, 3.0, 0.8, KILL_DARK);
+      for (const k of [-3.0, 3.0]) part(a + k, 5.4, 25.4, 2.0, 1.6, 0.5, [255, 226, 160]);
+
+      // Six wheels per tractor.
+      for (const b of [21.0, 15.0, 11.0]) {
+        for (const w of [-1, 1]) {
+          part(a + w * 5.6, 2.8, b, 2.6, 5.6, 5.6, KILL_TYRE);
+        }
+      }
+    }
+
+    // The drawbar joining them to the load.
+    part(0, 5.0, 6.0, 20.0, 1.6, 6.0, KILL_DARK);
+
+    // ---- THE PLATFORM --------------------------------------------------
+    // A flat deck the size of a house, with a rail round the edge so the
+    // crew aren't just stood on a table.
+    part(0, 6.4, -14.0, 22.0, 2.0, 34.0, shade(KILL_PLATE, hurt));
+    part(0, 7.6, -14.0, 21.0, 0.6, 33.0, shade([104, 114, 126], hurt));
+
+    for (const s of [-1, 1]) {
+      part(s * 10.6, 9.2, -14.0, 0.9, 3.0, 34.0, KILL_STEEL);   // side rails
+    }
+    part(0, 9.2, -30.6, 21.0, 3.0, 0.9, KILL_STEEL);            // back rail
+
+    // Crates and a fuel drum riding down the middle, so the deck isn't
+    // just a grey rectangle.
+    part(0, 9.4, -6.0, 5.0, 4.0, 7.0, [92, 82, 66]);
+    part(0, 9.8, -20.0, 4.0, 5.0, 4.0, [128, 74, 44]);
+
+    // Eight wheels under the deck.
+    for (const b of [-2.0, -10.0, -18.0, -26.0]) {
+      for (const w of [-1, 1]) {
+        part(w * 9.4, 3.0, b, 2.8, 6.0, 6.0, KILL_TYRE);
+      }
+    }
+
+    // ---- THE CREW -------------------------------------------------------
+    // Drawn from the SAME crewSpot the shooting uses, so every tracer
+    // comes out of a marine you can actually see.
+    for (const c of o.crew) {
+      const at = crewSpot(o, c);
+      drawPerson(at.x, base + 7.6 + Math.sin(c.bob) * 0.1, at.z,
+                 c.yaw, MARINE_COAT, true, c.flash);
+    }
+  }
+
+
   function draw() {
     // A different planet, a different painter.
     if (state === 'space') { drawSpace(); return; }
@@ -7260,8 +7457,12 @@
     drawJet();
     for (const o of others) {
       // Anything past the fog is a waste of a hundred faces.
-      if (Math.hypot(o.x - cam.x, o.z - cam.z) > 400) continue;
-      drawTruck(o, o.side === 'marine' ? SKIN_MARINE : SKIN_ZOMBIE, false);
+      // A kill rig is enormous - worth drawing from much further away,
+      // because seeing one on the horizon is half of what it's for.
+      const far = Math.hypot(o.x - cam.x, o.z - cam.z);
+      if (far > (o.side === 'kill' ? 700 : 400)) continue;
+      if (o.side === 'kill') drawKillRig(o);
+      else drawTruck(o, o.side === 'marine' ? SKIN_MARINE : SKIN_ZOMBIE, false);
     }
     drawBolts();
     drawTracers();
