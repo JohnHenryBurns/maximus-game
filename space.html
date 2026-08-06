@@ -20,7 +20,7 @@
 </head>
 <body>
 <canvas id="screen"></canvas>
-<div id="hud">MOUSE = steer &nbsp;&nbsp; W = thrust &nbsp;&nbsp; S = brake &nbsp;&nbsp; A D = roll &nbsp;&nbsp; <b>Q = lock on</b> &nbsp;&nbsp; T = auto-aim &nbsp;&nbsp; CLICK = shoot</div>
+<div id="hud">MOUSE = steer &nbsp;&nbsp; W = thrust &nbsp;&nbsp; S = brake &nbsp;&nbsp; A D = roll &nbsp;&nbsp; <b>Q = lock on</b> &nbsp;&nbsp; <b>E = dock</b> &nbsp;&nbsp; T = auto-aim &nbsp;&nbsp; CLICK = shoot</div>
 
 <script>
 // ===================================================================
@@ -256,6 +256,11 @@
     fwd: vec(0, 0, 1), up: vec(0, 1, 0), right: vec(1, 0, 0),
 
     health: 100,
+    maxHealth: 100,     // a station can raise this
+    gunDamage: 1,       // ...and this
+    enginePower: 1,     // ...and this
+    salvage: 0,         // cut off the ships you kill. Spend it docked.
+
     cool: 0,
     hurtFlash: 0,
     thrusting: 0,
@@ -419,6 +424,142 @@
 
 
 // -------------------------------------------------------------------
+//  STATIONS
+// -------------------------------------------------------------------
+//  Somewhere to go, and a reason to have got there.
+//
+//  Unlike the rocks, EVERY station cell has one - no roll, no maybe.
+//  The asteroids can be a lottery because you don't need any particular
+//  rock. You do need a station, and a game that can leave you with
+//  nowhere to repair is a game that can quietly become unwinnable.
+//
+//  So they're on a coarse grid, jittered off the corners so it doesn't
+//  feel like graph paper, and there is always one within reach.
+// -------------------------------------------------------------------
+
+  const ST_CELL   = 3000;
+  const ST_SEE    = 9000;    // its light carries a very long way
+  const DOCK_DIST = 130;     // how close the bay has to be
+  const DOCK_SPEED = 34;     // and how slowly you must be moving
+
+  const ST_HULL = [96, 106, 122];
+  const ST_DARK = [58, 66, 80];
+  const ST_LIT  = [120, 220, 255];
+
+  const stCache = new Map();
+
+  function stationAt(gx, gy, gz) {
+    const key = gx + ',' + gy + ',' + gz;
+    if (stCache.has(key)) return stCache.get(key);
+    if (stCache.size > 900) stCache.clear();
+
+    const st = {
+      gx: gx, gy: gy, gz: gz,
+      pos: vec(
+        gx * ST_CELL + (hash3(gx + 2, gy, gz) - 0.5) * ST_CELL * 0.5,
+        gy * ST_CELL + (hash3(gx, gy + 2, gz) - 0.5) * ST_CELL * 0.5,
+        gz * ST_CELL + (hash3(gx, gy, gz + 2) - 0.5) * ST_CELL * 0.5),
+      spin: hash3(gx + 4, gy, gz) * 6.28,
+      name: 'STATION ' + (Math.abs(gx * 7 + gy * 13 + gz * 3) % 90 + 10)
+    };
+
+    stCache.set(key, st);
+    return st;
+  }
+
+  // The station's own three arrows, turning very slowly.
+  function stationFrame(st) {
+    const a = st.spin + clock * 0.07;
+    const o = { right: vec(1, 0, 0), up: vec(0, 1, 0), fwd: vec(0, 0, 1) };
+    const p = spinPair(o.fwd, o.right, a);
+    o.fwd = p[0]; o.right = p[1];
+    tidy(o);
+    return o;
+  }
+
+  // WHERE THE DOOR IS. Out in front of the station along its own axis,
+  // so you have to come round to the right side rather than bumping
+  // into whichever bit of it you happened to reach first.
+  function dockPoint(st) {
+    return add(st.pos, mul(stationFrame(st).fwd, 120));
+  }
+
+  function nearestStation() {
+    const gx = Math.round(ship.pos.x / ST_CELL);
+    const gy = Math.round(ship.pos.y / ST_CELL);
+    const gz = Math.round(ship.pos.z / ST_CELL);
+
+    let best = null, bestD = 1e9;
+
+    for (let ax = gx - 1; ax <= gx + 1; ax++) {
+      for (let ay = gy - 1; ay <= gy + 1; ay++) {
+        for (let az = gz - 1; az <= gz + 1; az++) {
+          const st = stationAt(ax, ay, az);
+          const d = len(sub(st.pos, ship.pos));
+          if (d < bestD) { bestD = d; best = st; }
+        }
+      }
+    }
+    return best;
+  }
+
+  function drawStations() {
+    const gx = Math.round(ship.pos.x / ST_CELL);
+    const gy = Math.round(ship.pos.y / ST_CELL);
+    const gz = Math.round(ship.pos.z / ST_CELL);
+
+    for (let ax = gx - 1; ax <= gx + 1; ax++) {
+      for (let ay = gy - 1; ay <= gy + 1; ay++) {
+        for (let az = gz - 1; az <= gz + 1; az++) {
+          const st = stationAt(ax, ay, az);
+          const d = len(sub(st.pos, ship.pos));
+          if (d > ST_SEE) continue;
+
+          const o = stationFrame(st);
+
+          // ---- THE LIGHT, at any distance --------------------------
+          // Drawn even when the station itself is far past the point
+          // where anything else is worth drawing. It's how you find the
+          // place - the same trick the wasteland's beacons use.
+          const pulse = 0.55 + Math.sin(clock * 2 + st.gx) * 0.45;
+          const size = 14 + d * 0.02;
+          addBox(st.pos, o, size, size, size,
+                 [90 + 90 * pulse, 190 + 60 * pulse, 255]);
+
+          if (d > SEE) continue;      // too far for the actual building
+
+          // ---- THE HUB ---------------------------------------------
+          addBox(st.pos, o, 74, 30, 74, ST_HULL);
+          addBox(st.pos, o, 52, 44, 52, ST_DARK);
+          addBox(st.pos, o, 30, 58, 30, ST_HULL);
+
+          // Four arms, and a lit pod on the end of each.
+          for (let i = 0; i < 4; i++) {
+            const s = (i < 2 ? 1 : -1);
+            const along = (i % 2 === 0) ? o.right : o.up;
+            addBox(add(st.pos, mul(along, s * 62)), o,
+                   i % 2 === 0 ? 60 : 20, i % 2 === 0 ? 12 : 60, 20, ST_DARK);
+            addBox(add(st.pos, mul(along, s * 96)), o, 26, 26, 26, ST_HULL);
+            addBox(add(st.pos, mul(along, s * 96)), o, 28, 8, 8, ST_LIT);
+          }
+
+          // ---- THE DOCKING BAY -------------------------------------
+          // Ringed in light so you can see where the door is from a
+          // long way off, and which way round you have to come.
+          const bay = dockPoint(st);
+          addBox(bay, o, 46, 46, 8, ST_DARK);
+          for (const c of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
+            addBox(add(add(bay, mul(o.right, c[0] * 24)), mul(o.up, c[1] * 24)),
+                   o, c[0] ? 6 : 48, c[1] ? 6 : 48, 5, ST_LIT);
+          }
+          addBox(add(bay, mul(o.fwd, -34)), o, 34, 34, 60, ST_DARK);
+        }
+      }
+    }
+  }
+
+
+// -------------------------------------------------------------------
 //  STARS
 // -------------------------------------------------------------------
 //  Infinitely far away, so they never get closer no matter how hard you
@@ -479,6 +620,45 @@
   let enemies = [];
   let bolts   = [];
   let bits    = [];
+  let loot    = [];      // salvage floating where something died
+
+
+  const LOOT_GRAB = 34;      // how close you have to fly to pick it up
+
+  function updateLoot(dt) {
+    for (const l of loot) {
+      l.pos = add(l.pos, mul(l.vel, dt));
+      l.spin += dt * 1.6;
+      l.life -= dt;
+
+      // Drifts towards you once you're near - a chunk of metal you have
+      // to line up perfectly with would be a chore, not a reward.
+      const to = sub(ship.pos, l.pos);
+      const d = len(to) || 1;
+
+      if (d < 120) l.vel = add(l.vel, mul(mul(to, 1 / d), 90 * dt));
+
+      if (d < LOOT_GRAB) {
+        ship.salvage += l.worth;
+        l.life = 0;
+        beep(880, 1400, 0.07, 0.09, 'triangle');
+      }
+    }
+    loot = loot.filter(function (l) { return l.life > 0; });
+  }
+
+  function drawLoot() {
+    for (const l of loot) {
+      const o = {
+        right: vec(Math.cos(l.spin), 0, Math.sin(l.spin)),
+        up: vec(0, 1, 0),
+        fwd: vec(-Math.sin(l.spin), 0, Math.cos(l.spin))
+      };
+      // Bright and warm, so it reads as WORTH SOMETHING against grey rock.
+      addBox(l.pos, o, 2.6, 2.6, 2.6, [230, 190, 90]);
+      addBox(l.pos, o, 3.2, 0.9, 0.9, [255, 225, 140]);
+    }
+  }
 
   let spawnTimer = 3;
 
@@ -737,6 +917,111 @@
 
 
 // -------------------------------------------------------------------
+//  DOCKING
+// -------------------------------------------------------------------
+//  Close to the bay, and SLOW. That's it - and the slow part is the
+//  whole skill, because nothing out here slows you down for you. You
+//  have to plan the approach, turn round, and burn against your own
+//  drift before you arrive.
+//
+//  When it won't let you in it SAYS WHY. "Nothing happens when I press
+//  E" is the most infuriating thing a game can do to you; "TOO FAST" is
+//  a game telling you how to fix it.
+// -------------------------------------------------------------------
+
+  function dockCheck() {
+    const st = nearestStation();
+    const d = len(sub(dockPoint(st), ship.pos));
+
+    if (d > DOCK_DIST) return { st: st, near: false, ok: false, why: '' };
+
+    const sp = len(ship.vel);
+    if (sp > DOCK_SPEED) {
+      return { st: st, near: true, ok: false,
+               why: 'TOO FAST  -  ' + Math.round(sp) + ', NEEDS UNDER ' +
+                    DOCK_SPEED + '  -  HOLD S' };
+    }
+
+    return { st: st, near: true, ok: true, why: '' };
+  }
+
+  let docked = null;
+  let dockPick = 0;
+
+  function tryDock() {
+    const c = dockCheck();
+    if (!c.ok) return;
+
+    docked = c.st;
+    state = 'docked';
+    dockPick = 0;
+
+    // Bring the ship to rest in the bay. Nothing else in this game ever
+    // stops - this is the one place it does.
+    ship.vel = vec(0, 0, 0);
+    ship.pos = dockPoint(c.st);
+
+    beep(420, 700, 0.5, 0.16, 'triangle');
+  }
+
+  function undock() {
+    if (!docked) return;
+    // Nudged out of the bay so you don't immediately re-dock.
+    ship.pos = add(ship.pos, mul(stationFrame(docked).fwd, 60));
+    docked = null;
+    state = 'play';
+    beep(700, 300, 0.3, 0.14, 'triangle');
+  }
+
+  // ---- WHAT YOU CAN BUY -----------------------------------------------
+  // Each one says what it costs, whether you can have it, and what it
+  // does. Prices climb, so the fifth gun upgrade is a real decision and
+  // the first one is easy.
+  function dockMenu() {
+    const need = Math.ceil(ship.maxHealth - ship.health);
+
+    return [
+      { label: 'Repair the hull',
+        note: need > 0 ? need + ' points of damage' : 'no damage to fix',
+        cost: need * 2,
+        can: need > 0,
+        take: function () { ship.health = ship.maxHealth; } },
+
+      { label: 'Hull plating',
+        note: 'top hull ' + ship.maxHealth + ' becomes ' + (ship.maxHealth + 25),
+        cost: 40 + (ship.maxHealth - 100) * 1.6,
+        can: true,
+        take: function () { ship.maxHealth += 25; ship.health += 25; } },
+
+      { label: 'Gun capacitors',
+        note: 'shots do ' + ship.gunDamage + ', would do ' + (ship.gunDamage + 1),
+        cost: 60 + (ship.gunDamage - 1) * 70,
+        can: true,
+        take: function () { ship.gunDamage += 1; } },
+
+      { label: 'Engine tuning',
+        note: 'thrust ' + Math.round(ship.enginePower * 100) + '%, would be ' +
+              Math.round((ship.enginePower + 0.25) * 100) + '%',
+        cost: 50 + (ship.enginePower - 1) * 90,
+        can: true,
+        take: function () { ship.enginePower += 0.25; } }
+    ];
+  }
+
+  function buyDock(i) {
+    const m = dockMenu()[i];
+    if (!m || !m.can) return;
+
+    const cost = Math.round(m.cost);
+    if (ship.salvage < cost) { beep(200, 140, 0.14, 0.1); return; }
+
+    ship.salvage -= cost;
+    m.take();
+    beep(520, 900, 0.25, 0.16, 'triangle');
+  }
+
+
+// -------------------------------------------------------------------
 //  SHOOTING
 // -------------------------------------------------------------------
 
@@ -775,7 +1060,7 @@
         for (const e of enemies) {
           if (e.hp <= 0) continue;
           if (len(sub(b.pos, e.pos)) < ENEMY_R) {
-            e.hp--;
+            e.hp -= ship.gunDamage;
             e.hitFlash = 1;
             b.life = 0;
             burst(b.pos, [[255, 200, 140], [255, 130, 80]], 8, 30);
@@ -807,6 +1092,25 @@
   function killEnemy(e) {
     e.hp = -1;
     ship.kills++;
+
+    // ---- WHAT'S LEFT OF HIM -----------------------------------------
+    // Chunks worth taking, drifting away from the wreck. You have to go
+    // and get them, which means the moment you shoot something down you
+    // have a decision: chase the salvage, or stay out of trouble.
+    for (let i = 0; i < 5; i++) {
+      const a = Math.random() * 6.28;
+      const b = Math.acos(Math.random() * 2 - 1);
+      const dir = vec(Math.cos(a) * Math.sin(b), Math.cos(b), Math.sin(a) * Math.sin(b));
+
+      loot.push({
+        pos: vec(e.pos.x, e.pos.y, e.pos.z),
+        vel: add(mul(e.vel, 0.4), mul(dir, 12 + Math.random() * 22)),
+        worth: 3 + Math.floor(Math.random() * 4),
+        life: 40,
+        spin: Math.random() * 6.28
+      });
+    }
+
     burst(e.pos, [[255, 190, 110], [255, 120, 60], [150, 60, 60]], 40, 90);
     beep(180, 40, 0.6, 0.28);
     shake = Math.max(shake, 0.6);
@@ -898,6 +1202,21 @@
       e.preventDefault();      // or Tab jumps out of the game entirely
     }
 
+    // ---- THE STATION -------------------------------------------------
+    if (state === 'docked') {
+      const k = e.key.toLowerCase();
+      if (k === 'e' || k === 'escape') undock();
+      else if (k >= '1' && k <= '4') buyDock(Number(k) - 1);
+      e.preventDefault();
+      return;                       // shopping, not flying
+    }
+
+    if (e.key.toLowerCase() === 'e' && state === 'play') {
+      tryDock();
+      e.preventDefault();
+      return;
+    }
+
     if (e.key.toLowerCase() === 't' && state === 'play') {
       aimBot = !aimBot;
       beep(aimBot ? 620 : 300, aimBot ? 980 : 200, 0.14, 0.12, 'triangle');
@@ -933,11 +1252,13 @@
     ship.pos = vec(0, 0, 0);
     ship.vel = vec(0, 0, 0);
     ship.fwd = vec(0, 0, 1); ship.up = vec(0, 1, 0); ship.right = vec(1, 0, 0);
-    ship.health = 100;
+    ship.maxHealth = 100; ship.gunDamage = 1; ship.enginePower = 1;
+    ship.salvage = 0; ship.health = ship.maxHealth;
     ship.kills = 0;
     ship.hurtFlash = 0;
-    enemies = []; bolts = []; bits = [];
+    enemies = []; bolts = []; bits = []; loot = [];
     target = null;
+    docked = null;
     spawnTimer = 3;
     clock = 0;
     state = 'play';
@@ -956,9 +1277,14 @@
     if (ship.cool > 0) ship.cool -= dt;
 
     updateBits(dt);
+    updateLoot(dt);
 
     // Once, up front, for everybody.
     gatherRocks();
+
+    // Tied up at a station: the world holds still. You're inside the
+    // dock, which is the one safe place there is.
+    if (state === 'docked') { aimCamera(dt); return; }
 
     if (state === 'dead') {
       deadTimer += dt;
@@ -1003,7 +1329,7 @@
     // racer.
     const boosting = keys['shift'];
     if (held('w', 'arrowup')) {
-      ship.vel = add(ship.vel, mul(ship.fwd, (boosting ? BOOST : THRUST) * dt));
+      ship.vel = add(ship.vel, mul(ship.fwd, (boosting ? BOOST : THRUST) * ship.enginePower * dt));
       ship.thrusting = Math.min(1, ship.thrusting + dt * 4);
     } else {
       ship.thrusting = Math.max(0, ship.thrusting - dt * 3);
@@ -1286,6 +1612,105 @@
     }
   }
 
+  // ---- WHERE'S THE NEAREST STATION? ------------------------------------
+  function drawNav() {
+    const st = nearestStation();
+    const to = sub(st.pos, ship.pos);
+    const d = len(to);
+    const s = project(st.pos);
+
+    const onScreen = s.depth > 1 && s.x > 40 && s.x < W - 40 &&
+                                    s.y > 40 && s.y < H - 40;
+
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 12px system-ui, sans-serif';
+
+    if (onScreen) {
+      ctx.strokeStyle = 'rgba(120,220,255,0.75)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, 16, 0, 6.28);
+      ctx.stroke();
+      ctx.fillStyle = '#78dcff';
+      ctx.fillText(st.name + '  ' + Math.round(d), s.x, s.y + 32);
+      return;
+    }
+
+    // Off screen or behind: an arrow on the rim pointing the way to turn.
+    let ax = dot(to, cam.right), ay = dot(to, cam.up);
+    if (dot(to, cam.fwd) < 0) { ax = -ax; ay = -ay; }
+
+    const l = Math.hypot(ax, ay) || 1;
+    const r = Math.min(W, H) * 0.42;
+    const ex = W / 2 + (ax / l) * r;
+    const ey = H / 2 - (ay / l) * r;
+
+    ctx.save();
+    ctx.translate(ex, ey);
+    ctx.rotate(Math.atan2(-(ay / l), ax / l));
+    ctx.fillStyle = '#78dcff';
+    ctx.beginPath();
+    ctx.moveTo(13, 0); ctx.lineTo(-7, 7); ctx.lineTo(-7, -7);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+
+    ctx.fillStyle = '#78dcff';
+    ctx.fillText(Math.round(d), ex, ey + 24);
+  }
+
+  // ---- INSIDE THE STATION ----------------------------------------------
+  function drawDockScreen() {
+    ctx.fillStyle = 'rgba(4,10,20,0.9)';
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.textAlign = 'center';
+    ctx.font = 'bold ' + Math.min(W * 0.06, 40) + 'px system-ui, sans-serif';
+    ctx.fillStyle = '#78dcff';
+    ctx.fillText(docked ? docked.name : 'STATION', W / 2, H * 0.15);
+
+    ctx.font = Math.min(W * 0.03, 18) + 'px system-ui, sans-serif';
+    ctx.fillStyle = '#8fa8c8';
+    ctx.fillText('docked  -  you have ' + ship.salvage + ' salvage',
+                 W / 2, H * 0.20);
+
+    const list = dockMenu();
+
+    for (let i = 0; i < list.length; i++) {
+      const m = list[i];
+      const cost = Math.round(m.cost);
+      const afford = m.can && ship.salvage >= cost;
+
+      const bw = Math.min(W * 0.68, 500), bh = H * 0.105;
+      const bx = W / 2 - bw / 2, by = H * 0.26 + i * (bh + 9);
+
+      ctx.fillStyle = afford ? 'rgba(120,220,255,0.14)' : 'rgba(0,0,0,0.42)';
+      ctx.fillRect(bx, by, bw, bh);
+      ctx.lineWidth = afford ? 3 : 1.5;
+      ctx.strokeStyle = afford ? '#78dcff' : 'rgba(255,255,255,0.18)';
+      ctx.strokeRect(bx, by, bw, bh);
+
+      ctx.textAlign = 'left';
+      ctx.font = 'bold ' + Math.min(W * 0.034, 22) + 'px system-ui, sans-serif';
+      ctx.fillStyle = afford ? '#bfe9ff' : '#7f8fa0';
+      ctx.fillText((i + 1) + '.  ' + m.label, bx + 16, by + bh * 0.42);
+
+      ctx.font = Math.min(W * 0.025, 15) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#7f93aa';
+      ctx.fillText(m.note, bx + 16, by + bh * 0.76);
+
+      ctx.textAlign = 'right';
+      ctx.font = 'bold ' + Math.min(W * 0.03, 19) + 'px system-ui, sans-serif';
+      ctx.fillStyle = !m.can ? '#5f6f80' : afford ? '#8fff9a' : '#e0704a';
+      ctx.fillText(m.can ? cost + ' salvage' : '-', bx + bw - 16, by + bh * 0.6);
+    }
+
+    ctx.textAlign = 'center';
+    ctx.font = Math.min(W * 0.03, 18) + 'px system-ui, sans-serif';
+    ctx.fillStyle = '#6c8098';
+    ctx.fillText('press 1 to 4 to buy      E to undock', W / 2, H * 0.88);
+  }
+
   function drawHud() {
     // ---- CROSSHAIR ----------------------------------------------------
     // Dead centre, and it can be, because the camera IS the ship now.
@@ -1334,6 +1759,20 @@
     ctx.fillText(aimBot ? 'targeting computer ON' : 'targeting computer OFF',
                  W * 0.95, H - 78);
 
+    ctx.fillStyle = '#e6c05a';
+    ctx.fillText(ship.salvage + ' salvage', W * 0.95, H - 94);
+
+    // ---- CAN YOU DOCK? ------------------------------------------------
+    if (state === 'play') {
+      const c = dockCheck();
+      if (c.near) {
+        ctx.textAlign = 'center';
+        ctx.font = 'bold ' + Math.min(W * 0.04, 25) + 'px system-ui, sans-serif';
+        ctx.fillStyle = c.ok ? '#8fff9a' : '#ffb060';
+        ctx.fillText(c.ok ? 'PRESS E TO DOCK' : c.why, W / 2, H * 0.70);
+      }
+    }
+
     // ---- HIT ----------------------------------------------------------
     if (ship.hurtFlash > 0) {
       const g = ctx.createRadialGradient(W / 2, H / 2, H * 0.28, W / 2, H / 2, H * 0.8);
@@ -1380,9 +1819,11 @@
 
     faces = [];
     drawRocks();
+    drawStations();
     drawEnemies();
     drawBolts();
     drawBits();
+    drawLoot();
     if (state === 'play') drawCockpitParts();
 
     faces.sort(function (a, b) { return b.depth - a.depth; });
@@ -1400,7 +1841,9 @@
 
     // Canopy first, then the readouts - so the numbers sit ON the
     // dashboard instead of underneath it.
-    if (state === 'play') drawCanopy();
+    if (state === 'docked') { drawDockScreen(); return; }
+
+    if (state === 'play') { drawCanopy(); drawNav(); }
     drawLock();
     drawHud();
   }
