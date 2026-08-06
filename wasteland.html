@@ -415,24 +415,31 @@
   function terrainAt(x, z) {
     if (!PLANETS[planetIx].hills) return 0;
 
-    // Broad rolling hills, about 240 paces crest to crest.
-    const broad = noiseAt(HILL_GRID, 40, x / 4800, z / 4800);
-    let h = (broad - 0.35) * 34;
+    // MOSTLY FLAT - Maximus played the everywhere-hills version and
+    // ruled against it. A slow mask picks out a few patches of the
+    // map; outside them the answer is simply zero, the pancake the
+    // wasteland always was.
+    const zone = noiseAt(CLIFF_GRID, 40, x / 10400 + 11, z / 10400 + 7);
+    if (zone < 0.67) return 0;
 
-    // Cliff country: where this slow mask runs high, the same hills
-    // get squared off into terraces.
-    const cliffy = noiseAt(CLIFF_GRID, 40, x / 10400 + 11, z / 10400 + 7);
-    if (cliffy > 0.55) {
+    // Ease in at a patch's edges so flat ground rises into a landform
+    // instead of hitting a wall of dirt.
+    const lift = clamp((zone - 0.67) / 0.12, 0, 1);
+
+    // Inside a patch: one big hill...
+    const broad = noiseAt(HILL_GRID, 40, x / 4800, z / 4800);
+    let h = broad * 34 * lift;
+
+    // ...and the taller it gets, the more it squares off into cliff
+    // terraces - so the big landforms are the dramatic ones.
+    if (h > 7) {
       const t = h / CLIFF_STEP;
       const frac = t - Math.floor(t);
-      const riser = clamp((frac - 0.5) * 6 + 0.5, 0, 1);   // steep, not sheer
+      const riser = clamp((frac - 0.5) * 6 + 0.5, 0, 1);
       const terraced = (Math.floor(t) + riser) * CLIFF_STEP;
-      const mix = clamp((cliffy - 0.55) / 0.15, 0, 1);
+      const mix = clamp((h - 7) / 5, 0, 1);
       h += (terraced - h) * mix;
     }
-
-    // A little fine ripple so the flats aren't billiard tables.
-    h += (noiseAt(HILL_GRID, 40, x / 900 + 3, z / 900 + 5) - 0.5) * 3;
     return h;
   }
 
