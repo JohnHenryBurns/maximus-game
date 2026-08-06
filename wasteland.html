@@ -3295,7 +3295,16 @@
       skyTop: '#3a2214', skyLow: '#c9955a',
       fog: [178, 136, 88],  ground: [186, 156, 112], orb: [220, 150, 80],
       kinds: { melee: 'zombie', ranged: 'robot', big: 'giant' },
-      hills: true },   // Maximus wants hills and cliffs here
+      // FLAT. Maximus tried it with hills, then with cliffs and no
+      // slopes, and has now ruled against the lot. The Rust is a
+      // pancake again.
+      //
+      // The terrain code stays exactly where it is - terrainAt starts
+      // with "if this planet has no hills, the answer is zero", so
+      // switching this one word turns all of it off and costs nothing.
+      // Deleting it would only mean writing it again if he changes his
+      // mind, and he is allowed to change his mind.
+      hills: false },
     { name: 'ASHFALL',     seed: 1,
       skyTop: '#17171d', skyLow: '#8e8e96',
       fog: [138, 138, 146], ground: [118, 118, 126], orb: [170, 170, 180],
