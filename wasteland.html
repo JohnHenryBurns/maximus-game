@@ -1553,6 +1553,36 @@
       bite: 6, biteEvery: 0.7, ranged: false,
       knock: 1.6, shove: 1.2, scrap: 1
     },
+    // Maximus's ruling: NO repeat monsters between planets. So the
+    // three worlds that borrowed the robot get shooters of their own.
+    ashSpitter: {
+      role: 'robot',
+      hp: 6, speed: 5.5, radius: 2.5, height: 6.6, reach: 3.3,
+      body: [116, 116, 126], limb: [92, 92, 102], head: [148, 148, 160],
+      eye: [255, 255, 255], boltColour: [235, 235, 245],
+      gib: [[126, 126, 138], [98, 98, 110], [200, 200, 212]],
+      bite: 0, biteEvery: 1, ranged: true, fireEvery: 2.3, bolt: 48, boltHurt: 10,
+      knock: 0.7, shove: 0.8, scrap: 4
+    },
+    bloodSpitter: {
+      role: 'robot',
+      hp: 8, speed: 6.0, radius: 2.6, height: 6.6, reach: 3.4,
+      body: [120, 30, 26], limb: [95, 24, 20], head: [160, 45, 36],
+      eye: [255, 220, 60], boltColour: [255, 60, 40],
+      gib: [[130, 34, 30], [100, 26, 22], [180, 60, 45]],
+      bite: 0, biteEvery: 1, ranged: true, fireEvery: 2.0, bolt: 50, boltHurt: 12,
+      knock: 0.6, shove: 0.7, scrap: 6
+    },
+    frostSpitter: {
+      role: 'robot',
+      hp: 7, speed: 5.0, radius: 2.6, height: 6.8, reach: 3.4,
+      body: [155, 188, 212], limb: [128, 160, 188], head: [195, 218, 235],
+      eye: [120, 220, 255], boltColour: [140, 220, 255],
+      gib: [[165, 195, 216], [138, 168, 192], [215, 230, 242]],
+      bite: 0, biteEvery: 1, ranged: true, fireEvery: 2.6, bolt: 40, boltHurt: 12,
+      knock: 0.5, shove: 0.7, scrap: 5
+    },
+
     ashGiant: {
       role: 'giant', name: 'ASH GIANT',
       hp: 40, speed: 5.8, radius: 5.2, height: 15, reach: 6.5,
@@ -3012,7 +3042,7 @@
     { name: 'ASHFALL',     seed: 1,
       skyTop: '#17171d', skyLow: '#8e8e96',
       fog: [138, 138, 146], ground: [118, 118, 126], orb: [170, 170, 180],
-      kinds: { melee: 'ashWraith', ranged: 'robot', big: 'ashGiant' } },
+      kinds: { melee: 'ashWraith', ranged: 'ashSpitter', big: 'ashGiant' } },
     { name: 'THE ROT',     seed: 2,
       skyTop: '#0f2010', skyLow: '#71994f',
       fog: [112, 148, 92],  ground: [112, 140, 90],  orb: [120, 210, 90],
@@ -3020,11 +3050,11 @@
     { name: 'BLOODMOON',   seed: 3,
       skyTop: '#2a0a0a', skyLow: '#b0503c',
       fog: [162, 92, 70],   ground: [152, 102, 80],  orb: [235, 80, 60],
-      kinds: { melee: 'bloodFiend', ranged: 'robot', big: 'bloodGiant' } },
+      kinds: { melee: 'bloodFiend', ranged: 'bloodSpitter', big: 'bloodGiant' } },
     { name: 'FROSTBITE',   seed: 4,
       skyTop: '#16202e', skyLow: '#9fc0d8',
       fog: [172, 196, 214], ground: [182, 200, 214], orb: [150, 210, 250],
-      kinds: { melee: 'frostShambler', ranged: 'robot', big: 'frostGolem' } },
+      kinds: { melee: 'frostShambler', ranged: 'frostSpitter', big: 'frostGolem' } },
     { name: 'VIOLET DEEP', seed: 5,
       skyTop: '#1d1030', skyLow: '#8a6ab0',
       fog: [142, 112, 168], ground: [132, 112, 150], orb: [190, 120, 255],
@@ -4596,10 +4626,10 @@
     zombieMarine:  '#d05aff',   // evil purple - nothing else on the map has it
     zombieBoss:    '#ff2a2a',   // pure alarm red
     // the locals of the other five planets
-    ashWraith:     '#d0d0da',  ashGiant:     '#a8a8b4',
+    ashWraith:     '#d0d0da',  ashSpitter:   '#f0f0f8',  ashGiant: '#a8a8b4',
     rotCrawler:    '#c6d84a',  sporeSpitter: '#8fe0a0',  rotGiant: '#9fcf4f',
-    bloodFiend:    '#ff6a5a',  bloodGiant:   '#ff3a2a',
-    frostShambler: '#c8e4f8',  frostGolem:   '#8fd0ff',
+    bloodFiend:    '#ff6a5a',  bloodSpitter: '#ff9040',  bloodGiant: '#ff3a2a',
+    frostShambler: '#c8e4f8',  frostSpitter: '#5ab0e8',  frostGolem: '#8fd0ff',
     voidWalker:    '#c08aff',  voidFloater:  '#e0a0ff',  voidGiant: '#a050ff'
   };
 
