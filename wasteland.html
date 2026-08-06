@@ -422,26 +422,34 @@
     const zone = noiseAt(CLIFF_GRID, 40, x / 10400 + 11, z / 10400 + 7);
     if (zone < 0.67) return 0;
 
-    // Ease in at a patch's edges so flat ground rises into a landform
-    // instead of hitting a wall of dirt.
-    const lift = clamp((zone - 0.67) / 0.12, 0, 1);
-
-    // Inside a patch: one big hill...
+    // NO SLOPES ANYWHERE. Maximus played the hilly version and ruled
+    // against every last slant: flat ground, and cliffs that go
+    // straight up.
+    //
+    // Math.floor is the whole thing. It throws away everything between
+    // the steps, so the ground can only ever be 0, or 8, or 16, or 24.
+    // There is no in-between height for it to be at - and a slope is
+    // nothing but a long line of in-between heights. Take those away
+    // and what's left can only be a flat top or a vertical face.
+    //
+    // The old version eased the edges and blended the terraces into the
+    // hill underneath, which is exactly what put the slants back.
     const broad = noiseAt(HILL_GRID, 40, x / 4800, z / 4800);
-    let h = broad * 34 * lift;
+    const step  = Math.floor(broad * 4.4);
 
-    // ...and the taller it gets, the more it squares off into cliff
-    // terraces - so the big landforms are the dramatic ones.
-    if (h > 7) {
-      const t = h / CLIFF_STEP;
-      const frac = t - Math.floor(t);
-      const riser = clamp((frac - 0.5) * 6 + 0.5, 0, 1);
-      const terraced = (Math.floor(t) + riser) * CLIFF_STEP;
-      const mix = clamp((h - 7) / 5, 0, 1);
-      h += (terraced - h) * mix;
-    }
-    return h;
+    return Math.max(0, step) * CLIFF_STEP;
   }
+
+  // HOW HIGH A LEDGE YOU CAN WALK ONTO.
+  //
+  // This has to exist now. Boots follow the ground - which is fine on a
+  // hill and useless against a wall, because walking at a cliff would
+  // simply lift you eight units into the air and you'd stroll up a
+  // sheer rock face.
+  //
+  // So: anything taller than a kerb stops you. Cliffs became walls the
+  // moment the slopes went, and walls need to behave like walls.
+  const STEP_UP = 1.6;
 
   function groundShade(wx, wz) {
     // 0.72 to 1.20 - dark dips and pale raised bits, like weathered rock.
@@ -466,19 +474,44 @@
         if (Math.hypot(dx, dz) > NEAR_EDGE) continue;      // outside the disc
         if (dx * fx + dz * fz < -TILE * 2) continue;       // behind your head
 
-        // Each corner of the square sits at its own height - that's
-        // the entire difference between a floor and a landscape.
-        const h00 = terrainAt(x0, z0),        h10 = terrainAt(x0 + TILE, z0);
-        const h11 = terrainAt(x0 + TILE, z0 + TILE), h01 = terrainAt(x0, z0 + TILE);
-
-        // Slopes facing the light get brighter, slopes facing away get
-        // darker. Without this a hill is just a bulge in the fog.
-        const lit = clamp(1 + (h10 + h11 - h00 - h01) * 0.045, 0.72, 1.28);
+        // ONE HEIGHT FOR THE WHOLE SQUARE, taken at its middle.
+        //
+        // It used to read all four corners and stretch the square
+        // between them, which is right for a hillside and wrong here -
+        // a square straddling a level change came out as a diagonal
+        // ramp. That ramp WAS the slant. Snapping the numbers doesn't
+        // help while the drawing is still building slopes out of them.
+        const h = terrainAt(mx, mz);
 
         addFace([
-          [x0, h00, z0], [x0 + TILE, h10, z0],
-          [x0 + TILE, h11, z0 + TILE], [x0, h01, z0 + TILE]
-        ], shade(groundShade(mx, mz), lit));
+          [x0, h, z0], [x0 + TILE, h, z0],
+          [x0 + TILE, h, z0 + TILE], [x0, h, z0 + TILE]
+        ], groundShade(mx, mz));
+
+        // ---- AND THE CLIFF FACE ------------------------------------
+        // A flat square floating above a lower one leaves a hole you
+        // can see the sky through. So wherever a neighbour is lower, we
+        // hang a wall down to meet it. Straight down, obviously.
+        //
+        // Only on the LOW side. Do all four and every wall gets built
+        // twice, once from each square, and they fight over which is
+        // in front.
+        const sides = [
+          { hx: mx, hz: mz - TILE, a: [x0, z0],               b: [x0 + TILE, z0] },
+          { hx: mx, hz: mz + TILE, a: [x0 + TILE, z0 + TILE], b: [x0, z0 + TILE] },
+          { hx: mx - TILE, hz: mz, a: [x0, z0 + TILE],        b: [x0, z0] },
+          { hx: mx + TILE, hz: mz, a: [x0 + TILE, z0],        b: [x0 + TILE, z0 + TILE] }
+        ];
+
+        for (const s of sides) {
+          const hn = terrainAt(s.hx, s.hz);
+          if (hn >= h - 0.01) continue;          // neighbour is level or higher
+
+          addFace([
+            [s.a[0], h,  s.a[1]], [s.b[0], h,  s.b[1]],
+            [s.b[0], hn, s.b[1]], [s.a[0], hn, s.a[1]]
+          ], shade(groundShade(mx, mz), 0.62));   // rock face, in shadow
+        }
       }
     }
 
@@ -504,12 +537,28 @@
         const p10x = px + c1 * r0, p10z = pz + s1 * r0;
         const p11x = px + c1 * r1, p11z = pz + s1 * r1;
         const p01x = px + c0 * r1, p01z = pz + s0 * r1;
+        // Flat, at one height, same as the near squares - and then a
+        // deep skirt hung underneath it.
+        //
+        // Out here we don't work out which neighbour is lower; we just
+        // drop a wall a long way down on every ring and let it plug
+        // whatever hole is there. You only ever see these from above or
+        // level, so the bottom is never in shot - and the fog has eaten
+        // most of the colour by this distance anyway.
+        const h = terrainAt(wx, wz);
+
         addFace([
-          [p00x, terrainAt(p00x, p00z), p00z],
-          [p10x, terrainAt(p10x, p10z), p10z],
-          [p11x, terrainAt(p11x, p11z), p11z],
-          [p01x, terrainAt(p01x, p01z), p01z]
+          [p00x, h, p00z], [p10x, h, p10z],
+          [p11x, h, p11z], [p01x, h, p01z]
         ], groundShade(wx, wz));
+
+        if (h > 0.01) {
+          const skirt = h - CLIFF_STEP * 3;
+          addFace([
+            [p00x, h, p00z], [p10x, h, p10z],
+            [p10x, skirt, p10z], [p00x, skirt, p00z]
+          ], shade(groundShade(wx, wz), 0.62));
+        }
       }
     }
   }
@@ -4535,11 +4584,29 @@
       // direction at a time - and whichever half is clear still
       // happens. That's why you SLIDE along a wall instead of
       // sticking to it the moment you brush it, and it's three lines.
-      if (!blockedAt(nx, nz, PLAYER_R)) {
+      // A cliff counts as "something in the way" too. You can step up a
+      // kerb; you cannot step up a cliff. Jump for it, or walk round.
+      //
+      // Only while your boots are DOWN - in mid-air the rule is off, so
+      // a jump can carry you onto a ledge. That's the whole reason to
+      // jump on this planet.
+      const grounded = player.feetY <= terrainAt(player.x, player.z) + 0.01;
+
+      function canStand(tx, tz) {
+        if (blockedAt(tx, tz, PLAYER_R)) return false;
+
+        // On foot you can manage a kerb. In the air you can only move
+        // over ground that's already below your boots - so a jump gets
+        // you onto a ledge you've cleared, and never through the side
+        // of one.
+        return terrainAt(tx, tz) <= player.feetY + (grounded ? STEP_UP : 0.5);
+      }
+
+      if (canStand(nx, nz)) {
         player.x = nx; player.z = nz;
       } else {
-        if (!blockedAt(nx, player.z, PLAYER_R)) player.x = nx;
-        if (!blockedAt(player.x, nz, PLAYER_R)) player.z = nz;
+        if (canStand(nx, player.z)) player.x = nx;
+        if (canStand(player.x, nz)) player.z = nz;
       }
 
       player.bob += dt * speed * 0.36;
