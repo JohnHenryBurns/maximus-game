@@ -118,6 +118,7 @@
   let atRadio     = null;    // the radio tower you're stood at
   let nearRecruit = null;    // the waiting marine you're stood next to
   let atGear      = null;    // the fort armoury station you're stood at
+  let atPad       = null;    // the landing pad whose ship you're stood by
   let questFlash = 0;        // "job done" message
   let questWord  = '';
   let deadTimer = 0;
@@ -446,6 +447,8 @@
   const BUNKER_CHANCE = 1 / 300;
   const RADIO_CHANCE  = 1 / 130;   // radio towers - commoner than settlements
   const FORT_CHANCE   = 1 / 450;   // marine forts - rarer than ANYTHING
+  const PAD_CHANCE    = 1 / 100;   // landing pads everywhere - Maximus
+                                   // wants the sky within walking distance
 
   const RUBBLE = [104, 94, 84];
   const CONCRETE = [138, 128, 116];
@@ -518,6 +521,19 @@
       b.manned = Math.ceil(b.guards.length / GUARD_EVERY);   // the rest are hires
       b.quests = questsFor(gx, gz);
       return b;
+    }
+
+    // ---- OR A LANDING PAD? ------------------------------------------
+    // A concrete pad with a marine dropship squatting on it, fuelled
+    // and pointing at the sky. Walk up, press E, and leave the planet.
+    if (home > 1 && hash2(gx + 8111, gz + 941) < PAD_CHANCE) {
+      return {
+        gx: gx, gz: gz, kind: 'pad',
+        x: gx * CELL + (hash2(gx + 7, gz) - 0.5) * CELL * 0.8,
+        z: gz * CELL + (hash2(gx, gz + 7) - 0.5) * CELL * 0.8,
+        spin: hash2(gx + 3, gz + 3) * Math.PI * 2,
+        solid: 8, tall: 9
+      };
     }
 
     // ---- OR A MARINE FORT? ------------------------------------------
@@ -1011,7 +1027,7 @@
       for (let gz = cz - reach; gz <= cz + reach; gz++) {
         const p = propAt(gx, gz);
         if (!p || (p.kind !== 'bunker' && p.kind !== 'radio' &&
-                   p.kind !== 'fort')) continue;
+                   p.kind !== 'fort' && p.kind !== 'pad')) continue;
 
         const dx = p.x - player.x, dz = p.z - player.z;
         const d = Math.hypot(dx, dz);
@@ -1064,6 +1080,12 @@
           // red = reinforcements, blue = shopping.
           addBox(p.x, 31, p.z, size, size, size,
                  [150 + 60 * pulse, 190 + 50 * pulse, 255]);
+        } else if (p.kind === 'pad') {
+          // Landing pads burn GREEN. Four colours of light now:
+          // amber = shelter, red = reinforcements, blue = shopping,
+          // green = a ride off this entire planet.
+          addBox(p.x, 31, p.z, size, size, size,
+                 [110 + 40 * pulse, 255, 130 + 60 * pulse]);
         } else {
           addBox(p.x, 31, p.z, size, size, size,
                  [225 + 30 * pulse, 205 + 45 * pulse, 140 + 90 * pulse]);
@@ -1101,6 +1123,7 @@
         else if (p.kind === 'bunker') drawBunker(p);
         else if (p.kind === 'radio')  drawRadio(p);
         else if (p.kind === 'fort')   drawFort(p);
+        else if (p.kind === 'pad')    drawPad(p);
         else if (p.kind === 'wreck')  drawWreck(p);
         else if (p.kind === 'tree')   drawDeadTree(p);
         else if (p.kind === 'rubble') drawRubble(p);
@@ -2810,6 +2833,495 @@
 
 
 // -------------------------------------------------------------------
+//  SPACE
+// -------------------------------------------------------------------
+//  Maximus's biggest idea yet: find a landing pad, board the dropship,
+//  and LAUNCH. Up there it's a different game - stars streaming past,
+//  aliens weaving in, meteorites tumbling at your windscreen, and twin
+//  blasters to deal with both. Fly home when your pockets are full.
+//
+//  The trick that makes this cheap: the ship never moves. You sit at
+//  (0,0,0) forever and the UNIVERSE streams past you - the same trick
+//  the wasteland uses for spawning, turned up to eleven. "Flying
+//  forward" is just every star sliding backward.
+// -------------------------------------------------------------------
+
+  const SHIP_SPEED   = 70;     // how fast the stars stream past
+  const BLASTER_COOL = 0.13;
+  const BLASTER_HURT = 2;
+
+  let space = null;            // null on the ground. A whole world aloft.
+
+  // ---- THE SHIP ON ITS PAD ------------------------------------------
+  function drawPad(p) {
+    const co = Math.cos(p.spin), si = Math.sin(p.spin);
+
+    function part(lx, y, lz, w, h, d, rgb) {
+      addBox(p.x + lx * co + lz * si, y, p.z - lx * si + lz * co,
+             w, h, d, rgb, p.spin);
+    }
+
+    // The pad: a wide slab with a skirt, scorched by launches.
+    part(0, 0.5, 0, 30, 1.0, 30, [92, 94, 100]);
+    part(0, 0.15, 0, 34, 0.3, 34, [66, 68, 74]);
+
+    // Blinking green edge lights, running in a chase pattern.
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      const on = Math.sin(clock * 4 - i * 0.8) > 0;
+      part(Math.cos(a) * 14, 1.3, Math.sin(a) * 14, 0.9, 0.7, 0.9,
+           on ? [110, 255, 140] : [30, 80, 45]);
+    }
+
+    // THE DROPSHIP. Nose towards spin, engines aft, wings out wide
+    // with a blaster pod on each tip - the same two blasters you'll
+    // be firing a minute from now.
+    part(0, 4.2, 0, 5.2, 3.6, 13, ARMOUR);                   // body
+    part(0, 2.4, 0, 4.2, 1.4, 10, ARMOUR_DARK);              // belly
+    part(0, 4.0, -8.2, 3.4, 2.6, 3.6, ARMOUR_DARK);          // nose
+    part(0, 4.9, -7.4, 2.6, 1.2, 1.6, [150, 205, 235]);      // cockpit glass
+    part(0, 7.6, 5.0, 0.8, 3.6, 3.6, ARMOUR);                // tail fin
+    part(0, 5.6, -2.0, 5.3, 0.5, 5.0, VISOR);                // orange stripe
+    for (const side of [-1, 1]) {
+      part(side * 5.6, 3.7, 1.0, 6.6, 0.7, 4.6, ARMOUR);     // wing
+      part(side * 8.4, 3.4, -0.4, 0.9, 0.9, 3.6, [48, 52, 58]); // blaster pod
+      part(side * 2.0, 3.1, 6.9, 2.2, 2.2, 2.6, METAL);      // engine
+      part(side * 2.0, 3.1, 8.3, 1.4, 1.4, 0.5, VISOR);      // engine glow
+      part(side * 3.0, 1.1, -3.6, 0.7, 2.2, 0.7, [40, 42, 46]); // legs
+      part(side * 3.0, 1.1, 4.0, 0.7, 2.2, 0.7, [40, 42, 46]);
+    }
+
+    // The beacon: a fat, BRIGHT green lamp on the tail, and a beam of
+    // green light standing straight up out of it. Even when a tower or
+    // a dune hides the whole pad, the beam gives it away - which is
+    // exactly what a beacon is for.
+    const pulse = 0.55 + Math.sin(clock * 3.4 + p.gx) * 0.45;
+    fogResist = 0.95;
+    part(0, 9.9, 5.0, 2.0, 2.0, 2.0, [120 + 100 * pulse, 255, 150 + 60 * pulse]);
+    fogResist = 0.45;
+    part(0, 25, 5.0, 0.9, 28, 0.9, [90, 230, 115]);
+    fogResist = 0;
+  }
+
+  // ---- LIFT-OFF -----------------------------------------------------
+  function launchShip() {
+    state = 'space';
+    space = {
+      t: 0, hull: 100, kills: 0, earned: 0,
+      cool: 0, spawnT: 0, side: 1, flash: 0,
+      stars: [], rocks: [], foes: [], foeBolts: [], shots: [], sparks: []
+    };
+    for (let i = 0; i < 130; i++) space.stars.push(randomStar(true));
+    shake = 1.4;
+    playLaunch();
+  }
+
+  function randomStar(anywhere) {
+    // A random direction, a random distance. "anywhere" fills the sky
+    // at launch; afterwards new stars appear far off so you never see
+    // one pop in.
+    const a = Math.random() * Math.PI * 2;
+    const b = (Math.random() - 0.5) * Math.PI;
+    const d = anywhere ? 70 + Math.random() * 320 : 300 + Math.random() * 90;
+    return { x: Math.sin(a) * Math.cos(b) * d,
+             y: Math.sin(b) * d,
+             z: Math.cos(a) * Math.cos(b) * d };
+  }
+
+  function landShip(crashed) {
+    const earned = space.earned;
+    state = 'play';
+    space = null;
+    questWord = crashed
+      ? 'SHIP DOWN!  -  you crawled out with ' + earned + ' scrap'
+      : 'BACK ON THE DIRT  -  ' + earned + ' scrap from orbit';
+    questFlash = 6;
+    if (!crashed) playLand();
+  }
+
+  // ---- ONE FRAME IN ORBIT -------------------------------------------
+  function updateSpace(dt) {
+    const s = space;
+    s.t += dt;
+    s.cool -= dt;
+    s.flash = Math.max(0, s.flash - dt * 3);
+
+    // Which way is the ship pointing? Wherever you're steering it.
+    const cp = Math.cos(player.pitch), sp = Math.sin(player.pitch);
+    const fx = Math.sin(player.yaw) * cp, fy = sp, fz = Math.cos(player.yaw) * cp;
+    const rx = Math.cos(player.yaw), rz = -Math.sin(player.yaw);  // your right
+
+    // During the first two seconds you're still climbing - the world
+    // rumbles, the stars accelerate, nothing attacks yet.
+    const climbing = s.t < 2.2;
+    if (climbing) shake = Math.max(shake, 0.5 * (1 - s.t / 2.2));
+    const step = SHIP_SPEED * dt * (climbing ? s.t / 2.2 : 1);
+
+    // ---- STARS STREAM PAST ----------------------------------------
+    for (let i = 0; i < s.stars.length; i++) {
+      const st = s.stars[i];
+      st.x -= fx * step; st.y -= fy * step; st.z -= fz * step;
+      if (st.x * fx + st.y * fy + st.z * fz < -40 ||
+          Math.hypot(st.x, st.y, st.z) > 420) {
+        s.stars[i] = randomStar(false);
+      }
+    }
+
+    // ---- THINGS TURN UP -------------------------------------------
+    if (!climbing) {
+      s.spawnT -= dt;
+      if (s.spawnT <= 0) {
+        s.spawnT = 1.1 + Math.random() * 1.2;
+        const offA = (Math.random() - 0.5) * 130;
+        const offB = (Math.random() - 0.5) * 110;
+        if (Math.random() < 0.55 && s.rocks.length < 10) {
+          // A meteorite, way out ahead, tumbling in.
+          const d = 240 + Math.random() * 90;
+          const size = 2.5 + Math.random() * 4;
+          s.rocks.push({
+            x: fx * d + rx * offA, y: fy * d + offB, z: fz * d + rz * offA,
+            size: size, hp: Math.ceil(size * 1.5),
+            spin: Math.random() * 6, twirl: (Math.random() - 0.5) * 3
+          });
+        } else if (s.foes.length < 6) {
+          // An alien, closer, that WEAVES.
+          const d = 130 + Math.random() * 60;
+          s.foes.push({
+            x: fx * d + rx * offA * 0.6, y: fy * d + offB * 0.6,
+            z: fz * d + rz * offA * 0.6,
+            hp: 4, phase: Math.random() * 6, cool: 2 + Math.random() * 2
+          });
+        }
+      }
+    }
+
+    // ---- METEORITES: swept past by your speed, drifting at you ----
+    for (const r of s.rocks) {
+      r.spin += r.twirl * dt;
+      const d = Math.hypot(r.x, r.y, r.z) || 1;
+      r.x -= (fx * step) + (r.x / d) * 14 * dt;
+      r.y -= (fy * step) + (r.y / d) * 14 * dt;
+      r.z -= (fz * step) + (r.z / d) * 14 * dt;
+
+      if (d < r.size + 3.5) {
+        // THUD. A meteorite in the windscreen.
+        s.hull -= 15; s.flash = 1;
+        shake = Math.max(shake, 1.1);
+        boomAt(r, [[150, 138, 120], [110, 100, 88], [255, 170, 60]], 18);
+        r.hp = 0; r.gone = true;
+        playSpaceBoom();
+      } else if (r.x * fx + r.y * fy + r.z * fz < -30) {
+        r.gone = true;      // sailed past, no harm done
+      }
+    }
+    s.rocks = s.rocks.filter(function (r) { return !r.gone && r.hp > 0; });
+
+    // ---- ALIENS: they match your speed and WEAVE ------------------
+    for (const f of s.foes) {
+      // Each one chases its own wobbling spot in front of the ship,
+      // so the flock swirls instead of queueing up.
+      const wob = Math.sin(s.t * 1.3 + f.phase) * 42;
+      const bob = Math.cos(s.t * 0.9 + f.phase * 2) * 26;
+      const tx = fx * 55 + rx * wob, ty = fy * 55 + bob, tz = fz * 55 + rz * wob;
+      f.x += (tx - f.x) * 0.9 * dt;
+      f.y += (ty - f.y) * 0.9 * dt;
+      f.z += (tz - f.z) * 0.9 * dt;
+
+      f.cool -= dt;
+      if (f.cool <= 0 && s.t > 5) {
+        f.cool = 2.2 + Math.random() * 1.6;
+        const d = Math.hypot(f.x, f.y, f.z) || 1;
+        s.foeBolts.push({
+          x: f.x, y: f.y, z: f.z,
+          vx: -f.x / d * 95, vy: -f.y / d * 95, vz: -f.z / d * 95,
+          life: 3
+        });
+        playZap();
+      }
+    }
+
+    // ---- THEIR SHOTS AT YOU ---------------------------------------
+    for (const b of s.foeBolts) {
+      b.x += b.vx * dt; b.y += b.vy * dt; b.z += b.vz * dt;
+      b.life -= dt;
+      if (Math.hypot(b.x, b.y, b.z) < 3.5) {
+        b.life = 0;
+        s.hull -= 7; s.flash = 1;
+        shake = Math.max(shake, 0.5);
+        playOw();
+      }
+    }
+    s.foeBolts = s.foeBolts.filter(function (b) { return b.life > 0; });
+
+    // ---- YOUR BLASTERS --------------------------------------------
+    if ((firing || touchFire) && s.cool <= 0 && !climbing) {
+      s.cool = BLASTER_COOL;
+      s.side = -s.side;      // left barrel, right barrel, left barrel...
+      s.shots.push({
+        x: rx * 2.2 * s.side, y: -1.4, z: rz * 2.2 * s.side,
+        vx: fx * 260, vy: fy * 260, vz: fz * 260,
+        life: 1.5
+      });
+      playBlaster();
+    }
+
+    for (const sh of s.shots) {
+      sh.x += sh.vx * dt; sh.y += sh.vy * dt; sh.z += sh.vz * dt;
+      sh.life -= dt;
+      if (sh.life <= 0) continue;
+
+      for (const r of s.rocks) {
+        if (Math.hypot(sh.x - r.x, sh.y - r.y, sh.z - r.z) < r.size + 1.8) {
+          sh.life = 0;
+          r.hp -= BLASTER_HURT;
+          boomAt(sh, [[150, 138, 120], [200, 190, 170]], 5);
+          if (r.hp <= 0) {
+            const bounty = Math.max(2, Math.round(r.size));
+            s.kills++; s.earned += bounty; player.scrap += bounty;
+            boomAt(r, [[150, 138, 120], [110, 100, 88], [255, 200, 90]], 22);
+            playSpaceBoom();
+          }
+          break;
+        }
+      }
+      if (sh.life <= 0) continue;
+
+      for (const f of s.foes) {
+        if (Math.hypot(sh.x - f.x, sh.y - f.y, sh.z - f.z) < 4.2) {
+          sh.life = 0;
+          f.hp -= BLASTER_HURT;
+          boomAt(sh, [[140, 255, 120], [255, 120, 220]], 5);
+          if (f.hp <= 0) {
+            f.gone = true;
+            s.kills++; s.earned += 5; player.scrap += 5;
+            boomAt(f, [[110, 220, 90], [70, 160, 200], [255, 120, 220]], 24);
+            playSpaceBoom();
+          }
+          break;
+        }
+      }
+    }
+    s.shots = s.shots.filter(function (sh) { return sh.life > 0; });
+    s.foes = s.foes.filter(function (f) { return !f.gone; });
+
+    // ---- SPARKS AND WRECKAGE --------------------------------------
+    for (const sp2 of s.sparks) {
+      sp2.x += sp2.vx * dt; sp2.y += sp2.vy * dt; sp2.z += sp2.vz * dt;
+      sp2.life -= dt;
+    }
+    s.sparks = s.sparks.filter(function (sp2) { return sp2.life > 0; });
+
+    // ---- OUT OF HULL? ---------------------------------------------
+    if (s.hull <= 0) {
+      playCrash();
+      landShip(true);
+    }
+  }
+
+  // An explosion where something was. No gravity up here - the bits
+  // just fly apart forever, which is what real space wreckage does.
+  function boomAt(at, colours, count) {
+    for (let i = 0; i < count; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const b = (Math.random() - 0.5) * Math.PI;
+      const v = 8 + Math.random() * 26;
+      space.sparks.push({
+        x: at.x, y: at.y, z: at.z,
+        vx: Math.sin(a) * Math.cos(b) * v,
+        vy: Math.sin(b) * v,
+        vz: Math.cos(a) * Math.cos(b) * v,
+        size: 0.4 + Math.random() * 1.3,
+        life: 0.5 + Math.random() * 0.9,
+        colour: colours[Math.floor(Math.random() * colours.length)]
+      });
+    }
+  }
+
+  // ---- DRAWING ORBIT ------------------------------------------------
+  function drawSpace() {
+    const s = space;
+
+    // Deep space, very slightly blue at the bottom so "down" exists.
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, '#030308');
+    g.addColorStop(1, '#0a0a1e');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+
+    // You ARE the ship: the camera sits at zero and turns with you.
+    cam.x = 0; cam.y = 0; cam.z = 0;
+    cam.yaw = player.yaw; cam.pitch = player.pitch;
+    if (shake > 0) {
+      cam.x += (Math.random() - 0.5) * shake * 0.5;
+      cam.y += (Math.random() - 0.5) * shake * 0.5;
+    }
+
+    faces = [];
+    // No fog in space. seeFar lets faces past the fog line live, and
+    // fogResist 1 stops them being tinted wasteland-tan.
+    seeFar = true; fogResist = 1;
+
+    for (const st of s.stars) {
+      const d = Math.hypot(st.x, st.y, st.z);
+      const glow = clamp(1.5 - d / 320, 0.25, 1.2);
+      addBox(st.x, st.y, st.z, 1.2, 1.2, 1.2, shade([210, 215, 255], glow));
+    }
+
+    for (const r of s.rocks) {
+      // Two crossed boxes tumbling = one convincing lumpy meteorite.
+      addBox(r.x, r.y, r.z, r.size * 2, r.size * 1.5, r.size * 1.7,
+             [128, 116, 102], r.spin);
+      addBox(r.x, r.y, r.z, r.size * 1.5, r.size * 1.9, r.size * 1.4,
+             [100, 92, 82], r.spin + 0.8);
+    }
+
+    for (const f of s.foes) {
+      const yaw = Math.atan2(-f.x, -f.z);          // always facing you
+      const flap = Math.sin(clock * 9 + f.phase) * 1.4;
+      addBox(f.x, f.y, f.z, 3.2, 2.4, 3.6, [110, 220, 90], yaw);       // body
+      addBox(f.x, f.y + 1.6, f.z, 1.6, 1.2, 1.6, [88, 190, 74], yaw);  // head
+      const wco = Math.cos(yaw), wsi = Math.sin(yaw);
+      addBox(f.x - 2.6 * wco, f.y + flap, f.z + 2.6 * wsi,
+             2.2, 0.5, 2.8, [70, 160, 200], yaw);                       // wings
+      addBox(f.x + 2.6 * wco, f.y - flap, f.z - 2.6 * wsi,
+             2.2, 0.5, 2.8, [70, 160, 200], yaw);
+      addBox(f.x - 1.1 * wsi, f.y + 1.7, f.z - 1.1 * wco,
+             0.9, 0.5, 0.2, [255, 120, 220], yaw);                      // the eye
+    }
+
+    for (const b of s.foeBolts) {
+      addBox(b.x, b.y, b.z, 1.1, 1.1, 1.1, [180, 255, 150]);
+      addBox(b.x, b.y, b.z, 1.8, 0.5, 1.8, [90, 230, 110]);
+    }
+
+    for (const sh of s.shots) {
+      // A long thin streak lying along its own path.
+      addBox(sh.x, sh.y, sh.z, 0.5, 0.5, 6,
+             [140, 255, 160], Math.atan2(sh.vx, sh.vz));
+    }
+
+    for (const sp2 of s.sparks) {
+      addBox(sp2.x, sp2.y, sp2.z, sp2.size, sp2.size, sp2.size, sp2.colour);
+    }
+
+    seeFar = false; fogResist = 0;
+
+    // Furthest painted first - same painter, different planet.
+    faces.sort(function (a, b) { return b.depth - a.depth; });
+    for (const f of faces) {
+      ctx.beginPath();
+      ctx.moveTo(f.points[0].x, f.points[0].y);
+      for (let i = 1; i < f.points.length; i++) {
+        ctx.lineTo(f.points[i].x, f.points[i].y);
+      }
+      ctx.closePath();
+      ctx.fillStyle = f.colour;
+      ctx.fill();
+    }
+
+    drawCockpit(s);
+  }
+
+  // The inside of your ship: dark corner panels, a couple of struts,
+  // and the instruments. All flat 2D drawn OVER the 3D - the same way
+  // the gun and the minimap work down on the surface.
+  function drawCockpit(s) {
+    ctx.fillStyle = 'rgba(14,16,22,0.92)';
+
+    ctx.beginPath();                       // left panel
+    ctx.moveTo(0, 0); ctx.lineTo(W * 0.10, 0);
+    ctx.lineTo(W * 0.04, H); ctx.lineTo(0, H);
+    ctx.closePath(); ctx.fill();
+
+    ctx.beginPath();                       // right panel
+    ctx.moveTo(W, 0); ctx.lineTo(W * 0.90, 0);
+    ctx.lineTo(W * 0.96, H); ctx.lineTo(W, H);
+    ctx.closePath(); ctx.fill();
+
+    ctx.beginPath();                       // the console under the glass
+    ctx.moveTo(0, H); ctx.lineTo(W, H);
+    ctx.lineTo(W * 0.86, H * 0.86); ctx.lineTo(W * 0.14, H * 0.86);
+    ctx.closePath(); ctx.fill();
+
+    // Getting hit flashes the glass red.
+    if (s.flash > 0) {
+      ctx.fillStyle = 'rgba(255,60,40,' + (s.flash * 0.25) + ')';
+      ctx.fillRect(0, 0, W, H);
+    }
+
+    // Crosshair.
+    const mx = W / 2, my = H / 2;
+    ctx.strokeStyle = '#8fffa0';
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(mx - 16, my); ctx.lineTo(mx - 6, my);
+    ctx.moveTo(mx + 6, my);  ctx.lineTo(mx + 16, my);
+    ctx.moveTo(mx, my - 16); ctx.lineTo(mx, my - 6);
+    ctx.moveTo(mx, my + 6);  ctx.lineTo(mx, my + 16);
+    ctx.stroke();
+
+    // Hull bar, bottom left, on the console.
+    const bw = Math.min(W * 0.24, 220), bx = W * 0.16, by = H * 0.925;
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(bx, by, bw, 13);
+    const frac = Math.max(0, s.hull / 100);
+    ctx.fillStyle = frac > 0.5 ? '#6ee87a' : frac > 0.25 ? '#e0a83c' : '#e04a3c';
+    ctx.fillRect(bx, by, bw * frac, 13);
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(bx, by, bw, 13);
+    ctx.textAlign = 'left';
+    ctx.font = 'bold 12px system-ui, sans-serif';
+    ctx.fillStyle = '#cfe8d2';
+    ctx.fillText('HULL', bx, by - 5);
+
+    // Score, bottom right.
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#cfe8d2';
+    ctx.fillText(s.kills + ' destroyed   +' + s.earned + ' scrap',
+                 W * 0.84, by + 10);
+
+    // The way home.
+    ctx.textAlign = 'center';
+    ctx.font = 'bold ' + Math.min(W * 0.03, 18) + 'px system-ui, sans-serif';
+    ctx.fillStyle = 'rgba(160,220,170,0.85)';
+    ctx.fillText(touchMode ? 'TAP HERE TO FLY HOME' : 'PRESS E TO FLY HOME',
+                 W / 2, H * 0.64);
+
+    if (s.t < 2.2) {
+      ctx.font = 'bold ' + Math.min(W * 0.08, 54) + 'px system-ui, sans-serif';
+      ctx.fillStyle = 'rgba(255,220,150,' + (1 - s.t / 2.2) + ')';
+      ctx.fillText('LAUNCH!', W / 2, H * 0.32);
+    }
+  }
+
+  function playLaunch() {
+    noise(2.0, 160, 900, 0.5);
+    tone(50, 260, 2.2, 0.4, 'sawtooth');
+    tone(90, 380, 2.0, 0.2, 'square');
+  }
+
+  function playBlaster() {
+    tone(880, 180, 0.09, 0.11, 'square');
+  }
+
+  function playSpaceBoom() {
+    noise(0.3, 800, 90, 0.32);
+    tone(140, 40, 0.35, 0.2, 'sawtooth');
+  }
+
+  function playLand() {
+    tone(320, 90, 0.7, 0.25, 'triangle');
+    noise(0.8, 500, 120, 0.2);
+  }
+
+  function playCrash() {
+    noise(1.3, 600, 40, 0.55);
+    tone(130, 28, 1.1, 0.4, 'sawtooth');
+  }
+
+
+// -------------------------------------------------------------------
 //  SOUND
 // -------------------------------------------------------------------
 
@@ -2890,11 +3402,19 @@
       return;
     }
 
+    // In orbit, E is the way home.
+    if (k === 'e' && state === 'space') {
+      landShip(false);
+      e.preventDefault();
+      return;
+    }
+
     // E does whatever you're stood next to: a tower calls a pod, a
     // waiting marine joins the squad. The board got first dibs above.
     if (k === 'e' && state === 'play') {
       if (nearRecruit)                            recruitMarine(nearRecruit);
       else if (atGear)                            buyGear();
+      else if (atPad)                             launchShip();
       else if (atRadio && clock >= atRadio.podReadyAt &&
                squadSize() < MARINE_MAX)          summonPod(atRadio);
     }
@@ -3056,6 +3576,23 @@
 
       if (state === 'dead') { restart(); break; }
 
+      // ---- IN ORBIT ---------------------------------------------------
+      // Fire button fires, right side steers, and the middle of the
+      // screen is the way home. The left-half walk stick means nothing
+      // up here - the ship flies itself forward.
+      if (state === 'space') {
+        if (p.y > H * 0.55 && p.y < H * 0.72 &&
+            Math.abs(p.x - W / 2) < W * 0.25) {
+          landShip(false);
+        } else if (inCircle(p.x, p.y, fireButton())) {
+          roles[t.identifier] = { role: 'fire' };
+          touchFire = true;
+        } else {
+          roles[t.identifier] = { role: 'look', lx: p.x, ly: p.y };
+        }
+        continue;
+      }
+
       // ---- READING THE BOARD -----------------------------------------
       if (state === 'board') {
         let took = false;
@@ -3077,12 +3614,13 @@
 
       // Tapping the bottom-middle does whatever you're stood at: the
       // board, a radio tower, or a marine waiting to be recruited.
-      if ((atBoard || atRadio || nearRecruit || atGear) &&
+      if ((atBoard || atRadio || nearRecruit || atGear || atPad) &&
           p.y > H * 0.55 && p.y < H * 0.72 &&
           Math.abs(p.x - W / 2) < W * 0.25) {
         if (atBoard)          state = 'board';
         else if (nearRecruit) recruitMarine(nearRecruit);
         else if (atGear)      buyGear();
+        else if (atPad)       launchShip();
         else if (clock >= atRadio.podReadyAt && squadSize() < MARINE_MAX) {
           summonPod(atRadio);
         }
@@ -3239,7 +3777,8 @@
     // life, like your kills. But the radio towers stay found, and the
     // ones you already used stay on cooldown.
     pods = []; marines = [];
-    atRadio = null; nearRecruit = null;
+    atRadio = null; nearRecruit = null; atGear = null; atPad = null;
+    space = null;
     healing = false; healGlow = 0;
     spawnTimer = 1.5;
     hordeTimer = HORDE_FIRST; hordeWarn = 0;
@@ -3282,6 +3821,10 @@
     // do it, which is the one safe place there is, so nothing is being
     // dodged by standing here.
     if (state === 'board') return;
+
+    // In orbit, a different game runs. The wasteland below holds its
+    // breath - zombies, hordes, timers, all frozen - until you land.
+    if (state === 'space') { updateSpace(dt); return; }
 
     if (state === 'dead') {
       deadTimer += dt;
@@ -3377,6 +3920,22 @@
       if (Math.hypot(player.x - m.x, player.z - m.z) < 7) {
         nearRecruit = m;
         break;
+      }
+    }
+
+    // ---- OR STOOD AT THE DROPSHIP? ----------------------------------
+    atPad = null;
+    {
+      const gx0 = Math.round(player.x / CELL), gz0 = Math.round(player.z / CELL);
+      for (let gx = gx0 - 1; gx <= gx0 + 1 && !atPad; gx++) {
+        for (let gz = gz0 - 1; gz <= gz0 + 1; gz++) {
+          const p = propAt(gx, gz);
+          if (p && p.kind === 'pad' &&
+              Math.hypot(player.x - p.x, player.z - p.z) < 17) {
+            atPad = p;
+            break;
+          }
+        }
       }
     }
 
@@ -3671,6 +4230,32 @@
       for (let gz = gz0 - reach; gz <= gz0 + reach; gz++) {
         const p = propAt(gx, gz);
         if (!p) continue;
+
+        // ---- LANDING PADS: a little green SHUTTLE, nose up, wings
+        // out. Maximus asked for the actual ship on the map - and he's
+        // right, a shape you recognise beats a dot you have to learn.
+        if (p.kind === 'pad') {
+          const m = toMap(p.x, p.z);
+          if (m.d > MAP_RANGE) continue;
+
+          ctx.beginPath();
+          ctx.moveTo(m.x,       m.y - 6);      // nose
+          ctx.lineTo(m.x + 2,   m.y - 1);
+          ctx.lineTo(m.x + 5.5, m.y + 3);      // right wingtip
+          ctx.lineTo(m.x + 1.7, m.y + 2.2);
+          ctx.lineTo(m.x + 1.7, m.y + 5);      // right tail
+          ctx.lineTo(m.x - 1.7, m.y + 5);      // left tail
+          ctx.lineTo(m.x - 1.7, m.y + 2.2);
+          ctx.lineTo(m.x - 5.5, m.y + 3);      // left wingtip
+          ctx.lineTo(m.x - 2,   m.y - 1);
+          ctx.closePath();
+          ctx.fillStyle = '#6ee87a';
+          ctx.fill();
+          ctx.lineWidth = 1;
+          ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+          ctx.stroke();
+          continue;
+        }
 
         // ---- MARINE FORTS: a steel-blue square, drawn at real size.
         if (p.kind === 'fort') {
@@ -4069,6 +4654,9 @@
           ? name + '  -  need ' + atGear.cost + ' scrap, you have ' + player.scrap
           : (touchMode ? 'TAP HERE TO TAKE THE ' : 'PRESS E TO TAKE THE ') +
             name + '  -  ' + atGear.cost + ' scrap';
+      } else if (atPad) {
+        hint = touchMode ? 'TAP HERE TO LAUNCH INTO SPACE'
+                         : 'PRESS E TO LAUNCH INTO SPACE';
       } else if (atRadio) {
         if (squadSize() >= MARINE_MAX)      hint = 'ARMY FULL  -  twelve marines is an army';
         else if (clock < atRadio.podReadyAt) {
@@ -4230,6 +4818,9 @@
   }
 
   function draw() {
+    // A different planet, a different painter.
+    if (state === 'space') { drawSpace(); return; }
+
     const savedX = cam.x, savedY = cam.y;
     if (shake > 0) {
       cam.x += (Math.random() - 0.5) * shake * 0.5;
