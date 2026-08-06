@@ -1536,6 +1536,132 @@
       knock: 0.7, shove: 0.8, scrap: 4
     },
 
+    // ---- MONSTERS OF THE OTHER PLANETS ------------------------------
+    // Twelve new monsters and not one line of new drawing code - every
+    // one is a box of numbers that drawEnemy reads. Each has a "role"
+    // (zombie, robot or giant) so quest boards on every planet still
+    // work: a job asking for zombies is satisfied by whatever fills
+    // the zombie-shaped hole in the local food chain.
+
+    // ASHFALL: wraiths. Almost nothing to them - two hits - but they
+    // come at you half again faster than you can run.
+    ashWraith: {
+      role: 'zombie', plural: 'ash wraiths',
+      hp: 2, speed: 14, radius: 1.8, height: 5.8, reach: 2.8,
+      body: [128, 128, 138], limb: [104, 104, 116], head: [160, 160, 172],
+      eye: [240, 240, 255], gib: [[140, 140, 152], [110, 110, 122]],
+      bite: 6, biteEvery: 0.7, ranged: false,
+      knock: 1.6, shove: 1.2, scrap: 1
+    },
+    ashGiant: {
+      role: 'giant', name: 'ASH GIANT',
+      hp: 40, speed: 5.8, radius: 5.2, height: 15, reach: 6.5,
+      body: [110, 110, 120], limb: [90, 90, 100], head: [150, 150, 162],
+      eye: [255, 255, 255],
+      gib: [[130, 130, 142], [100, 100, 112], [160, 160, 172]],
+      bite: 22, biteEvery: 1.4, ranged: false,
+      knock: 0.14, shove: 0.12, scrap: 13, big: true
+    },
+
+    // THE ROT: crawlers, knee-high and everywhere, and spitters
+    // lobbing slow globs you can actually dodge - if you're looking.
+    rotCrawler: {
+      role: 'zombie', plural: 'rot crawlers',
+      hp: 2, speed: 11, radius: 1.6, height: 3.0, reach: 2.4,
+      body: [140, 150, 60], limb: [110, 122, 50], head: [170, 180, 80],
+      eye: [255, 200, 40], gib: [[150, 160, 70], [120, 130, 55]],
+      bite: 5, biteEvery: 0.8, ranged: false,
+      knock: 1.3, shove: 1.1, scrap: 1
+    },
+    sporeSpitter: {
+      role: 'robot',
+      hp: 5, speed: 5.5, radius: 2.6, height: 6.2, reach: 3.2,
+      body: [96, 140, 70], limb: [76, 112, 58], head: [130, 170, 90],
+      eye: [220, 255, 90], boltColour: [150, 230, 90],
+      gib: [[110, 150, 78], [86, 120, 62], [180, 220, 100]],
+      bite: 0, biteEvery: 1, ranged: true, fireEvery: 2.8, bolt: 30, boltHurt: 9,
+      knock: 0.8, shove: 0.8, scrap: 4
+    },
+    rotGiant: {
+      role: 'giant', name: 'ROT GIANT',
+      hp: 55, speed: 5.0, radius: 5.6, height: 17, reach: 7.0,
+      body: [104, 128, 52], limb: [84, 106, 44], head: [140, 156, 70],
+      eye: [255, 220, 50],
+      gib: [[120, 140, 60], [95, 115, 48], [160, 175, 80]],
+      bite: 26, biteEvery: 1.5, ranged: false,
+      knock: 0.12, shove: 0.10, scrap: 16, big: true
+    },
+
+    // BLOODMOON: fiends. Fast AND tough AND they hit hard. This is
+    // the planet you visit when the others stop scaring you.
+    bloodFiend: {
+      role: 'zombie', plural: 'blood fiends',
+      hp: 5, speed: 12, radius: 2.2, height: 5.6, reach: 3.0,
+      body: [140, 40, 34], limb: [110, 32, 28], head: [180, 60, 44],
+      eye: [255, 220, 60], gib: [[150, 45, 38], [115, 34, 30], [190, 70, 50]],
+      bite: 12, biteEvery: 0.8, ranged: false,
+      knock: 0.6, shove: 0.9, scrap: 3
+    },
+    bloodGiant: {
+      role: 'giant', name: 'BLOOD GIANT',
+      hp: 60, speed: 5.4, radius: 5.6, height: 17, reach: 7.0,
+      body: [120, 34, 28], limb: [95, 28, 24], head: [160, 50, 38],
+      eye: [255, 240, 80],
+      gib: [[130, 38, 32], [100, 30, 26], [170, 55, 42]],
+      bite: 30, biteEvery: 1.4, ranged: false,
+      knock: 0.10, shove: 0.09, scrap: 18, big: true
+    },
+
+    // FROSTBITE: shamblers, slow as glaciers and about as stoppable,
+    // and the frost golem - seventy hits of walking winter.
+    frostShambler: {
+      role: 'zombie', plural: 'frost shamblers',
+      hp: 6, speed: 6, radius: 2.4, height: 5.8, reach: 3.2,
+      body: [170, 198, 218], limb: [140, 170, 194], head: [200, 222, 238],
+      eye: [80, 180, 255], gib: [[180, 205, 224], [150, 178, 200], [220, 235, 245]],
+      bite: 14, biteEvery: 1.1, ranged: false,
+      knock: 0.5, shove: 0.7, scrap: 2
+    },
+    frostGolem: {
+      role: 'giant', name: 'FROST GOLEM',
+      hp: 70, speed: 4.4, radius: 6.0, height: 18, reach: 7.5,
+      body: [150, 185, 210], limb: [125, 158, 186], head: [190, 215, 232],
+      eye: [120, 220, 255],
+      gib: [[160, 192, 214], [135, 165, 190], [210, 228, 240]],
+      bite: 32, biteEvery: 1.6, ranged: false,
+      knock: 0.08, shove: 0.08, scrap: 20, big: true
+    },
+
+    // VIOLET DEEP: walkers and floaters, all wrong angles and glowing
+    // purple. The floaters' bolts are the fastest non-marine shots in
+    // the game - this planet teaches cover.
+    voidWalker: {
+      role: 'zombie', plural: 'void walkers',
+      hp: 4, speed: 9.5, radius: 2.1, height: 6.0, reach: 3.0,
+      body: [130, 80, 180], limb: [104, 62, 148], head: [165, 110, 215],
+      eye: [90, 255, 230], gib: [[140, 88, 190], [110, 66, 155], [175, 120, 225]],
+      bite: 9, biteEvery: 0.85, ranged: false,
+      knock: 0.9, shove: 1.0, scrap: 2
+    },
+    voidFloater: {
+      role: 'robot',
+      hp: 6, speed: 6.5, radius: 2.4, height: 7.2, reach: 3.4,
+      body: [150, 95, 205], limb: [120, 74, 168], head: [185, 130, 235],
+      eye: [90, 255, 230], boltColour: [200, 120, 255],
+      gib: [[160, 100, 215], [128, 80, 178], [200, 150, 245]],
+      bite: 0, biteEvery: 1, ranged: true, fireEvery: 1.8, bolt: 55, boltHurt: 9,
+      knock: 0.6, shove: 0.7, scrap: 5
+    },
+    voidGiant: {
+      role: 'giant', name: 'VOID GIANT',
+      hp: 55, speed: 5.2, radius: 5.6, height: 17, reach: 7.0,
+      body: [110, 66, 158], limb: [88, 52, 130], head: [145, 95, 195],
+      eye: [90, 255, 230],
+      gib: [[120, 72, 168], [95, 58, 140], [155, 105, 205]],
+      bite: 28, biteEvery: 1.5, ranged: false,
+      knock: 0.11, shove: 0.10, scrap: 16, big: true
+    },
+
     // ZOMBIE MARINE. Maximus asked for them "as strong as space
     // marines, except evil" - a marine who didn't make it, still
     // walking around inside his armour. Twenty hits, because the
@@ -1647,15 +1773,18 @@
 
     const d = atDistance || (SPAWN_MIN + Math.random() * (SPAWN_MAX - SPAWN_MIN));
 
-    // Robots get commoner the longer you last. At the start it's almost
-    // all zombies; after two minutes it's about half and half.
+    // Shooters get commoner the longer you last. At the start it's
+    // almost all crowd monsters; after two minutes, half and half.
+    // WHICH monsters depends on the planet - every world fills the
+    // same three jobs with its own locals.
     //
     // Zombie marines are NOT in this mix - Maximus ruled they only
     // march in with hordes, like officers leading the crowd. spawnHorde
     // asks for them by name.
+    const local = PLANETS[planetIx].kinds;
     const robotChance = Math.min(0.5, clock / 240);
     const kind = forceKind ||
-                 (Math.random() < robotChance ? 'robot' : 'zombie');
+                 (Math.random() < robotChance ? local.ranged : local.melee);
     const k = KINDS[kind];
 
     enemies.push({
@@ -1758,7 +1887,7 @@
       // reads as a LINE coming over a ridge rather than a blob.
       const across = (Math.random() - 0.5) * 1.15;
       const deep   = 215 + Math.random() * 85;
-      spawnEnemy(deep, from + across, 'zombie');
+      spawnEnemy(deep, from + across, PLANETS[planetIx].kinds.melee);
     }
 
     // ---- AND SOMETHING BIG AT THE FRONT -----------------------------
@@ -1781,7 +1910,8 @@
       const big = 1 + (Math.random() < 0.35 ? 1 : 0);
       for (let i = 0; i < big; i++) {
         if (spawnEnemy(198 + Math.random() * 30,
-                       from + (Math.random() - 0.5) * 0.5, 'giant')) {
+                       from + (Math.random() - 0.5) * 0.5,
+                       PLANETS[planetIx].kinds.big)) {
           hordeGiants++;
         }
       }
@@ -2284,10 +2414,13 @@
     else playHit();
   }
 
-  // Does this kill count towards the job you took?
+  // Does this kill count towards the job you took? A job that asks
+  // for zombies is happy with anything doing the zombie JOB on this
+  // planet - that's what the "role" on each kind is for.
   function questCredit(e) {
     if (!quest) return;
-    if (quest.kind !== 'any' && quest.kind !== e.kind) return;
+    if (quest.kind !== 'any' && quest.kind !== e.kind &&
+        quest.kind !== e.k.role) return;
 
     quest.count++;
     if (quest.count >= quest.target) finishQuest();
@@ -2868,25 +3001,34 @@
   // world: its own seed (so the maths builds different everything) and
   // its own weather. Every planet still has settlements, radio towers,
   // forts and pads - so wherever you land, you can always fly on.
+  // Each planet names its monsters: who fills the crowd, who shoots,
+  // and who's the big one at the front of a horde. spawnEnemy and
+  // spawnHorde read these instead of hard-coding zombie/robot/giant.
   const PLANETS = [
     { name: 'THE RUST',    seed: 0,
       skyTop: '#3a2214', skyLow: '#c9955a',
-      fog: [178, 136, 88],  ground: [186, 156, 112], orb: [220, 150, 80]  },
+      fog: [178, 136, 88],  ground: [186, 156, 112], orb: [220, 150, 80],
+      kinds: { melee: 'zombie', ranged: 'robot', big: 'giant' } },
     { name: 'ASHFALL',     seed: 1,
       skyTop: '#17171d', skyLow: '#8e8e96',
-      fog: [138, 138, 146], ground: [118, 118, 126], orb: [170, 170, 180] },
+      fog: [138, 138, 146], ground: [118, 118, 126], orb: [170, 170, 180],
+      kinds: { melee: 'ashWraith', ranged: 'robot', big: 'ashGiant' } },
     { name: 'THE ROT',     seed: 2,
       skyTop: '#0f2010', skyLow: '#71994f',
-      fog: [112, 148, 92],  ground: [112, 140, 90],  orb: [120, 210, 90]  },
+      fog: [112, 148, 92],  ground: [112, 140, 90],  orb: [120, 210, 90],
+      kinds: { melee: 'rotCrawler', ranged: 'sporeSpitter', big: 'rotGiant' } },
     { name: 'BLOODMOON',   seed: 3,
       skyTop: '#2a0a0a', skyLow: '#b0503c',
-      fog: [162, 92, 70],   ground: [152, 102, 80],  orb: [235, 80, 60]   },
+      fog: [162, 92, 70],   ground: [152, 102, 80],  orb: [235, 80, 60],
+      kinds: { melee: 'bloodFiend', ranged: 'robot', big: 'bloodGiant' } },
     { name: 'FROSTBITE',   seed: 4,
       skyTop: '#16202e', skyLow: '#9fc0d8',
-      fog: [172, 196, 214], ground: [182, 200, 214], orb: [150, 210, 250] },
+      fog: [172, 196, 214], ground: [182, 200, 214], orb: [150, 210, 250],
+      kinds: { melee: 'frostShambler', ranged: 'robot', big: 'frostGolem' } },
     { name: 'VIOLET DEEP', seed: 5,
       skyTop: '#1d1030', skyLow: '#8a6ab0',
-      fog: [142, 112, 168], ground: [132, 112, 150], orb: [190, 120, 255] }
+      fog: [142, 112, 168], ground: [132, 112, 150], orb: [190, 120, 255],
+      kinds: { melee: 'voidWalker', ranged: 'voidFloater', big: 'voidGiant' } }
   ];
 
   let planetIx = 0;
@@ -4448,11 +4590,17 @@
   const MAP_RANGE = 320;
 
   const MAP_COLOUR = {
-    zombie:       '#7ad05a',
-    robot:        '#6ecdff',
-    giant:        '#ff5a3c',
-    zombieMarine: '#d05aff',   // evil purple - nothing else on the map has it
-    zombieBoss:   '#ff2a2a'    // pure alarm red
+    zombie:        '#7ad05a',
+    robot:         '#6ecdff',
+    giant:         '#ff5a3c',
+    zombieMarine:  '#d05aff',   // evil purple - nothing else on the map has it
+    zombieBoss:    '#ff2a2a',   // pure alarm red
+    // the locals of the other five planets
+    ashWraith:     '#d0d0da',  ashGiant:     '#a8a8b4',
+    rotCrawler:    '#c6d84a',  sporeSpitter: '#8fe0a0',  rotGiant: '#9fcf4f',
+    bloodFiend:    '#ff6a5a',  bloodGiant:   '#ff3a2a',
+    frostShambler: '#c8e4f8',  frostGolem:   '#8fd0ff',
+    voidWalker:    '#c08aff',  voidFloater:  '#e0a0ff',  voidGiant: '#a050ff'
   };
 
   function drawMiniMap() {
@@ -4690,8 +4838,11 @@
   }
 
   function questLine(q) {
+    // "zombies" on The Rust, "ash wraiths" on Ashfall - the board
+    // names whatever fills the zombie job on THIS planet.
+    const localName = KINDS[PLANETS[planetIx].kinds.melee].plural || 'zombies';
     return 'Kill ' + q.target + ' ' +
-           (q.kind === 'zombie' ? 'zombies' : 'of them');
+           (q.kind === 'zombie' ? localName : 'of them');
   }
 
   function drawBoardScreen() {
