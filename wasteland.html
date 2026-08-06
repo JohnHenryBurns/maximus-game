@@ -1130,12 +1130,16 @@
         // anything, skips about half the entire wasteland for free.
         if (dx * Math.sin(player.yaw) + dz * Math.cos(player.yaw) < -26) continue;
 
-        if      (p.kind === 'tower')  drawTower(p);
+        // On the mushroom planet, towers and wrecks GROW instead of
+        // stand: same spots, same collision, different clothes. The
+        // world's shape doesn't change - only what it's wearing.
+        const shroomy = PLANETS[planetIx].shrooms;
+        if      (p.kind === 'tower')  (shroomy ? drawShroom(p) : drawTower(p));
         else if (p.kind === 'bunker') drawBunker(p);
         else if (p.kind === 'radio')  drawRadio(p);
         else if (p.kind === 'fort')   drawFort(p);
         else if (p.kind === 'pad')    drawPad(p);
-        else if (p.kind === 'wreck')  drawWreck(p);
+        else if (p.kind === 'wreck')  (shroomy ? drawShroomPatch(p) : drawWreck(p));
         else if (p.kind === 'tree')   drawDeadTree(p);
         else if (p.kind === 'rubble') drawRubble(p);
         else                          drawBarrels(p);
@@ -1176,6 +1180,54 @@
     if (ready) addBox(x, 21.2, z, 1.4, 1.4, 1.4, [255, 40 + 80 * pulse, 36]);
     else       addBox(x, 21.2, z, 1.1, 1.1, 1.1, [110, 42, 34]);
     fogResist = 0;
+  }
+
+  // A GIANT VIOLET MUSHROOM, exactly where a tower would stand and
+  // exactly as solid. The stalk is as fat as the tower's collision
+  // circle, so what stops you matches what you see.
+  function drawShroom(p) {
+    const x = p.x, z = p.z, gx = p.gx, gz = p.gz;
+    const h = p.tall;
+    const capW = p.w * 2.4;
+
+    // The stalk, leaning ever so slightly - grown, not built.
+    const lean = (hash2(gx + 5, gz) - 0.5) * 0.15;
+    addBox(x, h * 0.5, z, p.w * 0.62, h, p.w * 0.62, [196, 176, 214], lean);
+
+    // The cap: a fat violet dome in two layers, gills underneath.
+    addBox(x, h + p.w * 0.28, z, capW * 0.7, p.w * 0.75, capW * 0.7,
+           [128, 64, 186], p.spin);
+    addBox(x, h + p.w * 0.06, z, capW, p.w * 0.42, capW,
+           [112, 54, 168], p.spin);
+    addBox(x, h - p.w * 0.10, z, capW * 0.82, 0.8, capW * 0.82,
+           [88, 40, 132], p.spin);   // the dark gills under the brim
+
+    // Glowing spots on the cap - a little fogResist so the mushroom
+    // forest twinkles through the violet haze.
+    fogResist = 0.4;
+    for (let i = 0; i < 4; i++) {
+      const a = hash2(gx + i * 7, gz + i) * Math.PI * 2;
+      const r = capW * (0.15 + hash2(gx, gz + i * 3) * 0.28);
+      addBox(x + Math.cos(a) * r, h + p.w * (0.3 + hash2(gx + i, gz) * 0.3),
+             z + Math.sin(a) * r,
+             1.2, 1.2, 1.2, [228, 196, 255]);
+    }
+    fogResist = 0;
+  }
+
+  // Where a wrecked car would rust, a patch of knee-high mushrooms
+  // grows instead. Same solid lump in the middle.
+  function drawShroomPatch(p) {
+    const x = p.x, z = p.z, gx = p.gx, gz = p.gz;
+    const n = 3 + Math.floor(hash2(gx + 6, gz) * 3);
+    for (let i = 0; i < n; i++) {
+      const a = hash2(gx + i, gz + i * 3) * Math.PI * 2;
+      const d = 1.5 + hash2(gx + i * 2, gz) * 4;
+      const s = 1.4 + hash2(gx, gz + i) * 2.2;
+      const mx = x + Math.cos(a) * d, mz = z + Math.sin(a) * d;
+      addBox(mx, s * 0.8, mz, s * 0.5, s * 1.6, s * 0.5, [196, 176, 214]);
+      addBox(mx, s * 1.7, mz, s * 1.5, s * 0.7, s * 1.5, [118, 58, 174]);
+    }
   }
 
   // A tower with its top blown off. The break is what makes it a ruin -
@@ -3058,7 +3110,8 @@
     { name: 'VIOLET DEEP', seed: 5,
       skyTop: '#1d1030', skyLow: '#8a6ab0',
       fog: [142, 112, 168], ground: [132, 112, 150], orb: [190, 120, 255],
-      kinds: { melee: 'voidWalker', ranged: 'voidFloater', big: 'voidGiant' } }
+      kinds: { melee: 'voidWalker', ranged: 'voidFloater', big: 'voidGiant' },
+      shrooms: true }   // towers and wrecks grow as giant mushrooms here
   ];
 
   let planetIx = 0;
