@@ -1134,12 +1134,15 @@
         // stand: same spots, same collision, different clothes. The
         // world's shape doesn't change - only what it's wearing.
         const shroomy = PLANETS[planetIx].shrooms;
-        if      (p.kind === 'tower')  (shroomy ? drawShroom(p) : drawTower(p));
+        const icy     = PLANETS[planetIx].icy;
+        if      (p.kind === 'tower')  (shroomy ? drawShroom(p) :
+                                       icy     ? drawIcicle(p) : drawTower(p));
         else if (p.kind === 'bunker') drawBunker(p);
         else if (p.kind === 'radio')  drawRadio(p);
         else if (p.kind === 'fort')   drawFort(p);
         else if (p.kind === 'pad')    drawPad(p);
-        else if (p.kind === 'wreck')  (shroomy ? drawShroomPatch(p) : drawWreck(p));
+        else if (p.kind === 'wreck')  (shroomy ? drawShroomPatch(p) :
+                                       icy     ? drawIcePatch(p) : drawWreck(p));
         else if (p.kind === 'tree')   drawDeadTree(p);
         else if (p.kind === 'rubble') drawRubble(p);
         else                          drawBarrels(p);
@@ -1227,6 +1230,56 @@
       const mx = x + Math.cos(a) * d, mz = z + Math.sin(a) * d;
       addBox(mx, s * 0.8, mz, s * 0.5, s * 1.6, s * 0.5, [196, 176, 214]);
       addBox(mx, s * 1.7, mz, s * 1.5, s * 0.7, s * 1.5, [118, 58, 174]);
+    }
+  }
+
+  // A GIANT ICICLE where a tower would stand - Frostbite's version of
+  // the same trick as the mushrooms. Stacked boxes, each one smaller
+  // and a little off-centre, taper up to a point that catches the
+  // light. Grown by cold, not built by anybody.
+  function drawIcicle(p) {
+    const x = p.x, z = p.z, gx = p.gx, gz = p.gz;
+    const h = p.tall;
+    const steps = 5;
+
+    for (let i = 0; i < steps; i++) {
+      const t = i / steps;                       // 0 at the base, up to 1
+      const w = p.w * (1 - t * 0.8);             // narrowing as it climbs
+      const ox = (hash2(gx + i, gz) - 0.5) * p.w * 0.25 * t;
+      const oz = (hash2(gx, gz + i) - 0.5) * p.w * 0.25 * t;
+      const blue = 0.85 + t * 0.35;              // paler towards the tip
+      addBox(x + ox, h * (t + 0.1), z + oz, w, h / steps * 1.25, w,
+             shade([170, 205, 235], blue), p.spin + t * 0.3);
+    }
+
+    // Two smaller spikes leaning against the big one.
+    for (const s of [-1, 1]) {
+      const sw = p.w * 0.35;
+      const sh = h * (0.3 + hash2(gx + s * 3, gz) * 0.2);
+      addBox(x + s * p.w * 0.7, sh * 0.5, z + s * p.w * 0.3,
+             sw, sh, sw, [150, 188, 218], p.spin + s * 0.4);
+      addBox(x + s * p.w * 0.7, sh * 1.05, z + s * p.w * 0.3,
+             sw * 0.5, sh * 0.35, sw * 0.5, [200, 226, 245], p.spin + s * 0.4);
+    }
+
+    // The glint at the tip - ice is only ice if it catches the light.
+    fogResist = 0.4;
+    addBox(x, h * 1.16, z, 1.1, 1.1, 1.1, [240, 250, 255]);
+    fogResist = 0;
+  }
+
+  // Where a wrecked car would rust on Frostbite, a cluster of small
+  // ice spikes grows instead. Same solid lump in the middle.
+  function drawIcePatch(p) {
+    const x = p.x, z = p.z, gx = p.gx, gz = p.gz;
+    const n = 3 + Math.floor(hash2(gx + 6, gz) * 3);
+    for (let i = 0; i < n; i++) {
+      const a = hash2(gx + i, gz + i * 3) * Math.PI * 2;
+      const d = 1.5 + hash2(gx + i * 2, gz) * 4;
+      const s = 1.6 + hash2(gx, gz + i) * 2.6;
+      const mx = x + Math.cos(a) * d, mz = z + Math.sin(a) * d;
+      addBox(mx, s * 0.9, mz, s * 0.7, s * 1.8, s * 0.7, [170, 205, 235], a);
+      addBox(mx, s * 2.1, mz, s * 0.35, s * 0.9, s * 0.35, [210, 232, 248], a);
     }
   }
 
@@ -3106,7 +3159,8 @@
     { name: 'FROSTBITE',   seed: 4,
       skyTop: '#16202e', skyLow: '#9fc0d8',
       fog: [172, 196, 214], ground: [182, 200, 214], orb: [150, 210, 250],
-      kinds: { melee: 'frostShambler', ranged: 'frostSpitter', big: 'frostGolem' } },
+      kinds: { melee: 'frostShambler', ranged: 'frostSpitter', big: 'frostGolem' },
+      icy: true },   // towers and wrecks stand as giant icicles here
     { name: 'VIOLET DEEP', seed: 5,
       skyTop: '#1d1030', skyLow: '#8a6ab0',
       fog: [142, 112, 168], ground: [132, 112, 150], orb: [190, 120, 255],
