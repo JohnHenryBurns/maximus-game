@@ -4299,11 +4299,13 @@
   window.addEventListener('mousemove', function (e) {
     if (!locked) return;
 
-    // In the cab the mouse does NOT turn the truck - the wheel does
-    // that. It swings the camera round so you can look out of the side
-    // window at what you're about to hit, then springs back.
+    // In the cab the mouse does NOT turn the truck - A and D do that.
+    // It turns your HEAD: look out of the side window, or down over
+    // the bonnet at what you're about to flatten. Let go and your head
+    // drifts back to straight ahead.
     if (driving) {
-      lookYaw = clamp(lookYaw + e.movementX * LOOK, -2.4, 2.4);
+      lookYaw = clamp(lookYaw + e.movementX * LOOK, -2.2, 2.2);
+      player.pitch = clamp(player.pitch - e.movementY * LOOK, -0.7, 0.7);
       return;
     }
 
@@ -5899,6 +5901,7 @@
   function enterRig() {
     driving = true;
     lookYaw = 0;
+    player.pitch = 0;          // eyes level with the road, not the sky
     setHelp();
     say('IN THE CAB  -  W to pull away,  E to get out');
   }
@@ -6102,30 +6105,52 @@
     }
   }
 
-  // Behind and above, and it LAGS - which is what makes a hard turn
-  // feel like a hard turn instead of the world blinking sideways.
+  // IN THE CAB, LOOKING OUT.
+  //
+  // Your eye sits just in FRONT of the windscreen glass, up where a
+  // lorry driver's head actually is. Put it behind the glass and the
+  // windscreen - which is a solid box like everything else in this
+  // game - fills the whole screen with blue.
+  //
+  // From here you can see your own bonnet and the bull bars below you,
+  // which is exactly what tells you where the front of the truck is.
+  // WHERE THE DRIVER'S HEAD IS. Properly in the seat, behind the glass
+  // - the cab box and windscreen simply aren't drawn while you're in
+  // there, so there's nothing to see through.
+  //
+  // Pushing the eye out in FRONT of the cab instead was the first try,
+  // and it worked right up until you noticed the whole lorry had
+  // vanished: from out there your own bonnet is entirely below the
+  // bottom of the screen, and you're a camera flying over the dirt.
+  const EYE_ALONG  = 2.2;    // sat in the seat
+  const EYE_UP     = 5.3;    // high up, like a lorry
+  const EYE_ACROSS = -1.3;   // the driver's side, not the middle
+
   function aimCamera(dt) {
-    const look = rig.yaw + lookYaw;
-    // The rig is 19 long. Sit closer than about 30 and the back of the
-    // trailer fills the screen and you drive blind behind your own load.
-    const back = 30 + Math.abs(rig.speed) * 0.16;
+    const co = Math.cos(rig.yaw), si = Math.sin(rig.yaw);
 
-    const wantX = rig.x - Math.sin(look) * back;
-    const wantZ = rig.z - Math.cos(look) * back;
+    // No lag and no smoothing - your head is bolted to the cab, so the
+    // world turns the instant the truck does. That IS first person.
+    cam.x = rig.x + EYE_ACROSS * co + EYE_ALONG * si;
+    cam.z = rig.z - EYE_ACROSS * si + EYE_ALONG * co;
 
-    const k = Math.min(1, dt * 4.5);
-    cam.x += (wantX - cam.x) * k;
-    cam.z += (wantZ - cam.z) * k;
-    cam.y += (terrainAt(rig.x, rig.z) + 19 - cam.y) * k;
+    // A shudder that grows with speed. Sat still it's dead steady; flat
+    // out the cab shakes, and that does more for how fast 60 FEELS than
+    // any number on the screen.
+    const rough = Math.abs(rig.speed) / TOP_SPEED;
+    cam.y = terrainAt(rig.x, rig.z) + EYE_UP
+          + Math.sin(clock * 26) * rough * 0.16
+          + Math.sin(clock * 11) * rough * 0.10;
 
-    // Turn the shortest way round, or the camera whips the long way
-    // every time the rig crosses due north.
-    let gap = look - cam.yaw;
-    while (gap > Math.PI)  gap -= Math.PI * 2;
-    while (gap < -Math.PI) gap += Math.PI * 2;
-    cam.yaw += gap * Math.min(1, dt * 6);
+    cam.yaw   = rig.yaw + lookYaw;
+    cam.pitch = clamp(player.pitch, -0.7, 0.7);
 
-    cam.pitch = -0.22;
+    // THE VIEW DRIFTS BACK TO STRAIGHT AHEAD.
+    // Without this you glance out of the side window, take your hand
+    // off the mouse, and drive into a tower wondering why - because
+    // the wheel and the window had quietly stopped agreeing.
+    lookYaw -= lookYaw * Math.min(1, dt * 1.6);
+    if (Math.abs(lookYaw) < 0.003) lookYaw = 0;
   }
 
 
@@ -6247,9 +6272,22 @@
     // Scorched as it gets wrecked, so you can SEE how bad it is without
     // reading the number.
     const hurt = 1 - (1 - rig.health / rig.maxHealth) * 0.55;
+
+    // The bonnet. Always drawn - from the driver's seat this is the
+    // long brown nose stretching away in front of you, and it's what
+    // tells you where your own front end is.
     part(0, 2.6, 2.4, 6.4, 3.4, 8.4, shade(CAB_A, hurt));
-    part(0, 5.0, 1.2, 5.8, 2.6, 5.0, shade(CAB_B, hurt));
-    part(0, 5.2, 3.5, 5.0, 1.8, 0.5, GLASS);                    // windscreen
+
+    // THE BOX ROUND YOUR HEAD, AND THE GLASS YOU LOOK THROUGH.
+    // From outside these are the cab and the windscreen. From the
+    // driver's seat your eye is INSIDE them, and a solid box you are
+    // sat inside just paints the whole screen its own colour. So while
+    // you're driving, they aren't drawn at all - which is exactly what
+    // it's like to be in a cab: you see out, not in.
+    if (!driving) {
+      part(0, 5.0, 1.2, 5.8, 2.6, 5.0, shade(CAB_B, hurt));
+      part(0, 5.2, 3.5, 5.0, 1.8, 0.5, GLASS);                  // windscreen
+    }
     for (const a of [-2.95, 2.95]) part(a, 5.2, 1.4, 0.5, 1.6, 3.0, GLASS);
     part(0, 6.5, 0.6, 4.4, 0.5, 3.6, shade(CAB_B, 1.1 * hurt));
     for (const a of [-1.6, 1.6]) part(a, 7.2, 0.4, 0.4, 1.4, 0.4, DARKR);  // stacks
