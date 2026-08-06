@@ -280,6 +280,8 @@
   let state = 'play';
   let deadTimer = 0;
   let shake = 0;
+  let flashWin = 0;      // the white flash when the dreadnought goes
+  let wonTimer = 0;
 
 
 // -------------------------------------------------------------------
@@ -963,6 +965,330 @@
 
 
 // -------------------------------------------------------------------
+//  THE DREADNOUGHT
+// -------------------------------------------------------------------
+//  One enormous warship, sat in one place, waiting. Ten turrets down its
+//  hull, each one its own little fight, and a core underneath them that
+//  only opens up once every gun is off.
+//
+//  IT IS DELIBERATELY TOO BIG FOR THE SHIP YOU START WITH. Ten turrets
+//  at 26 each and a core at 150 is 410 damage, and a starting gun puts
+//  out about 15 a second while ten guns shoot back. You are meant to go
+//  away, mine, fight, dock, come back stronger, and try again.
+//
+//  That's the job it's really doing. Everything you can buy has been
+//  buyable for a while with nothing to spend it FOR. This is the reason.
+// -------------------------------------------------------------------
+
+  const CAP_TURRETS  = 10;
+  const TURRET_HP    = 26;
+  const CORE_HP      = 150;
+  const CAP_LEN      = 260;      // half its length
+  const TURRET_RANGE = 620;
+  // TEN GUNS ADD UP FAST, and it's worth doing the sum rather than
+  // guessing. At 8 damage every 2.6 seconds, ten of them is 31 a second
+  // - which takes a starting hull of 100 apart in three seconds. That
+  // isn't a hard fight, it's a wall.
+  //
+  // At 6 every 3 seconds it's 20 a second:
+  //
+  //   starting ship   100 hull, no wingmen   dead in 5s
+  //                   needs about 27s of shooting to win.  Hopeless.
+  //
+  //   fully upgraded  200 hull, 3 wingmen healing 9 a second
+  //                   so 11 a second gets through - 18s of life
+  //                   needs about 7s of shooting.  Winnable, with room.
+  //
+  // Which is exactly the shape it should be.
+  const TURRET_COOL  = 3.0;
+  const TURRET_HURT  = 6;
+  const TURRET_R     = 26;       // how near a bolt has to be to hit one
+
+  const CAP_HULL = [86, 92, 104];
+  const CAP_DARK = [48, 54, 66];
+  const CAP_RED  = [190, 70, 60];
+
+  let capital = null;
+
+  function makeCapital() {
+    const turrets = [];
+
+    for (let i = 0; i < CAP_TURRETS; i++) {
+      // Spiralled along the hull, so wherever you come from some are
+      // facing you and some aren't - and flying round the far side is
+      // a real way of buying yourself a moment.
+      const t = i / (CAP_TURRETS - 1);
+      const ang = t * Math.PI * 3.4;
+
+      turrets.push({
+        lx: Math.cos(ang) * 46,
+        ly: Math.sin(ang) * 34,
+        lz: -CAP_LEN * 0.78 + t * CAP_LEN * 1.56,
+        hp: TURRET_HP,
+        cool: 1 + Math.random() * TURRET_COOL,
+        flash: 0
+      });
+    }
+
+    const cap = {
+      pos: vec(4200, -700, 3800),
+      fwd: norm(vec(-0.6, 0.1, -0.8)),
+      up: vec(0, 1, 0),
+      right: vec(1, 0, 0),
+      turrets: turrets,
+      core: CORE_HP,
+      coreFlash: 0,
+      dead: false,
+      boom: 0
+    };
+
+    // SQUARE IT UP BEFORE ANYBODY LOOKS AT IT.
+    //
+    // fwd points off at an angle but up and right were left as plain
+    // axes, so the three arrows weren't at right angles - and every
+    // turret sat 83 units away from where it really was until the first
+    // frame ran tidy() and they all jumped.
+    //
+    // Anything aimed at a turret in that first moment missed something
+    // that had already moved. Found by printing a turret's position
+    // either side of a tidy() and watching the number change.
+    tidy(cap);
+    return cap;
+  }
+
+  // Where a turret is in the world.
+  function turretPos(t) {
+    return add(add(add(capital.pos, mul(capital.right, t.lx)),
+                   mul(capital.up, t.ly)),
+               mul(capital.fwd, t.lz));
+  }
+
+  function turretsLeft() {
+    let n = 0;
+    for (const t of capital.turrets) if (t.hp > 0) n++;
+    return n;
+  }
+
+  // The core only opens up when every gun is off. That ordering IS the
+  // fight - without it you'd ignore the turrets and shoot the middle.
+  function coreOpen() { return turretsLeft() === 0; }
+
+  function updateCapital(dt) {
+    if (!capital || capital.dead) return;
+
+    capital.coreFlash = Math.max(0, capital.coreFlash - dt * 4);
+    tidy(capital);
+
+    const away = len(sub(ship.pos, capital.pos));
+
+    for (const t of capital.turrets) {
+      t.flash = Math.max(0, t.flash - dt * 4);
+      if (t.hp <= 0) continue;
+
+      t.cool -= dt;
+      if (t.cool > 0 || away > TURRET_RANGE) continue;
+
+      t.cool = TURRET_COOL * (0.7 + Math.random() * 0.6);
+
+      const from = turretPos(t);
+      // Leads you, same sum as everything else that shoots in this game.
+      const aim = norm(sub(add(ship.pos, mul(ship.vel, len(sub(ship.pos, from)) / 300)),
+                           from));
+
+      bolts.push({
+        pos: from, vel: mul(aim, 300),
+        life: 4, side: 'them', hurt: TURRET_HURT,
+        colour: [255, 150, 90]
+      });
+      beep(150, 70, 0.2, 0.1, 'sawtooth');
+    }
+
+    // ---- SOLID ------------------------------------------------------
+    // Checked at a few points down the hull rather than one big sphere,
+    // because a sphere round something 520 long would keep you away from
+    // empty space either end of it.
+    for (let i = -2; i <= 2; i++) {
+      const at = add(capital.pos, mul(capital.fwd, i * CAP_LEN * 0.4));
+      const to = sub(ship.pos, at);
+      const d = len(to);
+      const hitAt = 62;
+      if (d > hitAt) continue;
+
+      const out = mul(to, 1 / (d || 1));
+      ship.pos = add(at, mul(out, hitAt));
+      const into = dot(ship.vel, out);
+      if (into < 0) {
+        ship.vel = sub(ship.vel, mul(out, into * 1.5));
+        hurt(Math.min(30, Math.abs(into) * 0.22));
+        burst(ship.pos, [[255, 190, 120], [200, 100, 70]], 16, 44);
+      }
+    }
+  }
+
+  // A bolt of yours reaching the dreadnought. Returns true if it hit
+  // something and should stop.
+  function capitalHit(b) {
+    if (!capital || capital.dead) return false;
+    if (len(sub(b.pos, capital.pos)) > CAP_LEN + 120) return false;
+
+    // ---- A TURRET ---------------------------------------------------
+    for (const t of capital.turrets) {
+      if (t.hp <= 0) continue;
+      if (len(sub(b.pos, turretPos(t))) > TURRET_R) continue;
+
+      t.hp -= b.hurt;
+      t.flash = 1;
+      burst(b.pos, [[255, 210, 150], [255, 140, 80]], 7, 26);
+
+      if (t.hp <= 0) {
+        burst(turretPos(t), [[255, 200, 120], [255, 120, 60], CAP_HULL], 34, 70);
+        beep(220, 60, 0.5, 0.24, 'sawtooth');
+        shake = Math.max(shake, 0.5);
+        dropLoot(turretPos(t), 4, 6, 30);
+      }
+      return true;
+    }
+
+    // ---- THE CORE ---------------------------------------------------
+    if (len(sub(b.pos, capital.pos)) < 54) {
+      if (!coreOpen()) {
+        // Bounces off. You have to take the guns first.
+        burst(b.pos, [[190, 200, 220], [140, 150, 170]], 6, 22);
+        return true;
+      }
+
+      capital.core -= b.hurt;
+      capital.coreFlash = 1;
+      burst(b.pos, [[255, 240, 180], [255, 180, 90]], 9, 32);
+
+      if (capital.core <= 0) killCapital();
+      return true;
+    }
+
+    // ---- THE HULL ---------------------------------------------------
+    // Anywhere else on it just stops the shot.
+    for (let i = -2; i <= 2; i++) {
+      const at = add(capital.pos, mul(capital.fwd, i * CAP_LEN * 0.4));
+      if (len(sub(b.pos, at)) < 56) {
+        burst(b.pos, [[190, 200, 220], [140, 150, 170]], 5, 20);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function killCapital() {
+    capital.dead = true;
+    capital.boom = 1;
+
+    for (let i = 0; i < 9; i++) {
+      const off = mul(capital.fwd, (i - 4) * CAP_LEN * 0.22);
+      burst(add(capital.pos, off),
+            [[255, 240, 190], [255, 170, 80], [255, 100, 50], CAP_HULL], 40, 130);
+    }
+    dropLoot(capital.pos, 20, 12, 70);
+
+    beep(160, 30, 2.4, 0.32, 'sawtooth');
+    shake = 2.5;
+    flashWin = 1;
+    state = 'won';
+  }
+
+  function drawCapital() {
+    if (!capital || capital.dead) return;
+
+    const d = len(sub(capital.pos, ship.pos));
+    if (d > SEE * 1.8) {
+      // Too far for the ship itself, but it gets a marker so you can
+      // find it - and decide from a long way off whether you're ready.
+      const pulse = 0.5 + Math.sin(clock * 1.6) * 0.5;
+      const size = 20 + d * 0.02;
+      addBox(capital.pos, capital, size, size, size,
+             [180 + 60 * pulse, 70, 60]);
+      return;
+    }
+
+    const o = capital;
+    const p = capital.pos;
+    const near = d < 900;
+
+    // ---- THE HULL ---------------------------------------------------
+    addBox(p, o, 84, 60, CAP_LEN * 2, CAP_HULL);
+    addBox(p, o, 96, 26, CAP_LEN * 1.5, CAP_DARK);
+
+    // A spine of plating down the top.
+    for (let i = -4; i <= 4; i++) {
+      addBox(add(add(p, mul(o.fwd, i * CAP_LEN * 0.2)), mul(o.up, 34)),
+             o, 60, 14, 34, i % 2 ? CAP_HULL : CAP_DARK);
+    }
+
+    // The bridge, up near the back.
+    addBox(add(add(p, mul(o.fwd, -CAP_LEN * 0.62)), mul(o.up, 52)),
+           o, 54, 30, 70, CAP_HULL);
+    addBox(add(add(p, mul(o.fwd, -CAP_LEN * 0.62)), mul(o.up, 62)),
+           o, 40, 8, 44, [120, 200, 255]);
+
+    // Engines, four of them, burning.
+    for (const c of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+      const at = add(add(add(p, mul(o.fwd, -CAP_LEN * 1.02)),
+                         mul(o.right, c[0] * 30)), mul(o.up, c[1] * 20));
+      addBox(at, o, 26, 26, 40, CAP_DARK);
+      addBox(add(at, mul(o.fwd, -26)), o, 20, 20, 26 + Math.sin(clock * 9) * 5,
+             [120, 190, 255]);
+    }
+
+    // The nose.
+    addBox(add(p, mul(o.fwd, CAP_LEN * 1.02)), o, 46, 34, 70, CAP_HULL);
+
+    // ---- THE CORE ---------------------------------------------------
+    // Sealed and dull while the guns live. Wide open and blazing once
+    // they're gone - so you can SEE that the fight has changed.
+    const open = coreOpen();
+    const beat = 0.6 + Math.sin(clock * (open ? 7 : 2)) * 0.4;
+
+    addBox(p, o, 62, 62, 62, open
+      ? [255, 200 + 55 * beat, 90]
+      : shade(CAP_DARK, 0.9 + capital.coreFlash));
+
+    if (open) {
+      addBox(p, o, 74, 20, 74, [255, 160 + 80 * beat, 60]);
+      addBox(p, o, 20, 74, 74, [255, 160 + 80 * beat, 60]);
+    }
+
+    // ---- THE TURRETS -------------------------------------------------
+    for (const t of capital.turrets) {
+      const at = turretPos(t);
+
+      if (t.hp <= 0) {
+        // A blackened stub, so you can count what you've done.
+        addBox(at, o, 20, 12, 20, [38, 34, 34]);
+        if (near && Math.random() < 0.25) {
+          addBox(add(at, mul(o.up, 10)), o, 4, 4, 4, [255, 190, 90]);
+        }
+        continue;
+      }
+
+      const lit = t.flash > 0.1;
+      addBox(at, o, 26, 16, 26, lit ? [255, 220, 220] : CAP_DARK);
+
+      // The barrel points AT YOU, which is the clearest way a gun can
+      // tell you it has noticed you.
+      const look = { fwd: norm(sub(ship.pos, at)), up: o.up, right: o.right };
+      tidy(look);
+      addBox(add(at, mul(look.fwd, 16)), look,
+             8, 8, 30, lit ? [255, 200, 200] : CAP_RED);
+
+      if (near) {
+        // A little health pip on top of each one.
+        const f = Math.max(0, t.hp / TURRET_HP);
+        addBox(add(at, mul(o.up, 16)), o, 22 * f, 3, 5,
+               f > 0.5 ? [140, 230, 110] : [230, 110, 70]);
+      }
+    }
+  }
+
+
+// -------------------------------------------------------------------
 //  WINGMEN
 // -------------------------------------------------------------------
 //  Hired at a station. They fly on your wing, shoot what shoots at you,
@@ -1279,6 +1605,10 @@
       //
       // So "mine" became "side", and there are three of them.
       if (b.side === 'you' || b.side === 'wing') {
+        // The dreadnought first - it's the biggest thing out here and a
+        // bolt inside it should never sail through to whatever's behind.
+        if (capitalHit(b)) { b.life = 0; continue; }
+
         for (const e of enemies) {
           if (e.hp <= 0) continue;
           if (len(sub(b.pos, e.pos)) < ENEMY_R) {
@@ -1469,7 +1799,7 @@
   window.addEventListener('keydown', function (e) {
     keys[e.key.toLowerCase()] = true;
     if (e.key.startsWith('Arrow') || e.key === ' ') e.preventDefault();
-    if (e.key.toLowerCase() === 'r' && state === 'dead') restart();
+    if (e.key.toLowerCase() === 'r' && (state === 'dead' || state === 'won')) restart();
 
     if ((e.key.toLowerCase() === 'q' || e.key === 'Tab') && state === 'play') {
       cycleTarget();
@@ -1531,6 +1861,8 @@
     ship.kills = 0;
     ship.hurtFlash = 0;
     enemies = []; bolts = []; bits = []; loot = []; wings = [];
+    capital = makeCapital();
+    flashWin = 0; wonTimer = 0;
     target = null;
     docked = null;
     spawnTimer = 3;
@@ -1555,6 +1887,19 @@
 
     // Once, up front, for everybody.
     gatherRocks();
+
+    if (flashWin > 0) flashWin = Math.max(0, flashWin - dt * 0.7);
+
+    // ---- YOU DID IT ---------------------------------------------------
+    // Nothing restarts, nothing counts down. Your ship drifts on through
+    // the wreckage exactly as it was going, because out here it would.
+    if (state === 'won') {
+      wonTimer += dt;
+      ship.pos = add(ship.pos, mul(ship.vel, dt));
+      updateBolts(dt);
+      aimCamera(dt);
+      return;
+    }
 
     // Tied up at a station: the world holds still. You're inside the
     // dock, which is the one safe place there is.
@@ -1664,6 +2009,7 @@
 
     updateEnemies(dt);
     updateWings(dt);
+    updateCapital(dt);
     updateBolts(dt);
     keepTargetHonest();
 
@@ -1887,6 +2233,52 @@
     }
   }
 
+  // ---- WHERE IS IT, AND HOW'S IT DOING? --------------------------------
+  function drawCapNav() {
+    if (!capital || capital.dead || state !== 'play') return;
+
+    const to = sub(capital.pos, ship.pos);
+    const d = len(to);
+    const s = project(capital.pos);
+    const left = turretsLeft();
+
+    const onScreen = s.depth > 1 && s.x > 40 && s.x < W - 40 &&
+                                    s.y > 40 && s.y < H - 40;
+
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 13px system-ui, sans-serif';
+    ctx.fillStyle = coreOpen() ? '#ffd06a' : '#ff7a5a';
+
+    if (onScreen) {
+      ctx.fillText('DREADNOUGHT  ' + Math.round(d), s.x, s.y - 40);
+      ctx.font = '12px system-ui, sans-serif';
+      ctx.fillText(coreOpen() ? 'CORE EXPOSED  -  HIT THE MIDDLE'
+                              : left + ' turrets left', s.x, s.y - 24);
+      return;
+    }
+
+    let ax = dot(to, cam.right), ay = dot(to, cam.up);
+    if (dot(to, cam.fwd) < 0) { ax = -ax; ay = -ay; }
+
+    const l = Math.hypot(ax, ay) || 1;
+    const r = Math.min(W, H) * 0.30;
+    const ex = W / 2 + (ax / l) * r;
+    const ey = H / 2 - (ay / l) * r;
+
+    ctx.save();
+    ctx.translate(ex, ey);
+    ctx.rotate(Math.atan2(-(ay / l), ax / l));
+    ctx.fillStyle = coreOpen() ? '#ffd06a' : '#ff7a5a';
+    ctx.beginPath();
+    ctx.moveTo(15, 0); ctx.lineTo(-8, 9); ctx.lineTo(-8, -9);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+
+    ctx.fillStyle = coreOpen() ? '#ffd06a' : '#ff7a5a';
+    ctx.fillText('DREADNOUGHT ' + Math.round(d), ex, ey + 26);
+  }
+
   // ---- WHERE'S THE NEAREST STATION? ------------------------------------
   function drawNav() {
     const st = nearestStation();
@@ -2067,6 +2459,38 @@
       ctx.fillText('CLICK TO FLY', W / 2, H * 0.62);
     }
 
+    // ---- THE DREADNOUGHT IS DOWN ---------------------------------------
+    if (state === 'won') {
+      if (flashWin > 0) {
+        ctx.fillStyle = 'rgba(255,245,220,' + (flashWin * 0.85) + ')';
+        ctx.fillRect(0, 0, W, H);
+      }
+
+      const fade = Math.min(1, wonTimer / 2.2);
+
+      ctx.fillStyle = 'rgba(255,200,90,' + (fade * 0.16) + ')';
+      ctx.fillRect(0, 0, W, H);
+
+      ctx.textAlign = 'center';
+      ctx.font = 'bold ' + Math.min(W * 0.11, 80) + 'px system-ui, sans-serif';
+      ctx.fillStyle = 'rgba(0,0,0,' + fade + ')';
+      ctx.fillText('DREADNOUGHT DOWN', W / 2 + 4, H * 0.42 + 4);
+      ctx.fillStyle = 'rgba(255,224,138,' + fade + ')';
+      ctx.fillText('DREADNOUGHT DOWN', W / 2, H * 0.42);
+
+      if (wonTimer > 1.4) {
+        const late = Math.min(1, (wonTimer - 1.4) / 1.2);
+        ctx.font = Math.min(W * 0.034, 21) + 'px system-ui, sans-serif';
+        ctx.fillStyle = 'rgba(240,235,220,' + late + ')';
+        ctx.fillText('ten turrets, a core, and ' + ship.kills +
+                     ' fighters on the way in', W / 2, H * 0.53);
+        ctx.fillText('you still had ' + Math.ceil(ship.health) + ' hull left',
+                     W / 2, H * 0.59);
+        ctx.fillText('press R to fly again', W / 2, H * 0.66);
+      }
+      return;
+    }
+
     if (state === 'dead') {
       ctx.fillStyle = 'rgba(30,4,6,' + Math.min(0.75, deadTimer * 0.7) + ')';
       ctx.fillRect(0, 0, W, H);
@@ -2100,6 +2524,7 @@
     drawStations();
     drawEnemies();
     drawWings();
+    drawCapital();
     drawBolts();
     drawBits();
     drawLoot();
@@ -2122,7 +2547,7 @@
     // dashboard instead of underneath it.
     if (state === 'docked') { drawDockScreen(); return; }
 
-    if (state === 'play') { drawCanopy(); drawNav(); }
+    if (state === 'play') { drawCanopy(); drawNav(); drawCapNav(); }
     drawLock();
     drawHud();
   }
