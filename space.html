@@ -331,7 +331,14 @@
 
     const size = 8 + hash3(gx + 7, gy, gz) * 26;
 
+    // HOW MUCH SHOOTING IT TAKES, worked out from the size - so a
+    // boulder is a job and a pebble is a pop. One number decides both
+    // how big it looks and how long it lasts, which means they can
+    // never disagree.
+    const hp = Math.max(2, Math.round(size * 0.42));
+
     return {
+      hp: hp, maxHp: hp, dead: false,
       pos: vec(
         gx * CELL + (hash3(gx + 1, gy, gz) - 0.5) * CELL * 0.7,
         gy * CELL + (hash3(gx, gy + 1, gz) - 0.5) * CELL * 0.7,
@@ -381,7 +388,8 @@
       for (let gy = cy - reach; gy <= cy + reach; gy++) {
         for (let gz = cz - reach; gz <= cz + reach; gz++) {
           const rk = rockAt(gx, gy, gz);
-          if (!rk) continue;
+          if (!rk || rk.dead) continue;      // broken ones are gone, for
+                                             // drawing, bolts and hull alike
 
           const d = len(sub(rk.pos, ship.pos));
           if (d > ROCK_SEE) continue;
@@ -402,8 +410,30 @@
       const o = rockFrame(rk);
       const s = rk.size;
 
+      // A rock you've been chipping at LOOKS chipped - it darkens as it
+      // goes. Without it there's no way to tell a fresh boulder from one
+      // that's nearly open, and you'd never know whether to keep firing.
+      const wear = 1 - (1 - rk.hp / rk.maxHp) * 0.32;
+
       // Far off it's one lump. Close up it's a lump with lumps on it.
-      addBox(rk.pos, o, s, s * 0.86, s * 0.94, rk.colour);
+      addBox(rk.pos, o, s, s * 0.86, s * 0.94, shade(rk.colour, wear));
+
+      // THE ORE SEAM, drawn much further out than the rest of the
+      // detail. It's the whole point of it: a gold stripe on the
+      // horizon is a reason to change course, and a reason you can only
+      // act on if you can see it from far enough away to bother.
+      if (rk.ore) {
+        const glow = 0.8 + Math.sin(clock * 3 + rk.pos.x * 0.1) * 0.2;
+        const gold = shade(ROCK_ORE, glow);
+
+        // THREE BARS, one along each direction. One bar alone is a flat
+        // slab, and a flat slab seen edge-on is a line - so half the
+        // time you'd fly straight past a rock worth five times the rest
+        // and never know. Cross them and there is no angle that hides it.
+        addBox(rk.pos, o, s * 1.03, s * 0.24, s * 0.26, gold);
+        addBox(rk.pos, o, s * 0.24, s * 1.03, s * 0.26, gold);
+        addBox(rk.pos, o, s * 0.26, s * 0.24, s * 1.03, gold);
+      }
 
       if (rk.away < 330) {
         for (let i = 0; i < 4; i++) {
@@ -413,11 +443,9 @@
                                Math.cos(b),
                                Math.sin(a) * Math.sin(b)), s * 0.42);
           const bs = s * (0.3 + hash3(rk.pos.x, rk.pos.y, rk.pos.z + i) * 0.3);
-          addBox(add(rk.pos, bump), o, bs, bs, bs, shade(rk.colour, 0.9));
+          addBox(add(rk.pos, bump), o, bs, bs, bs,
+                 shade(rk.colour, 0.9 * wear));
         }
-
-        // A seam of something worth having.
-        if (rk.ore) addBox(rk.pos, o, s * 1.02, s * 0.22, s * 0.24, ROCK_ORE);
       }
     }
   }
@@ -624,6 +652,24 @@
 
 
   const LOOT_GRAB = 34;      // how close you have to fly to pick it up
+
+  // Scatter salvage from a spot. Written once because two different
+  // things now need it - a ship blowing up and a rock breaking open.
+  function dropLoot(p, count, worth, spread) {
+    for (let i = 0; i < count; i++) {
+      const a = Math.random() * 6.28;
+      const b = Math.acos(Math.random() * 2 - 1);
+      const dir = vec(Math.cos(a) * Math.sin(b), Math.cos(b), Math.sin(a) * Math.sin(b));
+
+      loot.push({
+        pos: vec(p.x, p.y, p.z),
+        vel: mul(dir, (spread || 20) * (0.4 + Math.random())),
+        worth: worth,
+        life: 40,
+        spin: Math.random() * 6.28
+      });
+    }
+  }
 
   function updateLoot(dt) {
     for (const l of loot) {
@@ -1078,15 +1124,62 @@
       if (b.life > 0) {
         for (const rk of nearRocks) {
           if (rk.away > 340) continue;
-          if (len(sub(b.pos, rk.pos)) < rk.size * 0.62) {
-            b.life = 0;
-            burst(b.pos, [[190, 180, 170], [140, 130, 120]], 6, 24);
-            break;
-          }
+          if (len(sub(b.pos, rk.pos)) >= rk.size * 0.62) continue;
+
+          b.life = 0;
+          burst(b.pos, [[190, 180, 170], [140, 130, 120]], 6, 24);
+
+          // Only YOUR shots count as mining. Theirs just chip the rock -
+          // you don't get paid for standing near a firefight.
+          if (b.mine) mineRock(rk, b.pos);
+          break;
         }
       }
     }
     bolts = bolts.filter(function (b) { return b.life > 0; });
+  }
+
+// -------------------------------------------------------------------
+//  MINING
+// -------------------------------------------------------------------
+//  Shoot a rock and it gives you salvage. Every hit knocks a chip loose,
+//  and breaking one open pays properly.
+//
+//  And the ORE seams finally do something. They were painted on from the
+//  very first version of this game and did nothing at all - a gold stripe
+//  on one rock in seven, purely for show. Now they're worth about five
+//  times a plain rock, which turns "there's a rock" into "there's a rock
+//  worth going to".
+// -------------------------------------------------------------------
+
+  const ORE_MULT = 5;
+
+  function mineRock(rk, at) {
+    rk.hp -= ship.gunDamage;
+
+    // ---- STILL STANDING: a chip comes off ---------------------------
+    if (rk.hp > 0) {
+      if (rk.ore) dropLoot(at, 1, 2, 14);        // ore pays as you dig
+      else if (Math.random() < 0.4) dropLoot(at, 1, 1, 14);
+      return;
+    }
+
+    // ---- BROKEN OPEN -------------------------------------------------
+    rk.dead = true;
+
+    const worth = rk.ore ? ORE_MULT : 1;
+    const chunks = 3 + Math.round(rk.size / 9);
+
+    dropLoot(rk.pos, chunks, 2 * worth, 26);
+
+    burst(rk.pos, rk.ore
+      ? [[235, 190, 90], [190, 150, 70], rk.colour]
+      : [rk.colour, shade(rk.colour, 0.7), shade(rk.colour, 1.2)],
+      24 + chunks * 3, 55);
+
+    beep(rk.ore ? 520 : 200, rk.ore ? 900 : 90, 0.35, 0.2,
+         rk.ore ? 'triangle' : 'square');
+    shake = Math.max(shake, 0.3);
   }
 
   function killEnemy(e) {
@@ -1097,19 +1190,7 @@
     // Chunks worth taking, drifting away from the wreck. You have to go
     // and get them, which means the moment you shoot something down you
     // have a decision: chase the salvage, or stay out of trouble.
-    for (let i = 0; i < 5; i++) {
-      const a = Math.random() * 6.28;
-      const b = Math.acos(Math.random() * 2 - 1);
-      const dir = vec(Math.cos(a) * Math.sin(b), Math.cos(b), Math.sin(a) * Math.sin(b));
-
-      loot.push({
-        pos: vec(e.pos.x, e.pos.y, e.pos.z),
-        vel: add(mul(e.vel, 0.4), mul(dir, 12 + Math.random() * 22)),
-        worth: 3 + Math.floor(Math.random() * 4),
-        life: 40,
-        spin: Math.random() * 6.28
-      });
-    }
+    dropLoot(e.pos, 5, 4, 24);
 
     burst(e.pos, [[255, 190, 110], [255, 120, 60], [150, 60, 60]], 40, 90);
     beep(180, 40, 0.6, 0.28);
