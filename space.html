@@ -555,6 +555,52 @@
     }
   }
 
+  // WHAT YOU CAN SEE OF YOUR OWN SHIP FROM INSIDE IT.
+  //
+  // Not the whole model - most of it is behind your head. Just the nose
+  // out in front and the wings off to either side, which is exactly what
+  // you'd have in view sat in the seat.
+  //
+  // These matter more than they look. They're the only things on screen
+  // that stay put while everything else moves, and without them your eye
+  // has nothing to hold on to - you stop feeling like a ship and start
+  // feeling like a floating eyeball.
+  function drawCockpitParts() {
+    const o = ship;
+    const p = ship.pos;
+
+    // EVERYTHING HERE HAD TO MOVE FORWARD, and it's the same reason
+    // twice. Things get bigger the closer they are - that's the divide
+    // in project(). The nose started 5 units from the eye and came out
+    // 384 pixels across, a slab over the middle of the screen. And the
+    // wings started BEHIND the camera, so they were culled and never
+    // appeared at all.
+    //
+    // Pushed out to 13 and 18 they land where they belong: a small nose
+    // at the bottom and two wings in the lower corners.
+
+    addBox(add(add(p, mul(o.fwd, 18)), mul(o.up, -2.8)), o,
+           2.0, 1.2, 8.0, [78, 112, 152]);
+    addBox(add(add(p, mul(o.fwd, 23.5)), mul(o.up, -2.9)), o,
+           1.2, 0.9, 4.0, [96, 132, 172]);
+
+    for (const side of [-1, 1]) {
+      addBox(add(add(add(p, mul(o.right, side * 7.0)), mul(o.fwd, 13)),
+                 mul(o.up, -3.4)), o,
+             7.0, 0.7, 6.5, [70, 100, 138]);
+
+      // The gun pod on the tip - and it's where the bolts really come
+      // from, so your own shots leave from the right place.
+      addBox(add(add(add(p, mul(o.right, side * 9.8)), mul(o.fwd, 15.5)),
+                 mul(o.up, -3.4)), o,
+             1.1, 1.1, 5.0, [50, 74, 104]);
+    }
+
+    // No engine flare out here: the engines are behind your head, and a
+    // thing behind the camera can't be drawn. The dashboard glow does
+    // that job instead.
+  }
+
   function drawEnemies() {
     for (const e of enemies) {
       const body = e.hitFlash > 0.1
@@ -865,19 +911,20 @@
     aimCamera(dt);
   }
 
-  // ---- THE CAMERA SITS BEHIND YOU -------------------------------------
-  // And it LAGS. It chases where the ship was a moment ago rather than
-  // being welded to it, which is what makes a hard turn feel like a hard
-  // turn instead of the whole universe blinking sideways.
+  // ---- YOU'RE IN THE SEAT ---------------------------------------------
+  // The camera IS the ship now - same place, same three arrows, no lag
+  // at all.
+  //
+  // The chase camera used to trail a little behind, which softened hard
+  // turns. In the seat that softening becomes a lie: the stars would
+  // swing a moment after you moved the stick, and your eyes would tell
+  // you the ship was loose. Welded to the ship is the only honest
+  // option from inside it.
   function aimCamera(dt) {
-    const want = add(add(ship.pos, mul(ship.fwd, -26)), mul(ship.up, 7));
-    const k = Math.min(1, dt * 7);
-
-    cam.pos = add(cam.pos, mul(sub(want, cam.pos), k));
-
-    cam.fwd = norm(add(cam.fwd, mul(sub(ship.fwd, cam.fwd), k)));
-    cam.up  = norm(add(cam.up,  mul(sub(ship.up,  cam.up),  k)));
-    tidy(cam);
+    cam.pos = add(add(ship.pos, mul(ship.fwd, 2.0)), mul(ship.up, 1.3));
+    cam.fwd = ship.fwd;
+    cam.up = ship.up;
+    cam.right = ship.right;
   }
 
 
@@ -897,21 +944,78 @@
     }
   }
 
+  // ---- THE CANOPY ---------------------------------------------------
+  // Painted flat on top of everything: struts round the edge and a dash
+  // along the bottom. It's a frame you're looking through, and it turns
+  // "a view of space" into "a view of space FROM SOMEWHERE".
+  function drawCanopy() {
+    ctx.fillStyle = '#0a1018';
+
+    // Dashboard along the bottom, curving up at the corners.
+    ctx.beginPath();
+    ctx.moveTo(0, H);
+    ctx.lineTo(0, H * 0.84);
+    ctx.quadraticCurveTo(W * 0.5, H * 0.965, W, H * 0.84);
+    ctx.lineTo(W, H);
+    ctx.closePath();
+    ctx.fill();
+
+    // Two struts sweeping up from the corners of the dash.
+    ctx.strokeStyle = '#0d141e';
+    ctx.lineWidth = Math.max(9, W * 0.017);
+    ctx.beginPath();
+    ctx.moveTo(-10, H * 0.02);
+    ctx.quadraticCurveTo(W * 0.20, H * 0.52, W * 0.055, H * 0.92);
+    ctx.moveTo(W + 10, H * 0.02);
+    ctx.quadraticCurveTo(W * 0.80, H * 0.52, W * 0.945, H * 0.92);
+    ctx.stroke();
+
+    // THE THROTTLE GLOW. The engines are behind your head where you can
+    // never see them, so the dashboard tells you instead - it lifts as
+    // you open up and dies away when you let go.
+    if (ship.thrusting > 0.02) {
+      const g = ctx.createLinearGradient(0, H * 0.88, 0, H);
+      g.addColorStop(0, 'rgba(90,190,255,0)');
+      g.addColorStop(1, 'rgba(90,190,255,' + (ship.thrusting * 0.30) + ')');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.moveTo(0, H);
+      ctx.lineTo(0, H * 0.84);
+      ctx.quadraticCurveTo(W * 0.5, H * 0.965, W, H * 0.84);
+      ctx.lineTo(W, H);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // A thin bright edge on the inside of each strut, so they read as
+    // metal catching the light rather than as smears of nothing.
+    ctx.strokeStyle = 'rgba(130,180,220,0.28)';
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(-10, H * 0.02);
+    ctx.quadraticCurveTo(W * 0.20, H * 0.52, W * 0.055, H * 0.92);
+    ctx.moveTo(W + 10, H * 0.02);
+    ctx.quadraticCurveTo(W * 0.80, H * 0.52, W * 0.945, H * 0.92);
+    ctx.stroke();
+  }
+
   function drawHud() {
     // ---- CROSSHAIR ----------------------------------------------------
-    // Sat where your NOSE points, not the middle of the screen - the
-    // camera lags behind you, so the middle of the screen isn't where
-    // you're aimed.
-    const nose = project(add(ship.pos, mul(ship.fwd, 400)));
-    if (nose.depth > 1) {
-      ctx.strokeStyle = '#7fe4ff';
-      ctx.lineWidth = 1.6;
-      ctx.beginPath();
-      ctx.arc(nose.x, nose.y, 12, 0, 6.28);
-      ctx.moveTo(nose.x - 20, nose.y); ctx.lineTo(nose.x - 6, nose.y);
-      ctx.moveTo(nose.x + 6, nose.y);  ctx.lineTo(nose.x + 20, nose.y);
-      ctx.stroke();
-    }
+    // Dead centre, and it can be, because the camera IS the ship now.
+    // It used to be projected out along the nose - it had to be, with a
+    // chase camera trailing behind, since the middle of the screen
+    // wasn't where you were pointing. From the seat those are the same
+    // place, so the maths simply goes away.
+    const cx = W / 2, cy = H / 2;
+    ctx.strokeStyle = '#7fe4ff';
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 12, 0, 6.28);
+    ctx.moveTo(cx - 22, cy); ctx.lineTo(cx - 7, cy);
+    ctx.moveTo(cx + 7, cy);  ctx.lineTo(cx + 22, cy);
+    ctx.moveTo(cx, cy - 22); ctx.lineTo(cx, cy - 7);
+    ctx.moveTo(cx, cy + 7);  ctx.lineTo(cx, cy + 22);
+    ctx.stroke();
 
     // ---- HULL ---------------------------------------------------------
     const bw = Math.min(W * 0.26, 240), bx = W * 0.05, by = H - 44;
@@ -988,9 +1092,7 @@
     drawEnemies();
     drawBolts();
     drawBits();
-    if (state === 'play') {
-      drawShipModel(ship, ship.pos, [90, 130, 175], [120, 240, 255], ship.thrusting);
-    }
+    if (state === 'play') drawCockpitParts();
 
     faces.sort(function (a, b) { return b.depth - a.depth; });
 
@@ -1004,6 +1106,10 @@
     }
 
     cam.pos = saved;
+
+    // Canopy first, then the readouts - so the numbers sit ON the
+    // dashboard instead of underneath it.
+    if (state === 'play') drawCanopy();
     drawHud();
   }
 
