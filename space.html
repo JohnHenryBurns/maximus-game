@@ -1852,6 +1852,210 @@
     mouseY += e.movementY;
   });
 
+
+// -------------------------------------------------------------------
+//  PHONES AND TABLETS
+// -------------------------------------------------------------------
+//  This one asks the most of two thumbs of anything in the arcade. A
+//  spaceship wants steering, thrust, a brake, roll, a trigger, a lock
+//  and a docking clamp - and the wasteland only had to find room for
+//  walk, look, shoot and jump.
+//
+//  So the left thumb does THREE jobs at once instead of one:
+//
+//    push up      thrust
+//    pull down    the retros
+//    left/right   roll
+//
+//  Which is exactly what a real flight stick does, and it means no
+//  extra buttons to hunt for while something is shooting at you.
+//
+//  The right thumb steers. Everything else is a button, and buttons
+//  only appear when they'd do something - the docking clamp isn't on
+//  screen until there's a bay in front of you.
+// -------------------------------------------------------------------
+
+  const TOUCH_LOOK = 0.9;    // thumbs are coarser than mice
+  const STICK_MAX  = 58;
+
+  let touchMode = false;
+  const roles = {};
+
+  const stick = { on: false, ox: 0, oy: 0, dx: 0, dy: 0 };
+  let touchFire = false;
+
+  function btnR() { return Math.min(W, H) * 0.115; }
+
+  function fireBtn() { const r = btnR(); return { x: W - r * 1.35, y: H - r * 1.35, r: r }; }
+  function lockBtn() { const r = btnR(); return { x: W - r * 1.35, y: H - r * 3.3, r: r * 0.7 }; }
+  function dockBtn() { const r = btnR(); return { x: W - r * 3.3, y: H - r * 1.35, r: r * 0.8 }; }
+
+  function inCircle(px, py, b) { return Math.hypot(px - b.x, py - b.y) < b.r; }
+
+  function touchPoint(t) {
+    const box = canvas.getBoundingClientRect();
+    return { x: t.clientX - box.left, y: t.clientY - box.top };
+  }
+
+  function canDockNow() {
+    return state === 'play' && dockCheck().near;
+  }
+
+  function onTouchStart(e) {
+    if (!touchMode) {
+      touchMode = true;
+      const h = document.getElementById('hud');
+      if (h) h.style.display = 'none';      // that hint is wrong now
+    }
+    startAudio();
+
+    for (const t of e.changedTouches) {
+      const p = touchPoint(t);
+
+      // ---- SCREENS THAT AREN'T FLYING ------------------------------
+      if (state === 'dead' || state === 'won') { restart(); break; }
+
+      if (state === 'docked') {
+        let took = false;
+        for (let i = 0; i < 5; i++) {
+          const b = dockRowBox(i);          // the very box that got drawn
+          if (p.y >= b.y && p.y <= b.y + b.h && p.x >= b.x && p.x <= b.x + b.w) {
+            buyDock(i);
+            took = true;
+          }
+        }
+        if (!took) undock();                // tap anywhere else = leave
+        break;
+      }
+
+      // ---- BUTTONS, checked before the halves ----------------------
+      if (inCircle(p.x, p.y, lockBtn())) {
+        roles[t.identifier] = { role: 'tap' };
+        cycleTarget();
+      } else if (canDockNow() && inCircle(p.x, p.y, dockBtn())) {
+        roles[t.identifier] = { role: 'tap' };
+        tryDock();
+      } else if (inCircle(p.x, p.y, fireBtn())) {
+        roles[t.identifier] = { role: 'fire' };
+        touchFire = true;
+        shoot();
+      } else if (p.x < W * 0.5) {
+        // THE STICK APPEARS UNDER YOUR THUMB, so you never have to look
+        // down to find it.
+        roles[t.identifier] = { role: 'stick' };
+        stick.on = true;
+        stick.ox = p.x; stick.oy = p.y;
+        stick.dx = 0; stick.dy = 0;
+      } else {
+        roles[t.identifier] = { role: 'look', lx: p.x, ly: p.y };
+      }
+    }
+    e.preventDefault();
+  }
+
+  function onTouchMove(e) {
+    for (const t of e.changedTouches) {
+      const r = roles[t.identifier];
+      if (!r) continue;
+      const p = touchPoint(t);
+
+      if (r.role === 'stick') {
+        let dx = p.x - stick.ox, dy = p.y - stick.oy;
+        const l = Math.hypot(dx, dy);
+        if (l > STICK_MAX) { dx *= STICK_MAX / l; dy *= STICK_MAX / l; }
+        stick.dx = dx; stick.dy = dy;
+
+      } else if (r.role === 'look') {
+        // Fed into the SAME two numbers the mouse fills in, so the
+        // steering itself never learns there's such a thing as a thumb.
+        mouseX += (p.x - r.lx) * TOUCH_LOOK;
+        mouseY += (p.y - r.ly) * TOUCH_LOOK;
+        r.lx = p.x; r.ly = p.y;
+      }
+    }
+    e.preventDefault();
+  }
+
+  function onTouchEnd(e) {
+    for (const t of e.changedTouches) {
+      const r = roles[t.identifier];
+      if (!r) continue;
+      if (r.role === 'stick') { stick.on = false; stick.dx = 0; stick.dy = 0; }
+      if (r.role === 'fire') touchFire = false;
+      delete roles[t.identifier];
+    }
+    e.preventDefault();
+  }
+
+  canvas.addEventListener('touchstart',  onTouchStart, { passive: false });
+  canvas.addEventListener('touchmove',   onTouchMove,  { passive: false });
+  canvas.addEventListener('touchend',    onTouchEnd,   { passive: false });
+  canvas.addEventListener('touchcancel', onTouchEnd,   { passive: false });
+
+
+  function drawThumbPad() {
+    if (!touchMode || state !== 'play') return;
+
+    // ---- THE STICK --------------------------------------------------
+    if (stick.on) {
+      ctx.beginPath();
+      ctx.arc(stick.ox, stick.oy, STICK_MAX, 0, 6.28);
+      ctx.strokeStyle = 'rgba(140,200,255,0.22)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // A cross through it, because this stick does two different jobs
+      // on two different axes and the lines say so without a word.
+      ctx.strokeStyle = 'rgba(140,200,255,0.14)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(stick.ox - STICK_MAX, stick.oy);
+      ctx.lineTo(stick.ox + STICK_MAX, stick.oy);
+      ctx.moveTo(stick.ox, stick.oy - STICK_MAX);
+      ctx.lineTo(stick.ox, stick.oy + STICK_MAX);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(stick.ox + stick.dx, stick.oy + stick.dy, STICK_MAX * 0.36, 0, 6.28);
+      ctx.fillStyle = 'rgba(120,220,255,0.30)';
+      ctx.fill();
+      ctx.strokeStyle = '#7fe4ff';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      ctx.textAlign = 'center';
+      ctx.font = '11px system-ui, sans-serif';
+      ctx.fillStyle = 'rgba(160,215,245,0.75)';
+      ctx.fillText('THRUST', stick.ox, stick.oy - STICK_MAX - 8);
+      ctx.fillText('BRAKE', stick.ox, stick.oy + STICK_MAX + 16);
+      ctx.fillText('ROLL', stick.ox + STICK_MAX + 20, stick.oy + 4);
+    }
+
+    function roundBtn(b, on, label, colOn, colOff) {
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, b.r, 0, 6.28);
+      ctx.fillStyle = on ? colOn : 'rgba(0,0,0,0.34)';
+      ctx.fill();
+      ctx.lineWidth = on ? 4 : 2;
+      ctx.strokeStyle = on ? colOff : 'rgba(255,255,255,0.42)';
+      ctx.stroke();
+
+      ctx.textAlign = 'center';
+      ctx.font = 'bold ' + (b.r * 0.34) + 'px system-ui, sans-serif';
+      ctx.fillStyle = on ? colOff : '#dfe4ee';
+      ctx.fillText(label, b.x, b.y + b.r * 0.12);
+    }
+
+    roundBtn(fireBtn(), touchFire, 'FIRE', 'rgba(255,120,60,0.38)', '#ffb070');
+    roundBtn(lockBtn(), !!target, 'LOCK', 'rgba(255,138,90,0.34)', '#ff8a5a');
+
+    // Only on screen when there's a bay in front of you to use it on.
+    if (canDockNow()) {
+      const c = dockCheck();
+      roundBtn(dockBtn(), c.ok, 'DOCK', 'rgba(143,255,154,0.34)', '#8fff9a');
+    }
+  }
+
   function restart() {
     ship.pos = vec(0, 0, 0);
     ship.vel = vec(0, 0, 0);
@@ -1923,6 +2127,10 @@
     mouseX = 0; mouseY = 0;
 
     let roll = 0;
+    // Sideways on the thumb stick is roll - the same axis your hand
+    // uses on a real stick.
+    if (stick.on) roll -= (stick.dx / STICK_MAX) * ROLL * dt;
+
     if (held('a', 'arrowleft'))  roll += ROLL * dt;
     if (held('d', 'arrowright')) roll -= ROLL * dt;
 
@@ -1946,18 +2154,31 @@
     // going exactly as you were - there is nothing out here to slow you
     // down, which is the whole reason this game feels different to the
     // racer.
+    // UP ON THE STICK IS THROTTLE, DOWN IS THE RETROS - and it's not
+    // on-or-off like the key is. A thumb halfway up gives you half the
+    // engine, which is the only way to arrive at a docking bay slowly
+    // enough to be let in.
+    //
+    // Screen y grows DOWNWARDS, so up the screen is a negative dy, and
+    // that's why it's subtracted.
+    const stickUp = stick.on ? -stick.dy / STICK_MAX : 0;
+
     const boosting = keys['shift'];
-    if (held('w', 'arrowup')) {
-      ship.vel = add(ship.vel, mul(ship.fwd, (boosting ? BOOST : THRUST) * ship.enginePower * dt));
-      ship.thrusting = Math.min(1, ship.thrusting + dt * 4);
+    const throttle = held('w', 'arrowup') ? 1 : Math.max(0, stickUp);
+
+    if (throttle > 0.03) {
+      ship.vel = add(ship.vel, mul(ship.fwd,
+        (boosting ? BOOST : THRUST) * ship.enginePower * throttle * dt));
+      ship.thrusting = Math.min(1, ship.thrusting + dt * 4 * throttle);
     } else {
       ship.thrusting = Math.max(0, ship.thrusting - dt * 3);
     }
 
     // The brake is retro-rockets: it drags your speed towards nothing in
     // whatever direction you happen to be drifting.
-    if (held('s', 'arrowdown')) {
-      ship.vel = mul(ship.vel, Math.max(0, 1 - BRAKE * dt));
+    const braking = held('s', 'arrowdown') ? 1 : Math.max(0, -stickUp);
+    if (braking > 0.03) {
+      ship.vel = mul(ship.vel, Math.max(0, 1 - BRAKE * braking * dt));
     }
 
     const sp = len(ship.vel);
@@ -1965,7 +2186,7 @@
 
     ship.pos = add(ship.pos, mul(ship.vel, dt));
 
-    if (firing) shoot();
+    if (firing || touchFire) shoot();
 
     // ---- FLYING INTO A ROCK -------------------------------------------
     for (const rk of nearRocks) {
@@ -2326,6 +2547,15 @@
     ctx.fillText(Math.round(d), ex, ey + 24);
   }
 
+  // Where row i of the station menu sits. Used BOTH to draw it and to
+  // work out what a thumb landed on, so the row you see is the row you
+  // get. Five at 0.093 with 8 between, from 0.245 - ends at 0.74, and
+  // the footer is at 0.88, so it fits on a short window too.
+  function dockRowBox(i) {
+    const w = Math.min(W * 0.68, 500), h = H * 0.093;
+    return { x: W / 2 - w / 2, y: H * 0.245 + i * (h + 8), w: w, h: h };
+  }
+
   // ---- INSIDE THE STATION ----------------------------------------------
   function drawDockScreen() {
     ctx.fillStyle = 'rgba(4,10,20,0.9)';
@@ -2348,11 +2578,8 @@
       const cost = Math.round(m.cost);
       const afford = m.can && ship.salvage >= cost;
 
-      // Five rows now. Worked out rather than eyeballed: five at 0.093
-      // with 8 between, from 0.245, ends at 0.74 - and the footer sits
-      // at 0.88, so it fits even on a short window.
-      const bw = Math.min(W * 0.68, 500), bh = H * 0.093;
-      const bx = W / 2 - bw / 2, by = H * 0.245 + i * (bh + 8);
+      const b = dockRowBox(i);
+      const bw = b.w, bh = b.h, bx = b.x, by = b.y;
 
       ctx.fillStyle = afford ? 'rgba(120,220,255,0.14)' : 'rgba(0,0,0,0.42)';
       ctx.fillRect(bx, by, bw, bh);
@@ -2378,7 +2605,8 @@
     ctx.textAlign = 'center';
     ctx.font = Math.min(W * 0.03, 18) + 'px system-ui, sans-serif';
     ctx.fillStyle = '#6c8098';
-    ctx.fillText('press 1 to 5 to buy      E to undock', W / 2, H * 0.88);
+    ctx.fillText(touchMode ? 'tap a line to buy it, or tap anywhere else to undock'
+                           : 'press 1 to 5 to buy      E to undock', W / 2, H * 0.88);
   }
 
   function drawHud() {
@@ -2416,21 +2644,27 @@
     ctx.fillText(Math.ceil(ship.health) + '  HULL', bx, by - 6);
 
     // ---- SPEED --------------------------------------------------------
+    // On a phone the FIRE and LOCK buttons sit in this exact corner, so
+    // the whole column shifts left of them - worked out from the
+    // button's own size rather than a guessed number, so it stays clear
+    // whatever the screen. Learned this the hard way on the wasteland.
+    const RX = touchMode ? W - btnR() * 2.9 : W * 0.95;
+
     ctx.textAlign = 'right';
     ctx.font = 'bold ' + Math.min(W * 0.05, 30) + 'px system-ui, sans-serif';
     ctx.fillStyle = '#7fe4ff';
-    ctx.fillText(Math.round(len(ship.vel)), W * 0.95, H - 44);
+    ctx.fillText(Math.round(len(ship.vel)), RX, H - 44);
     ctx.font = '13px system-ui, sans-serif';
     ctx.fillStyle = '#7f93aa';
-    ctx.fillText('SPEED', W * 0.95, H - 27);
-    ctx.fillText(ship.kills + ' shot down', W * 0.95, H - 62);
+    ctx.fillText('SPEED', RX, H - 27);
+    ctx.fillText(ship.kills + ' shot down', RX, H - 62);
 
     ctx.fillStyle = aimBot ? '#8fff9a' : '#6c7f92';
     ctx.fillText(aimBot ? 'targeting computer ON' : 'targeting computer OFF',
-                 W * 0.95, H - 78);
+                 RX, H - 78);
 
     ctx.fillStyle = '#e6c05a';
-    ctx.fillText(ship.salvage + ' salvage', W * 0.95, H - 94);
+    ctx.fillText(ship.salvage + ' salvage', RX, H - 94);
 
     // ---- CAN YOU DOCK? ------------------------------------------------
     if (state === 'play') {
@@ -2439,7 +2673,7 @@
         ctx.textAlign = 'center';
         ctx.font = 'bold ' + Math.min(W * 0.04, 25) + 'px system-ui, sans-serif';
         ctx.fillStyle = c.ok ? '#8fff9a' : '#ffb060';
-        ctx.fillText(c.ok ? 'PRESS E TO DOCK' : c.why, W / 2, H * 0.70);
+        ctx.fillText(c.ok ? (touchMode ? 'DOCK' : 'PRESS E TO DOCK') : c.why, W / 2, H * 0.70);
       }
     }
 
@@ -2452,11 +2686,11 @@
       ctx.fillRect(0, 0, W, H);
     }
 
-    if (!locked && state === 'play') {
+    if (!locked && !touchMode && state === 'play') {
       ctx.textAlign = 'center';
       ctx.font = 'bold ' + Math.min(W * 0.045, 28) + 'px system-ui, sans-serif';
       ctx.fillStyle = '#7fe4ff';
-      ctx.fillText('CLICK TO FLY', W / 2, H * 0.62);
+      ctx.fillText(touchMode ? 'TOUCH TO FLY' : 'CLICK TO FLY', W / 2, H * 0.62);
     }
 
     // ---- THE DREADNOUGHT IS DOWN ---------------------------------------
@@ -2486,7 +2720,7 @@
                      ' fighters on the way in', W / 2, H * 0.53);
         ctx.fillText('you still had ' + Math.ceil(ship.health) + ' hull left',
                      W / 2, H * 0.59);
-        ctx.fillText('press R to fly again', W / 2, H * 0.66);
+        ctx.fillText(touchMode ? 'tap anywhere to fly again' : 'press R to fly again', W / 2, H * 0.66);
       }
       return;
     }
@@ -2503,7 +2737,8 @@
       ctx.font = Math.min(W * 0.035, 21) + 'px system-ui, sans-serif';
       ctx.fillStyle = '#e8f0f8';
       ctx.fillText(ship.kills + ' shot down before they got you', W / 2, H * 0.53);
-      ctx.fillText('press R or click to fly again', W / 2, H * 0.60);
+      ctx.fillText(touchMode ? 'tap anywhere to fly again'
+                             : 'press R or click to fly again', W / 2, H * 0.60);
     }
   }
 
@@ -2550,6 +2785,7 @@
     if (state === 'play') { drawCanopy(); drawNav(); drawCapNav(); }
     drawLock();
     drawHud();
+    drawThumbPad();
   }
 
 
