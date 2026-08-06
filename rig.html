@@ -6683,15 +6683,57 @@
   function spawnOther(side) {
     if (others.length >= OTHER_MAX) return;
 
+    // WHERE THIS KIND OF TRUCK COMES FROM.
+    //
+    // Kill rigs are the SETTLEMENTS' doing - fifty to a hundred people
+    // behind those walls, and this is what they built to keep the road
+    // open. They roll out of the gates of a bunker. Marine rigs still
+    // come out of the forts.
     if (side === 'marine' || side === 'kill') {
-      const forts = placesNear(rig.x, rig.z, 5).filter(function (p) {
-        return p.kind === 'fort';
-      });
-      if (forts.length) {
-        const f = forts[0];
-        const a = Math.random() * Math.PI * 2;
-        others.push(makeOther('marine',
-          f.x + Math.sin(a) * (f.half + 26), f.z + Math.cos(a) * (f.half + 26), a));
+      const isKill = (side === 'kill');
+      const want   = isKill ? 'bunker' : 'fort';
+
+      // Look further for a kill rig. Settlements are one square in 300,
+      // so a five-square glance round you finds one less than half the
+      // time - and the rest of the time it quietly gave up and spawned
+      // out of the fog instead, which is not where they live.
+      const homes = placesNear(rig.x, rig.z, isKill ? 13 : 5)
+        .filter(function (p) { return p.kind === want; });
+
+      if (homes.length) {
+        // The nearest one, so it turns up somewhere you might see it
+        // rather than a mile off in the fog.
+        homes.sort(function (a2, b2) {
+          return Math.hypot(a2.x - rig.x, a2.z - rig.z)
+               - Math.hypot(b2.x - rig.x, b2.z - rig.z);
+        });
+        const h = homes[0];
+
+        // OUTSIDE THE WALLS, and a kill rig needs a lot of room - it's
+        // sixty long. Spawned too close it would start life sat on top
+        // of somebody's settlement.
+        const out = h.half + (isKill ? 52 : 26);
+
+        // AND OUTSIDE EVERYBODY ELSE'S WALLS TOO. Clearing its own gate
+        // isn't enough - settlements have neighbours, and one spawn in
+        // a hundred was landing inside the one next door. So try a few
+        // ways round the ring and take the first that's clear of every
+        // camp nearby.
+        let sx = 0, sz = 0, a = 0;
+        for (let attempt = 0; attempt < 8; attempt++) {
+          a  = Math.random() * Math.PI * 2;
+          sx = h.x + Math.sin(a) * out;
+          sz = h.z + Math.cos(a) * out;
+          const clash = placesNear(sx, sz, 2).some(function (p) {
+            return Math.hypot(p.x - sx, p.z - sz) < (p.half || 16) + 20;
+          });
+          if (!clash) break;
+        }
+
+        // This used to say makeOther('marine', ...) whatever was asked
+        // for, so a kill rig born at a fort quietly came out as an
+        // ordinary marine rig. It's `side` now.
+        others.push(makeOther(side, sx, sz, a));
         return;
       }
     }
