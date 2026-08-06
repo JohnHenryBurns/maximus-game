@@ -150,12 +150,33 @@
 //  slows you down a little - so a big enough crowd drags you under
 //  the line and into its own trap.
 
-  const TOP_SPEED = 62;      // flat out
-  const REVERSE   = 16;      // backwards is always slower
-  const ACCEL     = 11;
-  const BRAKE     = 26;
-  const DRAG      = 3.4;     // slows down on its own with your foot off
-  const TURN      = 0.85;
+  // THESE ARE MAX'S RACER'S NUMBERS, COPIED EXACTLY.
+  // Same top speed, same pull-away, same brakes, same coasting - so a
+  // rig drives like the car in the racing game, because it IS the car
+  // in the racing game with a trailer on the back.
+  const TOP_SPEED = 105;     // flat out
+  const ACCEL     = 34;      // how hard you pull away
+  const BRAKE     = 90;      // how hard the brakes bite
+  const DRAG      = 9;       // slowing down when you touch nothing
+
+  // ---- HOW HARD THE WHEEL FIGHTS BACK -------------------------------
+  // Straight out of the racer. A real steering wheel doesn't stay where
+  // you leave it: it pushes back towards straight, and it pushes HARDER
+  // the further round you have it and the faster you're going.
+  const MOUSE_RETURN = 1.5;      // how eagerly it winds back to straight
+  const MOUSE_HEAVY  = 2.0;      // how much heavier it gets at full lock
+  const MOUSE_GRIP   = 0.9;      // how much heavier it gets at speed
+  const MOUSE_SENS   = 0.008;    // how twitchy the mouse is
+
+  let mouseSteer = 0;            // where you're holding the wheel, -1 to 1
+
+  // THE ONE THING THAT ISN'T THE RACER'S.
+  // The racer clamps its speed at zero - there is no reverse, because
+  // there's nothing on a racetrack to get stuck against. The wasteland
+  // is full of towers and wrecks, and a lorry nose-first into one with
+  // no reverse gear is a lorry that never moves again. So S still backs
+  // you out.
+  const REVERSE   = 16;
   const RAM_SPEED = 22;      // the line between armour and dinner
   const RIG_HALF_W = 3.2;    // how wide the bull bars reach
   const RIG_NOSE   = 7.5;    // how far in front of the middle they stick
@@ -174,7 +195,9 @@
 
   let driving  = false;      // are you in the seat?
   let atRig    = null;       // stood next to it, close enough to climb in
-  let lookYaw  = 0;          // the mouse swings the camera round the rig
+  // The touch stick doubles as pedals AND wheel while you are driving,
+  // so a phone gets the same driving model a mouse does.
+  let pedalGo = false, pedalBrake = false;
   let rigSay   = '';         // a line of text the rig wants to tell you
   let rigSayT  = 0;
 
@@ -4302,13 +4325,11 @@
   window.addEventListener('mousemove', function (e) {
     if (!locked) return;
 
-    // In the cab the mouse does NOT turn the truck - A and D do that.
-    // It turns your HEAD: look out of the side window, or down over
-    // the bonnet at what you're about to flatten. Let go and your head
-    // drifts back to straight ahead.
+    // IN THE CAB THE MOUSE IS THE STEERING WHEEL. Exactly the racer's
+    // line, exactly the racer's sensitivity. It used to turn your head
+    // instead, which is a different game - this one you drive.
     if (driving) {
-      lookYaw = clamp(lookYaw + e.movementX * LOOK, -2.2, 2.2);
-      player.pitch = clamp(player.pitch - e.movementY * LOOK, -0.7, 0.7);
+      mouseSteer = clamp(mouseSteer + e.movementX * MOUSE_SENS, -1, 1);
       return;
     }
 
@@ -4630,7 +4651,7 @@
     rig.kills = 0; rig.ramFlash = 0;
     rig.cargo = null; rig.hauls = 0; rig.earned = 0;
     rig.bumpCool = 0;
-    lookYaw = 0; rigSay = ''; rigSayT = 0;
+    mouseSteer = 0; rigSay = ''; rigSayT = 0;
     atMechanic = null; repairGlow = 0;
     others = []; otherTimer = 22;
     setHelp();
@@ -5937,7 +5958,7 @@
   const HELP_FOOT  = 'MOUSE = look &nbsp;&nbsp; W A S D = move &nbsp;&nbsp; ' +
                      'CLICK = shoot &nbsp;&nbsp; SHIFT = run &nbsp;&nbsp; E = drive';
   const HELP_DRIVE = 'W = throttle &nbsp;&nbsp; S = brake / reverse &nbsp;&nbsp; ' +
-                     'A D = steer &nbsp;&nbsp; MOUSE = look around &nbsp;&nbsp; E = get out';
+                     'MOUSE = the wheel &nbsp;&nbsp; A D = steer too &nbsp;&nbsp; E = get out';
 
   function setHelp() {
     const el = document.getElementById('hud');
@@ -5946,7 +5967,7 @@
 
   function enterRig() {
     driving = true;
-    lookYaw = 0;
+    mouseSteer = 0;
     player.pitch = 0;          // eyes level with the road, not the sky
     setHelp();
     say('IN THE CAB  -  W to pull away,  E to get out');
@@ -6003,7 +6024,7 @@
     player.yaw = rig.yaw;
     player.pitch = 0;
 
-    lookYaw = 0;
+    mouseSteer = 0;
     updateEngineNote();      // and the engine shuts up
     setHelp();
     say('OUT ON FOOT');
@@ -6012,33 +6033,64 @@
   function say(words) { rigSay = words; rigSayT = 3.2; }
 
   function updateRig(dt) {
-    // ---- FOOT DOWN ----------------------------------------------------
-    let want = 0;
-    if (keys['w'] || keys['arrowup'])   want += 1;
-    if (keys['s'] || keys['arrowdown']) want -= 1;
+    // ---- THE SAME CONTROLS, WITH A THUMB ------------------------------
+    // Push the stick forward for the throttle, back for the brake, and
+    // sideways to steer - and the sideways part feeds the SAME
+    // mouseSteer the mouse does, so the wheel fights a thumb back
+    // exactly as hard as it fights a mouse. One driving model.
+    pedalGo = pedalBrake = false;
+    if (stick.on && stick.push > 0.06) {
+      const sy = -stick.dy / STICK_MAX, sx = stick.dx / STICK_MAX;
+      if (sy >  0.25) pedalGo    = true;
+      if (sy < -0.25) pedalBrake = true;
+      mouseSteer = clamp(mouseSteer + sx * 3.2 * dt, -1, 1);
+    }
 
-    if (want > 0)      rig.speed += ACCEL * dt;
-    else if (want < 0) rig.speed -= BRAKE * dt;
+    // ---- THE PEDALS ---------------------------------------------------
+    // The racer's rules exactly: throttle adds, brake takes away, and
+    // with your foot off nothing at all you coast down on DRAG.
+    const goPedal    = keys['w'] || keys['arrowup']   || pedalGo;
+    const brakePedal = keys['s'] || keys['arrowdown'] || pedalBrake;
 
-    // Off the pedal it coasts down on its own. A lorry does not stop dead.
-    if (want === 0) {
+    if (goPedal)         rig.speed += ACCEL * dt;
+    else if (brakePedal) rig.speed -= BRAKE * dt;
+    else {
+      // Coast to a stop from either direction - the racer only ever
+      // rolls forwards, but this one can be backing out of a wreck.
       const slow = DRAG * dt;
       if (Math.abs(rig.speed) < slow) rig.speed = 0;
       else rig.speed -= Math.sign(rig.speed) * slow;
     }
     rig.speed = clamp(rig.speed, -REVERSE, TOP_SPEED);
 
-    // ---- STEERING -----------------------------------------------------
-    let turn = 0;
-    if (keys['a'] || keys['arrowleft'])  turn -= 1;
-    if (keys['d'] || keys['arrowright']) turn += 1;
-    rig.steer += (turn - rig.steer) * Math.min(1, dt * 7);
+    // ---- THE WHEEL FIGHTS BACK ----------------------------------------
+    // Two things make it heavy, and they multiply together:
+    //
+    //   1. HOW FAR ROUND IT IS. Near straight it barely resists. At
+    //      full lock it's shoving hard. So little corrections stay
+    //      easy and big ones have to be held.
+    //
+    //   2. HOW FAST YOU'RE GOING. Standing still it's light; flat out
+    //      it's heavy.
+    const heavy = 1 + Math.abs(mouseSteer) * MOUSE_HEAVY;
+    const grip  = 0.5 + (Math.abs(rig.speed) / TOP_SPEED) * MOUSE_GRIP;
 
-    // Two rules that make it feel like a LORRY and not a go-kart:
-    // it only turns while it's rolling (a parked truck can't spin on
-    // the spot), and it turns WORSE the faster it's going.
-    const grip = 1 - Math.abs(rig.speed) / TOP_SPEED * 0.45;
-    rig.yaw += rig.steer * TURN * (rig.speed / TOP_SPEED) * grip * dt * 2.4;
+    mouseSteer -= mouseSteer * Math.min(1, MOUSE_RETURN * heavy * grip * dt);
+
+    let want = mouseSteer;
+    if (keys['a'] || keys['arrowleft'])  want -= 1;
+    if (keys['d'] || keys['arrowright']) want += 1;
+    want = clamp(want, -1, 1);
+
+    // And the wheel itself is heavier to turn than it is to let go of.
+    const windSpeed = (want === 0) ? 6 : 2.8;
+    rig.steer += (want - rig.steer) * Math.min(1, windSpeed * dt);
+
+    // ---- TURNING ------------------------------------------------------
+    // Multiplying by speed is the important part. Standing still you
+    // can't turn at all, which is exactly right - a truck turns because
+    // it's MOVING, not because the wheel is round.
+    rig.yaw += rig.steer * 1.5 * (rig.speed / TOP_SPEED) * dt;
 
     // ---- ACTUALLY MOVING ----------------------------------------------
     const nx = rig.x + Math.sin(rig.yaw) * rig.speed * dt;
@@ -6188,15 +6240,12 @@
           + Math.sin(clock * 26) * rough * 0.16
           + Math.sin(clock * 11) * rough * 0.10;
 
-    cam.yaw   = rig.yaw + lookYaw;
-    cam.pitch = clamp(player.pitch, -0.7, 0.7);
-
-    // THE VIEW DRIFTS BACK TO STRAIGHT AHEAD.
-    // Without this you glance out of the side window, take your hand
-    // off the mouse, and drive into a tower wondering why - because
-    // the wheel and the window had quietly stopped agreeing.
-    lookYaw -= lookYaw * Math.min(1, dt * 1.6);
-    if (Math.abs(lookYaw) < 0.003) lookYaw = 0;
+    // You look where the truck is pointed, same as the racer. The mouse
+    // is the wheel now, so there is no separate "look" to add on - and
+    // if there were, the window and the wheel could disagree, which is
+    // how you drive into a tower without noticing.
+    cam.yaw   = rig.yaw;
+    cam.pitch = -0.02;
   }
 
 
@@ -6404,8 +6453,12 @@
       // 1.8 times your turn rate. Without it a truck doing 48 needs a
       // circle 48 paces WIDE, which is wider than most of the crowds
       // it's trying to get into, so it just swings round the outside.
-      const grip = 1 - Math.abs(o.speed) / TOP_SPEED * 0.45;
-      o.yaw += o.steer * TURN * (o.speed / TOP_SPEED) * grip * dt * 2.4 * 1.8;
+      // The racer's turning rule, same as yours now - turn rate is the
+      // wheel times the speed, so a stopped truck cannot pivot. Times
+      // 1.8 because these drivers are better than you; without it a
+      // truck doing 90 needs a circle wider than most of the crowds
+      // it's trying to get into, and it swings round the outside.
+      o.yaw += o.steer * 1.5 * (o.speed / TOP_SPEED) * dt * 1.8;
 
       // ---- FOOT DOWN -------------------------------------------------
       // Slower than you flat out, so a chase is always winnable.
