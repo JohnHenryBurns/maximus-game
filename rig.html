@@ -3125,7 +3125,14 @@
   function drawMarine(m) {
     const away = Math.hypot(m.x - player.x, m.z - player.z);
     if (away > FOG_FAR) return;
-    groundY = terrainAt(m.x, m.z);
+
+    // Normally a marine stands on the ground, so the floor under him IS
+    // the terrain. But the ones riding a kill rig are stood on a deck
+    // nine feet up and moving, so they hand in their own floor. One
+    // marine, drawn one way, wherever his boots happen to be - rather
+    // than a second copy of all this that would drift out of step the
+    // first time the armour changed colour.
+    groundY = (m.baseY !== undefined) ? m.baseY : terrainAt(m.x, m.z);
 
     const co = Math.cos(m.yaw), si = Math.sin(m.yaw);
     const h = MARINE.height;
@@ -7465,13 +7472,29 @@
     }
 
     // ---- THE CREW -------------------------------------------------------
+    // SPACE MARINES. The real ones - the same steel-blue plate, the
+    // same pauldrons and backpack, the same orange visor as the squads
+    // that come down in the drop pods. Not people in coats.
+    //
     // Drawn from the SAME crewSpot the shooting uses, so every tracer
     // comes out of a marine you can actually see.
+    const deck = base + 7.6;
     for (const c of o.crew) {
       const at = crewSpot(o, c);
-      drawPerson(at.x, base + 7.6 + Math.sin(c.bob) * 0.1, at.z,
-                 c.yaw, MARINE_COAT, true, c.flash);
+      drawMarine({
+        x: at.x, z: at.z,
+        yaw: c.yaw,
+        step: c.bob,          // the shift of weight as they brace
+        flash: c.flash,       // muzzle flash, already ticking down
+        state: 'crew',        // not 'wait', so no recruit marker over them
+        baseY: deck + Math.sin(c.bob) * 0.1
+      });
     }
+
+    // groundY is a global that every box adds itself to, and drawMarine
+    // has just set it to the deck. Leave it there and the NEXT thing
+    // drawn this frame is built nine feet in the air.
+    groundY = 0;
   }
 
 
