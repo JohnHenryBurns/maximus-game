@@ -1,0 +1,1088 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>THE LONG HAUL</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: #1a120c; overflow: hidden;
+    font-family: system-ui, sans-serif;
+  }
+  canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+  #hud {
+    position: fixed; left: 0; right: 0; bottom: 10px;
+    text-align: center; color: #d8c4a8; font-size: 14px;
+    pointer-events: none; text-shadow: 0 2px 6px #000;
+  }
+</style>
+</head>
+<body>
+<canvas id="screen"></canvas>
+<div id="hud">W = throttle &nbsp;&nbsp; S = brake / reverse &nbsp;&nbsp; A D = steer &nbsp;&nbsp; MOUSE = look around</div>
+
+<script>
+// ===================================================================
+//  THE LONG HAUL          -  a Wasteland sequel
+// ===================================================================
+//  Same dead orange world. Same things walking at you. One difference:
+//  you're not on foot any more.
+//
+//  Forty tonnes of rig, and the whole game hangs off one idea -
+//  SPEED IS ARMOUR. Fast, and they come apart on the bull bars. Slow,
+//  and they climb all over you. Every corner is a decision about
+//  whether you can afford to slow down for it.
+//
+//  The racer taught the steering, the wasteland taught the world. This
+//  is those two let loose on each other.
+// ===================================================================
+
+  const canvas = document.getElementById('screen');
+  const ctx = canvas.getContext('2d');
+
+  let W = 0, H = 0;
+
+  function fitScreen() {
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    W = canvas.clientWidth;
+    H = canvas.clientHeight;
+    canvas.width  = W * dpr;
+    canvas.height = H * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  window.addEventListener('resize', fitScreen);
+
+  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+  function hash(n) {
+    const x = Math.sin(n * 12.9898) * 43758.5453;
+    return x - Math.floor(x);
+  }
+  function hash2(a, b) { return hash(a * 374.761 + b * 668.265); }
+
+
+// -------------------------------------------------------------------
+//  THE LOOK - the wasteland's sky, because it's the same world
+// -------------------------------------------------------------------
+
+  const FOG      = [178, 136, 88];
+  const FOG_NEAR = 26;
+  const FOG_FAR  = 190;
+
+  const SKY_TOP  = '#3a2214';
+  const SKY_LOW  = '#c9955a';
+  const GROUND   = [186, 156, 112];
+
+
+// -------------------------------------------------------------------
+//  THE RIG
+// -------------------------------------------------------------------
+
+  const rig = {
+    x: 0, z: 0,
+    yaw: 0,
+    speed: 0,
+    steer: 0,
+
+    health: 100,
+    kills: 0,
+    metres: 0,
+
+    hurtFlash: 0,
+    ramFlash: 0
+  };
+
+  // A LORRY IS NOT A RACING CAR. Slow to wind up, slow to shed it, and
+  // it does not want to change direction. That weight is the whole
+  // feel - if it turned like the racer it would just be a car in a
+  // different colour.
+  const TOP_SPEED = 62;
+  const REVERSE   = 16;
+  const ACCEL     = 11;      // the racer pulled away at 34
+  const BRAKE     = 26;
+  const DRAG      = 3.4;
+  const TURN      = 0.85;
+
+  const RIG_HALF_W = 3.2;    // how wide it is, for flattening things
+  const RIG_NOSE   = 7.5;    // how far the bull bars reach in front
+
+  // SPEED IS ARMOUR. Above this you go through them; below it they get
+  // hold of you. One number, and it's the entire game.
+  const RAM_SPEED = 22;
+
+  let clock = 0;
+  let state = 'play';
+  let deadTimer = 0;
+  let shake = 0;
+
+
+// -------------------------------------------------------------------
+//  THE CAMERA - behind and above, and it LAGS
+// -------------------------------------------------------------------
+
+  const cam = { x: 0, y: 9, z: -18, yaw: 0, pitch: -0.10 };
+  let lookYaw = 0;           // mouse spins the camera round the rig
+
+  function focal() { return H * 0.78; }
+
+  function project(x, y, z) {
+    const dx = x - cam.x, dy = y - cam.y, dz = z - cam.z;
+
+    const cy = Math.cos(cam.yaw), sy = Math.sin(cam.yaw);
+    const rx = dx * cy - dz * sy;
+    const rz = dx * sy + dz * cy;
+    const ry = dy;
+
+    const cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch);
+    const fz = rz * cp + ry * sp;
+    const fy = ry * cp - rz * sp;
+
+    return {
+      x: W / 2 + rx * focal() / fz,
+      y: H / 2 - fy * focal() / fz,
+      depth: fz
+    };
+  }
+
+
+// -------------------------------------------------------------------
+//  THE FACE LIST - furthest first, and fog on everything
+// -------------------------------------------------------------------
+
+  let faces = [];
+
+  function shade(rgb, k) { return [rgb[0] * k, rgb[1] * k, rgb[2] * k]; }
+
+  function fogMix(rgb, depth) {
+    const t = clamp((depth - FOG_NEAR) / (FOG_FAR - FOG_NEAR), 0, 1);
+    return 'rgb(' +
+      ((rgb[0] + (FOG[0] - rgb[0]) * t) | 0) + ',' +
+      ((rgb[1] + (FOG[1] - rgb[1]) * t) | 0) + ',' +
+      ((rgb[2] + (FOG[2] - rgb[2]) * t) | 0) + ')';
+  }
+
+  function addFace(pts, rgb, lift) {
+    const flat = [];
+    let total = 0;
+
+    for (const p of pts) {
+      const s = project(p[0], p[1], p[2]);
+      if (s.depth < 0.4) return;
+      flat.push(s);
+      total += s.depth;
+    }
+
+    const depth = total / flat.length;
+    if (depth > FOG_FAR) return;
+
+    faces.push({ points: flat, depth: depth - (lift || 0),
+                 colour: fogMix(rgb, depth) });
+  }
+
+  function addBox(cx, cy, cz, w, h, d, rgb, spin) {
+    spin = spin || 0;
+    const hw = w / 2, hh = h / 2, hd = d / 2;
+    const co = Math.cos(spin), si = Math.sin(spin);
+
+    const local = [
+      [-hw, -hh, -hd], [ hw, -hh, -hd], [ hw, -hh,  hd], [-hw, -hh,  hd],
+      [-hw,  hh, -hd], [ hw,  hh, -hd], [ hw,  hh,  hd], [-hw,  hh,  hd]
+    ];
+
+    const c = local.map(function (v) {
+      return [cx + v[0] * co + v[2] * si, cy + v[1], cz - v[0] * si + v[2] * co];
+    });
+
+    addFace([c[4], c[5], c[6], c[7]], shade(rgb, 1.18));
+    addFace([c[0], c[1], c[5], c[4]], shade(rgb, 0.78));
+    addFace([c[3], c[2], c[6], c[7]], shade(rgb, 1.00));
+    addFace([c[0], c[3], c[7], c[4]], shade(rgb, 0.64));
+    addFace([c[1], c[2], c[6], c[5]], shade(rgb, 0.88));
+  }
+
+
+// -------------------------------------------------------------------
+//  THE GROUND - the wasteland's stone, straight across
+// -------------------------------------------------------------------
+
+  function makeNoiseGrid(size) {
+    const g = new Float32Array(size * size);
+    for (let i = 0; i < g.length; i++) g[i] = Math.random();
+    return g;
+  }
+
+  function noiseAt(grid, size, x, y) {
+    const fx = x * size, fy = y * size;
+    const x0 = Math.floor(fx), y0 = Math.floor(fy);
+
+    let tx = fx - x0, ty = fy - y0;
+    tx = tx * tx * (3 - 2 * tx);
+    ty = ty * ty * (3 - 2 * ty);
+
+    function corner(cx, cy) {
+      const wx = ((cx % size) + size) % size;
+      const wy = ((cy % size) + size) % size;
+      return grid[wy * size + wx];
+    }
+
+    const a = corner(x0, y0), b = corner(x0 + 1, y0);
+    const c = corner(x0, y0 + 1), d = corner(x0 + 1, y0 + 1);
+    const top = a + (b - a) * tx, bot = c + (d - c) * tx;
+    return top + (bot - top) * ty;
+  }
+
+  const STONE = [
+    { grid: makeNoiseGrid(6),  size: 6,  weight: 0.50 },
+    { grid: makeNoiseGrid(14), size: 14, weight: 0.32 },
+    { grid: makeNoiseGrid(34), size: 34, weight: 0.18 }
+  ];
+
+  function stoneAt(wx, wz) {
+    let total = 0;
+    for (const l of STONE) {
+      total += noiseAt(l.grid, l.size, wx / 220, wz / 220) * l.weight;
+    }
+    return total;
+  }
+
+  function groundShade(wx, wz) {
+    return shade(GROUND, 0.72 + stoneAt(wx, wz) * 0.48);
+  }
+
+  const TILE = 6, NEAR_EDGE = 58;
+  const RINGS = [NEAR_EDGE, 82, 116, 152, FOG_FAR];
+  const SPOKES = 26;
+
+  function drawGround() {
+    const fx = Math.sin(cam.yaw), fz = Math.cos(cam.yaw);
+
+    const gx0 = Math.floor((rig.x - NEAR_EDGE) / TILE);
+    const gx1 = Math.floor((rig.x + NEAR_EDGE) / TILE);
+    const gz0 = Math.floor((rig.z - NEAR_EDGE) / TILE);
+    const gz1 = Math.floor((rig.z + NEAR_EDGE) / TILE);
+
+    for (let gx = gx0; gx <= gx1; gx++) {
+      for (let gz = gz0; gz <= gz1; gz++) {
+        const x0 = gx * TILE, z0 = gz * TILE;
+        const mx = x0 + TILE * 0.5, mz = z0 + TILE * 0.5;
+
+        const dx = mx - cam.x, dz = mz - cam.z;
+        if (Math.hypot(dx, dz) > NEAR_EDGE) continue;
+        if (dx * fx + dz * fz < -TILE * 2) continue;
+
+        addFace([[x0, 0, z0], [x0 + TILE, 0, z0],
+                 [x0 + TILE, 0, z0 + TILE], [x0, 0, z0 + TILE]],
+                groundShade(mx, mz));
+      }
+    }
+
+    for (let r = 0; r < RINGS.length - 1; r++) {
+      const r0 = RINGS[r], r1 = RINGS[r + 1];
+
+      for (let s = 0; s < SPOKES; s++) {
+        const a0 = (s / SPOKES) * Math.PI * 2;
+        const a1 = ((s + 1) / SPOKES) * Math.PI * 2;
+        const c0 = Math.cos(a0), s0 = Math.sin(a0);
+        const c1 = Math.cos(a1), s1 = Math.sin(a1);
+
+        const ma = (a0 + a1) * 0.5, mr = (r0 + r1) * 0.5;
+        const wx = rig.x + Math.cos(ma) * mr, wz = rig.z + Math.sin(ma) * mr;
+
+        if ((wx - cam.x) * fx + (wz - cam.z) * fz < -r1 * 0.4) continue;
+
+        addFace([
+          [rig.x + c0 * r0, 0, rig.z + s0 * r0],
+          [rig.x + c1 * r0, 0, rig.z + s1 * r0],
+          [rig.x + c1 * r1, 0, rig.z + s1 * r1],
+          [rig.x + c0 * r1, 0, rig.z + s0 * r1]
+        ], groundShade(wx, wz));
+      }
+    }
+  }
+
+
+// -------------------------------------------------------------------
+//  WHAT'S OUT THERE
+// -------------------------------------------------------------------
+//  The same invisible-squares trick as the wasteland. Nothing is
+//  stored; it goes on forever in every direction.
+// -------------------------------------------------------------------
+
+  const CELL = 46;
+
+  const RUST     = [128, 74, 44];
+  const CONCRETE = [138, 128, 116];
+  const DEADWOOD = [78, 62, 46];
+  const RUBBLE   = [104, 94, 84];
+
+  const propCache = new Map();
+
+  function propAt(gx, gz) {
+    const key = gx + ',' + gz;
+    if (propCache.has(key)) return propCache.get(key);
+    if (propCache.size > 6000) propCache.clear();
+
+    const p = buildProp(gx, gz);
+    propCache.set(key, p);
+    return p;
+  }
+
+  function buildProp(gx, gz) {
+    const r = hash2(gx, gz);
+    if (r > 0.5) return null;
+
+    // Keep the patch you start on clear, so the game doesn't open with
+    // a pylon through the windscreen.
+    if (Math.max(Math.abs(gx), Math.abs(gz)) === 0) return null;
+
+    const p = {
+      gx: gx, gz: gz,
+      x: gx * CELL + (hash2(gx + 7, gz) - 0.5) * CELL * 0.8,
+      z: gz * CELL + (hash2(gx, gz + 7) - 0.5) * CELL * 0.8,
+      spin: hash2(gx + 3, gz + 3) * Math.PI * 2
+    };
+
+    if (r < 0.13)      { p.kind = 'pylon';  p.solid = 3.0; p.tall = 22; }
+    else if (r < 0.26) { p.kind = 'wreck';  p.solid = 4.4; p.tall = 2.6; }
+    else if (r < 0.36) { p.kind = 'tree';   p.solid = 1.5; p.tall = 9; }
+    else               { p.kind = 'rubble'; p.solid = 0;   p.tall = 0; }
+
+    return p;
+  }
+
+  // Only the nine squares round a spot can possibly reach it.
+  function blockedAt(x, z, radius) {
+    const gx = Math.round(x / CELL), gz = Math.round(z / CELL);
+
+    for (let ax = gx - 1; ax <= gx + 1; ax++) {
+      for (let az = gz - 1; az <= gz + 1; az++) {
+        const p = propAt(ax, az);
+        if (!p || p.solid <= 0) continue;
+        if (Math.hypot(x - p.x, z - p.z) < p.solid + radius) return p;
+      }
+    }
+    return null;
+  }
+
+  function drawScenery() {
+    const reach = Math.ceil(FOG_FAR / CELL);
+    const cx = Math.round(rig.x / CELL), cz = Math.round(rig.z / CELL);
+    const fx = Math.sin(cam.yaw), fz = Math.cos(cam.yaw);
+
+    for (let gx = cx - reach; gx <= cx + reach; gx++) {
+      for (let gz = cz - reach; gz <= cz + reach; gz++) {
+        const p = propAt(gx, gz);
+        if (!p) continue;
+
+        const dx = p.x - cam.x, dz = p.z - cam.z;
+        if (Math.hypot(dx, dz) > FOG_FAR) continue;
+        if (dx * fx + dz * fz < -30) continue;      // behind the camera
+
+        const near = Math.hypot(p.x - rig.x, p.z - rig.z) < 90;
+
+        if (p.kind === 'pylon') {
+          for (let i = 0; i < 4; i++) {
+            addBox(p.x, 3 + i * 5.4, p.z, 5 - i * 0.8, 5, 5 - i * 0.8,
+                   shade(CONCRETE, 0.9 + i * 0.03), p.spin);
+          }
+          addBox(p.x, 23, p.z, 13, 1.2, 1.2, CONCRETE, p.spin);
+
+        } else if (p.kind === 'wreck') {
+          addBox(p.x, 1.3, p.z, 4.4, 2.0, 8.6, RUST, p.spin);
+          addBox(p.x, 2.8, p.z + 0.6, 3.6, 1.2, 3.8, [46, 40, 38], p.spin);
+
+        } else if (p.kind === 'tree') {
+          const h = 7 + hash2(p.gx + 2, p.gz) * 8;
+          addBox(p.x, h * 0.5, p.z, 1.4, h, 1.4, DEADWOOD);
+          if (near) {
+            for (let i = 0; i < 3; i++) {
+              const a = hash2(p.gx + i * 5, p.gz + i) * Math.PI * 2;
+              addBox(p.x + Math.cos(a) * 2.2, h * (0.55 + i * 0.14),
+                     p.z + Math.sin(a) * 2.2, 4.5, 0.7, 0.7, DEADWOOD, -a);
+            }
+          }
+
+        } else if (near) {
+          const lumps = 3 + Math.floor(hash2(p.gx + 4, p.gz) * 3);
+          for (let i = 0; i < lumps; i++) {
+            const a = hash2(p.gx + i, p.gz + i * 3) * Math.PI * 2;
+            const d = hash2(p.gx + i * 2, p.gz) * 5;
+            const s = 1.4 + hash2(p.gx, p.gz + i) * 2.6;
+            addBox(p.x + Math.cos(a) * d, s * 0.35, p.z + Math.sin(a) * d,
+                   s * 1.6, s * 0.7, s * 1.4, RUBBLE, a);
+          }
+        }
+      }
+    }
+  }
+
+
+// -------------------------------------------------------------------
+//  THEM
+// -------------------------------------------------------------------
+
+  const Z_SPEED  = 7.5;
+  const Z_REACH  = 5.0;
+  const Z_HEIGHT = 5.4;
+  const Z_BITE   = 7;
+  const Z_BITE_EVERY = 0.85;
+
+  const Z_BODY = [84, 102, 66];
+  const Z_LIMB = [70, 86, 56];
+  const Z_HEAD = [132, 142, 100];
+  const Z_EYE  = [214, 66, 48];
+  const Z_GIB  = [[96, 128, 62], [72, 100, 50], [140, 150, 104]];
+
+  const MAX_ZOMBIES = 150;
+  const SPAWN_MIN = 150, SPAWN_MAX = 220;
+
+  let zombies = [];
+  let gibs = [];
+  let spawnTimer = 1;
+
+  function spawnZombie(atDistance, atAngle) {
+    if (zombies.length >= MAX_ZOMBIES) return false;
+
+    // Mostly ahead of you, because a thing behind a lorry doing 60 is
+    // never going to catch it and may as well not exist.
+    const a = (atAngle !== undefined) ? atAngle
+      : rig.yaw + (Math.random() - 0.5) * 2.4;
+    const d = atDistance || (SPAWN_MIN + Math.random() * (SPAWN_MAX - SPAWN_MIN));
+
+    zombies.push({
+      x: rig.x + Math.sin(a) * d,
+      z: rig.z + Math.cos(a) * d,
+      yaw: 0,
+      step: Math.random() * 6,
+      cool: Math.random(),
+      away: d
+    });
+    return true;
+  }
+
+  function updateZombies(dt) {
+    const near = [];
+    for (const z of zombies) {
+      z.away = Math.hypot(rig.x - z.x, rig.z - z.z);
+      if (z.away < 80) near.push(z);
+    }
+
+    for (const z of zombies) {
+      if (z.dead) continue;
+
+      const dx = rig.x - z.x, dz = rig.z - z.z;
+      const gap = z.away || 1;
+
+      z.yaw = Math.atan2(dx, dz);
+
+      if (gap > Z_REACH) {
+        z.x += (dx / gap) * Z_SPEED * dt;
+        z.z += (dz / gap) * Z_SPEED * dt;
+        z.step += dt * 4.2;
+      }
+
+      // Shove each other apart, but only the ones close enough for the
+      // stacking to show.
+      if (gap < 80) {
+        for (const o of near) {
+          if (o === z) continue;
+          const ox = z.x - o.x, oz = z.z - o.z;
+          const og = Math.hypot(ox, oz);
+          if (og < 3.4 && og > 0.01) {
+            const push = (3.4 - og) * 0.5;
+            z.x += (ox / og) * push;
+            z.z += (oz / og) * push;
+          }
+        }
+      }
+
+      z.cool -= dt;
+    }
+
+    runThemDown(dt);
+    zombies = zombies.filter(function (z) { return !z.dead; });
+  }
+
+  // ---- THE WHOLE GAME, IN ONE FUNCTION -------------------------------
+  // Anything inside the rig's footprint either goes under the wheels or
+  // gets hold of you, and which one depends ONLY on how fast you're
+  // going. Nothing else in here matters as much as that.
+  function runThemDown(dt) {
+    const co = Math.cos(rig.yaw), si = Math.sin(rig.yaw);
+
+    for (const z of zombies) {
+      if (z.dead || z.away > 20) continue;
+
+      // Put it in the RIG'S directions - how far ahead, how far across.
+      // Spinning the gap backwards turns a slanted lorry into a
+      // straight one, and then it's two easy comparisons.
+      const dx = z.x - rig.x, dz = z.z - rig.z;
+      const along = dx * si + dz * co;
+      const across = dx * co - dz * si;
+
+      if (across < -RIG_HALF_W - 1.4 || across > RIG_HALF_W + 1.4) continue;
+      if (along < -9 || along > RIG_NOSE) continue;
+
+      const fast = Math.abs(rig.speed) >= RAM_SPEED;
+
+      if (fast) {
+        z.dead = true;
+        rig.kills++;
+        rig.ramFlash = 1;
+
+        // It costs you a little speed. Not much - but plough through
+        // thirty and you'll be crawling, which is exactly when the next
+        // thirty get hold of you.
+        rig.speed *= 0.985;
+        shake = Math.max(shake, 0.35);
+
+        burst(z.x, 2.4, z.z, Z_GIB, 16, 16);
+        thud();
+      } else if (z.cool <= 0) {
+        // Too slow. Now they're climbing on the bonnet.
+        z.cool = Z_BITE_EVERY;
+        hurt(Z_BITE);
+        rig.speed *= 0.9;
+      }
+    }
+  }
+
+  function drawZombie(z) {
+    const s = z.yaw;
+    const co = Math.cos(s), si = Math.sin(s);
+    const sw = Math.sin(z.step) * 1.1;
+
+    // Detail falls off with distance - a hundred of them at full detail
+    // would be six thousand flat shapes.
+    if (z.away > 110) {
+      addBox(z.x, Z_HEIGHT * 0.45, z.z, 1.9, Z_HEIGHT * 0.8, 1.5,
+             shade(Z_BODY, 0.85), s);
+      return;
+    }
+
+    if (z.away > 45) {
+      addBox(z.x, Z_HEIGHT * 0.30, z.z, 2.2, Z_HEIGHT * 0.6, 1.5, Z_LIMB, s);
+      addBox(z.x, Z_HEIGHT * 0.68, z.z, 3.0, Z_HEIGHT * 0.3, 1.9, Z_BODY, s);
+      addBox(z.x, Z_HEIGHT * 0.88, z.z, 1.9, 1.8, 1.8, Z_HEAD, s);
+      return;
+    }
+
+    addBox(z.x - 0.9 * co + sw * 0.3 * si, Z_HEIGHT * 0.20,
+           z.z + 0.9 * si + sw * 0.3 * co, 1.1, Z_HEIGHT * 0.42, 1.1, Z_LIMB, s);
+    addBox(z.x + 0.9 * co - sw * 0.3 * si, Z_HEIGHT * 0.20,
+           z.z - 0.9 * si - sw * 0.3 * co, 1.1, Z_HEIGHT * 0.42, 1.1, Z_LIMB, s);
+
+    addBox(z.x, Z_HEIGHT * 0.58, z.z, 3.0, Z_HEIGHT * 0.36, 1.9, Z_BODY, s);
+    addBox(z.x, Z_HEIGHT * 0.52, z.z, 3.1, 0.5, 2.0, shade(Z_BODY, 0.8), s);
+
+    // Arms out in front, reaching.
+    for (const side of [-1, 1]) {
+      addBox(z.x + side * 1.8 * co - (-1.4 + sw * 0.3 * side) * si,
+             Z_HEIGHT * 0.62,
+             z.z - side * 1.8 * si - (-1.4 + sw * 0.3 * side) * co,
+             0.9, 0.9, 3.4, Z_LIMB, s);
+    }
+
+    addBox(z.x, Z_HEIGHT * 0.86, z.z, 1.9, 1.8, 1.8, Z_HEAD, s);
+
+    for (const ex of [-0.5, 0.5]) {
+      addBox(z.x + ex * co - 0.95 * si, Z_HEIGHT * 0.88,
+             z.z - ex * si - 0.95 * co, 0.42, 0.34, 0.16, Z_EYE, s);
+    }
+  }
+
+
+// -------------------------------------------------------------------
+//  BITS
+// -------------------------------------------------------------------
+
+  function burst(x, y, z, cols, n, power) {
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const p = power * (0.4 + Math.random());
+      gibs.push({
+        x: x, y: y, z: z,
+        vx: Math.cos(a) * p + Math.sin(rig.yaw) * rig.speed * 0.35,
+        vy: 4 + Math.random() * 13,
+        vz: Math.sin(a) * p + Math.cos(rig.yaw) * rig.speed * 0.35,
+        size: 0.4 + Math.random() * 1.2,
+        life: 0.5 + Math.random() * 0.7,
+        spin: Math.random() * 6,
+        colour: cols[Math.floor(Math.random() * cols.length)]
+      });
+    }
+  }
+
+  function updateGibs(dt) {
+    for (const g of gibs) {
+      g.x += g.vx * dt; g.y += g.vy * dt; g.z += g.vz * dt;
+      g.vy -= 30 * dt;
+      g.spin += dt * 6;
+      g.life -= dt;
+      if (g.y < 0.2) { g.y = 0.2; g.vy *= -0.3; g.vx *= 0.7; g.vz *= 0.7; }
+    }
+    gibs = gibs.filter(function (g) { return g.life > 0; });
+  }
+
+  function drawGibs() {
+    for (const g of gibs) {
+      addBox(g.x, g.y, g.z, g.size, g.size, g.size, g.colour, g.spin);
+    }
+  }
+
+
+// -------------------------------------------------------------------
+//  DRAWING THE RIG
+// -------------------------------------------------------------------
+
+  const CAB_A  = [126, 74, 52];
+  const CAB_B  = [96, 56, 40];
+  const STEEL  = [104, 100, 96];
+  const DARK   = [42, 38, 36];
+  const GLASS  = [92, 128, 148];
+
+  function drawRig() {
+    const s = rig.yaw;
+    const co = Math.cos(s), si = Math.sin(s);
+
+    // Put a box on the rig, measured in the RIG'S directions.
+    function part(across, up, along, w, h, d, rgb) {
+      addBox(rig.x + across * co + along * si, up,
+             rig.z - across * si + along * co, w, h, d, rgb, s);
+    }
+
+    // ---- BULL BARS - the business end -------------------------------
+    part(0, 2.0, 6.4, 7.6, 0.8, 0.9, STEEL);
+    part(0, 3.4, 6.4, 7.6, 0.8, 0.9, STEEL);
+    for (const a of [-2.6, 0, 2.6]) part(a, 2.7, 6.4, 0.8, 2.6, 0.9, STEEL);
+    for (const a of [-3.4, 3.4]) part(a, 2.6, 5.2, 0.7, 3.2, 2.6, shade(STEEL, 0.8));
+
+    // ---- CAB ---------------------------------------------------------
+    part(0, 2.6, 2.4, 6.4, 3.4, 8.4, CAB_A);
+    part(0, 5.0, 1.2, 5.8, 2.6, 5.0, CAB_B);
+    part(0, 5.2, 3.5, 5.0, 1.8, 0.5, GLASS);          // windscreen
+    for (const a of [-2.95, 2.95]) part(a, 5.2, 1.4, 0.5, 1.6, 3.0, GLASS);
+
+    part(0, 6.5, 0.6, 4.4, 0.5, 3.6, shade(CAB_B, 1.1));
+    for (const a of [-1.6, 1.6]) part(a, 7.2, 0.4, 0.4, 1.4, 0.4, DARK);  // stacks
+
+    // ---- TRAILER -----------------------------------------------------
+    part(0, 3.6, -6.6, 6.8, 5.2, 11.0, shade(CAB_B, 0.85));
+    for (let i = 0; i < 4; i++) {
+      part(0, 3.6, -2.4 - i * 2.9, 7.0, 5.4, 0.5, shade(STEEL, 0.7));
+    }
+    part(0, 6.4, -6.6, 6.4, 0.5, 10.6, STEEL);
+
+    // ---- WHEELS ------------------------------------------------------
+    // They have to stick out PAST the body (which is 3.4 to the side) or
+    // they just look like dark patches painted on the trailer.
+    for (const a of [-3.9, 3.9]) {
+      for (const b of [4.0, -1.6, -7.0, -10.0]) {
+        part(a, 1.6, b, 1.6, 3.2, 3.2, DARK);
+        part(a * 1.18, 1.6, b, 0.3, 1.4, 1.4, shade(STEEL, 0.9));   // hub cap
+      }
+    }
+
+    // ---- LIGHTS ------------------------------------------------------
+    for (const a of [-2.4, 2.4]) part(a, 3.0, 6.5, 1.2, 0.9, 0.3, [255, 226, 160]);
+  }
+
+
+// -------------------------------------------------------------------
+//  SOUND
+// -------------------------------------------------------------------
+
+  let audio = null, engine = null, engineGain = null;
+
+  function startAudio() {
+    if (audio) return;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    audio = new AC();
+
+    // The engine: one low note whose pitch IS your speed. No samples,
+    // no timers - it rises because you did.
+    engine = audio.createOscillator();
+    const wob = audio.createOscillator();
+    const wobGain = audio.createGain();
+    engineGain = audio.createGain();
+
+    engine.type = 'sawtooth';
+    engine.frequency.value = 40;
+    wob.type = 'sine';
+    wob.frequency.value = 7;
+    wobGain.gain.value = 6;
+    wob.connect(wobGain); wobGain.connect(engine.frequency);
+
+    engineGain.gain.value = 0.05;
+    engine.connect(engineGain); engineGain.connect(audio.destination);
+    engine.start(); wob.start();
+  }
+
+  function updateEngine() {
+    if (!engine) return;
+    const t = Math.abs(rig.speed) / TOP_SPEED;
+    engine.frequency.setTargetAtTime(34 + t * 78, audio.currentTime, 0.12);
+    engineGain.gain.setTargetAtTime(0.04 + t * 0.09, audio.currentTime, 0.12);
+  }
+
+  function tone(f1, f2, dur, vol, type) {
+    if (!audio) return;
+    const o = audio.createOscillator(), g = audio.createGain();
+    o.type = type || 'square';
+    o.frequency.setValueAtTime(f1, audio.currentTime);
+    o.frequency.exponentialRampToValueAtTime(Math.max(1, f2), audio.currentTime + dur);
+    g.gain.setValueAtTime(vol, audio.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.0001, audio.currentTime + dur);
+    o.connect(g); g.connect(audio.destination);
+    o.start(); o.stop(audio.currentTime + dur + 0.02);
+  }
+
+  function noise(dur, from, to, vol) {
+    if (!audio) return;
+    const buf = audio.createBuffer(1, Math.floor(audio.sampleRate * dur),
+                                   audio.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) {
+      d[i] = (Math.random() * 2 - 1) * (1 - i / d.length);
+    }
+    const src = audio.createBufferSource();
+    src.buffer = buf;
+    const f = audio.createBiquadFilter();
+    f.type = 'lowpass';
+    f.frequency.value = from;
+    const g = audio.createGain();
+    g.gain.value = vol;
+    src.connect(f); f.connect(g); g.connect(audio.destination);
+    src.start();
+  }
+
+  function thud()  { noise(0.22, 700, 120, 0.32); tone(90, 50, 0.16, 0.14, 'square'); }
+  function crunch(){ noise(0.5, 1500, 200, 0.4); tone(140, 60, 0.4, 0.22, 'sawtooth'); }
+
+
+// -------------------------------------------------------------------
+//  TAKING DAMAGE
+// -------------------------------------------------------------------
+
+  function hurt(n) {
+    if (state !== 'play') return;
+    rig.health -= n;
+    rig.hurtFlash = 1;
+    shake = Math.max(shake, 0.5);
+    crunch();
+
+    if (rig.health <= 0) {
+      rig.health = 0;
+      state = 'dead';
+      deadTimer = 0;
+      burst(rig.x, 3, rig.z, [[255, 200, 120], [255, 120, 60], DARK], 50, 40);
+    }
+  }
+
+
+// -------------------------------------------------------------------
+//  CONTROLS
+// -------------------------------------------------------------------
+
+  const keys = {};
+  let locked = false;
+
+  window.addEventListener('keydown', function (e) {
+    keys[e.key.toLowerCase()] = true;
+    if (e.key.startsWith('Arrow') || e.key === ' ') e.preventDefault();
+    if (e.key.toLowerCase() === 'r' && state === 'dead') restart();
+  });
+  window.addEventListener('keyup', function (e) { keys[e.key.toLowerCase()] = false; });
+
+  function held(a, b) { return keys[a] || keys[b]; }
+
+  canvas.addEventListener('mousedown', function () {
+    startAudio();
+    if (!locked && canvas.requestPointerLock) canvas.requestPointerLock();
+    else if (state === 'dead') restart();
+  });
+
+  document.addEventListener('pointerlockchange', function () {
+    locked = (document.pointerLockElement === canvas);
+  });
+
+  window.addEventListener('mousemove', function (e) {
+    if (!locked) return;
+    // The mouse swings the CAMERA round the rig, not the rig itself.
+    // You steer with the wheels; you look with your head.
+    lookYaw = clamp(lookYaw + e.movementX * 0.0028, -2.4, 2.4);
+  });
+
+  function restart() {
+    rig.x = 0; rig.z = 0; rig.yaw = 0;
+    rig.speed = 0; rig.steer = 0;
+    rig.health = 100; rig.kills = 0; rig.metres = 0;
+    rig.hurtFlash = 0; rig.ramFlash = 0;
+    zombies = []; gibs = [];
+    spawnTimer = 1;
+    lookYaw = 0;
+    clock = 0;
+    state = 'play';
+    for (let i = 0; i < 8; i++) spawnZombie(70 + Math.random() * 60);
+  }
+
+
+// -------------------------------------------------------------------
+//  DRIVING
+// -------------------------------------------------------------------
+
+  function update(dt) {
+    clock += dt;
+
+    if (rig.hurtFlash > 0) rig.hurtFlash = Math.max(0, rig.hurtFlash - dt * 1.6);
+    if (rig.ramFlash > 0)  rig.ramFlash  = Math.max(0, rig.ramFlash - dt * 3.5);
+    if (shake > 0) shake = Math.max(0, shake - dt * 2.2);
+
+    updateGibs(dt);
+    updateEngine();
+
+    if (state === 'dead') {
+      deadTimer += dt;
+      rig.speed *= Math.max(0, 1 - 2.5 * dt);
+      aimCamera(dt);
+      return;
+    }
+
+    // ---- THE PEDALS ---------------------------------------------------
+    if (held('w', 'arrowup')) {
+      rig.speed += ACCEL * dt;
+    } else if (held('s', 'arrowdown')) {
+      rig.speed -= BRAKE * dt;
+    } else {
+      // Engine braking. A lorry coasting doesn't coast for long.
+      rig.speed -= Math.sign(rig.speed) * Math.min(Math.abs(rig.speed), DRAG * dt);
+    }
+
+    rig.speed = clamp(rig.speed, -REVERSE, TOP_SPEED);
+
+    // ---- THE WHEEL ----------------------------------------------------
+    let want = 0;
+    if (held('a', 'arrowleft'))  want -= 1;
+    if (held('d', 'arrowright')) want += 1;
+
+    rig.steer += (want - rig.steer) * Math.min(1, (want === 0 ? 5 : 2.4) * dt);
+
+    // Multiplied by speed, so a stopped lorry cannot turn on the spot -
+    // and it turns worse the faster it goes, which is what makes going
+    // flat out a genuine risk rather than a free win.
+    const grip = 1 - Math.abs(rig.speed) / TOP_SPEED * 0.45;
+    rig.yaw += rig.steer * TURN * (rig.speed / TOP_SPEED) * grip * dt * 2.4;
+
+    // ---- GO -------------------------------------------------------------
+    const nx = rig.x + Math.sin(rig.yaw) * rig.speed * dt;
+    const nz = rig.z + Math.cos(rig.yaw) * rig.speed * dt;
+
+    // ---- HITTING SOMETHING SOLID ---------------------------------------
+    const hit = blockedAt(nx, nz, RIG_HALF_W + 1.5);
+    if (hit) {
+      const bang = Math.abs(rig.speed);
+      if (bang > 8) {
+        hurt(Math.min(34, bang * 0.55));
+        burst(nx, 2.5, nz, [[190, 180, 160], [150, 120, 90]], 22, 30);
+      }
+      rig.speed *= -0.15;             // bounced off
+      shake = Math.max(shake, 0.9);
+    } else {
+      rig.metres += Math.abs(rig.speed) * dt;
+      rig.x = nx; rig.z = nz;
+    }
+
+    updateZombies(dt);
+
+    // ---- MORE OF THEM ---------------------------------------------------
+    spawnTimer -= dt;
+    if (spawnTimer <= 0) {
+      spawnZombie();
+      spawnTimer = Math.max(0.25, 1.4 - clock * 0.007);
+    }
+
+    aimCamera(dt);
+  }
+
+  // Behind and above, and it LAGS - which is what makes a hard turn feel
+  // like a hard turn instead of the world blinking sideways.
+  function aimCamera(dt) {
+    const look = rig.yaw + lookYaw;
+    // The rig is 19 long. Sit closer than about 30 and the back of the
+    // trailer fills the whole screen - you end up driving a brown wall.
+    const back = 30 + Math.abs(rig.speed) * 0.16;    // drops back at speed
+
+    const wantX = rig.x - Math.sin(look) * back;
+    const wantZ = rig.z - Math.cos(look) * back;
+
+    const k = Math.min(1, dt * 4.5);
+    cam.x += (wantX - cam.x) * k;
+    cam.z += (wantZ - cam.z) * k;
+    // High enough to see OVER the trailer roof (6.4) to the road ahead.
+    // Sit level with it and you're driving blind behind your own load.
+    cam.y += (19 - cam.y) * k;
+
+    // Turn the shortest way round, or the camera whips the long way
+    // every time the rig crosses due north.
+    let gap = look - cam.yaw;
+    while (gap > Math.PI) gap -= Math.PI * 2;
+    while (gap < -Math.PI) gap += Math.PI * 2;
+    cam.yaw += gap * Math.min(1, dt * 6);
+
+    cam.pitch = -0.22;
+  }
+
+
+// -------------------------------------------------------------------
+//  DRAW
+// -------------------------------------------------------------------
+
+  function drawSky() {
+    const horizon = H / 2 + focal() * Math.tan(cam.pitch);
+
+    if (horizon > 0) {
+      const sky = ctx.createLinearGradient(0, 0, 0, horizon);
+      sky.addColorStop(0, SKY_TOP);
+      sky.addColorStop(1, SKY_LOW);
+      ctx.fillStyle = sky;
+      ctx.fillRect(0, 0, W, horizon);
+    }
+    ctx.fillStyle = 'rgb(' + FOG[0] + ',' + FOG[1] + ',' + FOG[2] + ')';
+    ctx.fillRect(0, Math.max(0, horizon), W, H);
+  }
+
+  function drawHud() {
+    // ---- SPEED, and whether it's enough --------------------------------
+    const fast = Math.abs(rig.speed) >= RAM_SPEED;
+
+    ctx.textAlign = 'right';
+    ctx.font = 'bold ' + Math.min(W * 0.075, 52) + 'px system-ui, sans-serif';
+    ctx.fillStyle = fast ? '#ffd9a0' : '#ff8a6a';
+    ctx.fillText(Math.round(Math.abs(rig.speed)), W * 0.95, H - 46);
+
+    ctx.font = '13px system-ui, sans-serif';
+    ctx.fillStyle = '#b8a68c';
+    ctx.fillText('SPEED', W * 0.95, H - 28);
+
+    // The line that teaches the whole game.
+    ctx.font = 'bold 13px system-ui, sans-serif';
+    ctx.fillStyle = fast ? '#8fd45c' : '#ff8a6a';
+    ctx.fillText(fast ? 'PLOUGHING THROUGH' : 'TOO SLOW - THEY CAN GET ON',
+                 W * 0.95, H - 68);
+
+    // ---- THE RIG -------------------------------------------------------
+    const bw = Math.min(W * 0.28, 260), bx = W * 0.05, by = H - 46;
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(bx, by, bw, 16);
+    const frac = rig.health / 100;
+    ctx.fillStyle = frac > 0.5 ? '#7fc45c' : frac > 0.25 ? '#e0a83c' : '#d64a3c';
+    ctx.fillRect(bx, by, bw * frac, 16);
+    ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(bx, by, bw, 16);
+
+    ctx.textAlign = 'left';
+    ctx.font = 'bold 13px system-ui, sans-serif';
+    ctx.fillStyle = '#e8dcc8';
+    ctx.fillText(Math.ceil(rig.health) + '  RIG', bx, by - 6);
+
+    ctx.font = '13px system-ui, sans-serif';
+    ctx.fillStyle = '#b8a68c';
+    ctx.fillText(rig.kills + ' flattened', bx, by - 24);
+    ctx.fillText((rig.metres / 1000).toFixed(2) + ' km', bx, by - 42);
+
+    // ---- FEEDBACK -------------------------------------------------------
+    if (rig.ramFlash > 0.02) {
+      ctx.fillStyle = 'rgba(150,220,110,' + (rig.ramFlash * 0.10) + ')';
+      ctx.fillRect(0, 0, W, H);
+    }
+
+    if (rig.hurtFlash > 0) {
+      const g = ctx.createRadialGradient(W / 2, H / 2, H * 0.3, W / 2, H / 2, H * 0.85);
+      g.addColorStop(0, 'rgba(150,10,10,0)');
+      g.addColorStop(1, 'rgba(150,10,10,' + (rig.hurtFlash * 0.8) + ')');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H);
+    }
+
+    if (!locked && state === 'play') {
+      ctx.textAlign = 'center';
+      ctx.font = 'bold ' + Math.min(W * 0.045, 28) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#ffd9a0';
+      ctx.fillText('CLICK TO DRIVE', W / 2, H * 0.62);
+    }
+
+    if (state === 'dead') {
+      ctx.fillStyle = 'rgba(50,8,6,' + Math.min(0.75, deadTimer * 0.8) + ')';
+      ctx.fillRect(0, 0, W, H);
+
+      ctx.textAlign = 'center';
+      ctx.font = 'bold ' + Math.min(W * 0.11, 78) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#000';
+      ctx.fillText('THE RIG IS DONE', W / 2 + 4, H * 0.42 + 4);
+      ctx.fillStyle = '#ffb08a';
+      ctx.fillText('THE RIG IS DONE', W / 2, H * 0.42);
+
+      ctx.font = Math.min(W * 0.035, 21) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#f0e2ce';
+      ctx.fillText(rig.kills + ' flattened over ' + (rig.metres / 1000).toFixed(2) + ' km',
+                   W / 2, H * 0.53);
+      ctx.fillText('press R or click to roll out again', W / 2, H * 0.60);
+    }
+  }
+
+  function draw() {
+    const sx = cam.x, sy = cam.y;
+    if (shake > 0) {
+      cam.x += (Math.random() - 0.5) * shake * 0.7;
+      cam.y += (Math.random() - 0.5) * shake * 0.7;
+    }
+
+    drawSky();
+
+    faces = [];
+    drawGround();
+    drawScenery();
+    for (const z of zombies) drawZombie(z);
+    drawGibs();
+    if (state === 'play') drawRig();
+
+    faces.sort(function (a, b) { return b.depth - a.depth; });
+
+    for (const f of faces) {
+      ctx.beginPath();
+      ctx.moveTo(f.points[0].x, f.points[0].y);
+      for (let i = 1; i < f.points.length; i++) ctx.lineTo(f.points[i].x, f.points[i].y);
+      ctx.closePath();
+      ctx.fillStyle = f.colour;
+      ctx.fill();
+    }
+
+    cam.x = sx; cam.y = sy;
+    drawHud();
+  }
+
+
+// -------------------------------------------------------------------
+//  THE LOOP
+// -------------------------------------------------------------------
+
+  let last = 0;
+
+  function loop(now) {
+    const dt = Math.min(0.05, Math.max(0.0005, (now - last) / 1000 || 0.016));
+    last = now;
+    update(dt);
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  fitScreen();
+  restart();
+  requestAnimationFrame(loop);
+
+</script>
+</body>
+</html>
