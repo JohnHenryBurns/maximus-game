@@ -4632,6 +4632,7 @@
     rig.bumpCool = 0;
     lookYaw = 0; rigSay = ''; rigSayT = 0;
     atMechanic = null; repairGlow = 0;
+    others = []; otherTimer = 22;
     setHelp();
 
     // The squad dies with you - marines are something you EARN each
@@ -4814,6 +4815,9 @@
 
     // ---- IS SOMEBODY FIXING THE RIG? --------------------------------
     updateMechanic(dt);
+
+    // ---- OTHER TRUCKS ON THE ROAD -----------------------------------
+    updateOthers(dt);
 
     // ---- ARE YOU STOOD AT A BOARD? ----------------------------------
     atBoard = null;
@@ -5308,6 +5312,19 @@
       ctx.lineWidth = 1.5;
       ctx.strokeStyle = 'rgba(0,0,0,0.6)';
       ctx.stroke();
+    }
+
+    // ---- THE OTHER TRUCKS -------------------------------------------
+    // Bigger than a person on the map, because a truck IS bigger and
+    // you want to see one coming well before it arrives.
+    for (const o of others) {
+      const m = toMap(o.x, o.z);
+      if (m.d > MAP_RANGE) continue;
+      ctx.fillStyle = o.side === 'marine' ? '#7fc0f0' : '#d05a4a';
+      ctx.fillRect(m.x - 4, m.y - 4, 8, 8);
+      ctx.lineWidth = 1.2;
+      ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+      ctx.strokeRect(m.x - 4, m.y - 4, 8, 8);
     }
 
     // ---- EVERYTHING THAT WANTS YOU ----------------------------------
@@ -6184,6 +6201,342 @@
 
 
 // -------------------------------------------------------------------
+//  OTHER TRUCKS ON THE ROAD
+// -------------------------------------------------------------------
+//
+//  MARINE RIGS come out of the forts. They hunt zombies, they'll take
+//  on a zombie rig, and they leave you alone - a friendly pair of
+//  headlights on the horizon.
+//
+//  ZOMBIE RIGS hunt YOU. The dead got hold of a lorry, welded spikes on
+//  the front, and worked out what a steering wheel does. They ram.
+//
+//  Both drive with the same code and the same rules you do. The only
+//  difference is what they're pointed at, which is one line each.
+
+  const OTHER_MAX     = 4;      // never more than this on the map at once
+  const OTHER_SEE     = 300;    // how far they can pick a target
+  const RAM_DAMAGE    = 0.9;    // damage per unit of closing speed
+  const MARINE_RIG_HP = 220;
+  const ZOMBIE_RIG_HP = 260;
+
+  let others = [];
+  let otherTimer = 22;
+
+  function makeOther(side, x, z, yaw) {
+    return {
+      side: side,                       // 'marine' or 'zombie'
+      x: x, z: z, yaw: yaw,
+      speed: 20, steer: 0,
+      health: side === 'marine' ? MARINE_RIG_HP : ZOMBIE_RIG_HP,
+      maxHealth: side === 'marine' ? MARINE_RIG_HP : ZOMBIE_RIG_HP,
+      ramFlash: 0, hitCool: 0, kills: 0,
+      runT: 0, runYaw: 0, lock: null, lockT: 0
+    };
+  }
+
+  // Marine rigs come OUT OF a fort if there's one about; zombie rigs
+  // just come out of the fog behind you, like everything else does.
+  function spawnOther(side) {
+    if (others.length >= OTHER_MAX) return;
+
+    if (side === 'marine') {
+      const forts = placesNear(rig.x, rig.z, 5).filter(function (p) {
+        return p.kind === 'fort';
+      });
+      if (forts.length) {
+        const f = forts[0];
+        const a = Math.random() * Math.PI * 2;
+        others.push(makeOther('marine',
+          f.x + Math.sin(a) * (f.half + 26), f.z + Math.cos(a) * (f.half + 26), a));
+        return;
+      }
+    }
+
+    const a = Math.random() * Math.PI * 2;
+    const d = 200 + Math.random() * 90;
+    others.push(makeOther(side, rig.x + Math.sin(a) * d, rig.z + Math.cos(a) * d,
+                          a + Math.PI));
+  }
+
+  // WHAT IS THIS TRUCK POINTED AT? The whole difference between a
+  // friend and an enemy, in one function.
+  function otherTarget(o) {
+    // The rig object itself, not a copy of where it is - so a locked-on
+    // zombie rig keeps tracking you instead of charging the spot you
+    // were standing in three seconds ago.
+    if (o.side === 'zombie') return rig;
+
+    // A marine rig goes for the nearest zombie rig, and failing that
+    // the crowd.
+    let best = null, bestD = OTHER_SEE;
+    for (const q of others) {
+      if (q === o || q.side !== 'zombie') continue;
+      const d = Math.hypot(q.x - o.x, q.z - o.z);
+      if (d < bestD) { bestD = d; best = q; }
+    }
+    if (best) return best;
+
+    // NEAREST IS NOT THE SAME AS BEST.
+    //
+    // Going for whichever zombie is closest, a lorry kills one, then
+    // hauls its enormous turning circle right round to the next one,
+    // and spends the whole fight turning. Four kills in thirty seconds.
+    //
+    // So a target that's straight ahead is worth going a long way for.
+    // Sixty paces' worth: that's how much distance a hard turn has to
+    // save before it's worth making. The rig lines up a row of them
+    // and drives THROUGH it, which is what a truck is for.
+    let bestScore = 1e9;
+    for (const e of enemies) {
+      if (e.dead) continue;
+      const d = Math.hypot(e.x - o.x, e.z - o.z);
+      if (d > OTHER_SEE) continue;
+
+      let turn = Math.atan2(e.x - o.x, e.z - o.z) - o.yaw;
+      while (turn >  Math.PI) turn -= Math.PI * 2;
+      while (turn < -Math.PI) turn += Math.PI * 2;
+
+      // 20, not 60. At sixty, a target straight ahead was worth so much
+      // that the rig ignored the crowd right beside it and drove off
+      // into the distance after one far-away zombie. One kill in thirty
+      // seconds - WORSE than having no preference at all.
+      const score = d + Math.abs(turn) * 20;
+      if (score < bestScore) { bestScore = score; best = e; }
+    }
+    return best;
+  }
+
+  function updateOthers(dt) {
+    // More of them as the game goes on, same as everything else here.
+    otherTimer -= dt;
+    if (otherTimer <= 0) {
+      // Zombie rigs get commoner the longer you last; marine rigs don't.
+      spawnOther(Math.random() < Math.min(0.7, 0.3 + clock / 400) ? 'zombie' : 'marine');
+      otherTimer = 26 + Math.random() * 22;
+    }
+
+    for (const o of others) {
+      if (o.hitCool > 0) o.hitCool -= dt;
+      if (o.ramFlash > 0) o.ramFlash -= dt * 2.4;
+
+      // ---- PICK ONE, AND STICK WITH IT --------------------------------
+      // Re-choosing the "best" target every frame is what sent these
+      // rigs round in perfect circles. As the truck moved, a different
+      // zombie kept winning, so the heading it was lining up on quietly
+      // rotated - and a lorry that never chases the same thing for two
+      // seconds running never catches anything at all. Measured: steer
+      // pinned at -0.95, for ever.
+      //
+      // So: choose a target, and stay committed to it until it's dead,
+      // out of sight, or three seconds are up.
+      if (!(o.lockT > 0 && o.lock && !o.lock.dead &&
+            Math.hypot(o.lock.x - o.x, o.lock.z - o.z) < OTHER_SEE)) {
+        o.lock  = otherTarget(o);
+        o.lockT = 3;
+        o.runT  = 0;
+      }
+      o.lockT -= dt;
+      const t = o.lock;
+
+      // ---- STEER AT IT ----------------------------------------------
+      // Turn towards the target the SHORT way round, and only as fast
+      // as a lorry can - which is what stops them pirouetting on the
+      // spot like something on ice.
+      let want = 0;
+      if (t) {
+        want = Math.atan2(t.x - o.x, t.z - o.z) - o.yaw;
+        while (want >  Math.PI) want -= Math.PI * 2;
+        while (want < -Math.PI) want += Math.PI * 2;
+
+        // THE ATTACK RUN.
+        //
+        // Steering straight at the target every frame looks obviously
+        // right and is obviously wrong. As the rig closes in, the
+        // bearing swings faster than a lorry can follow, so it ends up
+        // ORBITING its prey - measured at seven paces out, for ever,
+        // when the bull bars only reach five and a half to the side.
+        // Eight kills in five seconds and then nothing, all day. Just
+        // easing off the wheel didn't fix it either; it orbited wider.
+        //
+        // What a driver actually does is LINE UP and commit. So inside
+        // sixty paces the rig picks its heading ONCE and holds it for
+        // two seconds - straightening onto the line and driving all the
+        // way through - then looks up and picks a new one. Chasing is
+        // for things that can turn. A lorry aims.
+        const close = Math.hypot(t.x - o.x, t.z - o.z);
+
+        // YOU CANNOT TURN ONTO SOMETHING THAT IS ALREADY BESIDE YOU.
+        //
+        // At 35 this lorry's turning circle is about twenty-two paces
+        // across. A zombie eight paces off the side is INSIDE that
+        // circle - no amount of steering reaches it, and every attempt
+        // just carries the truck round it in a ring. Measured: eight
+        // paces away, for twenty seconds, never once in the bull bars.
+        //
+        // So when the target is close AND off to the side, the rig
+        // stops steering, drives on to open the gap, and only turns in
+        // once it has room to make the corner. Getting further away is
+        // how you get closer. That's real, and it's why lorries reverse
+        // out of streets they can't turn in.
+        if (close < 34 && Math.abs(want) > 0.7) {
+          o.steer *= 0.8;
+          o.runT = 0;
+        } else if (close < 30) {
+          if (o.runT <= 0) {
+            o.runYaw = Math.atan2(t.x - o.x, t.z - o.z);
+            o.runT = 1.4;
+          }
+          o.runT -= dt;
+          want = o.runYaw - o.yaw;
+          while (want >  Math.PI) want -= Math.PI * 2;
+          while (want < -Math.PI) want += Math.PI * 2;
+        } else {
+          o.runT = 0;             // out of range - go back to following it
+        }
+
+        o.steer += (clamp(want * 1.6, -1, 1) - o.steer) * Math.min(1, dt * 5);
+      } else {
+        o.steer *= 0.9;
+      }
+
+      // These drivers are better than the physics alone would allow -
+      // 1.8 times your turn rate. Without it a truck doing 48 needs a
+      // circle 48 paces WIDE, which is wider than most of the crowds
+      // it's trying to get into, so it just swings round the outside.
+      const grip = 1 - Math.abs(o.speed) / TOP_SPEED * 0.45;
+      o.yaw += o.steer * TURN * (o.speed / TOP_SPEED) * grip * dt * 2.4 * 1.8;
+
+      // ---- FOOT DOWN -------------------------------------------------
+      // Slower than you flat out, so a chase is always winnable.
+      let top = o.side === 'zombie' ? TOP_SPEED * 0.86 : TOP_SPEED * 0.78;
+
+      // EASE OFF FOR A HARD TURN, like anybody driving something this
+      // big would. Slower means a tighter circle - but never below the
+      // speed that flattens things, or it would arrive harmless.
+      if (Math.abs(want) > 0.7) top = Math.max(RAM_SPEED + 8, top * 0.62);
+
+      o.speed += (top - o.speed) * Math.min(1, dt * 0.5);
+
+      const nx = o.x + Math.sin(o.yaw) * o.speed * dt;
+      const nz = o.z + Math.cos(o.yaw) * o.speed * dt;
+      const R = RIG_HALF_W + 1.5;
+      if (!blockedAt(nx, nz, R)) {
+        o.x = nx; o.z = nz;
+      } else {
+        // Same slide-or-bounce rule your truck gets, so they can't
+        // weld themselves to a wreck and sit there for ever.
+        if (!blockedAt(nx, o.z, R)) o.x = nx;
+        else if (!blockedAt(o.x, nz, R)) o.z = nz;
+        else { o.speed = -8; o.yaw += 0.5; }
+      }
+
+      // ---- MARINE RIGS FLATTEN THE DEAD -------------------------------
+      if (o.side === 'marine') otherRunsThemDown(o, dt);
+
+      // ---- RAMMING ----------------------------------------------------
+      otherRams(o, dt);
+    }
+
+    // Wrecks blow up and leave the road.
+    for (const o of others) {
+      if (o.health > 0) continue;
+      burst(o.x, 4, o.z, [[60, 56, 52], [150, 90, 40], [90, 84, 78]], 40, 26);
+      crunch();
+      if (o.side === 'zombie') {
+        player.scrap += 30;
+        questWord = 'ZOMBIE RIG WRECKED  -  30 scrap';
+        questFlash = 3;
+      }
+    }
+    others = others.filter(function (o) {
+      // Anything a long way behind you is gone - it isn't part of the
+      // game any more and it costs a frame to keep pretending.
+      return o.health > 0 && Math.hypot(o.x - rig.x, o.z - rig.z) < 620;
+    });
+  }
+
+  // A marine rig ploughing through the crowd. Same rectangle test as
+  // yours, so it obeys the same speed-is-armour rule you do.
+  function otherRunsThemDown(o, dt) {
+    const co = Math.cos(o.yaw), si = Math.sin(o.yaw);
+    for (const e of enemies) {
+      if (e.dead) continue;
+      const dx = e.x - o.x, dz = e.z - o.z;
+      if (Math.abs(dx) > 24 || Math.abs(dz) > 24) continue;
+
+      const along  = dx * si + dz * co;
+      const across = dx * co - dz * si;
+      const wide = RIG_HALF_W + (e.k.radius || 1.4);
+      if (across < -wide || across > wide) continue;
+      if (along < -9 || along > RIG_NOSE) continue;
+
+      if (Math.abs(o.speed) >= RAM_SPEED) {
+        e.dead = true;
+        o.kills++;
+        o.ramFlash = 1;
+        o.speed *= (e.k.hp > 40 ? 0.86 : 0.985);
+        burst(e.x, e.k.height * 0.5, e.z, e.k.gib, 22, 18);
+      }
+    }
+  }
+
+  // TRUCK MEETS TRUCK.
+  //
+  // What decides it is CLOSING SPEED - how fast the gap between them is
+  // shutting - not who is faster in a straight line. Two lorries going
+  // the same way and touching is a scrape; head-on at sixty each is a
+  // hundred and twenty, and somebody is not driving home.
+  function otherRams(o, dt) {
+    // Against your rig.
+    if (o.side === 'zombie' && o.hitCool <= 0) {
+      const gap = Math.hypot(o.x - rig.x, o.z - rig.z);
+      if (gap < 13) {
+        const closing = Math.abs(o.speed) + Math.abs(rig.speed) *
+          // Facing each other? Add the speeds. Same way? Take them off.
+          (Math.cos(o.yaw - rig.yaw) < 0 ? 1 : -1);
+        const force = Math.max(6, Math.abs(closing));
+
+        hurtRig(force * RAM_DAMAGE);
+        o.health -= force * RAM_DAMAGE * 0.8;   // it hurts them too
+        o.hitCool = 0.8;
+        o.ramFlash = 1;
+        rig.ramFlash = 1;
+        shake = Math.max(shake, 0.9);
+        crunch();
+
+        // Shove them apart, or they'd sit inside each other grinding.
+        const away = Math.atan2(rig.x - o.x, rig.z - o.z);
+        rig.x += Math.sin(away) * 5; rig.z += Math.cos(away) * 5;
+        o.x   -= Math.sin(away) * 5; o.z   -= Math.cos(away) * 5;
+        rig.speed *= 0.55;
+        o.speed *= 0.55;
+      }
+    }
+
+    // Marine rig against zombie rig - the fight you get to watch.
+    if (o.side !== 'marine' || o.hitCool > 0) return;
+    for (const q of others) {
+      if (q.side !== 'zombie' || q.hitCool > 0) continue;
+      if (Math.hypot(o.x - q.x, o.z - q.z) > 13) continue;
+
+      const force = Math.max(6, Math.abs(o.speed) + Math.abs(q.speed) *
+        (Math.cos(o.yaw - q.yaw) < 0 ? 1 : -1));
+      o.health -= force * RAM_DAMAGE * 0.7;
+      q.health -= force * RAM_DAMAGE * 0.9;     // the marines drive better
+      o.hitCool = q.hitCool = 0.8;
+      o.ramFlash = q.ramFlash = 1;
+      crunch();
+
+      const away = Math.atan2(o.x - q.x, o.z - q.z);
+      o.x += Math.sin(away) * 5; o.z += Math.cos(away) * 5;
+      q.x -= Math.sin(away) * 5; q.z -= Math.cos(away) * 5;
+      o.speed *= 0.55; q.speed *= 0.55;
+    }
+  }
+
+
+// -------------------------------------------------------------------
 //  THE MECHANIC
 // -------------------------------------------------------------------
 //
@@ -6387,35 +6740,55 @@
   const STEEL = [104, 100, 96], DARKR = [42, 38, 36];
   const GLASS = [92, 128, 148];
 
-  function drawRig() {
-    const co = Math.cos(rig.yaw), si = Math.sin(rig.yaw);
-    const base = terrainAt(rig.x, rig.z);
+  // ONE FUNCTION DRAWS EVERY TRUCK IN THE GAME.
+  //
+  // Yours, the marines', and the ones the dead are driving are all the
+  // same lorry - the paint is different and each one gets a few bits of
+  // its own bolted on. Written three times it would have been three
+  // times the work AND three chances for them to drift apart, so that
+  // one day the zombie rig has wheels that stick out and yours doesn't.
+  //
+  //   t    - anything with x, z, yaw, health and maxHealth
+  //   skin - what colour it's painted
+  //   you  - true only for the player's, which hides the cab you're
+  //          sat inside and shows the load you're hauling
+  function drawTruck(t, skin, you) {
+    const co = Math.cos(t.yaw), si = Math.sin(t.yaw);
+    const base = terrainAt(t.x, t.z);
 
     // Put a box on the truck, measured in the TRUCK'S directions -
     // "so far to the side, so far up, so far along" - so the whole
     // lorry is written once and turns as one thing.
     function part(across, up, along, w, h, d, rgb) {
-      addBox(rig.x + across * co + along * si, base + up,
-             rig.z - across * si + along * co, w, h, d, rgb, rig.yaw);
+      addBox(t.x + across * co + along * si, base + up,
+             t.z - across * si + along * co, w, h, d, rgb, t.yaw);
     }
 
     // ---- BULL BARS - the business end --------------------------------
-    const barCol = rig.ramFlash > 0
-      ? shade(STEEL, 1 + rig.ramFlash * 0.7) : STEEL;
+    const barCol = t.ramFlash > 0
+      ? shade(skin.bar, 1 + t.ramFlash * 0.7) : skin.bar;
     part(0, 2.0, 6.4, 7.6, 0.8, 0.9, barCol);
     part(0, 3.4, 6.4, 7.6, 0.8, 0.9, barCol);
     for (const a of [-2.6, 0, 2.6]) part(a, 2.7, 6.4, 0.8, 2.6, 0.9, barCol);
-    for (const a of [-3.4, 3.4]) part(a, 2.6, 5.2, 0.7, 3.2, 2.6, shade(STEEL, 0.8));
+    for (const a of [-3.4, 3.4]) part(a, 2.6, 5.2, 0.7, 3.2, 2.6, shade(skin.bar, 0.8));
+
+    // Spikes on the front of a zombie rig, so you know at a glance that
+    // the thing coming at you is NOT here to help.
+    if (skin.spikes) {
+      for (const a of [-2.9, -1.0, 1.0, 2.9]) {
+        part(a, 2.8, 7.6, 0.5, 0.5, 2.6, shade(skin.bar, 0.7));
+      }
+    }
 
     // ---- CAB ----------------------------------------------------------
     // Scorched as it gets wrecked, so you can SEE how bad it is without
     // reading the number.
-    const hurt = 1 - (1 - rig.health / rig.maxHealth) * 0.55;
+    const hurt = 1 - (1 - t.health / t.maxHealth) * 0.55;
 
     // The bonnet. Always drawn - from the driver's seat this is the
     // long brown nose stretching away in front of you, and it's what
     // tells you where your own front end is.
-    part(0, 2.6, 2.4, 6.4, 3.4, 8.4, shade(CAB_A, hurt));
+    part(0, 2.6, 2.4, 6.4, 3.4, 8.4, shade(skin.body, hurt));
 
     // THE BOX ROUND YOUR HEAD, AND THE GLASS YOU LOOK THROUGH.
     // From outside these are the cab and the windscreen. From the
@@ -6423,23 +6796,23 @@
     // sat inside just paints the whole screen its own colour. So while
     // you're driving, they aren't drawn at all - which is exactly what
     // it's like to be in a cab: you see out, not in.
-    if (!driving) {
-      part(0, 5.0, 1.2, 5.8, 2.6, 5.0, shade(CAB_B, hurt));
-      part(0, 5.2, 3.5, 5.0, 1.8, 0.5, GLASS);                  // windscreen
+    if (!(you && driving)) {
+      part(0, 5.0, 1.2, 5.8, 2.6, 5.0, shade(skin.trim, hurt));
+      part(0, 5.2, 3.5, 5.0, 1.8, 0.5, skin.glass);             // windscreen
     }
-    for (const a of [-2.95, 2.95]) part(a, 5.2, 1.4, 0.5, 1.6, 3.0, GLASS);
-    part(0, 6.5, 0.6, 4.4, 0.5, 3.6, shade(CAB_B, 1.1 * hurt));
+    for (const a of [-2.95, 2.95]) part(a, 5.2, 1.4, 0.5, 1.6, 3.0, skin.glass);
+    part(0, 6.5, 0.6, 4.4, 0.5, 3.6, shade(skin.trim, 1.1 * hurt));
     for (const a of [-1.6, 1.6]) part(a, 7.2, 0.4, 0.4, 1.4, 0.4, DARKR);  // stacks
 
     // ---- TRAILER ------------------------------------------------------
-    part(0, 3.6, -6.6, 6.8, 5.2, 11.0, shade(CAB_B, 0.85 * hurt));
+    part(0, 3.6, -6.6, 6.8, 5.2, 11.0, shade(skin.trim, 0.85 * hurt));
     for (let i = 0; i < 4; i++) {
-      part(0, 3.6, -2.4 - i * 2.9, 7.0, 5.4, 0.5, shade(STEEL, 0.7));
+      part(0, 3.6, -2.4 - i * 2.9, 7.0, 5.4, 0.5, shade(skin.bar, 0.7));
     }
-    part(0, 6.4, -6.6, 6.4, 0.5, 10.6, STEEL);
+    part(0, 6.4, -6.6, 6.4, 0.5, 10.6, skin.bar);
 
     // A load riding on the back, so you can see you're carrying something.
-    if (rig.cargo) {
+    if (you && rig.cargo) {
       part(0, 7.3, -6.6, 5.4, 1.6, 8.6, rig.cargo.colour);
       part(0, 8.2, -6.6, 4.0, 0.4, 7.0, shade(rig.cargo.colour, 0.75));
     }
@@ -6450,13 +6823,53 @@
     for (const a of [-3.9, 3.9]) {
       for (const b of [4.0, -1.6, -7.0, -10.0]) {
         part(a, 1.6, b, 1.6, 3.2, 3.2, DARKR);
-        part(a * 1.18, 1.6, b, 0.3, 1.4, 1.4, shade(STEEL, 0.9));   // hub cap
+        part(a * 1.18, 1.6, b, 0.3, 1.4, 1.4, shade(skin.bar, 0.9));  // hub cap
       }
     }
 
     // ---- HEADLIGHTS ---------------------------------------------------
-    for (const a of [-2.4, 2.4]) part(a, 3.0, 6.5, 1.2, 0.9, 0.3, [255, 226, 160]);
+    for (const a of [-2.4, 2.4]) part(a, 3.0, 6.5, 1.2, 0.9, 0.3, skin.lamp);
+
+    // ---- WHO'S RIDING ON IT --------------------------------------------
+    // A marine standing on the roof with a rifle, or the dead clinging
+    // to the sides. Same idea either way: you should be able to tell
+    // what a truck is from a long way off, before it's close enough to
+    // matter.
+    if (skin.crew === 'marine') {
+      drawPerson(t.x + 0.6 * si, base + 6.8, t.z + 0.6 * co,
+                 t.yaw + Math.sin(clock * 0.7) * 0.5, MARINE_COAT, true, 0);
+    } else if (skin.crew === 'dead') {
+      for (const s of [-1, 1]) {
+        const bob = Math.sin(clock * 5 + s * 2 + t.x) * 0.22;
+        drawPerson(t.x + (s * 4.4) * co + (-3.0) * si, base + 3.6 + bob,
+                   t.z - (s * 4.4) * si + (-3.0) * co,
+                   t.yaw + s * 1.5, ZOM_COAT, false, 0);
+      }
+    }
   }
+
+  const MARINE_COAT = [64, 88, 118];
+  const ZOM_COAT    = [84, 102, 66];
+
+  // The three paint jobs. Everything that makes a truck LOOK like what
+  // it is lives here, so making a fourth kind one day is a few colours
+  // and not a new function.
+  const SKIN_YOU = {
+    body: CAB_A, trim: CAB_B, bar: STEEL, glass: GLASS,
+    lamp: [255, 226, 160], crew: null, spikes: false
+  };
+  const SKIN_MARINE = {
+    body: [72, 96, 124], trim: [56, 76, 100], bar: [128, 140, 152],
+    glass: [140, 200, 230], lamp: [210, 236, 255],
+    crew: 'marine', spikes: false
+  };
+  const SKIN_ZOMBIE = {
+    body: [70, 74, 52], trim: [54, 58, 42], bar: [108, 84, 52],
+    glass: [40, 52, 34], lamp: [150, 220, 130],
+    crew: 'dead', spikes: true
+  };
+
+  function drawRig() { drawTruck(rig, SKIN_YOU, true); }
 
 
   function draw() {
@@ -6480,6 +6893,11 @@
     for (const m of marines) drawMarine(m);
     for (const e of enemies) drawEnemy(e);
     drawRig();
+    for (const o of others) {
+      // Anything past the fog is a waste of a hundred faces.
+      if (Math.hypot(o.x - cam.x, o.z - cam.z) > 400) continue;
+      drawTruck(o, o.side === 'marine' ? SKIN_MARINE : SKIN_ZOMBIE, false);
+    }
     drawBolts();
     drawTracers();
     drawGibs();
