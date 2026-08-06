@@ -20,7 +20,7 @@
 </head>
 <body>
 <canvas id="screen"></canvas>
-<div id="hud">MOUSE = steer &nbsp;&nbsp; W = thrust &nbsp;&nbsp; S = brake &nbsp;&nbsp; A D = roll &nbsp;&nbsp; <b>Q = lock on</b> &nbsp;&nbsp; CLICK = shoot</div>
+<div id="hud">MOUSE = steer &nbsp;&nbsp; W = thrust &nbsp;&nbsp; S = brake &nbsp;&nbsp; A D = roll &nbsp;&nbsp; <b>Q = lock on</b> &nbsp;&nbsp; T = auto-aim &nbsp;&nbsp; CLICK = shoot</div>
 
 <script>
 // ===================================================================
@@ -674,6 +674,37 @@
     return add(e.pos, mul(relVel, t));
   }
 
+// -------------------------------------------------------------------
+//  THE TARGETING COMPUTER
+// -------------------------------------------------------------------
+//  With a lock on, the guns don't fire straight down the nose any more.
+//  They fire at the LEAD POINT - the spot the computer already worked
+//  out for the yellow ring - so a shot lands as long as you're roughly
+//  pointed the right way.
+//
+//  ROUGHLY is the important word. It only helps inside a cone about 35
+//  degrees wide. Outside that the guns go back to firing straight ahead
+//  and you're on your own, so you still have to fly the ship at the
+//  fight. A gun that hits anything anywhere isn't a game, it's a button.
+//
+//  T turns it off if you'd rather do it yourself, and AIM_CONE below is
+//  how forgiving it is - 1 would be dead ahead only, 0 would be
+//  everywhere in front.
+// -------------------------------------------------------------------
+
+  const AIM_CONE = 0.82;      // the cosine of about 35 degrees
+  let aimBot = true;
+
+  // Is the computer able to help with this shot?
+  function autoAimDir() {
+    if (!aimBot || !target) return null;
+
+    const dir = norm(sub(leadPoint(target), ship.pos));
+    if (dot(dir, ship.fwd) < AIM_CONE) return null;   // too far off the nose
+
+    return dir;
+  }
+
   function keepTargetHonest() {
     if (!target) return;
     // Dead, or wandered too far, and the lock drops itself.
@@ -691,6 +722,11 @@
     if (state !== 'play' || ship.cool > 0) return;
     ship.cool = GUN_COOL;
 
+    // The computer takes the shot if it can. If not, straight ahead and
+    // good luck.
+    const helped = autoAimDir();
+    const aim = helped || ship.fwd;
+
     // Fired from the wingtips, and the bolt inherits your speed - it
     // leaves the gun at 420 ON TOP of however fast you were already
     // going. That's how it works in real life and it's why you can't
@@ -698,12 +734,13 @@
     for (const side of [-1, 1]) {
       bolts.push({
         pos: add(add(ship.pos, mul(ship.right, side * 5)), mul(ship.fwd, 6)),
-        vel: add(ship.vel, mul(ship.fwd, BOLT_SPD)),
-        life: 2.2, mine: true, colour: [140, 240, 255]
+        vel: add(ship.vel, mul(aim, BOLT_SPD)),
+        life: 2.2, mine: true,
+        colour: helped ? [190, 255, 190] : [140, 240, 255]
       });
     }
 
-    beep(760, 300, 0.09, 0.12);
+    beep(helped ? 900 : 760, 300, 0.09, 0.12);
     shake = Math.max(shake, 0.1);
   }
 
@@ -837,6 +874,11 @@
     if ((e.key.toLowerCase() === 'q' || e.key === 'Tab') && state === 'play') {
       cycleTarget();
       e.preventDefault();      // or Tab jumps out of the game entirely
+    }
+
+    if (e.key.toLowerCase() === 't' && state === 'play') {
+      aimBot = !aimBot;
+      beep(aimBot ? 620 : 300, aimBot ? 980 : 200, 0.14, 0.12, 'triangle');
     }
   });
   window.addEventListener('keyup', function (e) { keys[e.key.toLowerCase()] = false; });
@@ -1167,18 +1209,35 @@
       ctx.setLineDash([]);
     }
 
-    // PUT YOUR CROSSHAIR ON THIS RING. Not on the ship - on here.
+    // ---- IS THE COMPUTER ON THIS SHOT? ------------------------------
+    // Green means the guns will take it themselves. Yellow means you're
+    // outside the cone and it's down to you. You should never have to
+    // guess which - a helper you can't see is worse than none.
+    const helped = autoAimDir() !== null;
     const onIt = Math.hypot(lead.x - W / 2, lead.y - H / 2) < 16;
 
-    ctx.strokeStyle = onIt ? '#8fff9a' : '#ffec96';
-    ctx.lineWidth = onIt ? 3 : 2;
+    ctx.strokeStyle = helped ? '#8fff9a' : '#ffec96';
+    ctx.lineWidth = helped || onIt ? 3 : 2;
     ctx.beginPath();
     ctx.arc(lead.x, lead.y, 9, 0, 6.28);
     ctx.stroke();
 
-    if (onIt) {
+    if (helped) {
+      // A second ring, breathing, so a locked-up gun looks alive.
+      const pulse = 12 + Math.sin(clock * 9) * 3;
+      ctx.strokeStyle = 'rgba(143,255,154,0.55)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(lead.x, lead.y, pulse, 0, 6.28);
+      ctx.stroke();
+
       ctx.font = 'bold 13px system-ui, sans-serif';
       ctx.fillStyle = '#8fff9a';
+      ctx.textAlign = 'center';
+      ctx.fillText('GUNS LOCKED', lead.x, lead.y - 20);
+    } else if (onIt) {
+      ctx.font = 'bold 13px system-ui, sans-serif';
+      ctx.fillStyle = '#ffec96';
       ctx.textAlign = 'center';
       ctx.fillText('FIRE', lead.x, lead.y - 16);
     }
@@ -1227,6 +1286,10 @@
     ctx.fillStyle = '#7f93aa';
     ctx.fillText('SPEED', W * 0.95, H - 27);
     ctx.fillText(ship.kills + ' shot down', W * 0.95, H - 62);
+
+    ctx.fillStyle = aimBot ? '#8fff9a' : '#6c7f92';
+    ctx.fillText(aimBot ? 'targeting computer ON' : 'targeting computer OFF',
+                 W * 0.95, H - 78);
 
     // ---- HIT ----------------------------------------------------------
     if (ship.hurtFlash > 0) {
