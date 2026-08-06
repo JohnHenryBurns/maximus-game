@@ -1,0 +1,2665 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Sinking Pole 2</title>
+
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="theme-color" content="#1a0a06">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="Sinking Pole 2">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="icon" href="icon-192.png">
+
+  <style>
+    body {
+      margin: 0;
+      overscroll-behavior: none;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #0b0503;
+      font-family: system-ui, sans-serif;
+      -webkit-user-select: none;
+      user-select: none;
+      /* Stops the phone doing its own scrolling when you drag on the game. */
+      touch-action: none;
+      overflow: hidden;
+    }
+
+    /* ------------------------------------------------------------------
+       The canvas is ALWAYS 460 x 760 on the inside, no matter what
+       screen it's on. The CSS below just stretches that rectangle to
+       fit the window, like a projector.
+
+       Why bother? Because it means the game plays EXACTLY the same on
+       your phone and on a giant monitor. On a wide screen you'd
+       otherwise be able to see miles of lava and it'd be too easy.
+       ------------------------------------------------------------------ */
+    canvas {
+      height: 100vh;
+      max-width: 100vw;
+      /* This keeps the 460:760 shape instead of squashing it. */
+      aspect-ratio: 460 / 760;
+      display: block;
+      /* Keeps the chunky pixel look when it gets stretched up big. */
+      image-rendering: pixelated;
+      touch-action: none;
+    }
+
+    #startScreen {
+      position: fixed;
+      inset: 0;
+      background: rgba(9, 4, 2, 0.94);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 22px;
+      z-index: 50;
+      text-align: center;
+      padding: 16px;
+      color: #e8e8f0;
+    }
+
+    #startScreen h2 {
+      margin: 0;
+      font-size: clamp(24px, 7vw, 40px);
+      letter-spacing: 3px;
+      color: #ffe9c4;
+      text-shadow: 0 0 18px #ff5e00;
+    }
+
+    #levelButtons {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      width: min(340px, 88vw);
+    }
+
+    .lvl {
+      padding: 15px 16px;
+      border: 2px solid #4a3a30;
+      border-radius: 12px;
+      background: #1a1010;
+      color: #e8e8f0;
+      font-family: inherit;
+      font-size: 14px;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
+    }
+    .lvl b { font-size: 21px; letter-spacing: 2px; }
+    .lvl span { color: #a89a8e; line-height: 1.4; }
+    .lvl:hover, .lvl:active { transform: scale(1.04); }
+
+    .lvl-easy b { color: #8fe0b4; }
+    .lvl-easy:hover, .lvl-easy:active {
+      border-color: #8fe0b4; box-shadow: 0 0 24px rgba(143,224,180,0.4);
+    }
+    .lvl-normal b { color: #ffc46b; }
+    .lvl-normal:hover, .lvl-normal:active {
+      border-color: #ffc46b; box-shadow: 0 0 24px rgba(255,196,107,0.4);
+    }
+    .lvl-hard b { color: #ff5a3c; }
+    .lvl-hard:hover, .lvl-hard:active {
+      border-color: #ff5a3c; box-shadow: 0 0 28px rgba(255,90,60,0.55);
+    }
+    .lvl-apocalypse b { color: #ff3ba7; }
+    .lvl-apocalypse:hover, .lvl-apocalypse:active {
+      border-color: #ff3ba7; box-shadow: 0 0 34px rgba(255,59,167,0.7);
+    }
+
+    #again {
+      position: fixed;
+      top: 8px;
+      right: 10px;
+      color: #ffb27a;
+      background: rgba(0,0,0,0.45);
+      border: none;
+      font-family: inherit;
+      font-size: 14px;
+      padding: 6px 11px;
+      border-radius: 8px;
+      cursor: pointer;
+      z-index: 10;
+    }
+
+    /* A little "back to the menu" link, parked in the corner. */
+    #back {
+      position: fixed;
+      top: 8px;
+      left: 10px;
+      color: #ffb27a;
+      background: rgba(0,0,0,0.45);
+      padding: 6px 11px;
+      border-radius: 8px;
+      text-decoration: none;
+      font-size: 14px;
+      z-index: 10;
+    }
+  </style>
+</head>
+<body>
+
+  <a id="back" href="index.html">&larr; Arcade</a>
+  <button id="again">&#8635; Level</button>
+
+  <!-- The buttons aren't written out here - JavaScript builds them from
+       the LEVELS list, so that list is the only place that decides what
+       levels exist. -->
+  <div id="startScreen">
+    <h2>HOW BAD IS IT?</h2>
+    <div id="levelButtons"></div>
+  </div>
+
+  <canvas id="screen" width="460" height="760"></canvas>
+
+<script>
+"use strict";
+
+// ======================================================================
+// SINKING POLE 2 : THE CLIMB
+// A stone pole sticking out of a lava field. It is sinking.
+// You are a gnome standing on it. Good luck.
+//
+// This is version 2.0. Everything the first game did, it still does -
+// plus four big new toys:
+//
+//   1. STAGES. The higher you climb, the meaner the world gets. Every
+//      30 metres you cross into a new stage: the lava speeds up, the
+//      monsters get tougher, and the sky changes colour so you can SEE
+//      how deep in trouble you are.
+//
+//   2. POWER-UPS. Little glowing goodies float over some ledges. Grab
+//      one and something good happens - a shield, a machine gun, a
+//      triple-shot, rocket boots, or a freeze-ray that stops the lava.
+//
+//   3. BOSSES. Every 5th stage, something enormous turns up and tries
+//      to end you. Shoot it enough and it drops a pile of loot.
+//
+//   4. THE DISAPPEARING-TOWER BUG IS FIXED. In version 1, if you got
+//      REALLY high (about 5000m) the stone pole ran out and vanished,
+//      because it was drawn from a fixed spot instead of from the top
+//      of the screen. Now it's drawn from the screen down every frame,
+//      so it can never run out. See drawPole().
+// ======================================================================
+
+const canvas = document.getElementById("screen");
+const ctx    = canvas.getContext("2d");
+
+// The size we PRETEND the screen is. Everything below uses these two
+// numbers instead of the real window size, so the game is always fair.
+const W = 460;
+const H = 760;
+
+// --- 1. THE KNOBS ------------------------------------------------------
+//     Every one of these is a number you can change. Change one, save,
+//     press F5, see what happens. That is the whole job.
+
+const GRAVITY      = 0.62;   // how hard you get pulled down each frame
+const JUMP_POWER    = 13.4;  // how hard you shove off when you jump
+const RUN_SPEED     = 3.7;   // sideways speed
+const MAX_FALL      = 17;    // fastest you're allowed to fall
+
+const POLE_WIDTH    = 92;    // how fat the stone pole is
+const GAP           = 84;    // vertical space between platforms
+const LEDGE_LEN     = 118;   // how far a ledge sticks out from the pole
+
+// It starts shaking this many frames before a ledge goes, so you get a
+// warning. A trap with no warning isn't difficulty, it's just a surprise.
+const WOBBLE_WARNING = 26;
+
+// --- THE THREE LEVELS -------------------------------------------------
+//
+// Exactly the same trick as the cavern's CHOOSE YOUR DOOM screen: not
+// different code, just different numbers going into the same machine.
+// HARD is the game as you'd been playing it - those were the numbers.
+//
+//   lavaStart   - how fast the pole sinks at the beginning
+//   lavaSpeedup - how much nastier that gets every single frame
+//   crumble     - frames you can stand on a ledge. 60 = one second
+//   regrow      - frames until a fallen ledge rebuilds itself
+//   every       - one monster per this many ledges
+//   monsterHp   - shots to kill one
+
+const LEVELS = {
+  easy: {
+    label: 'STROLL',
+    blurb: 'Slow lava, patient ledges, and the odd sleepy monster.',
+    lavaStart: 0.15, lavaSpeedup: 0.000014,
+    crumble: 115, regrow: 38,
+    every: 4, monsterHp: 1,
+  },
+  normal: {
+    label: 'CLIMB',
+    blurb: 'A fair fight. You will still cook eventually.',
+    lavaStart: 0.22, lavaSpeedup: 0.000024,
+    crumble: 82, regrow: 50,
+    every: 3, monsterHp: 2,
+  },
+  hard: {
+    label: 'MELTDOWN',
+    blurb: 'The pole is falling apart and so are you.',
+    lavaStart: 0.30, lavaSpeedup: 0.000035,
+    crumble: 60, regrow: 60,
+    every: 2, monsterHp: 2,
+  },
+  apocalypse: {
+    label: 'APOCALYPSE',
+    blurb: 'They fly. The ledges last half a second. The lava is coming.',
+    lavaStart: 0.72, lavaSpeedup: 0.000090,   // more than twice MELTDOWN
+    crumble: 30,      // half a second and it's gone
+    regrow: 80,       // and it takes its time coming back
+    every: 1,         // one on EVERY single ledge. All of them. Sorry.
+    monsterHp: 2,
+    fly: true,        // this one changes how monsters BEHAVE, not just how many
+  },
+};
+
+// `let`, because these get swapped when you pick a level. They start on
+// the HARD numbers, but nothing plays until you've chosen anyway.
+let LAVA_START = 0.30;
+let LAVA_SPEEDUP = 0.000035;
+let CRUMBLE_TIME = 60;
+let REGROW_TIME = 60;
+let MONSTER_EVERY = 5;
+let MONSTER_HEALTH = 2;
+let MONSTER_FLY = false;      // do they leave their ledge and come for you?
+
+// How fast a flying one drifts at you. Deliberately well under your
+// RUN_SPEED of 3.7 - it should feel like being hunted, not like being
+// caught. A monster you cannot outrun isn't scary, it's just the end.
+const MONSTER_FLY_SPEED = 1.15;
+
+let level = 'hard';     // which one you picked
+let started = false;    // has anything been picked yet?
+
+function applyLevel(name) {
+  const d = LEVELS[name];
+  level = name;
+
+  LAVA_START     = d.lavaStart;
+  LAVA_SPEEDUP   = d.lavaSpeedup;
+  CRUMBLE_TIME   = d.crumble;
+  REGROW_TIME    = d.regrow;
+  MONSTER_EVERY  = d.every;
+  MONSTER_HEALTH = d.monsterHp;
+  // Most levels don't mention `fly` at all, and undefined isn't false -
+  // it's just missing. The !! turns "missing" into a proper no.
+  MONSTER_FLY    = !!d.fly;
+}
+
+// --- THE PISTOL ---
+const BULLET_SPEED = 10;    // how fast a shot flies
+const BULLET_LIFE  = 60;    // frames before it fizzles out. Stops it
+                            // travelling forever and eating memory.
+const FIRE_GAP     = 11;    // frames between shots. Smaller = machine gun.
+
+// AUTO-AIM. Spot a monster and the gnome deals with it himself.
+// Set to false and you're back to firing manually.
+const AUTO_AIM = true;
+// How far he can see. Beyond this he doesn't notice, which matters -
+// an infinite range would have him sniping things off the top of the
+// screen that you never even knew were there.
+const AUTO_AIM_RANGE = 330;
+
+// The first few ledges are always clear, on every level, no matter how
+// thick the monsters get further up. You need a moment to get going.
+const MONSTER_GRACE = 3;
+
+// --- FIREBALLS ---
+// One falls out of the sky every 25 seconds. 60 frames is a second, so
+// 25 seconds is 1500 frames.
+const FIREBALL_GAP   = 1500;
+// It flashes a warning at the top of the screen for a second first.
+// Something that drops out of nowhere and kills you isn't difficulty,
+// it's just rude - same rule as the wobble on a crumbling ledge.
+const FIREBALL_WARN  = 60;
+const FIREBALL_SPEED = 9.5;   // it comes down FAST once it lets go
+
+// MONSTER_EVERY, up in LEVELS, used to be a timer - a monster every so
+// many seconds. Counting LEDGES instead is better, and not just tidier:
+// it means the danger is built into the pole rather than into how long
+// you've been alive. Climb fast and you meet more of them sooner, which
+// is exactly right. Sit still and no new ones appear, because you
+// haven't gone anywhere.
+
+// --- STAGES: the world gets meaner the higher you go -------------------
+//
+// Every STAGE_HEIGHT metres you cross into a new stage. Each new stage
+// gives the lava a shove so it climbs faster, and every few stages the
+// monsters grow an extra heart. The sky changes colour too, so you can
+// feel yourself getting into deeper and deeper trouble.
+const STAGE_HEIGHT   = 30;    // metres per stage
+const STAGE_LAVA_KICK = 0.05; // how much faster the lava goes each new stage
+// One extra monster heart every this-many stages. Stage 1-3 = normal,
+// 4-6 = +1, 7-9 = +2, and so on. Keeps the top of a long climb scary.
+const STAGE_TOUGHEN  = 3;
+
+// --- POWER-UPS: the glowing goodies -----------------------------------
+//
+// Roughly this share of ledges get a floating goody over them. Too many
+// and they stop feeling special; too few and you never get to play with
+// them. One in seven feels about right.
+const POWERUP_CHANCE = 0.14;
+// How close your body has to get to grab one.
+const POWERUP_GRAB   = 26;
+
+// How long each timed power-up lasts, in frames (60 = one second).
+const RAPID_TIME   = 8  * 60;   // machine-gun fire
+const SPREAD_TIME  = 8  * 60;   // three shots at once
+const FREEZE_TIME  = 5  * 60;   // the lava stops dead
+const ROCKET_TIME  = 4  * 60;   // hold JUMP to fly
+
+const RAPID_GAP    = 4;         // frames between shots while rapid-firing
+const ROCKET_THRUST = 0.92;     // how hard the rocket boots push up
+
+// After a shield saves you, you get a moment where nothing can touch you,
+// so you don't just die again on the very next frame to the same monster.
+const INVULN_TIME  = 70;
+
+// --- BOSSES ------------------------------------------------------------
+//
+// A boss turns up at the start of every BOSS_STAGE-th stage (5, 10, 15...).
+// There are three of them and they take it in turns.
+const BOSS_STAGE   = 5;
+// A boss's health: this, plus a bit more every stage, so the stage-15
+// boss is a proper wall of hit-points compared to the stage-5 one.
+const BOSS_BASE_HP = 14;
+const BOSS_HP_PER_STAGE = 2;
+
+const POLE_LEFT  = W / 2 - POLE_WIDTH / 2;
+const POLE_RIGHT = W / 2 + POLE_WIDTH / 2;
+
+
+// --- 2. THE GNOME ------------------------------------------------------
+//     An object is just a bag of labelled numbers that belong together.
+//     Instead of gnomeX, gnomeY, gnomeSpeed... we keep them in one bag.
+
+let gnome, platforms, lavaY, lavaSpeed, cameraY, best, dead, deadTimer;
+let bullets, monsters, fireballs, tick, nextShotAt, nextFireballAt, kills;
+
+// --- version 2 state ---------------------------------------------------
+// All the new stuff lives in its own little pile so it's easy to find.
+let powerups;      // the glowing goodies floating in the air, waiting to be grabbed
+let powerTimers;   // { rapid, spread, freeze, rockets } - frames left on each
+let shield;        // true while you're wearing a shield bubble (blocks one hit)
+let invuln;        // frames of "nothing can touch me" after a shield saves you
+let coins;         // shiny things collected, just for score and bragging
+let stage;         // which stage you're on (goes up as you climb)
+let boss;          // the current boss, or null when there isn't one
+let bossShots;     // things the boss throws at you
+let clearedBossStages;  // a Set of stage numbers whose boss is already dead
+let banner;        // { text, sub, timer } - the big words that flash in the middle
+
+// How many ledges have been built this game. Drives the every-fifth
+// monster, and nothing else.
+let ledgeCount = 0;
+
+// The height of the highest ledge built so far. Kept as its own number
+// rather than read off the end of the list, because ledges that give way
+// keep moving after they're built - so the last one in the list is no
+// longer reliably the highest one.
+let topLedgeY = 40;
+
+// Ticks up every single frame, even when you're dead. The crumbling
+// ledges shake in time with it. It's separate from the game's own
+// timers on purpose - a wobble should keep wobbling on the death screen.
+let shakeClock = 0;
+
+function newGame() {
+  gnome = {
+    x: W / 2,      // sideways position (middle of the pole)
+    y: 0,          // up-and-down position. NEGATIVE means higher up!
+    vx: 0,         // "v" is for velocity - how fast it's moving right now
+    vy: 0,
+    w: 26,         // how wide the gnome is
+    h: 34,         // how tall
+    onGround: false,
+    facing: 1,     // 1 = looking right, -1 = looking left
+    recoil: 0      // frames left of the pistol kicking back
+  };
+
+  // EMPTY THE LISTS FIRST. This has to happen before any ledges are
+  // built, because building a ledge can now put a monster on it - and a
+  // monster needs somewhere to go.
+  //
+  // This was a real bug: these three lines used to sit BELOW the ledge
+  // building, which was fine right up until ledges started spawning
+  // monsters. Then the very first addLedge() reached for a list that
+  // didn't exist yet, and the whole game died before drawing one frame.
+  //
+  // Nothing wrong with the monsters, or the ledges. Just the ORDER.
+  bullets   = [];
+  monsters  = [];
+  fireballs = [];
+  kills     = 0;
+
+  // --- fresh version-2 state, all zeroed for a new run ---
+  powerups    = [];
+  powerTimers = { rapid: 0, spread: 0, freeze: 0, rockets: 0 };
+  shield      = false;
+  invuln      = 0;
+  coins       = 0;
+  stage       = 1;
+  boss        = null;
+  bossShots   = [];
+  // A Set is a bag that only ever holds one of each thing. We use it to
+  // remember which bosses are already beaten, so a boss you've killed
+  // doesn't come straight back the moment you climb one metre higher.
+  clearedBossStages = new Set();
+  banner      = null;
+
+  // The starting ledge, so you don't begin the game falling into lava.
+  // This one NEVER crumbles - `safe` exempts it. Spawning onto a floor
+  // that's already counting down would mean losing before you'd worked
+  // out which key jumps.
+  const base = newLedge(POLE_LEFT - 60, 40, POLE_WIDTH + 120);
+  base.safe = true;
+  platforms = [ base ];
+
+  // Build the first stack of ledges going up. ledgeCount has to be zeroed
+  // BEFORE this runs, or a new game would carry on counting from the last
+  // one and your first monster would turn up in the wrong place.
+  ledgeCount = 0;
+  topLedgeY = 40;
+  for (let i = 0; i < 14; i++) {
+    topLedgeY -= GAP;
+    addLedge(topLedgeY);
+  }
+
+  lavaY     = 260;      // lava starts below the first ledge...
+  lavaSpeed = LAVA_START;
+  cameraY   = 0;
+  dead      = false;
+  deadTimer = 0;
+  best      = 0;
+
+  // `tick` counts frames of ACTUAL PLAY. It stops while you're dead,
+  // which is what you want for anything that should feel like game time:
+  // reload speed, how often monsters arrive. shakeClock is the other
+  // kind - it never stops, so wobbles keep wobbling on the death screen.
+  tick = 0;
+  nextShotAt = 0;
+  nextFireballAt = FIREBALL_GAP;   // the first one is 25 seconds away
+}
+
+// --- 3. MAKING LEDGES --------------------------------------------------
+//     A ledge sticks out of the pole - sometimes left, sometimes right,
+//     sometimes it goes all the way across. Math.random() gives a
+//     number between 0 and 1, which is how we flip a coin in code.
+
+// Every ledge carries three extra things now:
+//   stood   - how many frames you've spent standing on THIS one
+//   falling - has it given way? (it stops being solid the moment it has)
+//   vy      - how fast it's dropping once it goes
+//
+// Each ledge remembering its own timer is what makes this work. One
+// shared timer would mean stepping onto a fresh ledge inherited the last
+// one's countdown, and the game would feel haunted.
+function newLedge(x, y, w) {
+  return {
+    x: x,
+    y: y,
+    // WHERE IT BELONGS. `y` is where it is right now, which changes while
+    // it's tumbling. homeY is where it came from, and never changes - so
+    // it always knows exactly where to build itself back.
+    //
+    // Keeping "where it is" and "where it lives" as two separate facts is
+    // the whole trick here. Try doing this with only one and you'll find
+    // you've got nowhere to put it back to.
+    homeY: y,
+    w: w,
+    stood: 0,       // frames you've stood on it
+    falling: false, // has it given way?
+    vy: 0,          // how fast it's tumbling
+    gone: 0,        // frames since it gave way
+    fadeIn: 0,      // frames left of its reappearing shimmer
+  };
+}
+
+function makeLedge(y) {
+  const roll = Math.random();
+
+  if (roll < 0.15) {
+    // A rare full ledge, right across the pole. A little rest stop.
+    return newLedge(POLE_LEFT - 70, y, POLE_WIDTH + 140);
+  }
+
+  // How long this one is - a bit random so they're not all identical.
+  const len = LEDGE_LEN - 30 + Math.random() * 40;
+
+  if (roll < 0.575) {
+    return newLedge(POLE_LEFT - len, y, len + 14);      // sticks out LEFT
+  } else {
+    return newLedge(POLE_RIGHT - 14, y, len + 14);      // sticks out RIGHT
+  }
+}
+
+
+// --- 4. CONTROLS -------------------------------------------------------
+//     "keys" remembers which buttons are being held down RIGHT NOW.
+//     keydown puts a true in the bag, keyup takes it out again.
+
+const keys = {};
+
+addEventListener("keydown", e => {
+  keys[e.key.toLowerCase()] = true;
+  if (e.key === " ") e.preventDefault();   // stop space scrolling the page
+  if (e.key.toLowerCase() === "f") toggleFullscreen();
+  if (e.key.toLowerCase() === "m") audio.muted = !audio.muted;
+  if (dead && deadTimer > 40) newGame();
+});
+
+addEventListener("keyup", e => { keys[e.key.toLowerCase()] = false; });
+
+function toggleFullscreen() {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else document.documentElement.requestFullscreen().catch(() => {});
+}
+
+// --- 4b. TOUCH CONTROLS -------------------------------------------------
+//
+// The old version used the left half and right half of the whole screen,
+// with any tap counting as a jump. Two things wrong with that: you could
+// never run WITHOUT jumping, and there was nothing on screen to tell you
+// the rule existed. Invisible controls are only obvious to the person who
+// wrote them.
+//
+// So: three real buttons you can see, and each finger is tracked
+// separately - which is what lets you hold RIGHT with one thumb and jab
+// JUMP with the other at the same time.
+
+const BUTTONS = [
+  { name: "left",  x:  76, y: 648, r: 50, label: "◀" },
+  { name: "right", x: 188, y: 648, r: 50, label: "▶" },
+  { name: "jump",  x: 372, y: 636, r: 62, label: "JUMP" },
+  { name: "shoot", x: 268, y: 548, r: 46, label: "FIRE" },
+];
+
+// Which button each finger is currently on. A Map keyed by the finger's
+// id, because a phone gives every touch its own id and keeps it for as
+// long as that finger stays down. Two fingers, two entries, no confusion.
+const fingers = new Map();
+
+// Has anyone touched the screen at all? Until they have, we don't draw
+// the buttons - no point cluttering a computer screen with things you
+// can't press.
+let usingTouch = false;
+
+// JUMP BUFFERING. Tapping jump sets this to 8, and it ticks down every
+// frame. The gnome jumps if it's above zero and his feet are down.
+//
+// That means a tap a few frames BEFORE you land still works. Without it,
+// tapping one frame too early does nothing at all, and it feels like the
+// game ignored you - which, fairly, it did. Real platformers all do this.
+let jumpBuffer = 0;
+
+// The fire button doesn't need buffering - the gun has its own cooldown
+// and you can hold it down. So this is just "is a finger on FIRE".
+// Different question, so it's a different variable rather than a clever
+// reuse of the jump one.
+let touchShooting = false;
+let mouseShooting = false;
+
+// The canvas is stretched by CSS, so a finger at 300 real screen pixels
+// is somewhere quite different in our pretend 460-wide world. This works
+// out where. Get this wrong and every button is slightly off.
+function touchToCanvas(t) {
+  const box = canvas.getBoundingClientRect();
+  return {
+    x: (t.clientX - box.left) / box.width * W,
+    y: (t.clientY - box.top) / box.height * H,
+  };
+}
+
+function buttonAt(x, y) {
+  for (const b of BUTTONS) {
+    const dx = x - b.x;
+    const dy = y - b.y;
+    // Compare the SQUARES instead of doing a square root. Same answer,
+    // less work - a trick worth knowing, because "is this within that
+    // distance" comes up constantly.
+    if (dx * dx + dy * dy < b.r * b.r) return b.name;
+  }
+  return null;
+}
+
+function handleTouch(e) {
+  e.preventDefault();
+  usingTouch = true;
+
+  if (dead && deadTimer > 40) { newGame(); return; }
+
+  for (const t of e.changedTouches) {
+    if (e.type === "touchend" || e.type === "touchcancel") {
+      fingers.delete(t.identifier);
+      continue;
+    }
+
+    const p = touchToCanvas(t);
+    const hit = buttonAt(p.x, p.y);
+    const was = fingers.get(t.identifier);
+
+    // Only count a jump when a finger ARRIVES on the button - not every
+    // frame it sits there. Otherwise holding JUMP would make the gnome
+    // bounce like a pogo stick the instant he touched anything.
+    if (hit === "jump" && was !== "jump") jumpBuffer = 8;
+
+    fingers.set(t.identifier, hit);
+  }
+}
+
+canvas.addEventListener("touchstart",  handleTouch, { passive: false });
+canvas.addEventListener("touchmove",   handleTouch, { passive: false });
+canvas.addEventListener("touchend",    handleTouch, { passive: false });
+canvas.addEventListener("touchcancel", handleTouch, { passive: false });
+
+// Read the fingers and work out which way we're being pushed. Holding
+// both at once cancels out, which is exactly what happens on a keyboard.
+function touchSteering() {
+  let dir = 0;
+  touchShooting = false;
+  for (const on of fingers.values()) {
+    if (on === "left")  dir -= 1;
+    if (on === "right") dir += 1;
+    if (on === "shoot") touchShooting = true;
+  }
+  return Math.max(-1, Math.min(1, dir));
+}
+
+// Clicking anywhere shoots, on a computer. There's no aiming to do -
+// the gnome fires whichever way he's facing - so the mouse doesn't need
+// to point at anything, and the button is just "yes, now".
+canvas.addEventListener("mousedown", e => {
+  e.preventDefault();
+  if (dead && deadTimer > 40) { newGame(); return; }
+  mouseShooting = true;
+});
+addEventListener("mouseup", () => { mouseShooting = false; });
+
+// LETTING GO OF EVERYTHING.
+//
+// This is what stops the gnome running off on his own.
+//
+// `keys` finds out a key has been released from the keyup event. But if
+// you switch away while still holding D - alt-tab, swap apps, phone
+// locks - that keyup lands somewhere else and we never hear it. So
+// keys["d"] stays true forever and he keeps running.
+//
+// Same for a finger: if the phone takes the screen away mid-drag, the
+// touchend never arrives and that finger is still "on" the button.
+function forgetAllInput() {
+  for (const key of Object.keys(keys)) keys[key] = false;
+  fingers.clear();
+  touchShooting = false;
+  mouseShooting = false;
+  jumpBuffer = 0;
+}
+
+addEventListener("blur", forgetAllInput);
+
+// blur covers switching windows. This covers switching TABS, and a phone
+// being locked or sent home - which on a phone is much more likely, and
+// doesn't always fire blur.
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) forgetAllInput();
+});
+
+
+// --- 4d. SOUND ---------------------------------------------------------
+//
+// There is no sound FILE anywhere in this game. Nothing gets downloaded.
+// We describe the noise with numbers and the browser makes it up on the
+// spot - which is why the gnome can fart differently every single time.
+
+const audio = { ctx: null, on: false, muted: false };
+
+// WHAT THE GNOME DOES WHEN HE JUMPS.
+// Change either to false and that noise stops. Both true is the best one.
+const JUMP_BOING = true;
+const JUMP_FART  = true;
+
+// Browsers refuse to make any noise until you've clicked something.
+// That's deliberate: imagine if any page could start blaring at you.
+function startAudio() {
+  if (audio.on || audio.muted) return;
+  const Maker = window.AudioContext || window.webkitAudioContext;
+  if (!Maker) return;              // very old browser: no sound, game still works
+  audio.ctx = new Maker();
+  audio.on = true;
+}
+
+// A DISTORTION CURVE.
+//
+// This is a lookup table for "if the sound comes in at THIS loudness,
+// send it out at THAT loudness". A straight line changes nothing. This
+// one is a squashed S-shape, so loud bits get flattened off - and
+// flattening the tops off a wave is exactly what makes it sound RASPY
+// instead of smooth. It's the same trick as an electric guitar's fuzz.
+function raspCurve(amount) {
+  const n = 512;
+  const curve = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const x = (i * 2) / n - 1;          // spread from -1 to +1
+    curve[i] = ((3 + amount) * x * 0.35) / (1 + amount * Math.abs(x));
+  }
+  return curve;
+}
+
+// A LITTLE BAG OF PURE RANDOM NOISE.
+// Made once and reused, because building it every jump would be wasteful
+// and you genuinely cannot hear the difference.
+let noiseBuffer = null;
+function getNoise() {
+  if (noiseBuffer) return noiseBuffer;
+  const frames = audio.ctx.sampleRate;               // one second's worth
+  noiseBuffer = audio.ctx.createBuffer(1, frames, audio.ctx.sampleRate);
+  const data = noiseBuffer.getChannelData(0);
+  for (let i = 0; i < frames; i++) data[i] = Math.random() * 2 - 1;
+  return noiseBuffer;
+}
+
+// THE FART, properly this time.
+//
+// The first version was too TIDY. It buzzed politely at one steady
+// wobble and it sounded like a wasp in a jar. Real ones are messy, and
+// messy takes four ingredients:
+//
+//   1. A low buzzing wave that slides down  ... the "brrrr"
+//   2. TWO wobbles at once, at speeds that don't divide into each other,
+//      so they drift in and out of step and the flutter never repeats
+//   3. Fuzz, so it rasps instead of hums
+//   4. A splutter of noise through a narrow filter ... the wet bit
+//
+// Number 2 is the one that fixed it. One steady wobble sounds like a
+// machine. Two arguing with each other sounds like a bottom.
+function fart() {
+  if (!audio.on || audio.muted) return;
+
+  const ctx2 = audio.ctx;
+  const t = ctx2.currentTime;
+  const length = 0.26 + Math.random() * 0.40;
+
+  // Everything joins up here, so one volume shape controls the lot.
+  const out = ctx2.createGain();
+  out.gain.setValueAtTime(0.0001, t);
+  out.gain.exponentialRampToValueAtTime(0.42, t + 0.018);   // sudden start
+  // Sag in the middle, then trail away. A straight fade sounds like a
+  // dial being turned down; this sounds like something running out.
+  out.gain.exponentialRampToValueAtTime(0.26, t + length * 0.45);
+  out.gain.exponentialRampToValueAtTime(0.0001, t + length);
+  out.connect(ctx2.destination);
+
+  // ---- 3. the fuzz ----
+  const rasp = ctx2.createWaveShaper();
+  rasp.curve = raspCurve(9 + Math.random() * 8);
+
+  // ---- muffling, so it's all bottom-end ----
+  const filter = ctx2.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.frequency.setValueAtTime(1400, t);
+  filter.frequency.exponentialRampToValueAtTime(220, t + length);
+  filter.Q.value = 6;            // a bit of honk around the cutoff
+  rasp.connect(filter);
+  filter.connect(out);
+
+  // ---- 1. the buzz ----
+  const osc = ctx2.createOscillator();
+  osc.type = 'sawtooth';
+  const base = 58 + Math.random() * 42;
+  // A quick BLURT upwards at the very start before it sags. That little
+  // kick at the front is the difference between "prrrt" and "mmmm".
+  osc.frequency.setValueAtTime(base * 1.5, t);
+  osc.frequency.exponentialRampToValueAtTime(base, t + 0.06);
+  osc.frequency.exponentialRampToValueAtTime(base * 0.38, t + length);
+  osc.connect(rasp);
+
+  // ---- 2. two wobbles that don't agree ----
+  // About 25 and about 7. Because one doesn't divide neatly into the
+  // other, they line up differently every moment, and the flutter never
+  // settles into a pattern your ear can predict.
+  const wobbles = [
+    { rate: 19 + Math.random() * 12, depth: 34 + Math.random() * 26, type: 'square' },
+    { rate: 5  + Math.random() * 5,  depth: 22 + Math.random() * 18, type: 'triangle' },
+  ];
+  const running = [];
+  for (const w of wobbles) {
+    const lfo = ctx2.createOscillator();
+    lfo.type = w.type;
+    lfo.frequency.value = w.rate;
+    const depth = ctx2.createGain();
+    depth.gain.value = w.depth;
+    lfo.connect(depth);
+    depth.connect(osc.frequency);    // into PITCH, not volume
+    running.push(lfo);
+  }
+
+  // ---- 4. the wet splutter ----
+  const noise = ctx2.createBufferSource();
+  noise.buffer = getNoise();
+  noise.loop = true;
+
+  const noiseBand = ctx2.createBiquadFilter();
+  noiseBand.type = 'bandpass';
+  noiseBand.frequency.setValueAtTime(420 + Math.random() * 260, t);
+  noiseBand.frequency.exponentialRampToValueAtTime(180, t + length);
+  noiseBand.Q.value = 2.2;
+
+  const noiseLevel = ctx2.createGain();
+  noiseLevel.gain.value = 0.5;
+  noise.connect(noiseBand);
+  noiseBand.connect(noiseLevel);
+  noiseLevel.connect(rasp);        // through the fuzz as well
+
+  osc.start(t);   osc.stop(t + length + 0.05);
+  noise.start(t); noise.stop(t + length + 0.05);
+  for (const lfo of running) { lfo.start(t); lfo.stop(t + length + 0.05); }
+
+  // ---- and sometimes a cheeky little second one ----
+  // Not every time. A surprise that happens every time isn't a surprise,
+  // and this is the bit that makes people laugh twice.
+  if (Math.random() < 0.28) {
+    setTimeout(() => squeak(), (length * 1000) + 40 + Math.random() * 90);
+  }
+}
+
+// THE BOING.
+//
+// A cartoon spring is one idea: a note that swoops DOWN fast while
+// wobbling - and the wobble dies away as it goes.
+//
+// That fading wobble is the whole thing. A spring twangs like mad at
+// first and settles down as the energy runs out, so the "boi-oi-oi-oing"
+// gets calmer towards the end. Keep the wobble at full strength the
+// whole way and you don't get a spring, you get an ambulance.
+function boing() {
+  if (!audio.on || audio.muted) return;
+
+  const ctx2 = audio.ctx;
+  const t = ctx2.currentTime;
+  const length = 0.40 + Math.random() * 0.12;
+
+  const osc = ctx2.createOscillator();
+  osc.type = 'triangle';                  // rounder and softer than a saw
+  const top = 620 + Math.random() * 220;
+  osc.frequency.setValueAtTime(top, t);
+  osc.frequency.exponentialRampToValueAtTime(top * 0.17, t + length * 0.85);
+
+  // The twang, fading out. depth is how far it bends the pitch: starts
+  // huge, ends at almost nothing.
+  const lfo = ctx2.createOscillator();
+  lfo.type = 'sine';
+  lfo.frequency.value = 15 + Math.random() * 7;
+  const depth = ctx2.createGain();
+  depth.gain.setValueAtTime(230, t);
+  depth.gain.exponentialRampToValueAtTime(2, t + length);
+  lfo.connect(depth);
+  depth.connect(osc.frequency);
+
+  // Takes the fizzy edge off, so it's a boing and not a beep.
+  const filter = ctx2.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.frequency.value = 2200;
+
+  const g = ctx2.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.34, t + 0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + length);
+
+  osc.connect(filter);
+  filter.connect(g);
+  g.connect(ctx2.destination);
+
+  osc.start(t); osc.stop(t + length + 0.05);
+  lfo.start(t); lfo.stop(t + length + 0.05);
+}
+
+// The afterthought. Same idea, much shorter and higher.
+function squeak() {
+  if (!audio.on || audio.muted) return;
+  const ctx2 = audio.ctx;
+  const t = ctx2.currentTime;
+  const length = 0.09 + Math.random() * 0.09;
+
+  const osc = ctx2.createOscillator();
+  osc.type = 'sawtooth';
+  const base = 150 + Math.random() * 120;
+  osc.frequency.setValueAtTime(base, t);
+  osc.frequency.exponentialRampToValueAtTime(base * 0.55, t + length);
+
+  const lfo = ctx2.createOscillator();
+  lfo.type = 'square';
+  lfo.frequency.value = 34;
+  const depth = ctx2.createGain();
+  depth.gain.value = 45;
+  lfo.connect(depth);
+  depth.connect(osc.frequency);
+
+  const filter = ctx2.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.frequency.value = 1500;
+
+  const g = ctx2.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.20, t + 0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + length);
+
+  osc.connect(filter); filter.connect(g); g.connect(ctx2.destination);
+  osc.start(t); osc.stop(t + length + 0.04);
+  lfo.start(t); lfo.stop(t + length + 0.04);
+}
+
+// --- 4c. PUTTING A MONSTER SOMEWHERE -----------------------------------
+//
+// Picking WHERE is most of the work. A monster dropped anywhere at all
+// would sometimes land right on your face, and sometimes miles away
+// where you'd never meet it. Neither is a game.
+
+function putMonsterOn(ledge) {
+  monsters.push({
+    // We keep the LEDGE ITSELF, not its position or its number in the
+    // list. Positions go stale the moment anything moves, and list
+    // numbers go wrong the moment anything is removed. A direct hold on
+    // the thing can't drift out of date.
+    ledge: ledge,
+    x: ledge.x + ledge.w / 2,     // planted in the middle
+    y: ledge.y,
+    // Tougher the higher you are: the level sets the base, and every few
+    // stages adds another heart. A stage-1 monster and a stage-9 monster
+    // are the same shape but a very different fight.
+    health: MONSTER_HEALTH + Math.floor((stage - 1) / STAGE_TOUGHEN),
+    hurtUntil: 0,
+    wobble: Math.random() * 6,    // so they don't all pulse in time
+
+    // The monster remembers this for ITSELF, rather than asking the
+    // level every frame. It means one that's already in the air keeps
+    // flying even if you switch levels underneath it - and more
+    // usefully, it leaves room to have both kinds at once one day.
+    //
+    // On top of the level's own setting, the deeper stages start slipping
+    // in flyers even on the calmer difficulties, so nowhere stays safe
+    // forever.
+    flying: MONSTER_FLY || (stage >= 4 && Math.random() < Math.min(0.5, (stage - 3) * 0.08)),
+    flap: Math.random() * 6,
+  });
+}
+
+// THE ONLY PLACE A LEDGE GETS BUILT.
+//
+// Both the opening stack and the endless climb go through here, so the
+// every-fifth counting can't get out of step between them. Two places
+// pushing ledges would mean two counters, and two counters always drift.
+function addLedge(y) {
+  const ledge = makeLedge(y);
+  platforms.push(ledge);
+  ledgeCount++;
+
+  // Every so-many gets a guard - but never the first few, whatever the
+  // level says. That check used to be `ledgeCount >= MONSTER_EVERY`,
+  // which quietly stopped protecting anything once MONSTER_EVERY got
+  // small: on APOCALYPSE it's 1, so ledge number one would have had a
+  // monster on it, about a metre above your head, on frame one.
+  //
+  // A guard rail that depends on the thing it's guarding against isn't
+  // a guard rail. MONSTER_GRACE is its own number and always applies.
+  // No new monsters turn up while a boss is on screen - the boss is quite
+  // enough to be getting on with, thank you.
+  let gotMonster = false;
+  if (!boss && ledgeCount > MONSTER_GRACE && ledgeCount % MONSTER_EVERY === 0) {
+    putMonsterOn(ledge);
+    gotMonster = true;
+  }
+
+  // ...and maybe a floating goody. We hand it whether this ledge already
+  // has a monster on it, because a power-up guarded by a monster is a
+  // proper choice - grab it and fight, or leave it and stay safe.
+  maybePlacePowerup(ledge, gotMonster);
+
+  return ledge;
+}
+
+// --- PLACING A POWER-UP ------------------------------------------------
+//
+// Not every ledge gets one, and never the first few (you need a clean
+// run at the start). When a ledge does get one, we roll on a weighted
+// list: coins are common because they're only points, the big effects
+// are rarer because they're strong.
+//
+// A "weight" is just how many tickets each type puts in the hat. Coin
+// has 40 tickets, shield has 8, so coins come up five times as often.
+const POWERUP_KINDS = [
+  { kind: "coin",    weight: 40, emoji: "💰", color: "#ffd24a" },
+  { kind: "rapid",   weight: 12, emoji: "🔫", color: "#8fd0ff" },
+  { kind: "spread",  weight: 12, emoji: "🌟", color: "#ffe08a" },
+  { kind: "freeze",  weight: 10, emoji: "❄️", color: "#b6ecff" },
+  { kind: "rockets", weight: 10, emoji: "🚀", color: "#ff9a6b" },
+  { kind: "shield",  weight: 8,  emoji: "🛡️", color: "#b7ffcf" },
+];
+
+function pickPowerupKind() {
+  // Add up all the tickets, pick a random ticket, then walk the list
+  // subtracting weights until we land on the winner. This is the standard
+  // way to pick from a weighted list, and it's worth learning once.
+  let total = 0;
+  for (const k of POWERUP_KINDS) total += k.weight;
+  let roll = Math.random() * total;
+  for (const k of POWERUP_KINDS) {
+    roll -= k.weight;
+    if (roll < 0) return k;
+  }
+  return POWERUP_KINDS[0];   // can't really happen, but always return SOMETHING
+}
+
+function maybePlacePowerup(ledge, gotMonster) {
+  if (ledgeCount <= MONSTER_GRACE) return;      // clean start, no goodies yet
+  if (Math.random() > POWERUP_CHANCE) return;   // most ledges get nothing
+
+  const k = pickPowerupKind();
+  powerups.push({
+    kind: k.kind,
+    emoji: k.emoji,
+    color: k.color,
+    x: ledge.x + ledge.w / 2,   // centred over the ledge...
+    y: ledge.y - 34,            // ...and floating a little way above it
+    bob: Math.random() * 6,     // so they don't all bob up and down in step
+    guarded: gotMonster,        // just for a nervous little glow if a monster's near
+  });
+}
+
+// --- 4e. SPOTTING SOMETHING TO SHOOT -----------------------------------
+//
+// Walks every monster and keeps the closest one that's near enough to
+// bother with. Hands back null if there's nothing worth shooting - and
+// null is a perfectly good answer, not a failure.
+//
+// NEAREST, not first-in-the-list. Shooting at something far away while
+// one is about to land on your head would be a strange way to behave.
+
+function nearestMonster() {
+  let best = null;
+  // Starting the "closest so far" at the maximum range is a neat trick:
+  // anything further away automatically fails the same comparison that
+  // sorts the rest, so there's no separate check for out-of-range.
+  let bestDist = AUTO_AIM_RANGE;
+
+  const handY = gnome.y - 20;
+
+  for (const m of monsters) {
+    if (m.health <= 0) continue;
+
+    const dx = m.x - gnome.x;
+    const dy = (m.y - 14) - handY;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = m;
+    }
+  }
+
+  return best;
+}
+
+// --- 4f. VERSION 2 SYSTEMS ---------------------------------------------
+//
+// Everything new lives down here in its own room: dying (now that a
+// shield can save you), the power-ups, the stages, and the bosses.
+
+// DYING, THE POLITE WAY.
+//
+// In version 1, six different places just wrote `dead = true`. Now that a
+// shield can save you, that decision has to happen in ONE place instead,
+// so every kind of death gets the same fair check. `shieldable` is true
+// for things a bubble should stop (monsters, fireballs, boss attacks) and
+// false for the lava - a shield can't help you once you're actually IN it.
+function killGnome(shieldable) {
+  if (dead) return;
+  if (invuln > 0) return;              // a shield just saved you; you're safe for now
+
+  if (shieldable && shield) {
+    shield = false;                    // pop! the bubble is spent
+    invuln = INVULN_TIME;              // and you get a breather so you don't die instantly
+    chime();
+    return;
+  }
+
+  dead = true;
+  deadTimer = 0;
+}
+
+// A CHEERFUL LITTLE PICKUP NOISE. Two quick rising notes - the sound of
+// something GOOD, the opposite of the fart. Made from numbers like every
+// other noise in this game.
+function chime() {
+  if (!audio.on || audio.muted) return;
+  const c = audio.ctx, t = c.currentTime;
+  [660, 990].forEach((f, i) => {
+    const o = c.createOscillator();
+    o.type = "triangle";
+    o.frequency.value = f;
+    const g = c.createGain();
+    g.gain.setValueAtTime(0.0001, t + i * 0.07);
+    g.gain.exponentialRampToValueAtTime(0.22, t + i * 0.07 + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + i * 0.07 + 0.18);
+    o.connect(g); g.connect(c.destination);
+    o.start(t + i * 0.07); o.stop(t + i * 0.07 + 0.2);
+  });
+}
+
+// GRABBING GOODIES. Walk the floating power-ups, and if your body touches
+// one, take it. We also nudge each one's bob along here so they float up
+// and down.
+function grabPowerups() {
+  for (const p of powerups) {
+    p.bob += 0.08;
+    if (p.taken) continue;
+    const dx = p.x - gnome.x;
+    const dy = p.y - (gnome.y - 16);
+    if (dx * dx + dy * dy < POWERUP_GRAB * POWERUP_GRAB) {
+      p.taken = true;
+      applyPowerup(p.kind);
+      chime();
+    }
+  }
+  // Keep the ones that are still floating above the lava and haven't been
+  // taken. Everything else has done its job and can go.
+  powerups = powerups.filter(p => !p.taken && p.y < lavaY + 20);
+}
+
+// WHAT EACH GOODY DOES. One little switchboard - add a new kind of
+// power-up and this is the only place you have to teach the game what it
+// means.
+function applyPowerup(kind) {
+  if (kind === "coin")    coins += 5;
+  if (kind === "rapid")   powerTimers.rapid   = RAPID_TIME;
+  if (kind === "spread")  powerTimers.spread  = SPREAD_TIME;
+  if (kind === "freeze")  powerTimers.freeze  = FREEZE_TIME;
+  if (kind === "rockets") powerTimers.rockets = ROCKET_TIME;
+  if (kind === "shield")  shield = true;
+}
+
+// THE BIG WORDS THAT FLASH IN THE MIDDLE. Used for "STAGE 3", boss names,
+// "BOSS DOWN!" - anything worth shouting about for a second and a half.
+function showBanner(text, sub) {
+  banner = { text: text, sub: sub || "", timer: 110 };
+}
+
+// STAGES. Worked out straight from how high you've climbed. If you've
+// crossed into a higher stage since last frame, walk through each new one
+// so nothing gets skipped even if you shot up several at once.
+function updateStage() {
+  const want = Math.floor(best / STAGE_HEIGHT) + 1;
+  while (stage < want) {
+    stage++;
+    enterStage(stage);
+  }
+}
+
+const STAGE_TAUNTS = [
+  "the lava's getting hungry",
+  "keep climbing!",
+  "it's getting warm in here",
+  "higher... HIGHER",
+  "don't look down",
+];
+
+function enterStage(s) {
+  // Every new stage gives the lava a shove, so it always feels like it's
+  // closing in a little faster than before.
+  lavaSpeed += STAGE_LAVA_KICK;
+
+  // Is this a boss stage we haven't already cleared? If so, ring the bell.
+  if (s % BOSS_STAGE === 0 && !clearedBossStages.has(s) && !boss) {
+    spawnBoss(s);
+  } else {
+    showBanner("STAGE " + s, STAGE_TAUNTS[(s - 2 + STAGE_TAUNTS.length) % STAGE_TAUNTS.length]);
+  }
+}
+
+// --- THE BOSSES --------------------------------------------------------
+//
+// Three of them, taking turns: a Lava Golem that lobs rocks, an Ash
+// Dragon that dive-bombs fire, and the Blob King that coughs up little
+// monsters. They all live in ONE `boss` object with a `type`, and the
+// code below just asks "which type?" whenever they need to behave
+// differently. One boss on screen at a time, ever.
+
+const BOSS_TYPES = ["golem", "dragon", "blob"];
+const BOSS_NAMES = { golem: "LAVA GOLEM", dragon: "ASH DRAGON", blob: "THE BLOB KING" };
+
+function spawnBoss(s) {
+  // Stage 5 -> the 1st boss, stage 10 -> the 2nd, and so on, wrapping
+  // back round to the start once you've met all three.
+  const which = (s / BOSS_STAGE - 1) % BOSS_TYPES.length;
+  const type = BOSS_TYPES[which];
+  const hp = BOSS_BASE_HP + s * BOSS_HP_PER_STAGE;
+
+  boss = {
+    type: type,
+    stage: s,
+    hp: hp,
+    maxHp: hp,
+    x: W / 2,
+    y: cameraY + 150,     // drop in near the top of the view
+    dir: Math.random() < 0.5 ? -1 : 1,
+    vx: type === "dragon" ? 3.4 : type === "blob" ? 2.2 : 1.4,
+    t: 0,
+    nextAttack: 80,       // a moment's grace before it opens fire
+    hurtUntil: 0,
+    dying: 0,             // counts up while it's blowing up
+  };
+
+  fireballs = [];         // clear the sky so the fight starts clean
+  showBanner(BOSS_NAMES[type], "STAGE " + s + " BOSS");
+}
+
+function updateBoss() {
+  if (!boss) return;
+  boss.t++;
+
+  // Always hover near the top of the screen, bobbing gently, so it's
+  // forever in view and always in reach of your bullets no matter how
+  // fast you climb. The boss chases the top of your world.
+  const targetY = cameraY + 150 + Math.sin(boss.t * 0.05) * 16;
+  boss.y += (targetY - boss.y) * 0.08;
+
+  // Blowing up? Just count the frames and then clear it away.
+  if (boss.dying > 0) {
+    boss.dying++;
+    if (boss.dying > 60) boss = null;
+    return;
+  }
+
+  // --- how it moves and attacks, one behaviour per type ---
+  if (boss.type === "golem") {
+    boss.x += boss.vx * boss.dir;
+    if (boss.x < POLE_LEFT - 20)  boss.dir = 1;
+    if (boss.x > POLE_RIGHT + 20) boss.dir = -1;
+    if (boss.t >= boss.nextAttack) { golemAttack(); boss.nextAttack = boss.t + 95; }
+
+  } else if (boss.type === "dragon") {
+    boss.x += boss.vx * boss.dir;
+    if (boss.x < 44)     boss.dir = 1;
+    if (boss.x > W - 44) boss.dir = -1;
+    if (boss.t >= boss.nextAttack) { dragonAttack(); boss.nextAttack = boss.t + 52; }
+
+  } else { // blob
+    boss.x += boss.vx * boss.dir;
+    if (boss.x < 64)     boss.dir = 1;
+    if (boss.x > W - 64) boss.dir = -1;
+    if (boss.t >= boss.nextAttack) { blobAttack(); boss.nextAttack = boss.t + 150; }
+  }
+
+  // Touching the boss itself cooks you (a shield will save you once).
+  const dx = boss.x - gnome.x;
+  const dy = boss.y - (gnome.y - 17);
+  if (dx * dx + dy * dy < 40 * 40) killGnome(true);
+}
+
+// The golem lobs three rocks in a fan toward where you're standing. They
+// arc - thrown up and out, then gravity brings them down - so you dodge
+// by not being where you were a moment ago.
+function golemAttack() {
+  for (let i = -1; i <= 1; i++) {
+    const tx = gnome.x + i * 44;
+    const dx = tx - boss.x;
+    bossShots.push({
+      x: boss.x, y: boss.y + 18,
+      vx: dx / 62, vy: -3.2,
+      gravity: 0.15, kind: "rock", spin: 0, r: 12,
+    });
+  }
+}
+
+// The dragon spits a fireball straight down its own column - so it's
+// safe to be anywhere the dragon ISN'T directly above.
+function dragonAttack() {
+  bossShots.push({
+    x: boss.x, y: boss.y + 16,
+    vx: 0, vy: 6.4,
+    gravity: 0.05, kind: "fire", spin: 0, r: 12,
+  });
+}
+
+// The Blob King coughs up two little flying monsters. They're ordinary
+// flyers - we just make them here in the air instead of on a ledge. The
+// fake `ledge` is only so the rest of the monster code has something to
+// read; a flying monster never actually uses it.
+function blobAttack() {
+  for (const side of [-1, 1]) {
+    monsters.push({
+      ledge: { y: boss.y, homeY: boss.y },
+      x: boss.x + side * 22,
+      y: boss.y + 10,
+      health: MONSTER_HEALTH,
+      hurtUntil: 0,
+      wobble: Math.random() * 6,
+      flying: true,
+      flap: Math.random() * 6,
+    });
+  }
+}
+
+// Move the boss's thrown things, and check whether any of them got you.
+function updateBossShots() {
+  for (const s of bossShots) {
+    if (s.gravity) s.vy += s.gravity;
+    s.x += s.vx;
+    s.y += s.vy;
+    s.spin += 0.3;
+
+    const dx = s.x - gnome.x;
+    const dy = s.y - (gnome.y - 17);
+    if (dx * dx + dy * dy < (s.r + 9) * (s.r + 9)) {
+      killGnome(true);
+      s.dead = true;
+    }
+  }
+  bossShots = bossShots.filter(s =>
+    !s.dead && s.y < lavaY + 40 && s.y > cameraY - 200 && s.x > -40 && s.x < W + 40);
+}
+
+// The boss just ran out of health. Blow it up, hand over the loot, and
+// remember it's beaten so it doesn't come back this run.
+function startBossDeath() {
+  boss.dying = 1;
+  boss.hp = 0;
+  kills += 1;
+  coins += 50;
+  clearedBossStages.add(boss.stage);
+  dropBossLoot();
+  bossShots = [];          // its last shots shouldn't kill you AFTER you win
+  showBanner("BOSS DOWN!", "+50 💰");
+  boing();
+}
+
+// A little pile of goodies rains down where the boss was, as a reward.
+function dropBossLoot() {
+  const drops = ["shield", "rapid", "freeze", "coin", "coin", "spread"];
+  drops.forEach((kind, i) => {
+    const kd = POWERUP_KINDS.find(k => k.kind === kind);
+    powerups.push({
+      kind: kind, emoji: kd.emoji, color: kd.color,
+      x: W / 2 + (i - 2.5) * 42,
+      y: boss.y + 24,
+      bob: Math.random() * 6,
+      guarded: false,
+    });
+  });
+}
+
+
+// --- 5. UPDATE: the rules of the world ---------------------------------
+//     This runs about 60 times a second. Everything that MOVES, moves here.
+
+function update() {
+
+  // Nothing moves until you've chosen a level. One return at the top of
+  // update() freezes the whole world - lava, ledges, monsters, all of it -
+  // because update() IS the game.
+  if (!started) return;
+
+  if (dead) { deadTimer++; return; }
+
+  tick++;
+
+  // --- version-2 clocks ---
+  // Every timed power-up counts down one frame. When it hits zero it's
+  // just... zero, and the effect quietly switches itself off wherever it's
+  // read below. The banner fades on its own timer too.
+  for (const k in powerTimers) if (powerTimers[k] > 0) powerTimers[k]--;
+  if (invuln > 0) invuln--;
+  if (banner && banner.timer > 0) { banner.timer--; if (banner.timer <= 0) banner = null; }
+
+  // --- steering ---
+  let dir = 0;
+  if (keys["arrowleft"]  || keys["a"]) dir -= 1;
+  if (keys["arrowright"] || keys["d"]) dir += 1;
+  dir += touchSteering();
+  dir = Math.max(-1, Math.min(1, dir));   // keep it between -1 and 1
+
+  gnome.vx = dir * RUN_SPEED;
+  if (dir !== 0) gnome.facing = dir;
+
+  // --- jumping ---
+  // You can only jump if your feet are actually on something.
+  if (jumpBuffer > 0) jumpBuffer--;
+
+  const wantsJump = keys[" "] || keys["arrowup"] || keys["w"] || jumpBuffer > 0;
+  if (wantsJump && gnome.onGround) {
+    gnome.vy = -JUMP_POWER;    // negative = upward!
+    gnome.onGround = false;
+    jumpBuffer = 0;            // used it up
+
+    // Both at once. They're different pitches and different shapes, so
+    // your ear happily hears them as one silly noise rather than two
+    // sounds fighting - the boing swoops down while the fart flutters
+    // along underneath it.
+    if (JUMP_BOING) boing();
+    if (JUMP_FART) fart();
+  }
+
+  // --- ROCKET BOOTS ---
+  // While you've got rockets AND you're holding jump, you get pushed up
+  // every frame - so you can just fly straight up the pole for a few
+  // seconds. "Holding" is a different question from "tapped to jump", so
+  // we work it out fresh from the keys and fingers rather than reusing
+  // the buffered tap above.
+  let jumpHeld = keys[" "] || keys["arrowup"] || keys["w"];
+  for (const on of fingers.values()) if (on === "jump") jumpHeld = true;
+
+  if (powerTimers.rockets > 0 && jumpHeld) {
+    gnome.vy -= ROCKET_THRUST;
+    if (gnome.vy < -8) gnome.vy = -8;   // cap it so you don't rocket off the top
+    gnome.onGround = false;
+  }
+
+  // --- gravity ---
+  // This is the whole secret of platformers. Every single frame, fall
+  // a tiny bit faster than last frame. That's what makes jumps arc.
+  gnome.vy += GRAVITY;
+  if (gnome.vy > MAX_FALL) gnome.vy = MAX_FALL;
+
+  // --- actually move ---
+  gnome.x += gnome.vx;
+  gnome.y += gnome.vy;
+
+  // Walls at the edges of the lava field, so you can't run off forever.
+  if (gnome.x < 16)     gnome.x = 16;
+  if (gnome.x > W - 16) gnome.x = W - 16;
+
+  // --- landing on ledges ---
+  gnome.onGround = false;
+  let standingOn = null;
+
+  if (gnome.vy >= 0) {                       // only when FALLING, not rising
+    for (const p of platforms) {
+      if (p.falling) continue;               // it's given way - not solid any more
+
+      const feet = gnome.y;
+      const overlapsSideways = gnome.x + gnome.w / 2 > p.x &&
+                               gnome.x - gnome.w / 2 < p.x + p.w;
+      // Did the feet cross the top of this ledge this frame?
+      const crossed = feet >= p.y && feet - gnome.vy <= p.y + 2;
+      if (overlapsSideways && crossed) {
+        gnome.y = p.y;
+        gnome.vy = 0;
+        gnome.onGround = true;
+        standingOn = p;
+      }
+    }
+  }
+
+  // --- ledges give way ---
+  // The timer belongs to the LEDGE, not to the gnome, and it never gets
+  // reset. Hop off and back on and you pick up where you left off - so
+  // bouncing on the spot buys you nothing. The only way up is up.
+  if (standingOn && !standingOn.safe) {
+    standingOn.stood++;
+    if (standingOn.stood > CRUMBLE_TIME) standingOn.falling = true;
+  }
+
+  // Anything that's given way now drops out of the world. It's not solid
+  // any more, so it can fall straight through everything else, which is
+  // both correct and much less code than the alternative.
+  for (const p of platforms) {
+    if (p.fadeIn > 0) p.fadeIn--;
+    if (!p.falling) continue;
+
+    p.vy += GRAVITY * 0.45;      // lighter than the gnome - it flutters
+    p.y += p.vy;
+    p.gone++;
+
+    // ...and then it builds itself back, exactly where it was.
+    if (p.gone > REGROW_TIME) {
+      p.falling = false;
+      p.y = p.homeY;      // this is what homeY was for
+      p.vy = 0;
+      p.gone = 0;
+      p.stood = 0;        // a fresh ledge, with a fresh second on it
+      p.fadeIn = 14;      // shimmer back into being rather than blinking on
+    }
+  }
+
+  // --- SHOOTING ---
+  // Two ways to fire, and pressing the button always wins. You should
+  // never feel like the gnome ignored you because he'd decided something
+  // else was more interesting.
+  const wantsShoot = keys["x"] || keys["j"] || touchShooting || mouseShooting;
+
+  // Nothing to aim at unless auto-aim is on AND you're not already firing.
+  const target = (AUTO_AIM && !wantsShoot) ? nearestMonster() : null;
+
+  if ((wantsShoot || target) && tick >= nextShotAt) {
+    // Rapid-fire power-up? Then the gap between shots gets tiny and the
+    // pistol turns into a machine gun. Otherwise it's the normal cooldown.
+    nextShotAt = tick + (powerTimers.rapid > 0 ? RAPID_GAP : FIRE_GAP);
+
+    // Where the shot comes out: his hand, not his feet.
+    const handY = gnome.y - 20;
+    let vx, vy;
+
+    if (target) {
+      // AIM. The arrow from his hand to the monster, shrunk to length 1,
+      // then scaled up to bullet speed. Same shrink-to-1 trick as the
+      // diagonal running and the flying monsters - and for the same
+      // reason: without it, a shot going diagonally would be faster than
+      // one going straight.
+      const dx = target.x - gnome.x;
+      const dy = (target.y - 14) - handY;
+      const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+
+      vx = (dx / dist) * BULLET_SPEED;
+      vy = (dy / dist) * BULLET_SPEED;
+
+      // Turn to face what he's shooting at. Firing backwards over his
+      // own shoulder would look ridiculous.
+      gnome.facing = dx >= 0 ? 1 : -1;
+    } else {
+      // Manual: straight ahead, dead level, the way it always was.
+      vx = gnome.facing * BULLET_SPEED;
+      vy = 0;
+    }
+
+    const originX = gnome.x + gnome.facing * 15;
+
+    // SPREAD power-up: fire three shots in a little fan instead of one.
+    // We take the aim direction (vx, vy) and rotate it a few degrees each
+    // way. Rotating an arrow is a tiny bit of maths worth meeting once -
+    // cos and sin spin a direction around without changing its speed.
+    if (powerTimers.spread > 0) {
+      for (const ang of [-0.22, 0, 0.22]) {
+        const c = Math.cos(ang), s = Math.sin(ang);
+        bullets.push({
+          x: originX, y: handY,
+          vx: vx * c - vy * s,
+          vy: vx * s + vy * c,
+          life: BULLET_LIFE,
+        });
+      }
+    } else {
+      bullets.push({
+        x: originX,
+        y: handY,
+        vx: vx,
+        vy: vy,          // bullets can climb and dive now, not just fly flat
+        life: BULLET_LIFE,
+      });
+    }
+    gnome.recoil = 5;                // shoves the pistol back for 5 frames
+  }
+  if (gnome.recoil > 0) gnome.recoil--;
+
+  // --- bullets ---
+  for (const b of bullets) {
+    b.x += b.vx;
+    b.y += b.vy;
+    b.life--;
+  }
+
+  // --- monsters ---
+  // They don't go anywhere. They sit on their ledge and seethe. All this
+  // does is keep them level with it, and tick the wobble along so they
+  // still breathe rather than looking like painted-on scenery.
+  for (const m of monsters) {
+    m.wobble += 0.11;
+
+    if (m.flying) {
+      m.flap += 0.34;
+
+      // Head straight for the gnome. Work out the arrow from here to
+      // him, shrink that arrow to length 1, then step along it. Same
+      // maths as the gnome's diagonal running - and the same reason:
+      // without the shrinking, a monster coming at you diagonally would
+      // travel faster than one coming straight on.
+      const dx = gnome.x - m.x;
+      const dy = (gnome.y - 17) - (m.y - 14);
+      const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+
+      m.x += (dx / dist) * MONSTER_FLY_SPEED;
+      m.y += (dy / dist) * MONSTER_FLY_SPEED;
+
+      // A flutter on top, so it bobs through the air instead of gliding
+      // along an obviously straight line at you.
+      m.y += Math.sin(m.flap) * 0.7;
+      continue;
+    }
+
+    // Not flying: its height is simply its ledge's height. We don't give
+    // the monster its own gravity or its own falling code - it just
+    // reads where the ledge is, every frame. Which means when that ledge
+    // crumbles away, the monster rides it down into the lava without a
+    // single extra line. Things that follow something else are far less
+    // trouble than things that work it out for themselves.
+    m.y = m.ledge.y;
+  }
+
+  // --- bullets hitting monsters ---
+  // Two lists, so we walk one inside the other. It's the simplest way and
+  // with a handful of each it's nothing - a computer eats this for
+  // breakfast. Worry about it when there are thousands, not before.
+  for (const b of bullets) {
+    if (b.life <= 0) continue;
+    for (const m of monsters) {
+      if (m.health <= 0) continue;
+      const dx = b.x - m.x;
+      const dy = b.y - (m.y - 14);
+      if (dx * dx + dy * dy < 22 * 22) {
+        m.health--;
+        m.hurtUntil = shakeClock + 8;
+        b.life = 0;                  // the bullet is used up
+        if (m.health <= 0) kills++;
+        break;                       // one bullet, one monster
+      }
+    }
+  }
+
+  // --- bullets hitting the boss ---
+  // The boss is one big target, so this is simpler than the monster loop:
+  // one thing to check instead of a whole list. It only counts while the
+  // boss is alive and not already blowing up.
+  if (boss && boss.dying === 0) {
+    for (const b of bullets) {
+      if (b.life <= 0) continue;
+      const dx = b.x - boss.x;
+      const dy = b.y - boss.y;
+      if (dx * dx + dy * dy < 34 * 34) {
+        boss.hp--;
+        boss.hurtUntil = shakeClock + 6;
+        b.life = 0;
+        if (boss.hp <= 0) { startBossDeath(); break; }
+      }
+    }
+  }
+
+  // --- FIREBALLS FROM THE SKY ---
+  if (tick >= nextFireballAt) {
+    nextFireballAt = tick + FIREBALL_GAP;
+
+    // It aims at wherever you are right now, give or take. Straight at
+    // you every time would be undodgeable; anywhere at all would almost
+    // always miss and you'd never learn to fear it.
+    fireballs.push({
+      x: gnome.x + (Math.random() - 0.5) * 90,
+      y: 0,                    // parked; the warning phase sets this
+      warn: FIREBALL_WARN,     // counting down before it lets go
+      spin: 0,
+    });
+  }
+
+  for (const f of fireballs) {
+    f.spin += 0.3;
+
+    if (f.warn > 0) {
+      // WARNING PHASE. It hangs just off the top of the screen, tracking
+      // the camera so it stays visible while the marker flashes. It
+      // isn't falling and it can't hurt you yet - one object doing two
+      // jobs, told apart by a single counter.
+      f.warn--;
+      f.y = cameraY - 30;
+      continue;
+    }
+
+    f.y += FIREBALL_SPEED;
+
+    // It smashes any ledge it passes through. It doesn't stop - it goes
+    // straight on down, wrecking everything in that column, and the
+    // ledges rebuild themselves afterwards like they always do.
+    for (const p of platforms) {
+      if (p.safe || p.falling) continue;
+      if (f.x > p.x - 8 && f.x < p.x + p.w + 8 &&
+          f.y > p.y - 14 && f.y < p.y + 20) {
+        p.falling = true;
+      }
+    }
+  }
+
+  // --- a fireball catching you ---
+  for (const f of fireballs) {
+    if (f.warn > 0) continue;              // still up in the sky
+    const dx = f.x - gnome.x;
+    const dy = f.y - (gnome.y - 17);
+    if (dx * dx + dy * dy < 26 * 26) killGnome(true);
+  }
+
+  fireballs = fireballs.filter(f => f.y < lavaY + 40);
+
+  // --- a monster catching you ---
+  for (const m of monsters) {
+    if (m.health <= 0) continue;
+    const dx = m.x - gnome.x;
+    const dy = (m.y - 14) - (gnome.y - 17);
+    if (dx * dx + dy * dy < 26 * 26) killGnome(true);
+  }
+
+  // --- the version-2 movers ---
+  // The boss moves and attacks, its thrown things fly and check for a
+  // hit, and you sweep up any goodies you're touching.
+  updateBoss();
+  updateBossShots();
+  grabPowerups();
+
+  // --- clear out the dead and the gone ---
+  // Done in ONE place, at the end, after everything has had its say.
+  // Removing things from a list while you're still looping over it is
+  // how you end up skipping every other one.
+  // Bullets used to only ever fly sideways, so checking the left and
+  // right edges was enough. Now they can climb and dive, so they need
+  // a top and a bottom too - otherwise an aimed shot that misses sails
+  // off up the pole forever and never gets tidied away.
+  bullets = bullets.filter(b =>
+    b.life > 0 &&
+    b.x > -30 && b.x < W + 30 &&
+    b.y > cameraY - 200 && b.y < cameraY + H + 200);
+
+  // A monster goes when it's shot, or when it ends up in the lava. A
+  // SITTING one also goes when its ledge is swallowed for good.
+  //
+  // That last check must NOT apply to a flying one. It left its ledge
+  // behind ages ago, but it's still holding on to it - so the ledge's
+  // old home eventually sinks under the lava and the monster would
+  // vanish in mid-air, right in front of you, for no reason you could
+  // possibly see.
+  monsters = monsters.filter(m =>
+    m.health > 0 &&
+    m.y < lavaY &&
+    m.y > cameraY - 500 &&                            // lost you completely
+    (m.flying || m.ledge.homeY < lavaY + 200));
+
+  // --- the pole sinks ---
+  // Really the lava climbs, which is the same thing from where you're
+  // standing, and much easier to write.
+  //
+  // ...unless you grabbed a FREEZE. Then the lava holds dead still. We
+  // still let its SPEED creep up quietly underneath, so the moment it
+  // thaws it isn't suddenly a walk in the park - but it doesn't MOVE.
+  if (powerTimers.freeze > 0) {
+    lavaSpeed += LAVA_SPEEDUP;
+  } else {
+    lavaSpeed += LAVA_SPEEDUP;
+    lavaY -= lavaSpeed;
+  }
+
+  // --- the camera ---
+  // The gnome stays put around 60% down the screen; the world slides.
+  const wantCamera = gnome.y - H * 0.6;
+  cameraY += (wantCamera - cameraY) * 0.12;   // 0.12 = smooth, laggy follow
+  // Never let the camera drop below the lava - always show the danger.
+  if (cameraY > lavaY - H * 0.82) cameraY = lavaY - H * 0.82;
+
+  // --- how high have you got? ---
+  const height = Math.max(0, Math.floor((40 - gnome.y) / 20));
+  if (height > best) best = height;
+
+  // Now we know how high we are, we know which stage we're in. This is
+  // what ramps the difficulty and rings in the bosses.
+  updateStage();
+
+  // --- build more pole above you, forever ---
+  while (topLedgeY > cameraY - 200) {
+    topLedgeY -= GAP;
+    addLedge(topLedgeY);
+  }
+
+  // --- throw away ledges that have sunk into the lava ---
+  // If we didn't, the list would grow to a million and the game would
+  // get slower and slower the better you played.
+  // Note this asks about homeY, not y. A ledge that's mid-tumble has a
+  // `y` way down near the lava - check that and we'd throw it away a
+  // moment before it was due to build itself back, and ledges would
+  // randomly stop returning. It's where it LIVES that decides.
+  platforms = platforms.filter(p => p.homeY < lavaY + 200);
+
+  // --- cooked? ---
+  // A shield can't save you from being IN the lava, so this one passes
+  // `false`. You're not getting hit - you're swimming in it.
+  if (gnome.y > lavaY) killGnome(false);
+}
+
+
+// --- 6. DRAW: what it all looks like -----------------------------------
+
+function draw() {
+  // Sky: a hot, hazy orange glow near the lava, dark up high.
+  const sky = ctx.createLinearGradient(0, 0, 0, H);
+  sky.addColorStop(0,    "#1a0a1e");
+  sky.addColorStop(0.55, "#3a1209");
+  sky.addColorStop(1,    "#7a2405");
+  ctx.fillStyle = sky;
+  ctx.fillRect(0, 0, W, H);
+
+  // A colour wash that gets stronger the higher you climb, so each stage
+  // FEELS different - the sky bruises from purple to green to red as you
+  // go up. It's only a thin veil over the real sky, so you can still see
+  // the lava glow underneath.
+  const bands = ["#1a0a2a", "#3a0a5a", "#0a3a2a", "#5a0a2a", "#2a2a5a"];
+  const band = bands[stage % bands.length];
+  ctx.globalAlpha = Math.min(0.4, stage * 0.03);
+  ctx.fillStyle = band;
+  ctx.fillRect(0, 0, W, H);
+  ctx.globalAlpha = 1;
+
+  // screenY() turns a world position into a screen position.
+  // This one tiny function is what makes the camera work.
+  const screenY = wy => wy - cameraY;
+
+  drawPole(screenY);
+  for (const p of platforms) drawLedge(p, screenY);
+  for (const p of powerups) drawPowerup(p, screenY);
+  for (const m of monsters) drawMonster(m, screenY);
+  if (boss) drawBoss(screenY);
+  for (const b of bullets) drawBullet(b, screenY);
+  for (const s of bossShots) drawBossShot(s, screenY);
+  for (const f of fireballs) drawFireball(f, screenY);
+  if (!dead) drawGnome(screenY);
+  drawLava(screenY);
+
+  // A cold blue frost creeps in from the edges while the lava's frozen,
+  // so you can SEE that the freeze is on (and feel it running out).
+  if (powerTimers.freeze > 0) {
+    const frost = ctx.createRadialGradient(W / 2, H / 2, H * 0.3, W / 2, H / 2, H * 0.7);
+    frost.addColorStop(0, "rgba(150,230,255,0)");
+    frost.addColorStop(1, "rgba(150,230,255,0.28)");
+    ctx.fillStyle = frost;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  drawBossBar();
+  drawHud();
+  drawBanner();
+  drawButtons();
+}
+
+// The three thumb buttons. They light up while a finger is on them -
+// which matters more than it sounds. Without that you can never tell
+// whether the game missed your press or your thumb simply slipped off
+// the edge, and those two problems get fixed in completely different ways.
+function drawButtons() {
+  if (!usingTouch) return;
+
+  // save() and restore() are a bookmark. Canvas settings STICK - change
+  // textBaseline here and the HEIGHT counter up top quietly moves next
+  // frame, in a completely different function, for no visible reason.
+  // save() now, restore() at the end, and nothing leaks out.
+  ctx.save();
+
+  const pressed = new Set(fingers.values());
+
+  for (const b of BUTTONS) {
+    const on = pressed.has(b.name);
+
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+    ctx.fillStyle = on ? "rgba(255, 190, 120, 0.42)"
+                       : "rgba(20, 12, 10, 0.34)";
+    ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = on ? "rgba(255, 220, 170, 0.95)"
+                         : "rgba(255, 210, 160, 0.42)";
+    ctx.stroke();
+
+    ctx.fillStyle = on ? "#fff4e0" : "rgba(255, 226, 190, 0.72)";
+    ctx.font = (b.name === "jump" ? "bold 22px" : "30px") + " system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(b.label, b.x, b.y + 1);
+  }
+
+  ctx.restore();
+}
+
+function drawPole(screenY) {
+  // The great stone pole, going from the lava up past the top of the screen.
+  //
+  // THE BIG BUG FIX. Version 1 wrote `const top = screenY(-100000)`, which
+  // means "start the pole at world-height -100000". That's a fixed spot.
+  // It worked fine... right up until you actually climbed past it, at
+  // about 5000m. Once the camera went higher than that, the top of the
+  // pole slid down into view and there was nothing but sky above it - the
+  // whole tower looked like it had vanished.
+  //
+  // The pole is supposed to go up FOREVER, so it should always be drawn
+  // from the top of the SCREEN, not from some number we picked once and
+  // hoped was big enough. `-10` is just off the top edge. Now it can never
+  // run out, no matter how ridiculously high you get.
+  const top = -10;
+  const bottom = screenY(lavaY) + 40;
+
+  const stone = ctx.createLinearGradient(POLE_LEFT, 0, POLE_RIGHT, 0);
+  stone.addColorStop(0,    "#3c3a44");
+  stone.addColorStop(0.35, "#6a6676");
+  stone.addColorStop(1,    "#2e2c36");
+  ctx.fillStyle = stone;
+  ctx.fillRect(POLE_LEFT, top, POLE_WIDTH, bottom - top);
+
+  // Brick lines, so you can SEE that it's sinking. Without these the
+  // pole looks like it's standing still even though it isn't.
+  ctx.strokeStyle = "rgba(0,0,0,0.35)";
+  ctx.lineWidth = 2;
+  const firstBrick = Math.floor(cameraY / 46) * 46;
+  for (let wy = firstBrick; wy < cameraY + H; wy += 46) {
+    const sy = screenY(wy);
+    ctx.beginPath();
+    ctx.moveTo(POLE_LEFT, sy);
+    ctx.lineTo(POLE_RIGHT, sy);
+    ctx.stroke();
+  }
+}
+
+function drawLedge(p, screenY) {
+  const sy = screenY(p.y);
+  if (sy < -40 || sy > H + 40) return;   // off screen? don't bother drawing.
+
+  // HOW CLOSE IS IT TO GOING? 0 = untouched, 1 = about to give way.
+  // Everything below reads from this one number.
+  let strain = 0;
+  if (!p.safe && CRUMBLE_TIME > WOBBLE_WARNING) {
+    strain = (p.stood - (CRUMBLE_TIME - WOBBLE_WARNING)) / WOBBLE_WARNING;
+    if (strain < 0) strain = 0;
+    if (strain > 1) strain = 1;
+  }
+
+  // Shake, harder the closer it gets. Math.sin with the frame count
+  // makes it buzz back and forth; multiplying by strain means an
+  // untouched ledge sits perfectly still.
+  const shake = strain === 0 ? 0
+              : Math.sin(shakeClock * 1.4) * 3.2 * strain;
+
+  const x = p.x + shake;
+
+  ctx.save();
+  if (p.falling) {
+    // Fading out as it drops. Once it's see-through it's obviously not
+    // something you can land on any more.
+    ctx.globalAlpha = Math.max(0, 1 - p.vy / 26);
+  } else if (p.fadeIn > 0) {
+    // Fading back IN. Appearing instantly would look like a glitch;
+    // half a second of shimmer reads as "it rebuilt itself".
+    ctx.globalAlpha = 1 - p.fadeIn / 14;
+  }
+
+  // Redden as it strains. Mixing from grey towards a hot orange, so it
+  // looks like the lava is already getting to it.
+  const r = Math.round(139 + strain * 90);
+  const g = Math.round(132 - strain * 62);
+  const b = Math.round(150 - strain * 110);
+
+  ctx.fillStyle = "rgb(" + r + "," + g + "," + b + ")";
+  ctx.fillRect(x, sy, p.w, 12);
+  ctx.fillStyle = "#565062";
+  ctx.fillRect(x, sy + 8, p.w, 8);       // shadow under the lip
+  ctx.fillStyle = strain > 0.5 ? "#ffd08a" : "#b9b2c4";
+  ctx.fillRect(x, sy, p.w, 3);           // bright top edge
+
+  // Cracks, once it's really struggling.
+  if (strain > 0.35 && !p.falling) {
+    ctx.strokeStyle = "rgba(20,10,14,0.75)";
+    ctx.lineWidth = 1.6;
+    for (let i = 1; i < 4; i++) {
+      const cx = x + (p.w * i) / 4;
+      ctx.beginPath();
+      ctx.moveTo(cx, sy);
+      ctx.lineTo(cx + 4 - i * 2, sy + 12);
+      ctx.stroke();
+    }
+  }
+
+  ctx.restore();
+}
+
+// A bullet: a short bright streak rather than a dot. Drawing it stretched
+// out along the way it's travelling is an old trick - your eye reads the
+// smear as speed, and a round dot at this size just looks like a crumb.
+function drawBullet(b, screenY) {
+  const sy = screenY(b.y);
+  if (sy < -20 || sy > H + 20) return;
+
+  // The streak points back along the way it's travelling. It used to
+  // just go flat sideways, which was fine when bullets only ever flew
+  // sideways - now an aimed shot would have had a streak pointing
+  // somewhere it had never been.
+  const speed = Math.sqrt(b.vx * b.vx + b.vy * b.vy) || 1;
+  const tailX = b.x - (b.vx / speed) * 13;
+  const tailY = sy - (b.vy / speed) * 13;
+
+  ctx.strokeStyle = "#ffe08a";
+  ctx.lineWidth = 3;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(b.x, sy);
+  ctx.lineTo(tailX, tailY);
+  ctx.stroke();
+
+  ctx.fillStyle = "#fffbe8";
+  ctx.beginPath();
+  ctx.arc(b.x, sy, 2.4, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+// A FIREBALL, and the warning that comes before it.
+function drawFireball(f, screenY) {
+  // ---- the warning ----
+  if (f.warn > 0) {
+    // Flash faster and faster as it's about to go. The gap between
+    // flashes IS the countdown - you can feel how long you've got
+    // without anybody printing a number on the screen.
+    const urgency = 1 - f.warn / FIREBALL_WARN;
+    const blink = Math.sin(shakeClock * (0.25 + urgency * 0.5));
+    if (blink < 0) return;
+
+    ctx.save();
+    ctx.globalAlpha = 0.55 + urgency * 0.45;
+
+    // A downward arrow at the top of the screen, over the column it's
+    // about to come down.
+    ctx.fillStyle = "#ff7a2a";
+    ctx.beginPath();
+    ctx.moveTo(f.x, 74);
+    ctx.lineTo(f.x - 17, 40);
+    ctx.lineTo(f.x + 17, 40);
+    ctx.closePath();
+    ctx.fill();
+
+    // And a faint smear of light straight down the danger column, so
+    // it's obvious WHERE and not just THAT.
+    const col = ctx.createLinearGradient(0, 74, 0, H);
+    col.addColorStop(0, "rgba(255, 110, 30, 0.24)");
+    col.addColorStop(1, "rgba(255, 110, 30, 0)");
+    ctx.fillStyle = col;
+    ctx.fillRect(f.x - 22, 74, 44, H);
+
+    ctx.restore();
+    return;
+  }
+
+  // ---- the fireball itself ----
+  const sy = screenY(f.y);
+  if (sy < -120 || sy > H + 60) return;
+
+  // A tail of fading blobs trailing up behind it. Drawing the same
+  // shape a few times, smaller and fainter each time, is the cheapest
+  // convincing trail there is - no particles to keep track of.
+  for (let i = 6; i >= 1; i--) {
+    ctx.globalAlpha = 0.1 + (6 - i) * 0.055;
+    ctx.fillStyle = i > 3 ? "#8f2708" : "#ff8c1a";
+    ctx.beginPath();
+    ctx.arc(f.x + Math.sin(f.spin + i) * 3, sy - i * 15, 15 - i * 1.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  const glow = ctx.createRadialGradient(f.x, sy, 3, f.x, sy, 40);
+  glow.addColorStop(0, "rgba(255, 220, 120, 0.85)");
+  glow.addColorStop(0.4, "rgba(255, 110, 20, 0.5)");
+  glow.addColorStop(1, "rgba(255, 90, 0, 0)");
+  ctx.fillStyle = glow;
+  ctx.fillRect(f.x - 42, sy - 42, 84, 84);
+
+  ctx.fillStyle = "#ff6a1a";
+  ctx.beginPath();
+  ctx.arc(f.x, sy, 15, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = "#ffe08a";
+  ctx.beginPath();
+  ctx.arc(f.x - 3, sy - 3, 7.5, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+// A LAVA MONSTER. A wobbling blob of molten rock with a furious face.
+// Nothing here is a picture from a file - it's all circles and triangles,
+// same as everything else in this game.
+function drawMonster(m, screenY) {
+  const sy = screenY(m.y);
+  if (sy < -60 || sy > H + 60) return;
+
+  // Flashes white for a few frames when shot, so a hit that DOESN'T kill
+  // still obviously landed. Without this, shooting something with 2
+  // health feels like the first shot missed.
+  const flashing = shakeClock < m.hurtUntil;
+
+  // The body squashes and stretches as it moves. Two sine waves running
+  // at different speeds, so it never quite repeats and looks alive.
+  const squash = 1 + Math.sin(m.wobble) * 0.16;
+  const stretch = 1 - Math.sin(m.wobble) * 0.12;
+
+  const cy = sy - 14;
+
+  // A hot glow around it, painted first so everything else sits on top.
+  const glow = ctx.createRadialGradient(m.x, cy, 4, m.x, cy, 34);
+  glow.addColorStop(0, "rgba(255, 150, 40, 0.55)");
+  glow.addColorStop(1, "rgba(255, 90, 0, 0)");
+  ctx.fillStyle = glow;
+  ctx.fillRect(m.x - 36, cy - 36, 72, 72);
+
+  // WINGS. Drawn before the body so they sit behind it, and flapping by
+  // squashing them flat and back again - the same squash-and-stretch as
+  // the body, just used on a different shape.
+  if (m.flying) {
+    const beat = Math.abs(Math.sin(m.flap));      // 0 = flat out, 1 = up high
+    ctx.fillStyle = flashing ? "#ffffff" : "rgba(60, 18, 8, 0.92)";
+    for (const side of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(m.x + side * 8, cy - 2);
+      ctx.lineTo(m.x + side * 30, cy - 6 - beat * 15);
+      ctx.lineTo(m.x + side * 24, cy + 8 - beat * 5);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+
+  ctx.save();
+  ctx.translate(m.x, cy);
+  ctx.scale(stretch, squash);
+
+  ctx.fillStyle = flashing ? "#ffffff" : "#ff6a1a";
+  ctx.beginPath();
+  ctx.arc(0, 0, 17, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Cooler crust on top, molten underneath.
+  ctx.fillStyle = flashing ? "#ffffff" : "#8f2708";
+  ctx.beginPath();
+  ctx.arc(0, -6, 12, Math.PI, Math.PI * 2);
+  ctx.fill();
+
+  // Drippy blobs hanging off the bottom.
+  ctx.fillStyle = flashing ? "#ffffff" : "#ff9c2e";
+  for (const off of [-9, 0, 9]) {
+    ctx.beginPath();
+    ctx.arc(off, 13 + Math.sin(m.wobble + off) * 2, 4.2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Angry eyes. Two triangles pointing inwards - that's the whole face,
+  // and it's enough. Eyebrows down and in reads as "cross" every time.
+  if (!flashing) {
+    ctx.fillStyle = "#2a0a02";
+    for (const side of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(side * 3, -4);
+      ctx.lineTo(side * 11, -7);
+      ctx.lineTo(side * 10, 1);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.fillStyle = "#ffd166";
+    for (const side of [-1, 1]) {
+      ctx.beginPath();
+      ctx.arc(side * 7.5, -3, 1.7, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  ctx.restore();
+}
+
+function drawGnome(screenY) {
+  const sy = screenY(gnome.y);
+  const x = gnome.x;
+
+  ctx.save();
+  ctx.translate(x, sy);
+  ctx.scale(gnome.facing, 1);   // flips the whole gnome when he turns around
+
+  // boots
+  ctx.fillStyle = "#4a2c14";
+  ctx.fillRect(-10, -7, 8, 7);
+  ctx.fillRect(2, -7, 8, 7);
+
+  // blue tunic
+  ctx.fillStyle = "#2f5fb0";
+  ctx.fillRect(-11, -22, 22, 15);
+
+  // face
+  ctx.fillStyle = "#f0c39a";
+  ctx.fillRect(-8, -28, 16, 8);
+
+  // eye
+  ctx.fillStyle = "#111";
+  ctx.fillRect(2, -26, 3, 3);
+
+  // big white beard
+  ctx.fillStyle = "#eeeef4";
+  ctx.beginPath();
+  ctx.moveTo(-8, -22);
+  ctx.lineTo(8, -22);
+  ctx.lineTo(0, -8);
+  ctx.closePath();
+  ctx.fill();
+
+  // the important part: a giant red pointy hat
+  ctx.fillStyle = "#c0281f";
+  ctx.beginPath();
+  ctx.moveTo(-12, -28);
+  ctx.lineTo(12, -28);
+  ctx.lineTo(4, -50);
+  ctx.closePath();
+  ctx.fill();
+
+  // THE PISTOL. Drawn after the hat so it sits in front of him.
+  // Because we already flipped the whole gnome with ctx.scale further up,
+  // this only ever has to be drawn pointing RIGHT. Turning round is
+  // handled once, for everything, instead of once per body part.
+  const kick = gnome.recoil * 0.9;      // shoved back while it fires
+  ctx.fillStyle = "#3a3f4a";
+  ctx.fillRect(6 - kick, -22, 15, 5);   // barrel
+  ctx.fillRect(6 - kick, -20, 6, 8);    // grip
+  ctx.fillStyle = "#8b93a3";
+  ctx.fillRect(6 - kick, -22, 15, 2);   // a shine along the top
+
+  // Muzzle flash, only in the frames just after firing.
+  if (gnome.recoil > 2) {
+    ctx.fillStyle = "#ffe08a";
+    ctx.beginPath();
+    ctx.arc(22 - kick, -19.5, 5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.restore();
+
+  // THE SHIELD BUBBLE. Drawn after the restore, in plain screen
+  // coordinates, so the gnome flipping left and right doesn't flip the
+  // bubble too. It shimmers while you're briefly untouchable (just after
+  // it saved you) and sits steady while it's ready to take a hit.
+  if (shield || invuln > 0) {
+    ctx.save();
+    ctx.globalAlpha = invuln > 0 ? 0.35 + 0.3 * Math.sin(shakeClock * 0.6) : 0.55;
+    ctx.strokeStyle = "#b7ffcf";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(x, sy - 16, 26, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = "rgba(150,255,200,0.12)";
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+function drawLava(screenY) {
+  const sy = screenY(lavaY);
+  if (sy > H) return;
+
+  const glow = ctx.createLinearGradient(0, sy - 30, 0, sy + 90);
+  glow.addColorStop(0,   "#ffb703");
+  glow.addColorStop(0.3, "#ff6a00");
+  glow.addColorStop(1,   "#8a1502");
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, sy, W, H - sy + 10);
+
+  // A wobbly surface. Math.sin() makes a smooth wave, and feeding it
+  // the clock makes the wave travel sideways.
+  const t = performance.now() / 380;
+  ctx.fillStyle = "#ffd166";
+  ctx.beginPath();
+  ctx.moveTo(0, sy + 8);
+  for (let x = 0; x <= W; x += 10) {
+    ctx.lineTo(x, sy + Math.sin(x / 34 + t) * 6);
+  }
+  ctx.lineTo(W, sy + 16);
+  ctx.lineTo(0, sy + 16);
+  ctx.fill();
+}
+
+// A FLOATING GOODY. A glowing ring with an emoji in the middle, bobbing
+// up and down. The glow is the same radial-gradient trick as the monster
+// and fireball glows - paint a soft coloured circle first, everything
+// else on top.
+function drawPowerup(p, screenY) {
+  const sy = screenY(p.y) + Math.sin(p.bob) * 4;
+  if (sy < -30 || sy > H + 30) return;
+
+  ctx.save();
+  const glow = ctx.createRadialGradient(p.x, sy, 2, p.x, sy, 22);
+  glow.addColorStop(0, p.color);
+  glow.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.globalAlpha = 0.55;
+  ctx.fillStyle = glow;
+  ctx.fillRect(p.x - 24, sy - 24, 48, 48);
+  ctx.globalAlpha = 1;
+
+  ctx.beginPath();
+  ctx.arc(p.x, sy, 14, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(20,12,10,0.6)";
+  ctx.fill();
+  ctx.lineWidth = 2.5;
+  ctx.strokeStyle = p.color;
+  ctx.stroke();
+
+  ctx.font = "17px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(p.emoji, p.x, sy + 1);
+  ctx.restore();
+}
+
+// A THING THE BOSS THREW. A brown tumbling rock, or a molten fireball -
+// told apart by its `kind`, same as everything else in this game.
+function drawBossShot(s, screenY) {
+  const sy = screenY(s.y);
+  if (sy < -30 || sy > H + 30) return;
+
+  ctx.save();
+  if (s.kind === "rock") {
+    ctx.translate(s.x, sy);
+    ctx.rotate(s.spin);
+    ctx.fillStyle = "#6a5545";
+    ctx.beginPath();
+    ctx.arc(0, 0, s.r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#4a3a2e";
+    ctx.beginPath();
+    ctx.arc(-4, -3, s.r * 0.5, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    const glow = ctx.createRadialGradient(s.x, sy, 2, s.x, sy, s.r + 8);
+    glow.addColorStop(0, "rgba(255,224,138,0.9)");
+    glow.addColorStop(1, "rgba(255,90,0,0)");
+    ctx.fillStyle = glow;
+    ctx.fillRect(s.x - s.r - 8, sy - s.r - 8, (s.r + 8) * 2, (s.r + 8) * 2);
+    ctx.fillStyle = "#ff6a1a";
+    ctx.beginPath();
+    ctx.arc(s.x, sy, s.r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+// THE BOSS. One function, three looks, chosen by boss.type. While it's
+// dying it puffs up and fades. The flash-white-when-hit trick is exactly
+// the same one the little monsters use.
+function drawBoss(screenY) {
+  const sy = screenY(boss.y);
+  const flashing = shakeClock < boss.hurtUntil;
+
+  ctx.save();
+  ctx.translate(boss.x, sy);
+
+  // Dying: swell up and fade out over the 60 frames of boss.dying.
+  if (boss.dying > 0) {
+    const k = boss.dying / 60;
+    ctx.globalAlpha = 1 - k;
+    ctx.scale(1 + k * 0.8, 1 + k * 0.8);
+  }
+
+  if (boss.type === "golem") {
+    // A big lump of dark rock with glowing lava cracks and angry eyes.
+    ctx.fillStyle = flashing ? "#ffffff" : "#4a3d34";
+    ctx.beginPath();
+    ctx.arc(0, 0, 36, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = flashing ? "#ffffff" : "#ff6a1a";
+    ctx.lineWidth = 3;
+    for (const a of [-0.6, 0.2, 1.1]) {
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(a) * 10, Math.sin(a) * 10);
+      ctx.lineTo(Math.cos(a) * 34, Math.sin(a) * 34);
+      ctx.stroke();
+    }
+    if (!flashing) {
+      ctx.fillStyle = "#ffd166";
+      ctx.beginPath(); ctx.arc(-12, -6, 5, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(12, -6, 5, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#2a0a02";
+      ctx.beginPath(); ctx.arc(-12, -6, 2, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(12, -6, 2, 0, Math.PI * 2); ctx.fill();
+    }
+
+  } else if (boss.type === "dragon") {
+    // A winged body facing the way it's flying. Wings flap using the same
+    // sine-wave beat the flying monsters use.
+    ctx.scale(boss.dir, 1);
+    const beat = Math.abs(Math.sin(boss.t * 0.2));
+    ctx.fillStyle = flashing ? "#ffffff" : "#3a1a3a";
+    for (const side of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(0, -4);
+      ctx.lineTo(side * 40, -20 - beat * 14);
+      ctx.lineTo(side * 30, 8);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.fillStyle = flashing ? "#ffffff" : "#6a2a5a";
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 30, 20, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // head and snout, poking forward
+    ctx.beginPath();
+    ctx.arc(24, -6, 12, 0, Math.PI * 2);
+    ctx.fill();
+    if (!flashing) {
+      ctx.fillStyle = "#ffd166";
+      ctx.beginPath(); ctx.arc(28, -9, 3, 0, Math.PI * 2); ctx.fill();
+    }
+
+  } else {
+    // The Blob King: a wobbly green jelly wearing a crown.
+    const squash = 1 + Math.sin(boss.t * 0.12) * 0.12;
+    ctx.scale(1 / squash, squash);
+    ctx.fillStyle = flashing ? "#ffffff" : "#5ac06a";
+    ctx.beginPath();
+    ctx.arc(0, 0, 34, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = flashing ? "#ffffff" : "#3f9e4f";
+    ctx.beginPath();
+    ctx.arc(0, 8, 22, 0, Math.PI, false);
+    ctx.fill();
+    if (!flashing) {
+      ctx.fillStyle = "#123";
+      ctx.beginPath(); ctx.arc(-11, -4, 4, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(11, -4, 4, 0, Math.PI * 2); ctx.fill();
+      // a little gold crown
+      ctx.fillStyle = "#ffd24a";
+      ctx.beginPath();
+      ctx.moveTo(-18, -30);
+      ctx.lineTo(-18, -44); ctx.lineTo(-9, -34);
+      ctx.lineTo(0, -46);   ctx.lineTo(9, -34);
+      ctx.lineTo(18, -44);  ctx.lineTo(18, -30);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+
+  ctx.restore();
+}
+
+// The boss's health bar, pinned across the top of the screen so it's
+// always readable no matter where the boss has wandered to.
+function drawBossBar() {
+  if (!boss || boss.dying > 0) return;
+  const barW = W - 60, x = 30, y = 92;
+  ctx.fillStyle = "rgba(0,0,0,0.5)";
+  ctx.fillRect(x - 2, y - 2, barW + 4, 16);
+  ctx.fillStyle = "#3a1010";
+  ctx.fillRect(x, y, barW, 12);
+  const frac = Math.max(0, boss.hp) / boss.maxHp;
+  ctx.fillStyle = "#ff4a4a";
+  ctx.fillRect(x, y, barW * frac, 12);
+  ctx.fillStyle = "#ffe9c4";
+  ctx.font = "bold 13px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillText(BOSS_NAMES[boss.type], W / 2, y - 5);
+  ctx.textAlign = "left";
+}
+
+// The big words in the middle - stage changes, boss names, victories.
+// They fade out over their last few frames so they don't just blink off.
+function drawBanner() {
+  if (!banner) return;
+  ctx.save();
+  ctx.globalAlpha = Math.min(1, banner.timer / 22);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = "#ffd27a";
+  ctx.font = "bold 40px system-ui, sans-serif";
+  ctx.fillText(banner.text, W / 2, H * 0.32);
+  if (banner.sub) {
+    ctx.fillStyle = "#ffe9c4";
+    ctx.font = "18px system-ui, sans-serif";
+    ctx.fillText(banner.sub, W / 2, H * 0.32 + 30);
+  }
+  ctx.restore();
+}
+
+// The row of active power-ups down the left side, under the height. Each
+// timed one gets an emoji and a little draining bar; the shield, which
+// isn't on a timer, just gets its emoji.
+function drawPowerHud() {
+  const rows = [
+    { t: powerTimers.rapid,   max: RAPID_TIME,  e: "🔫" },
+    { t: powerTimers.spread,  max: SPREAD_TIME, e: "🌟" },
+    { t: powerTimers.freeze,  max: FREEZE_TIME, e: "❄️" },
+    { t: powerTimers.rockets, max: ROCKET_TIME, e: "🚀" },
+  ];
+  let py = 60;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  for (const r of rows) {
+    if (r.t <= 0) continue;
+    ctx.font = "15px system-ui, sans-serif";
+    ctx.fillStyle = "#ffe9c4";
+    ctx.fillText(r.e, 16, py);
+    ctx.fillStyle = "rgba(255,255,255,0.22)";
+    ctx.fillRect(40, py - 4, 46, 7);
+    ctx.fillStyle = "#8fd0ff";
+    ctx.fillRect(40, py - 4, 46 * (r.t / r.max), 7);
+    py += 18;
+  }
+  if (shield) {
+    ctx.font = "15px system-ui, sans-serif";
+    ctx.fillStyle = "#b7ffcf";
+    ctx.fillText("🛡️", 16, py);
+    py += 18;
+  }
+  ctx.textBaseline = "alphabetic";
+}
+
+function drawHud() {
+  ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = "#ffe9c4";
+  ctx.font = "bold 26px system-ui, sans-serif";
+  ctx.textAlign = "left";
+  ctx.fillText("HEIGHT " + best + "m", 16, 40);
+
+  // STAGE, centred up top, so you always know how deep in it you are.
+  ctx.textAlign = "center";
+  ctx.font = "bold 15px system-ui, sans-serif";
+  ctx.fillStyle = "#ffd27a";
+  ctx.fillText("STAGE " + stage, W / 2, 26);
+
+  ctx.textAlign = "right";
+  ctx.fillStyle = "#ffb27a";
+  ctx.font = "bold 26px system-ui, sans-serif";
+  ctx.fillText("☠ " + kills, W - 16, 40);
+  // coins, tucked just under the kill count
+  ctx.fillStyle = "#ffd24a";
+  ctx.font = "bold 18px system-ui, sans-serif";
+  ctx.fillText("💰 " + coins, W - 16, 62);
+
+  // A little stack of the power-ups you've got running right now, each
+  // with a bar that drains as it runs out.
+  drawPowerHud();
+
+  ctx.textAlign = "left";
+  ctx.fillStyle = "#ffe9c4";
+
+  // A hint, but only until you've actually climbed something. The moment
+  // you're 3m up you've clearly worked it out, and a permanent hint is
+  // just clutter sitting on top of the game forever.
+  if (best < 3 && !dead && !usingTouch) {
+    ctx.textAlign = "center";
+    ctx.font = "17px system-ui, sans-serif";
+    ctx.fillStyle = "rgba(255, 233, 196, 0.72)";
+    ctx.fillText("A / D  or  ← →  to run", W / 2, H - 118);
+    ctx.fillText("SPACE to jump", W / 2, H - 94);
+    ctx.fillText("X or CLICK to shoot", W / 2, H - 88);
+    ctx.fillText("M turns the gnome off", W / 2, H - 64);
+    ctx.fillStyle = "rgba(183, 255, 207, 0.8)";
+    ctx.fillText("grab the glowing goodies!", W / 2, H - 40);
+    ctx.textAlign = "left";
+  }
+
+  if (dead) {
+    ctx.fillStyle = "rgba(0,0,0,0.66)";
+    ctx.fillRect(0, H / 2 - 120, W, 230);
+
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#ff8f4a";
+    ctx.font = "bold 44px system-ui, sans-serif";
+    ctx.fillText("COOKED", W / 2, H / 2 - 60);
+
+    ctx.fillStyle = "#ffe9c4";
+    ctx.font = "bold 30px system-ui, sans-serif";
+    ctx.fillText("You climbed " + best + "m", W / 2, H / 2 - 6);
+    ctx.font = "20px system-ui, sans-serif";
+    ctx.fillText(kills + " monsters down · reached stage " + stage, W / 2, H / 2 + 22);
+    ctx.fillStyle = "#ffd24a";
+    ctx.fillText("💰 " + coins + " collected", W / 2, H / 2 + 46);
+
+    if (deadTimer > 40) {
+      ctx.font = "20px system-ui, sans-serif";
+      ctx.fillStyle = "#c9c2b4";
+      ctx.fillText("Tap or press any key to try again", W / 2, H / 2 + 76);
+    }
+  }
+}
+
+
+// --- 7. THE GAME LOOP --------------------------------------------------
+//     update, draw, update, draw... about 60 times a second, forever.
+
+function loop() {
+  shakeClock++;
+  update();
+  draw();
+  requestAnimationFrame(loop);
+}
+
+// --- 8. THE START SCREEN -----------------------------------------------
+
+function startLevel(name) {
+  // Clicking this button is the "you touched something" the browser has
+  // been waiting for, so it's where the sound gets switched on.
+  startAudio();
+
+  applyLevel(name);    // 1. swap the numbers
+  newGame();           // 2. THEN build the pole, using them
+  started = true;
+  document.getElementById("startScreen").style.display = "none";
+}
+
+// One button per entry in LEVELS. Add a fourth up there and a fourth
+// button turns up here on its own.
+for (const name of Object.keys(LEVELS)) {
+  const d = LEVELS[name];
+  const btn = document.createElement("button");
+  btn.className = "lvl lvl-" + name;
+  btn.innerHTML = "<b>" + d.label + "</b><span>" + d.blurb + "</span>";
+  btn.onclick = () => startLevel(name);
+  document.getElementById("levelButtons").appendChild(btn);
+}
+
+document.getElementById("again").onclick = () => {
+  started = false;
+  document.getElementById("startScreen").style.display = "flex";
+};
+
+// Build a pole so there's something behind the start screen to look at,
+// then start the loop. update() refuses to do anything until you've
+// picked, so nothing sinks and nothing moves while you're reading.
+newGame();
+loop();
+
+</script>
+</body>
+</html>
