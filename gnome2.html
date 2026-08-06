@@ -2296,18 +2296,83 @@ function drawLava(screenY) {
   ctx.fillStyle = glow;
   ctx.fillRect(0, sy, W, H - sy + 10);
 
-  // A wobbly surface. Math.sin() makes a smooth wave, and feeding it
-  // the clock makes the wave travel sideways.
+  // One clock for everything down here. performance.now() is the number
+  // of milliseconds since the page opened, so dividing it turns it into a
+  // slow, smooth number we can feed into sin() and into the bubbles.
   const t = performance.now() / 380;
+
+  // --- BUBBLES ---
+  // Blobs of molten rock that rise up through the lava, swell as they
+  // climb, and POP at the surface. There's no list of bubbles kept
+  // anywhere - each one is worked out fresh every frame from its number
+  // `i` and the clock, so they cost nothing to remember. Same bubble,
+  // same path, every loop - your eye just reads it as "it's bubbling".
+  const BUBBLES = 16;
+  for (let i = 0; i < BUBBLES; i++) {
+    // A steady sideways spot for this bubble, with a tiny sway so it
+    // isn't a dead straight line. The * 53.3 just scatters them across
+    // the width instead of bunching them up.
+    const bx = (i * 53.3) % W + Math.sin(t * 0.6 + i) * 5;
+
+    // rise is a number that climbs from 0 up to 1 and then snaps back to
+    // 0, over and over - that's one full journey from deep down up to the
+    // surface. The `% 1` is what makes it loop. Adding i * 0.13 means they
+    // don't all rise together like a lift; they're all at different points.
+    const rise = (t * 0.16 + i * 0.13) % 1;
+
+    // 0 = down in the depths, 1 = right at the surface.
+    const by = sy + 46 - rise * 46;
+
+    // They start tiny and puff up as they near the top, then the last
+    // bit of the journey they're "popping", so we fade them out.
+    const grow = 1.4 + rise * 3.2;
+    const alpha = rise < 0.82 ? 0.55 : 0.55 * (1 - (rise - 0.82) / 0.18);
+
+    ctx.globalAlpha = Math.max(0, alpha);
+    ctx.fillStyle = "#ffd98a";
+    ctx.beginPath();
+    ctx.arc(bx, by, grow, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Right as it reaches the top, draw a quick empty ring - the splash
+    // of the bubble bursting.
+    if (rise > 0.9) {
+      ctx.globalAlpha = (1 - rise) / 0.1 * 0.6;
+      ctx.strokeStyle = "#fff0c0";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(bx, sy + 2, grow + (rise - 0.9) * 40, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+  ctx.globalAlpha = 1;
+
+  // --- THE SURFACE ---
+  // A wobbly top edge. Two sine waves added together instead of one, at
+  // different speeds and sizes, so the surface looks choppy and churny
+  // rather than like a tidy skateboard ramp.
   ctx.fillStyle = "#ffd166";
   ctx.beginPath();
   ctx.moveTo(0, sy + 8);
-  for (let x = 0; x <= W; x += 10) {
-    ctx.lineTo(x, sy + Math.sin(x / 34 + t) * 6);
+  for (let x = 0; x <= W; x += 8) {
+    const wave = Math.sin(x / 34 + t) * 6 + Math.sin(x / 15 - t * 1.7) * 3;
+    ctx.lineTo(x, sy + wave);
   }
-  ctx.lineTo(W, sy + 16);
-  ctx.lineTo(0, sy + 16);
+  ctx.lineTo(W, sy + 20);
+  ctx.lineTo(0, sy + 20);
   ctx.fill();
+
+  // A bright hot line skimming along the very top of that wave, so the
+  // surface glows like it's white-hot where it meets the air.
+  ctx.strokeStyle = "rgba(255, 245, 200, 0.8)";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (let x = 0; x <= W; x += 8) {
+    const wave = Math.sin(x / 34 + t) * 6 + Math.sin(x / 15 - t * 1.7) * 3;
+    if (x === 0) ctx.moveTo(x, sy + wave);
+    else ctx.lineTo(x, sy + wave);
+  }
+  ctx.stroke();
 }
 
 // A FLOATING GOODY. A glowing ring with an emoji in the middle, bobbing
