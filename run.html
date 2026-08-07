@@ -851,29 +851,67 @@
     ctx.fillRect(0, 0, W, groundY());
   }
 
-  // ---- ONE EYE --------------------------------------------------------
-  // A glow, the yellow, and a pupil that never quite looks away.
-  function drawEye(x, y, r, open) {
-    if (open <= 0.02) return;
+  // ---- ONE CLOCK --------------------------------------------------
+  //
+  //  Every eye in this game is a clock now, and the hands spin FASTER
+  //  THE FURTHER YOU GET. Early on they tick along; a thousand metres
+  //  in they're a blur, and the whole background is telling you you're
+  //  running out of time.
+  //
+  //  One function, same as the eye was - the crowd behind you and the
+  //  three in each beast box all call it, so they can never disagree
+  //  about what time it is.
+
+  // How fast the hands go round. It's tied to how far you've RUN, not
+  // to the wall clock - so the panic belongs to the run, and a fresh
+  // go starts calm again.
+  function handSpeed() { return 1 + dist * 0.014; }
+
+  function drawClock(x, y, r, open) {
+    if (open <= 0.02 || r < 1.5) return;
+
+    // The glow the eyes had, kept - it's what makes them show up in the
+    // black without having to be big.
     ctx.fillStyle = 'rgba(255,186,50,0.10)';
     ctx.beginPath(); ctx.arc(x, y, r * 3.2, 0, Math.PI * 2); ctx.fill();
 
-    // The eye is WIDER than it is tall, and the pupil is small inside
-    // it. First go had the pupil almost as tall as the eye, which left
-    // two yellow crescents either side of a black slab - it read as a
-    // weird shape rather than as something looking at you.
+    // The face.
     ctx.fillStyle = '#ffc23a';
-    ctx.beginPath();
-    ctx.ellipse(x, y, r, r * 0.74 * open, 0, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#4a3208';
+    ctx.lineWidth = Math.max(1, r * 0.13);
+    ctx.stroke();
 
-    // The pupil slides towards YOU - the player is always about a third
-    // of the way across the screen, so they're all turned that way.
-    const look = clamp((W * 0.32 - x) / (W * 0.6), -1, 1);
-    ctx.fillStyle = '#160a02';
+    // Twelve o'clock and six o'clock, only when there's room for them
+    // to be anything but a smudge.
+    if (r > 7) {
+      ctx.fillStyle = '#4a3208';
+      for (let i = 0; i < 4; i++) {
+        const a = i * Math.PI / 2;
+        ctx.fillRect(x + Math.cos(a) * r * 0.76 - r * 0.06,
+                     y + Math.sin(a) * r * 0.76 - r * 0.06, r * 0.13, r * 0.13);
+      }
+    }
+
+    // THE HANDS. The minute hand races; the hour hand crawls round at a
+    // twelfth of it, exactly as a real clock does - which is what makes
+    // it read as a clock and not as a spinning stick.
+    const t = clock * handSpeed() + x * 0.03;
+    ctx.strokeStyle = '#241706';
+    ctx.lineCap = 'round';
+
+    ctx.lineWidth = Math.max(1, r * 0.18);
     ctx.beginPath();
-    ctx.ellipse(x + look * r * 0.4, y, r * 0.3, r * 0.46 * open, 0, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + Math.sin(t) * r * 0.82, y - Math.cos(t) * r * 0.82);
+    ctx.stroke();
+
+    ctx.lineWidth = Math.max(1, r * 0.26);
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + Math.sin(t / 12) * r * 0.5, y - Math.cos(t / 12) * r * 0.5);
+    ctx.stroke();
+    ctx.lineCap = 'butt';
   }
 
   // ---- ONE MONSTER, drawn anywhere, any size -------------------------
@@ -933,8 +971,8 @@
     const ph = (clock * 0.5 + cx * 0.013) % 1;
     const open = ph > 0.95 ? Math.abs(ph - 0.975) / 0.025 : 1;
     ctx.globalAlpha = dim;
-    drawEye(cx - gap / 2, ey, r, open);
-    drawEye(cx + gap / 2, ey, r, open);
+    drawClock(cx - gap / 2, ey, r, open);
+    drawClock(cx + gap / 2, ey, r, open);
     ctx.globalAlpha = 1;
   }
 
@@ -1231,9 +1269,9 @@
     const cx = x + w / 2, cy = top + h * 0.5;
     const ph = (clock * 0.6 + x * 0.021) % 1;
     const open = ph > 0.94 ? Math.abs(ph - 0.97) / 0.03 : 1;
-    drawEye(cx - r * 1.7, cy - r * 0.8, r, open);
-    drawEye(cx + r * 1.7, cy - r * 0.8, r, open);
-    drawEye(cx,           cy + r * 1.3, r, open);
+    drawClock(cx - r * 1.7, cy - r * 0.8, r, open);
+    drawClock(cx + r * 1.7, cy - r * 0.8, r, open);
+    drawClock(cx,           cy + r * 1.3, r, open);
   }
 
   // Road that is about to go. It shakes harder and glows brighter the
