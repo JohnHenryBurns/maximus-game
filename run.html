@@ -588,7 +588,14 @@
   // flash and a screen shake. Maximus wanted these the same size, so
   // these ARE the same numbers.
   const BOOM_CHUNKS = 70;
-  const FIRE = [[255, 240, 160], [255, 170, 40], [255, 90, 30], [180, 60, 30]];
+
+  // BLACK EXPLOSIONS - which is a real problem on a pitch black sky,
+  // because true #000000 chunks would simply be invisible. So these are
+  // black the way SMOKE is black: four shades just far enough off pure
+  // black to read against it, and the flash of each bang stays bright.
+  // A dark cloud with a white flash inside it is what an explosion
+  // actually looks like anyway.
+  const FIRE = [[10, 9, 13], [30, 27, 34], [52, 47, 58], [72, 66, 78]];
 
   // And 70 chunks twenty-five times a second is 1750 a second going in.
   // The cap is what stops that becoming a slideshow: the oldest specks
@@ -1030,8 +1037,10 @@
       const x = sx(b.x);
       if (x < -80 || x > W + 80) continue;
       const fade = clamp(b.life / 0.28, 0, 1);
-      ctx.globalAlpha = fade * 0.85;
-      ctx.fillStyle = 'rgb(255,' + Math.round(150 + 90 * fade) + ',80)';
+      // The one bright thing left. With the smoke gone black, this
+      // flash is what tells you a bang happened at all.
+      ctx.globalAlpha = fade * 0.9;
+      ctx.fillStyle = 'rgb(255,255,' + Math.round(200 + 55 * fade) + ')';
       ctx.beginPath();
       ctx.arc(x, gy + b.y, 6 + b.r * 0.35, 0, Math.PI * 2);
       ctx.fill();
@@ -1291,7 +1300,7 @@
     // THE WHOLE SCREEN GOING WHITE. Bob does this on his missile and
     // it's half of why that bang lands - the picture itself flinches.
     if (flash > 0) {
-      ctx.fillStyle = 'rgba(255,214,150,' + (flash * 0.55) + ')';
+      ctx.fillStyle = 'rgba(236,240,255,' + (flash * 0.4) + ')';
       ctx.fillRect(0, 0, W, H);
     }
 
