@@ -33,7 +33,7 @@
 <body>
 
 <canvas id="screen"></canvas>
-<div id="hud">SPACE or CLICK to jump &nbsp;&nbsp; hold it to jump higher &nbsp;&nbsp; press it again in the air to double jump</div>
+<div id="hud">SPACE or CLICK to jump <div id="hud">SPACE or CLICK to jump &nbsp;&nbsp; hold it to jump higher &nbsp;&nbsp; press it again in the air to double jump</div>nbsp;<div id="hud">SPACE or CLICK to jump &nbsp;&nbsp; hold it to jump higher &nbsp;&nbsp; press it again in the air to double jump</div>nbsp; hold it for the full 3 squares <div id="hud">SPACE or CLICK to jump &nbsp;&nbsp; hold it to jump higher &nbsp;&nbsp; press it again in the air to double jump</div>nbsp;<div id="hud">SPACE or CLICK to jump &nbsp;&nbsp; hold it to jump higher &nbsp;&nbsp; press it again in the air to double jump</div>nbsp; press again in the air to double jump</div>
 
 <script>
 // ===================================================================
@@ -76,10 +76,47 @@
   const TOP_SPEED   = 900;     // and it never gets faster than this
   const SPEED_UP    = 9;       // how much quicker per second survived
 
-  const GRAVITY   = 2600;
-  const JUMP_KICK = 900;       // the shove you get when you press it
-  const HOLD_LIFT = 1500;      // extra push while you keep holding
-  const HOLD_MAX  = 0.20;      // ...for this long, so a tap is a small hop
+  // -----------------------------------------------------------------
+  //  THE GRID, AND A JUMP THAT ALWAYS FITS IT
+  // -----------------------------------------------------------------
+  //
+  //  Maximus wanted the ground to be a grid you can read, and a jump
+  //  that goes exactly THREE squares across and TWO squares up. So you
+  //  can look at a gap, count the squares, and KNOW.
+  //
+  //  The trouble is you speed up as you run, and a jump that carries
+  //  you three squares at walking pace carries you six at full pelt.
+  //  So the jump isn't fixed - it's worked out FROM your speed, every
+  //  time, to land on exactly the promise.
+  //
+  //  If you want to be three squares wide, you must be in the air for
+  //  time  t = 3 * GRID / speed.  A jump that takes t seconds and gets
+  //  h high needs:
+  //
+  //      gravity = 8h / t*t        and       kick = gravity * t / 2
+  //
+  //  Put h = 2 grids in and the whole thing falls out. Three across and
+  //  two up, at 380 pixels a second or at 900.
+  const JUMP_ACROSS = 3;       // squares of HOLE you can clear
+  const JUMP_UP     = 2;       // squares of BLOCK you can clear
+
+  // A LITTLE MORE THAN THE PROMISE.
+  //
+  // Built to exactly three and two, the arc measured 2.97 across and
+  // 1.87 up - so the widest hole and the tallest block were each a hair
+  // TOO BIG, and a perfect run died at 23 metres. Clearing a three-wide
+  // hole isn't reaching the far edge, it's landing your feet past it.
+  // So the arc is built a bit bigger than the promise, and the promise
+  // then comes true.
+  const OVER_ACROSS = 0.55;
+  const OVER_UP     = 0.4;
+
+  function GRID() { return Math.round(clamp(H * 0.105, 42, 78)); }
+
+  function airTime() { return (JUMP_ACROSS + OVER_ACROSS) * GRID() / speed; }
+  function gravity() { const t = airTime();
+                       return 8 * ((JUMP_UP + OVER_UP) * GRID()) / (t * t); }
+  function jumpKick() { return gravity() * airTime() / 2; }
 
   const PLAYER_W = 26, PLAYER_H = 44;
 
@@ -148,34 +185,46 @@
   let madeTo = 0;
 
   function makeMore() {
-    // Gets meaner the further you get, but never so mean it's unfair -
-    // there's always a gap you can land in.
+    // EVERYTHING IS WHOLE SQUARES. A hole is 1, 2 or 3 wide and a block
+    // is 1 or 2 high, so nothing is ever a hair too big to clear - you
+    // can count it off the floor before you get there.
+    const g = GRID();
     const hard = Math.min(1, dist / 900);
-    const gap = 320 + Math.random() * 380 - hard * 120;
-    madeTo += gap;
+
+    // Gaps between things, in squares. Four to seven squares LOOKS like
+    // plenty on paper and isn't: a jump is in the air for nearly four
+    // squares' worth, so you land and have to take off again with no
+    // stride in between. A perfect run died at 93 metres. Seven to
+    // twelve gives you room to land, run, and set up the next one.
+    madeTo += (7 + Math.floor(Math.random() * 6)) * g;
 
     const roll = Math.random();
 
     if (roll < 0.16 + hard * 0.12) {
-      // A HOLE. Wide enough to need a real jump, never wider than one.
-      const w = 90 + Math.random() * (70 + hard * 90);
-      pits.push({ x: madeTo, w: w });
-      madeTo += w;
+      // A HOLE. Never wider than the jump - THREE squares is the most
+      // there will ever be, and three squares is exactly what you have.
+      const wide = 1 + Math.floor(Math.random() * (hard > 0.5 ? 3 : 2));
+      pits.push({ x: madeTo, w: wide * g, squares: wide });
+      madeTo += wide * g;
     } else if (roll < 0.72) {
-      // A BLOCK to clear.
-      const h = 34 + Math.random() * (30 + hard * 46);
-      blocks.push({ x: madeTo, w: 34 + Math.random() * 26, h: h, hit: false });
+      // A BLOCK, one or two squares tall - and two is exactly your
+      // jump, so the tallest thing here is always just clearable.
+      const tall = 1 + (Math.random() < 0.35 + hard * 0.3 ? 1 : 0);
+      blocks.push({ x: madeTo, w: g * 0.7, h: tall * g, hit: false, squares: tall });
     } else {
-      // TWO BLOCKS with a breath between them - the double jump's job.
-      const h = 30 + Math.random() * 34;
-      blocks.push({ x: madeTo, w: 30, h: h, hit: false });
-      blocks.push({ x: madeTo + 150 + Math.random() * 60, w: 30, h: h + 16, hit: false });
-      madeTo += 210;
+      // TWO BLOCKS, five squares apart. Three squares looked like the
+      // right answer because three is the jump - but a jump is IN THE
+      // AIR for three and a half, so you were still coming down when
+      // the second one arrived. Five leaves you a stride to land and
+      // take off again.
+      blocks.push({ x: madeTo, w: g * 0.7, h: g, hit: false, squares: 1 });
+      blocks.push({ x: madeTo + 5 * g, w: g * 0.7, h: g * 2, hit: false, squares: 2 });
+      madeTo += 5 * g;
     }
 
     // Something in the background for the monster to smash.
     scenery.push({
-      x: madeTo - gap * 0.5,
+      x: madeTo - GRID() * 3,
       w: 90 + Math.random() * 140,
       h: 120 + Math.random() * 260,
       shade: 0.5 + Math.random() * 0.4,
@@ -208,8 +257,7 @@
     // what makes a double block clearable instead of just cruel.
     if (player.jumps >= 2) return;
     player.jumps++;
-    player.vy = -JUMP_KICK;
-    player.holding = 0;
+    player.vy = -jumpKick();
     player.onGround = false;
   }
 
@@ -242,11 +290,7 @@
     // ---- UP AND DOWN ---------------------------------------------------
     // Holding the button keeps pushing you up for a moment, so a tap is
     // a hop and a hold is a proper leap. One button, two jumps.
-    if (held && player.holding < HOLD_MAX && player.vy < 0) {
-      player.vy -= HOLD_LIFT * dt;
-      player.holding += dt;
-    }
-    player.vy += GRAVITY * dt;
+    player.vy += gravity() * dt;
     player.y += player.vy * dt;
 
     if (player.y >= 0) {
@@ -331,7 +375,7 @@
     for (const b of bits) {
       b.x += b.vx * dt;
       b.y += b.vy * dt;
-      b.vy += GRAVITY * 0.55 * dt;
+      b.vy += gravity() * 0.55 * dt;
       b.spin += dt * 5;
       b.life -= dt;
       if (b.y > 0) { b.y = 0; b.vy *= -0.35; b.vx *= 0.7; }
@@ -440,13 +484,44 @@
     }
     if (at < W) ctx.fillRect(at, gy, W - at, 16);
 
+    // ---- THE GRID ---------------------------------------------------
+    // The squares are the whole point: a hole is so many squares wide
+    // and your jump is three, so you can COUNT whether you'll make it
+    // instead of guessing and hoping.
+    const g = GRID();
+    const off2 = camX % g;
+    ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i = -1; i < W / g + 2; i++) {
+      const x = i * g - off2;
+      ctx.moveTo(x, gy); ctx.lineTo(x, H);
+    }
+    for (let r = 1; r * g < H - gy; r++) {
+      ctx.moveTo(0, gy + r * g); ctx.lineTo(W, gy + r * g);
+    }
+    ctx.stroke();
+
+    // HOW HIGH YOU CAN GET. Two faint lines in the air at one and two
+    // squares - the second one is your ceiling, so anything under it
+    // is clearable and you can see that at a glance.
+    ctx.setLineDash([10, 12]);
+    for (let up = 1; up <= JUMP_UP; up++) {
+      ctx.strokeStyle = up === JUMP_UP ? 'rgba(255,214,130,0.30)'
+                                       : 'rgba(255,255,255,0.10)';
+      ctx.beginPath();
+      ctx.moveTo(0, gy - up * g); ctx.lineTo(W, gy - up * g);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+
     // Streaks tearing past, so the speed is something you can see even
     // when the ground is otherwise plain.
     ctx.fillStyle = 'rgba(255,255,255,0.10)';
-    const period = 90;
-    const off2 = camX % period;
+    const period = g;
+    const off3 = camX % period;
     for (let i = -1; i < W / period + 2; i++) {
-      ctx.fillRect(i * period - off2, gy + 22, 46, 3);
+      ctx.fillRect(i * period - off3, gy + g * 0.42, g * 0.5, 3);
     }
   }
 
@@ -631,17 +706,25 @@
       e.preventDefault();
     }
   });
+  // LETTING GO CUTS THE JUMP SHORT. Hold it all the way and you get
+  // the full three across and two up; a quick tap is a little hop. One
+  // button, and how long you hold it is the only other control there is.
+  function release() {
+    held = false;
+    if (state === 'run' && player.vy < 0) player.vy *= 0.42;
+  }
+
   window.addEventListener('keyup', function (e) {
     const k = e.key.toLowerCase();
-    if (k === ' ' || k === 'w' || k === 'arrowup') held = false;
+    if (k === ' ' || k === 'w' || k === 'arrowup') release();
   });
 
   canvas.addEventListener('mousedown', function () { jump(); held = true; });
-  canvas.addEventListener('mouseup',   function () { held = false; });
+  canvas.addEventListener('mouseup',   function () { release(); });
   canvas.addEventListener('touchstart', function (e) {
     e.preventDefault(); jump(); held = true;
   }, { passive: false });
-  canvas.addEventListener('touchend',  function () { held = false; });
+  canvas.addEventListener('touchend',  function () { release(); });
 
 
 // -------------------------------------------------------------------
