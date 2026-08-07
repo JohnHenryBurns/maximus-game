@@ -253,14 +253,20 @@
       madeTo += 5 * g;
     }
 
-    // Something in the background for the monster to smash.
-    scenery.push({
-      x: madeTo - GRID() * 3,
-      w: 90 + Math.random() * 140,
-      h: 120 + Math.random() * 260,
-      shade: 0.5 + Math.random() * 0.4,
-      gone: false
-    });
+    // THINGS IN THE DARK, WATCHING. One of these used to be one
+    // building; now each is a pair of eyes, and three of them per stretch
+    // of road is the difference between "some eyes" and "the dark is
+    // full of them". They're still what the monster eats, so they go out
+    // pair by pair as it gains.
+    for (let e = 0; e < 3; e++) {
+      scenery.push({
+        x: madeTo - GRID() * (1 + Math.random() * 7),
+        w: 90 + Math.random() * 140,
+        h: 60 + Math.random() * 330,
+        shade: 0.35 + Math.random() * 0.6,
+        gone: false
+      });
+    }
   }
 
   function tidyUp() {
@@ -711,59 +717,131 @@
   function sx(x) { return x - camX; }
 
   function drawSky() {
-    const g = ctx.createLinearGradient(0, 0, 0, groundY());
-    g.addColorStop(0, '#241a3a');
-    g.addColorStop(1, '#5b3350');
-    ctx.fillStyle = g;
+    // PITCH BLACK. No gradient, no moon, no city - Maximus wanted the
+    // dark itself, and the only things in it are looking at you.
+    ctx.fillStyle = '#000000';
     ctx.fillRect(0, 0, W, groundY());
+  }
 
-    // A moon, parked. It doesn't scroll, which quietly tells your eye
-    // it's a very long way away.
-    ctx.fillStyle = 'rgba(255,238,200,0.85)';
+  // ---- ONE EYE --------------------------------------------------------
+  // A glow, the yellow, and a pupil that never quite looks away.
+  function drawEye(x, y, r, open) {
+    if (open <= 0.02) return;
+    ctx.fillStyle = 'rgba(255,186,50,0.10)';
+    ctx.beginPath(); ctx.arc(x, y, r * 3.2, 0, Math.PI * 2); ctx.fill();
+
+    // The eye is WIDER than it is tall, and the pupil is small inside
+    // it. First go had the pupil almost as tall as the eye, which left
+    // two yellow crescents either side of a black slab - it read as a
+    // weird shape rather than as something looking at you.
+    ctx.fillStyle = '#ffc23a';
     ctx.beginPath();
-    ctx.arc(W * 0.78, H * 0.16, Math.min(W, H) * 0.055, 0, Math.PI * 2);
+    ctx.ellipse(x, y, r, r * 0.74 * open, 0, 0, Math.PI * 2);
     ctx.fill();
+
+    // The pupil slides towards YOU - the player is always about a third
+    // of the way across the screen, so they're all turned that way.
+    const look = clamp((W * 0.32 - x) / (W * 0.6), -1, 1);
+    ctx.fillStyle = '#160a02';
+    ctx.beginPath();
+    ctx.ellipse(x + look * r * 0.4, y, r * 0.3, r * 0.46 * open, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // ---- TEETH ----------------------------------------------------------
+  // Two rows, top and bottom, so the whole screen is the inside of a
+  // mouth and the running is happening in it.
+  function drawTeeth() {
+    const gy = groundY();
+    ctx.fillStyle = '#efe4cf';
+
+    // Hanging down from the top.
+    const stepA = 74, offA = (camX * 0.14) % stepA;
+    for (let i = -1; i < W / stepA + 2; i++) {
+      const x = i * stepA - offA;
+      const len = 40 + ((i * 53) % 46);
+      ctx.beginPath();
+      ctx.moveTo(x, -4);
+      ctx.lineTo(x + stepA * 0.5, len);
+      ctx.lineTo(x + stepA, -4);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // And coming up out of the dark at the horizon.
+    ctx.fillStyle = '#d8ccb6';
+    const stepB = 92, offB = (camX * 0.24) % stepB;
+    for (let i = -1; i < W / stepB + 2; i++) {
+      const x = i * stepB - offB;
+      const len = 34 + ((i * 71) % 54);
+      ctx.beginPath();
+      ctx.moveTo(x, gy + 2);
+      ctx.lineTo(x + stepB * 0.5, gy - len);
+      ctx.lineTo(x + stepB, gy + 2);
+      ctx.closePath();
+      ctx.fill();
+    }
   }
 
   // ---- LAYERS ---------------------------------------------------------
   // The far hills crawl, the buildings walk, the pavement sprints. Three
   // speeds is all it takes for flat shapes to feel deep - and it's the
   // only trick this game has for depth, so it does a lot of work.
+  // A further row, crawling - the same trick as the old hills, and it's
+  // still doing the same job: three speeds is what makes flat shapes
+  // feel deep.
   function drawHills() {
-    ctx.fillStyle = '#2b1f42';
-    const step = 260;
-    const off = (camX * 0.18) % step;
-    ctx.beginPath();
-    ctx.moveTo(-step, groundY());
+    const gy = groundY();
+    ctx.fillStyle = '#3a3126';
+    const step = 150, off = (camX * 0.07) % step;
     for (let i = -1; i < W / step + 2; i++) {
       const x = i * step - off;
-      ctx.lineTo(x, groundY() - 90 - ((i * 37) % 70));
-      ctx.lineTo(x + step / 2, groundY() - 30);
+      const len = 60 + ((i * 37) % 70);
+      ctx.beginPath();
+      ctx.moveTo(x, gy + 2);
+      ctx.lineTo(x + step * 0.5, gy - len);
+      ctx.lineTo(x + step, gy + 2);
+      ctx.closePath();
+      ctx.fill();
     }
-    ctx.lineTo(W + step, groundY());
-    ctx.closePath();
-    ctx.fill();
   }
 
   function drawScenery() {
+    // These used to be buildings. They're EYES now - and they're still
+    // the things the monster eats, so as it gains on you the eyes go
+    // out one pair at a time. Same list, same mechanic, better world.
     for (const s of scenery) {
       if (s.gone) continue;
-      const x = sx(s.x) * 0.72 + W * 0.14;    // walks slower than the road
+      const x = sx(s.x) * 0.72 + W * 0.14;
       if (x > W + 200 || x + s.w < -200) continue;
-      const base = groundY() - 6;
-      ctx.fillStyle = rgb([54 * s.shade + 26, 44 * s.shade + 22, 84 * s.shade + 30]);
-      ctx.fillRect(x, base - s.h, s.w, s.h);
 
-      // Windows. Some lit, some not, and always the same ones for a
-      // given building - worked out from its position, not from
-      // Math.random(), or they would flicker every single frame.
-      for (let wy = 0; wy < Math.floor(s.h / 34); wy++) {
-        for (let wx = 0; wx < Math.floor(s.w / 30); wx++) {
-          const lit = ((Math.floor(s.x) + wx * 7 + wy * 13) % 5) < 2;
-          ctx.fillStyle = lit ? 'rgba(255,214,130,0.75)' : 'rgba(20,16,32,0.5)';
-          ctx.fillRect(x + 10 + wx * 30, base - s.h + 14 + wy * 34, 13, 18);
-        }
-      }
+      // How high up this pair floats, and how big - straight out of the
+      // numbers the building used to use, so they're spread the same way.
+      const y = groundY() - 40 - s.h * 0.9;
+      const r = 7 + s.shade * 16;
+      const gap = r * 3.1;
+
+      // BLINKING. Worked out from the eye's own position, not from
+      // Math.random() - random would make every eye flicker sixty times
+      // a second instead of blinking now and then.
+      const ph = (clock * 0.55 + s.x * 0.017) % 1;
+      const open = ph > 0.94 ? Math.abs(ph - 0.97) / 0.03 : 1;
+
+      drawEye(x, y, r, open);
+      drawEye(x + gap, y, r, open);
+
+      // A SECOND PAIR, further back and dimmer. Costs almost nothing and
+      // doubles how many are out there - and at a different parallax, so
+      // the dark has depth to it instead of being one flat curtain.
+      const bx = sx(s.x) * 0.44 + W * 0.3;
+      const by = groundY() - 26 - s.h * 0.45;
+      const br = r * 0.55;
+      const ph2 = (clock * 0.43 + s.x * 0.029) % 1;
+      const open2 = ph2 > 0.95 ? Math.abs(ph2 - 0.975) / 0.025 : 1;
+      ctx.globalAlpha = 0.55;
+      drawEye(bx, by, br, open2);
+      drawEye(bx + br * 3.1, by, br, open2);
+      ctx.globalAlpha = 1;
     }
   }
 
@@ -1179,6 +1257,7 @@
     }
 
     drawSky();
+    drawTeeth();
     drawHills();
     drawScenery();
     drawGround();
