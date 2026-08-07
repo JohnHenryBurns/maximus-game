@@ -33,7 +33,7 @@
 <body>
 
 <canvas id="screen"></canvas>
-<div id="hud">SPACE or CLICK to jump <div id="hud">SPACE or CLICK to jump &nbsp;&nbsp; hold it to jump higher &nbsp;&nbsp; press it again in the air to double jump</div>nbsp;<div id="hud">SPACE or CLICK to jump &nbsp;&nbsp; hold it to jump higher &nbsp;&nbsp; press it again in the air to double jump</div>nbsp; hold it for the full 3 squares <div id="hud">SPACE or CLICK to jump &nbsp;&nbsp; hold it to jump higher &nbsp;&nbsp; press it again in the air to double jump</div>nbsp;<div id="hud">SPACE or CLICK to jump &nbsp;&nbsp; hold it to jump higher &nbsp;&nbsp; press it again in the air to double jump</div>nbsp; press again in the air to double jump</div>
+<div id="hud">SPACE or CLICK to jump &nbsp;&nbsp; hold it for the full 3 squares &nbsp;&nbsp; press again in the air to double jump</div>
 
 <script>
 // ===================================================================
@@ -206,11 +206,28 @@
       const wide = 1 + Math.floor(Math.random() * (hard > 0.5 ? 3 : 2));
       pits.push({ x: madeTo, w: wide * g, squares: wide });
       madeTo += wide * g;
-    } else if (roll < 0.72) {
+    } else if (roll < 0.52) {
       // A BLOCK, one or two squares tall - and two is exactly your
       // jump, so the tallest thing here is always just clearable.
       const tall = 1 + (Math.random() < 0.35 + hard * 0.3 ? 1 : 0);
       blocks.push({ x: madeTo, w: g * 0.7, h: tall * g, hit: false, squares: tall });
+    } else if (roll < 0.78) {
+      // A PLATFORM. Wide enough to land on and run along, one or two
+      // squares up. You can go over it OR along the top of it, and
+      // going along the top is faster because you skip what's beside it.
+      const tall = 1 + (Math.random() < 0.45 ? 1 : 0);
+      const wide = 3 + Math.floor(Math.random() * 4);
+      blocks.push({ x: madeTo, w: wide * g, h: tall * g,
+                    hit: false, squares: tall, platform: true });
+      madeTo += wide * g;
+
+      // Sometimes a second one, a step up - so you can climb.
+      if (Math.random() < 0.45) {
+        const w2 = 3 + Math.floor(Math.random() * 3);
+        blocks.push({ x: madeTo + 3 * g, w: w2 * g, h: Math.min(2, tall + 1) * g,
+                      hit: false, squares: Math.min(2, tall + 1), platform: true });
+        madeTo += 3 * g + w2 * g;
+      }
     } else {
       // TWO BLOCKS, five squares apart. Three squares looked like the
       // right answer because three is the jump - but a jump is IN THE
@@ -261,12 +278,34 @@
     player.onGround = false;
   }
 
-  // Is there floor under a given world x?
+  // Is there pavement under a given world x?
   function floorAt(x) {
     for (const p of pits) {
       if (x > p.x && x < p.x + p.w) return false;
     }
     return true;
+  }
+
+  // WHAT IS UNDER HIS FEET.
+  //
+  // Remember y is upside down here: 0 is the pavement and NEGATIVE is
+  // higher up. So a platform one square tall has its top at -GRID.
+  //
+  // Only surfaces at or below the feet count. Stood on the pavement
+  // beside a two-square platform, that platform is over your head, not
+  // under your boots - and forgetting that is how you get a player who
+  // teleports onto things by walking past them.
+  function supportUnder(x, feetY) {
+    let best = null;
+    for (const b of blocks) {
+      if (x < b.x || x > b.x + b.w) continue;
+      const top = -b.h;
+      if (top >= feetY - 2) {
+        if (best === null || top < best) best = top;
+      }
+    }
+    if (best !== null) return best;
+    return floorAt(x) ? 0 : null;
   }
 
 
@@ -290,11 +329,36 @@
     // ---- UP AND DOWN ---------------------------------------------------
     // Holding the button keeps pushing you up for a moment, so a tap is
     // a hop and a hold is a proper leap. One button, two jumps.
+    const wasY = player.y;
     player.vy += gravity() * dt;
     player.y += player.vy * dt;
 
-    if (player.y >= 0) {
-      // Only land if there is actually floor here.
+    const mid = player.x + PLAYER_W / 2;
+
+    // ---- COMING DOWN ONTO SOMETHING ------------------------------------
+    // Only ever from above, and only while falling. Landing is crossing
+    // a surface downwards; anything else is walking into its side.
+    let landed = false;
+    if (player.vy >= 0) {
+      const sup = supportUnder(mid, wasY);
+      if (sup !== null && wasY <= sup + 2 && player.y >= sup) {
+        player.y = sup; player.vy = 0;
+        player.onGround = true; player.jumps = 0;
+        landed = true;
+      }
+    }
+
+    // ---- WALKING OFF THE END OF ONE ------------------------------------
+    if (!landed && player.onGround) {
+      const still = supportUnder(mid, player.y);
+      if (still === null || Math.abs(still - player.y) > 3) {
+        player.onGround = false;      // nothing there now - over you go
+        player.jumps = Math.max(player.jumps, 1);   // no free ground-jump
+      }
+    }
+
+    if (!landed && player.y >= 0) {
+      // Only land if there is actually pavement here.
       if (floorAt(player.x) && floorAt(player.x + PLAYER_W)) {
         player.y = 0; player.vy = 0;
         player.onGround = true;
@@ -329,7 +393,8 @@
     for (const b of blocks) {
       if (b.hit) continue;
       if (player.x + PLAYER_W < b.x || player.x > b.x + b.w) continue;
-      // Above it? You cleared it.
+      // Stood ON it, or over the top of it? Then you didn't hit it -
+      // you cleared it, or you're running along it.
       if (-player.y > b.h - 6) continue;
       b.hit = true;
       player.stumble = 0.55;
@@ -529,11 +594,35 @@
     for (const b of blocks) {
       const x = sx(b.x);
       if (x > W + 60 || x + b.w < -60) continue;
-      const gy = groundY();
-      ctx.fillStyle = b.hit ? '#6b4a3a' : '#a8703f';
-      ctx.fillRect(x, gy - b.h, b.w, b.h);
-      ctx.fillStyle = b.hit ? '#4d362a' : '#7d5330';
-      ctx.fillRect(x, gy - b.h, b.w, 7);
+      const gy = groundY(), g = GRID();
+
+      if (b.platform) {
+        // A PLATFORM: pale stone with a bright top edge. It has to look
+        // DIFFERENT from a block at a glance, because one of them you
+        // get over and the other one you get ON, and deciding which is
+        // which at full speed is the whole skill.
+        ctx.fillStyle = '#6b5a86';
+        ctx.fillRect(x, gy - b.h, b.w, b.h);
+        ctx.fillStyle = '#b9a3dd';
+        ctx.fillRect(x, gy - b.h, b.w, 9);
+
+        // The grid carries on across it, so you can still count squares
+        // when you're up on top.
+        ctx.strokeStyle = 'rgba(255,255,255,0.13)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        for (let i = 1; i * g < b.w; i++) {
+          ctx.moveTo(x + i * g, gy - b.h + 9);
+          ctx.lineTo(x + i * g, gy);
+        }
+        ctx.stroke();
+      } else {
+        ctx.fillStyle = b.hit ? '#6b4a3a' : '#a8703f';
+        ctx.fillRect(x, gy - b.h, b.w, b.h);
+        ctx.fillStyle = b.hit ? '#4d362a' : '#7d5330';
+        ctx.fillRect(x, gy - b.h, b.w, 7);
+      }
+
       ctx.strokeStyle = 'rgba(0,0,0,0.35)';
       ctx.lineWidth = 2;
       ctx.strokeRect(x, gy - b.h, b.w, b.h);
