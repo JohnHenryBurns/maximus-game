@@ -150,6 +150,7 @@
   let bits = [];           // flying debris
   let crates = [];         // still falling out of the sky
   let crateTimer = 3.5;
+  let trailPit = null;     // the hole eating the road at your heels
   let cracks = [];         // road ahead that is about to give way
   let crackTimer = 5;
   let booms = [];          // the flashes going off behind you
@@ -188,7 +189,7 @@
     camX = 0; dist = 0; speed = START_SPEED; lead = LEAD_START; clock = 0;
     blocks = []; pits = []; scenery = []; bits = []; crates = []; booms = [];
     crateTimer = 3.5; lastHalf = 0; flash = 0; shake = 0;
-    cracks = []; crackTimer = 5;
+    cracks = []; crackTimer = 5; trailPit = null;
     player.x = 0; player.y = 0; player.vy = 0;
     player.onGround = true; player.jumps = 0; player.holding = 0;
     player.stumble = 0; player.run = 0;
@@ -614,6 +615,37 @@
   // without the list ever growing without end.
   const BITS_MAX = 900;
 
+  // -------------------------------------------------------------------
+  //  THE ROAD GOES AT YOUR HEELS
+  // -------------------------------------------------------------------
+  //
+  //  Every half square, the pavement HALF A SQUARE BEHIND YOU falls
+  //  away. There is no going back and there never was, and now you can
+  //  see it: a hole opening at your heels, all the way back to the
+  //  monster's teeth.
+  //
+  //  Half a square behind is the whole safety of it. The hole's near
+  //  edge is always that far back, so it can never open under your own
+  //  feet however slowly you're going - and stumbling doesn't help it
+  //  catch you, because it's measured from where you ARE, not from a
+  //  clock.
+  function eatGroundBehind() {
+    const g = GRID();
+    const w = g * 0.5;
+    const x = player.x - g;              // ends half a square behind you
+
+    // ONE HOLE THAT GROWS, not a new one every half square. Twenty-five
+    // new holes a second would be twenty-five things every landing
+    // check has to look through, every frame, for ever.
+    if (trailPit && Math.abs((trailPit.x + trailPit.w) - x) < w * 2.2
+                 && trailPit.w < g * 40) {
+      trailPit.w = (x + w) - trailPit.x;
+      return;
+    }
+    trailPit = { x: x, w: w, squares: 0.5, trail: true };
+    pits.push(trailPit);
+  }
+
   function blowUpBehind() {
     const front = monsterX();
     const room = player.x - 40 - front;
@@ -700,7 +732,7 @@
     let owed = nowHalf - lastHalf;
     lastHalf = nowHalf;
     if (owed > 6) owed = 6;                // after a stumble, don't flood
-    while (owed-- > 0) blowUpBehind();
+    while (owed-- > 0) { blowUpBehind(); eatGroundBehind(); }
 
     if (flash > 0) flash = Math.max(0, flash - dt * 2.2);
     if (shake > 0) shake = Math.max(0, shake - dt * 1.6);
