@@ -748,15 +748,98 @@
     ctx.fill();
   }
 
-  // ---- TEETH ----------------------------------------------------------
-  // Two rows, top and bottom, so the whole screen is the inside of a
-  // mouth and the running is happening in it.
-  function drawTeeth() {
-    const gy = groundY();
-    ctx.fillStyle = '#efe4cf';
+  // ---- ONE MONSTER, drawn anywhere, any size -------------------------
+  //
+  //  The thing chasing you is a boiling dark mass with a toothy edge and
+  //  glowing eyes. Maximus wants the whole background to be that, over
+  //  and over - so the shape comes out into ONE function and gets used
+  //  for the real one AND for every one of the crowd behind it.
+  //
+  //  Written twice, the crowd would drift away from the real monster the
+  //  first time either changed, and you'd end up being chased by
+  //  something that doesn't match its own family.
 
-    // Hanging down from the top.
-    const stepA = 74, offA = (camX * 0.14) % stepA;
+  function monsterHead(cx, baseY, w, h, phase, dim) {
+    const half = w / 2;
+    const topY = baseY - h;
+
+    // The lumpy top edge, boiling. Same two waves the real one uses.
+    ctx.fillStyle = dim > 0.55 ? '#0d0a14' : '#080611';
+    ctx.beginPath();
+    ctx.moveTo(cx - half, baseY);
+    const steps = Math.max(5, Math.round(w / 22));
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const x = cx - half + w * t;
+      // A dome, plus the boil.
+      const dome = Math.sin(t * Math.PI);
+      const wob = Math.sin(t * 9 + clock * 5 + phase) * h * 0.06 +
+                  Math.sin(t * 21 - clock * 8 + phase) * h * 0.03;
+      ctx.lineTo(x, baseY - dome * h - wob);
+    }
+    ctx.lineTo(cx + half, baseY);
+    ctx.closePath();
+    ctx.fill();
+
+    // TEETH along the edge, pointing inwards - the same pale triangles.
+    ctx.fillStyle = dim > 0.55 ? 'rgba(239,228,207,0.92)' : 'rgba(150,142,128,0.75)';
+    const nT = Math.max(3, Math.round(w / 34));
+    for (let i = 0; i < nT; i++) {
+      const t = (i + 0.5) / nT;
+      const x = cx - half + w * t;
+      const dome = Math.sin(t * Math.PI);
+      const y = baseY - dome * h;
+      const len = h * (0.07 + 0.05 * Math.abs(Math.sin(i * 2.4 + clock * 2)));
+      ctx.beginPath();
+      ctx.moveTo(x - w / nT * 0.4, y);
+      ctx.lineTo(x, y + len);
+      ctx.lineTo(x + w / nT * 0.4, y);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // AND THE EYES. Every one of them turned towards the player.
+    const r = Math.max(3, h * 0.055);
+    const ey = baseY - h * 0.52;
+    const gap = r * 3.4;
+    const ph = (clock * 0.5 + cx * 0.013) % 1;
+    const open = ph > 0.95 ? Math.abs(ph - 0.975) / 0.025 : 1;
+    ctx.globalAlpha = dim;
+    drawEye(cx - gap / 2, ey, r, open);
+    drawEye(cx + gap / 2, ey, r, open);
+    ctx.globalAlpha = 1;
+  }
+
+  // ---- THE CROWD ------------------------------------------------------
+  // Rank after rank of them pressing in behind, three depths deep. The
+  // far ones crawl, the near ones walk - the same three-speeds trick
+  // that gives flat shapes depth, doing double duty as "there are
+  // hundreds and they go back a long way".
+  function drawCrowd() {
+    const gy = groundY();
+    const rows = [
+      { par: 0.10, step: 150, h: 0.30, dim: 0.35, lift: 6 },
+      { par: 0.22, step: 210, h: 0.46, dim: 0.55, lift: 2 },
+      { par: 0.38, step: 300, h: 0.66, dim: 0.80, lift: -4 }
+    ];
+
+    for (let r = 0; r < rows.length; r++) {
+      const row = rows[r];
+      const off = (camX * row.par) % row.step;
+      for (let i = -1; i < W / row.step + 2; i++) {
+        const x = i * row.step - off + row.step / 2;
+        // Deterministic wobble per head, so they don't all match and
+        // don't flicker either.
+        const seed = Math.abs(Math.round((x + camX * row.par) / row.step)) + r * 37;
+        const tall = H * row.h * (0.72 + ((seed * 17) % 40) / 100);
+        const wide = row.step * (0.85 + ((seed * 29) % 50) / 100);
+        monsterHead(x, gy + row.lift, wide, tall, seed * 1.7, row.dim);
+      }
+    }
+
+    // And the teeth of something even bigger, hanging over the lot.
+    ctx.fillStyle = '#efe4cf';
+    const stepA = 74, offA = (camX * 0.06) % stepA;
     for (let i = -1; i < W / stepA + 2; i++) {
       const x = i * stepA - offA;
       const len = 40 + ((i * 53) % 46);
@@ -767,81 +850,18 @@
       ctx.closePath();
       ctx.fill();
     }
-
-    // And coming up out of the dark at the horizon.
-    ctx.fillStyle = '#d8ccb6';
-    const stepB = 92, offB = (camX * 0.24) % stepB;
-    for (let i = -1; i < W / stepB + 2; i++) {
-      const x = i * stepB - offB;
-      const len = 34 + ((i * 71) % 54);
-      ctx.beginPath();
-      ctx.moveTo(x, gy + 2);
-      ctx.lineTo(x + stepB * 0.5, gy - len);
-      ctx.lineTo(x + stepB, gy + 2);
-      ctx.closePath();
-      ctx.fill();
-    }
-  }
-
-  // ---- LAYERS ---------------------------------------------------------
-  // The far hills crawl, the buildings walk, the pavement sprints. Three
-  // speeds is all it takes for flat shapes to feel deep - and it's the
-  // only trick this game has for depth, so it does a lot of work.
-  // A further row, crawling - the same trick as the old hills, and it's
-  // still doing the same job: three speeds is what makes flat shapes
-  // feel deep.
-  function drawHills() {
-    const gy = groundY();
-    ctx.fillStyle = '#3a3126';
-    const step = 150, off = (camX * 0.07) % step;
-    for (let i = -1; i < W / step + 2; i++) {
-      const x = i * step - off;
-      const len = 60 + ((i * 37) % 70);
-      ctx.beginPath();
-      ctx.moveTo(x, gy + 2);
-      ctx.lineTo(x + step * 0.5, gy - len);
-      ctx.lineTo(x + step, gy + 2);
-      ctx.closePath();
-      ctx.fill();
-    }
   }
 
   function drawScenery() {
-    // These used to be buildings. They're EYES now - and they're still
-    // the things the monster eats, so as it gains on you the eyes go
-    // out one pair at a time. Same list, same mechanic, better world.
+    // These are the ones the MONSTER EATS. Same list it always was - so
+    // as it gains on you, the crowd behind you is swallowed head by
+    // head. They're the nearest and biggest rank of the lot.
     for (const s of scenery) {
       if (s.gone) continue;
-      const x = sx(s.x) * 0.72 + W * 0.14;
-      if (x > W + 200 || x + s.w < -200) continue;
-
-      // How high up this pair floats, and how big - straight out of the
-      // numbers the building used to use, so they're spread the same way.
-      const y = groundY() - 40 - s.h * 0.9;
-      const r = 7 + s.shade * 16;
-      const gap = r * 3.1;
-
-      // BLINKING. Worked out from the eye's own position, not from
-      // Math.random() - random would make every eye flicker sixty times
-      // a second instead of blinking now and then.
-      const ph = (clock * 0.55 + s.x * 0.017) % 1;
-      const open = ph > 0.94 ? Math.abs(ph - 0.97) / 0.03 : 1;
-
-      drawEye(x, y, r, open);
-      drawEye(x + gap, y, r, open);
-
-      // A SECOND PAIR, further back and dimmer. Costs almost nothing and
-      // doubles how many are out there - and at a different parallax, so
-      // the dark has depth to it instead of being one flat curtain.
-      const bx = sx(s.x) * 0.44 + W * 0.3;
-      const by = groundY() - 26 - s.h * 0.45;
-      const br = r * 0.55;
-      const ph2 = (clock * 0.43 + s.x * 0.029) % 1;
-      const open2 = ph2 > 0.95 ? Math.abs(ph2 - 0.975) / 0.025 : 1;
-      ctx.globalAlpha = 0.55;
-      drawEye(bx, by, br, open2);
-      drawEye(bx + br * 3.1, by, br, open2);
-      ctx.globalAlpha = 1;
+      const x = sx(s.x) * 0.62 + W * 0.19;
+      if (x > W + 300 || x < -300) continue;
+      monsterHead(x, groundY() - 2, s.w * 1.9, 90 + s.h * 0.85,
+                  s.x * 0.011, 0.95);
     }
   }
 
@@ -1257,8 +1277,7 @@
     }
 
     drawSky();
-    drawTeeth();
-    drawHills();
+    drawCrowd();
     drawScenery();
     drawGround();
     drawBlocks();
