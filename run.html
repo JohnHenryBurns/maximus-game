@@ -592,15 +592,19 @@
     // towards just-behind-you, which is where you'll actually see it.
     const x = player.x - 40 - Math.pow(Math.random(), 1.7) * room;
 
-    // A block or crate caught in it is simply gone.
+    // A block or crate caught in it is simply gone - but PLATFORMS
+    // STAND. They're the thing you get up onto and run along, so
+    // blowing them up takes away the one bit of the road you can
+    // actually use. Blast the obstacles, leave the road.
     for (let i = blocks.length - 1; i >= 0; i--) {
       const b = blocks[i];
+      if (b.platform) continue;
       if (b.x + b.w < x - 40 || b.x > x + 40) continue;
       bits.push({ x: b.x + b.w / 2, y: -b.h / 2,
                   vx: (Math.random() - 0.4) * 300, vy: -260 - Math.random() * 300,
                   size: 8 + Math.random() * 14, life: 0.7 + Math.random() * 0.5,
                   spin: Math.random() * 6,
-                  col: b.crate ? [176, 124, 62] : b.platform ? [126, 110, 160] : [150, 98, 58] });
+                  col: b.crate ? [176, 124, 62] : [150, 98, 58] });
       blocks.splice(i, 1);
       break;                                // one thing per bang
     }
