@@ -17,13 +17,13 @@
 <style>
   html, body {
     margin: 0; height: 100%; overflow: hidden;
-    background: #1a1210; color: #ffe9c8;
+    background: #14100e; color: #ffe9c8;
     font-family: system-ui, sans-serif;
     -webkit-user-select: none; user-select: none;
     overscroll-behavior: none;
     touch-action: none;
   }
-  canvas { display: block; cursor: pointer; }
+  canvas { display: block; }
   #hud {
     position: fixed; left: 0; right: 0; bottom: 6px;
     text-align: center; font-size: 14px; color: #a08c78;
@@ -34,21 +34,23 @@
 <body>
 
 <canvas id="screen"></canvas>
-<div id="hud">CLICK the bins to build a pizza &nbsp;&nbsp; then the OVEN &nbsp;&nbsp; then the WINDOW</div>
+<div id="hud">W A S D or ARROWS to walk &nbsp;&nbsp; E to use what you're stood at</div>
 
 <script>
 // ===================================================================
 //  MAX'S PIZZA
 //
-//  Nothing out here is trying to kill you. That was the whole point of
-//  the idea, and it changes what has to make the game good: with no
-//  danger, the thing that keeps you playing is THE NEXT UPGRADE. You
-//  carry on because you're forty coins off a better oven.
+//  Nothing here is trying to kill you. With no danger, what pulls you
+//  forward is THE NEXT UPGRADE - you keep going because you're forty
+//  coins off a better oven.
 //
-//  Same 3D box painter as the cavern, the wasteland and the rig - build
-//  a list of flat faces, sort them furthest-away-first, and fill them
-//  in that order. Near things end up painted over far things, and you
-//  get 3D out of nothing but coloured shapes.
+//  And a pizza starts as WHEAT IN A FIELD. You walk out, cut it, carry
+//  it back, grind it into dough, and the pizza travels in your hands
+//  the whole way to the window. The walking IS the game.
+//
+//  Same box painter as the cavern, the wasteland and the rig: build a
+//  list of flat faces, sort them furthest-away-first, fill them in that
+//  order, and 3D falls out of nothing but coloured shapes.
 // ===================================================================
 
   const canvas = document.getElementById('screen');
@@ -66,36 +68,25 @@
 
 
 // -------------------------------------------------------------------
-//  THE CAMERA - and it never moves
+//  LOOKING DOWN ON HIM
 // -------------------------------------------------------------------
 //
-//  Every other game Max has built lets you walk about. This one doesn't
-//  need to: you're stood behind a counter and everything you can touch
-//  is in front of you. A camera that never moves means a station is
-//  always in the same place on screen, which makes it easy to click and
-//  easy to learn.
+//  The camera sits high up and behind, tilted steeply down, and it
+//  FOLLOWS him. It never turns, though - north stays at the top of the
+//  screen whichever way he's facing. A top-down view that spins with
+//  the player is the fastest way to get somebody hopelessly lost.
 
-  const cam = { x: 0, y: 38, z: -24, pitch: -0.62 };
+  const cam = { x: 0, y: 0, z: 0, pitch: -0.95 };
+  const CAM_UP = 86, CAM_BACK = 62;
 
-  // HOW ZOOMED IN THE VIEW IS.
-  //
-  // This was H * 0.9, which fits the counter beautifully on a wide
-  // screen and shoves the end bins straight off the sides of a narrow
-  // one - because the counter is WIDE and the zoom only knew about
-  // height. Taking whichever of the two is tighter means the whole
-  // counter fits on any shape of screen, phone included.
-  function focal() { return Math.min(H * 0.9, W * 0.52); }
+  function focal() { return Math.min(H, W) * 0.98; }
 
   function project(x, y, z) {
     const dx = x - cam.x, dy = y - cam.y, dz = z - cam.z;
-
-    // Only a pitch, no yaw - the camera looks straight down the room,
-    // just tilted down at the counter.
     const cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch);
     const fz = dz * cp + dy * sp;
     const fy = dy * cp - dz * sp;
-
-    if (fz < 1) return null;             // behind you, or on your nose
+    if (fz < 1) return null;
     const f = focal() / fz;
     return { x: W / 2 + dx * f, y: H / 2 - fy * f, depth: fz };
   }
@@ -116,57 +107,39 @@
     return 'rgb(' + (c[0] | 0) + ',' + (c[1] | 0) + ',' + (c[2] | 0) + ')';
   }
 
-  // ONE BOX. Eight corners, six sides, each side a flat shape.
-  //
-  // The sides are shaded differently - top brightest, front middling,
-  // sides darker. That's the whole reason a pile of boxes reads as
-  // solid instead of as a flat blob: your eye reads the brightness
-  // change as a corner.
   function addBox(cx, cy, cz, w, h, d, rgb, spin) {
     spin = spin || 0;
     const co = Math.cos(spin), si = Math.sin(spin);
     const hw = w / 2, hh = h / 2, hd = d / 2;
 
     const pts = [];
-    for (const sx of [-1, 1]) {
-      for (const sy of [-1, 1]) {
+    for (const sx of [-1, 1])
+      for (const sy of [-1, 1])
         for (const sz of [-1, 1]) {
           const lx = sx * hw, lz = sz * hd;
-          pts.push(project(cx + lx * co + lz * si,
-                           cy + sy * hh,
+          pts.push(project(cx + lx * co + lz * si, cy + sy * hh,
                            cz - lx * si + lz * co));
         }
-      }
-    }
-    // Any corner behind the camera and the whole box is skipped. Fine
-    // here, because nothing is ever close enough for it to show.
     for (const p of pts) if (!p) return;
 
-    // Which corners make up which side. i = x*4 + y*2 + z
     const sides = [
-      { pts: [2, 3, 7, 6], light: 1.15 },   // top
-      { pts: [0, 1, 5, 4], light: 0.55 },   // bottom
-      { pts: [0, 2, 6, 4], light: 0.95 },   // front
-      { pts: [1, 3, 7, 5], light: 0.75 },   // back
-      { pts: [0, 1, 3, 2], light: 0.80 },   // left
-      { pts: [4, 5, 7, 6], light: 0.88 }    // right
+      { pts: [2, 3, 7, 6], light: 1.18 },   // top - brightest, we're above it
+      { pts: [0, 1, 5, 4], light: 0.55 },
+      { pts: [0, 2, 6, 4], light: 0.92 },
+      { pts: [1, 3, 7, 5], light: 0.72 },
+      { pts: [0, 1, 3, 2], light: 0.80 },
+      { pts: [4, 5, 7, 6], light: 0.86 }
     ];
 
     for (const s of sides) {
       const p = s.pts.map(function (i) { return pts[i]; });
       let depth = 0;
       for (const q of p) depth += q.depth;
-      faces.push({
-        points: p,
-        depth: depth / 4,
-        colour: rgbText(shade(rgb, s.light))
-      });
+      faces.push({ points: p, depth: depth / 4, colour: rgbText(shade(rgb, s.light)) });
     }
   }
 
   function paint() {
-    // FURTHEST FIRST. Sort it the other way round and the wall gets
-    // painted over the pizza.
     faces.sort(function (a, b) { return b.depth - a.depth; });
     for (const f of faces) {
       ctx.beginPath();
@@ -182,78 +155,90 @@
 // -------------------------------------------------------------------
 //  WHAT GOES ON A PIZZA
 // -------------------------------------------------------------------
-//
-//  One list. The bins on the counter, the order tickets, the little
-//  lumps drawn on the pizza and the "did you get it right?" check ALL
-//  read this - so adding a new topping one day is one line here and
-//  it turns up everywhere at once.
 
   const TOPPINGS = [
-    { key: 'pepperoni', name: 'PEPPERONI', colour: [178, 52, 44],  lumps: 9 },
+    { key: 'pepperoni', name: 'PEPPERONI', colour: [178, 52, 44],   lumps: 9 },
     { key: 'mushroom',  name: 'MUSHROOM',  colour: [206, 190, 158], lumps: 8 },
-    { key: 'pineapple', name: 'PINEAPPLE', colour: [238, 200, 70], lumps: 7 },
-    { key: 'olive',     name: 'OLIVES',    colour: [66, 58, 74],   lumps: 10 },
-    { key: 'pepper',    name: 'PEPPERS',   colour: [96, 158, 74],  lumps: 8 }
+    { key: 'pineapple', name: 'PINEAPPLE', colour: [238, 200, 70],  lumps: 7 },
+    { key: 'olive',     name: 'OLIVES',    colour: [66, 58, 74],    lumps: 10 },
+    { key: 'pepper',    name: 'PEPPERS',   colour: [96, 158, 74],   lumps: 8 }
   ];
-
   function toppingByKey(k) {
     return TOPPINGS.find(function (t) { return t.key === k; });
   }
 
 
 // -------------------------------------------------------------------
-//  THE STATIONS - the things you can click
+//  THE SHOP AND THE FIELD
 // -------------------------------------------------------------------
 //
-//  THIS IS THE IMPORTANT BIT, and it's the same trick as the quest
-//  board in the wasteland: every station knows ONE position, and both
-//  the drawing AND the clicking ask for it.
-//
-//  Write the position out twice and one day you nudge one of them, and
-//  then there's an invisible button floating next to the oven and the
-//  oven itself does nothing. Bugs like that are horrible to find. One
-//  list, one answer, and it can't happen.
+//  Everything you can use knows ONE position, and the drawing, the
+//  label and the "are you stood at it?" test all read it from here.
+//  Write a position out twice and one day you nudge one copy, and then
+//  there's an invisible button in an empty bit of floor.
 
-  const COUNTER_Y = 12;      // how high the worktop is
+  const REACH = 16;          // how close you have to stand to use a thing
 
-  // ONE ROW ALONG THE BACK OF THE COUNTER, and the board out in front
-  // where the pizza is biggest.
-  //
-  // The first go had two rows of bins, one behind the other - which
-  // looked sensible from above and was useless from HERE. A shallow
-  // camera squashes distance, so the back row landed 25 pixels from the
-  // front row on screen: two different bins, near enough the same spot.
-  // Everything you click lives on one line now.
-  const BIN_Z = 34;
+  const SPOTS = [
+    { id: 'mill',   name: 'MILL',      x:   0, z:  16, colour: [150, 122, 88] },
 
-  const STATIONS = [
-    { id: 'dough',  name: 'DOUGH',  x: -44, z: BIN_Z, colour: [222, 196, 150] },
-    { id: 'sauce',  name: 'SAUCE',  x: -33, z: BIN_Z, colour: [176, 46, 38] },
-    { id: 'cheese', name: 'CHEESE', x: -22, z: BIN_Z, colour: [240, 206, 96] },
+    { id: 'sauce',  name: 'SAUCE',     x: -40, z:  40, colour: [176, 46, 38] },
+    { id: 'cheese', name: 'CHEESE',    x: -40, z:  64, colour: [240, 206, 96] },
+    { id: 'top0',   name: 'PEPPERONI', x: -40, z:  88, colour: TOPPINGS[0].colour, top: 0 },
+    { id: 'top1',   name: 'MUSHROOM',  x: -40, z: 112, colour: TOPPINGS[1].colour, top: 1 },
 
-    { id: 'top0',   name: 'PEPPERONI', x: -11, z: BIN_Z, colour: TOPPINGS[0].colour, top: 0 },
-    { id: 'top1',   name: 'MUSHROOM',  x:   0, z: BIN_Z, colour: TOPPINGS[1].colour, top: 1 },
-    { id: 'top2',   name: 'PINEAPPLE', x:  11, z: BIN_Z, colour: TOPPINGS[2].colour, top: 2 },
-    { id: 'top3',   name: 'OLIVES',    x:  22, z: BIN_Z, colour: TOPPINGS[3].colour, top: 3 },
-    { id: 'top4',   name: 'PEPPERS',   x:  33, z: BIN_Z, colour: TOPPINGS[4].colour, top: 4 },
+    { id: 'top2',   name: 'PINEAPPLE', x:  40, z:  40, colour: TOPPINGS[2].colour, top: 2 },
+    { id: 'top3',   name: 'OLIVES',    x:  40, z:  64, colour: TOPPINGS[3].colour, top: 3 },
+    { id: 'top4',   name: 'PEPPERS',   x:  40, z:  88, colour: TOPPINGS[4].colour, top: 4 },
 
-    // The bin lives at the far end, well away from DOUGH - they're the
-    // two you reach for at the start and the end, and mixing them up
-    // means throwing away the pizza you just meant to begin.
-    { id: 'bin',    name: 'BIN',    x:  44, z: BIN_Z, colour: [70, 74, 78] },
-
-    { id: 'oven',   name: 'OVEN',   x: -36, z: 56, colour: [96, 92, 88], big: true },
-    { id: 'window', name: 'SERVE',  x:  16, z: 68, colour: [150, 128, 96], big: true }
+    { id: 'oven',   name: 'OVEN',      x:  40, z: 124, colour: [96, 92, 88], big: true },
+    { id: 'bin',    name: 'BIN',       x: -40, z: 136, colour: [70, 74, 78] },
+    { id: 'window', name: 'SERVE',     x:   0, z: 156, colour: [150, 128, 96], big: true }
   ];
 
-  function stationById(id) {
-    return STATIONS.find(function (s) { return s.id === id; });
-  }
+  function spotById(id) { return SPOTS.find(function (s) { return s.id === id; }); }
 
-  // Where a station is ON SCREEN. Projected from the very same numbers
-  // the drawing uses, so what you click is always what you can see.
-  function stationScreen(s) {
-    return project(s.x, COUNTER_Y + (s.big ? 9 : 4), s.z);
+  // ---- THE WHEAT FIELD -----------------------------------------------
+  // Outside the door, to the north. Every stalk is its own little thing
+  // that gets cut and grows back, so the field empties as you work it
+  // and fills in again while you're inside making the pizza.
+  const FIELD = { x: 0, z: -78, w: 130, d: 76 };
+  const WHEAT_REGROW = 11;     // seconds for one stalk to come back
+  const CUT_TIME = 0.85;       // how long the cutting takes
+  const CARRY_MAX = 6;
+
+  let wheatStalks = [];
+  function plantField() {
+    wheatStalks = [];
+    for (let r = 0; r < 7; r++) {
+      for (let c = 0; c < 13; c++) {
+        wheatStalks.push({
+          x: FIELD.x - FIELD.w / 2 + 8 + c * (FIELD.w - 16) / 12,
+          z: FIELD.z - FIELD.d / 2 + 8 + r * (FIELD.d - 16) / 6,
+          ready: true, back: 0
+        });
+      }
+    }
+  }
+  plantField();
+
+
+// -------------------------------------------------------------------
+//  THE PLAYER
+// -------------------------------------------------------------------
+
+  const WALK = 46;
+
+  const player = {
+    x: 0, z: -4, yaw: 0,
+    step: 0,                  // legs swinging
+    carryWheat: 0,
+    pizza: null,              // the pizza in his hands, if any
+    cutting: 0                // how far through cutting a stalk
+  };
+
+  function newPizza() {
+    return { sauce: false, cheese: false, tops: [], bakeT: 0, state: 'raw' };
   }
 
 
@@ -261,185 +246,221 @@
 //  THE GAME
 // -------------------------------------------------------------------
 
-  const BAKE_PERFECT = 6.0;    // seconds in the oven for a perfect pizza
-  const BURN_AFTER   = 4.0;    // ...and this long again before it's ruined
+  const BAKE_PERFECT = 6.0;
+  const BURN_AFTER   = 5.0;
+  const WHEAT_PER_DOUGH = 3;
 
-  let money = 0;
-  let served = 0;
-  let burnt  = 0;
-  let clock  = 0;
-
-  // The pizza on the board in front of you. null means the board is
-  // empty and you haven't started one.
-  let pizza = null;
-
-  function newPizza() {
-    return { sauce: false, cheese: false, tops: [],
-             bakeT: 0, state: 'raw' };   // 'raw', 'baking', 'baked', 'burnt'
-  }
-
-  // The customer at the window, and what they asked for.
-  let order = null;
-  let orderWait = 2.5;
-
-  let says = '';         // the line of text the shop wants to tell you
-  let saysT = 0;
+  let money = 0, served = 0, burnt = 0, clock = 0;
+  let ovenPizza = null;        // the pizza IN the oven, if any
+  let order = null, orderWait = 3;
+  let says = '', saysT = 0;
   function say(words) { says = words; saysT = 3.0; }
 
   const upgrades = {
-    oven:  { name: 'HOTTER OVEN',  cost: 60,  bought: 0, max: 3,
-             blurb: 'bakes faster, burns slower' },
-    sign:  { name: 'BIGGER SIGN',  cost: 45,  bought: 0, max: 3,
-             blurb: 'customers turn up sooner' },
-    boxes: { name: 'FANCY BOXES',  cost: 80,  bought: 0, max: 3,
-             blurb: 'every pizza sells for more' }
+    oven:   { name: 'HOTTER OVEN',   cost: 60,  bought: 0, max: 3,
+              blurb: 'bakes faster, burns slower' },
+    boots:  { name: 'FASTER BOOTS',  cost: 50,  bought: 0, max: 3,
+              blurb: 'you walk quicker' },
+    scythe: { name: 'BETTER SCYTHE', cost: 55,  bought: 0, max: 3,
+              blurb: 'cut wheat faster' },
+    boxes:  { name: 'FANCY BOXES',   cost: 80,  bought: 0, max: 3,
+              blurb: 'every pizza sells for more' }
   };
 
-  // WHAT AN UPGRADE ACTUALLY DOES. All three read the number of times
-  // you've bought it, so buying twice is twice as good, with no extra
-  // code for the second one.
-  function bakeSpeed()   { return 1 + upgrades.oven.bought * 0.45; }
-  function burnSlow()    { return 1 + upgrades.oven.bought * 0.5; }
-  function customerGap() { return 9 - upgrades.sign.bought * 2.0; }
-  function priceBoost()  { return 1 + upgrades.boxes.bought * 0.35; }
+  function bakeSpeed()  { return 1 + upgrades.oven.bought * 0.45; }
+  function burnSlow()   { return 1 + upgrades.oven.bought * 0.5; }
+  function walkSpeed()  { return WALK * (1 + upgrades.boots.bought * 0.28); }
+  function cutSpeed()   { return 1 + upgrades.scythe.bought * 0.7; }
+  function priceBoost() { return 1 + upgrades.boxes.bought * 0.35; }
 
-  function costOf(u) {
-    // Each one you buy makes the next dearer, or you'd buy all three
-    // levels the moment you could afford one.
-    return Math.round(u.cost * Math.pow(1.8, u.bought));
-  }
+  function costOf(u) { return Math.round(u.cost * Math.pow(1.8, u.bought)); }
 
-
-  // ---- MAKING A NEW ORDER -------------------------------------------
   function makeOrder() {
-    // One or two toppings to start with, three once the shop is busy.
     const most = served < 3 ? 1 : served < 8 ? 2 : 3;
     const howMany = 1 + Math.floor(Math.random() * most);
-
-    const want = [];
-    const pool = TOPPINGS.slice();
+    const want = [], pool = TOPPINGS.slice();
     for (let i = 0; i < howMany && pool.length; i++) {
       const pick = Math.floor(Math.random() * pool.length);
       want.push(pool[pick].key);
-      pool.splice(pick, 1);          // no asking for pepperoni twice
+      pool.splice(pick, 1);
     }
-
     order = { want: want, waited: 0 };
   }
 
-  // WHAT IS THIS PIZZA WORTH?
-  //
-  // Base price, plus a bit per topping, times whatever your boxes are
-  // worth. Wrong toppings don't earn nothing - they earn LESS. Getting
-  // it a bit wrong should sting, not end the world; nothing here is
-  // trying to kill you, including the scoring.
-  function priceOf() {
-    if (!order || !pizza) return 0;
-    if (pizza.state === 'burnt') return 0;
-
+  function priceOf(p) {
+    if (!order || !p) return 0;
+    if (p.state === 'burnt') return 0;
     let right = 0;
-    for (const k of order.want) if (pizza.tops.indexOf(k) >= 0) right++;
-    const extra = pizza.tops.length - right;          // things nobody asked for
-
-    let coins = 10 + right * 6 - extra * 2;
-    if (!pizza.sauce)  coins -= 5;
-    if (!pizza.cheese) coins -= 5;
-    if (pizza.state !== 'baked') coins = Math.round(coins * 0.35);   // raw dough!
-
+    for (const k of order.want) if (p.tops.indexOf(k) >= 0) right++;
+    const extra = p.tops.length - right;
+    let coins = 12 + right * 7 - extra * 2;
+    if (!p.sauce)  coins -= 5;
+    if (!p.cheese) coins -= 5;
+    if (p.state !== 'baked') coins = Math.round(coins * 0.35);
     return Math.max(1, Math.round(coins * priceBoost()));
   }
 
 
-  // ---- CLICKING A STATION -------------------------------------------
-  function useStation(id) {
-    const s = stationById(id);
-    if (!s) return;
+// -------------------------------------------------------------------
+//  USING WHAT YOU'RE STOOD AT
+// -------------------------------------------------------------------
 
-    // ---- THE BIN ----------------------------------------------------
-    if (id === 'bin') {
-      if (!pizza) { say('nothing to throw away'); return; }
-      pizza = null;
-      say('in the bin. start again');
-      return;
+  // WHAT IS HE NEXT TO? Worked out fresh every frame, and both the
+  // "press E" and the prompt on screen read the answer - so the hint
+  // never promises something the key won't do.
+  let nearSpot = null, inField = false;
+
+  function lookAround() {
+    nearSpot = null;
+    let best = REACH;
+    for (const s of SPOTS) {
+      const d = Math.hypot(player.x - s.x, player.z - s.z);
+      if (d < best) { best = d; nearSpot = s; }
     }
+    inField = Math.abs(player.x - FIELD.x) < FIELD.w / 2 + 6 &&
+              Math.abs(player.z - FIELD.z) < FIELD.d / 2 + 6;
+  }
 
-    // ---- DOUGH: the start of every pizza ----------------------------
-    if (id === 'dough') {
-      if (pizza) { say('there is already a pizza on the board'); return; }
-      pizza = newPizza();
-      say('dough down');
-      return;
+  // The nearest stalk still standing, if you're close enough to cut it.
+  function nearestStalk() {
+    let best = null, bestD = 13;
+    for (const s of wheatStalks) {
+      if (!s.ready) continue;
+      const d = Math.hypot(player.x - s.x, player.z - s.z);
+      if (d < bestD) { bestD = d; best = s; }
     }
+    return best;
+  }
 
-    if (!pizza) { say('you need DOUGH first'); return; }
-
-    // Once it's in the oven, hands off.
-    if (pizza.state === 'baking') { say('it is in the oven'); return; }
-
-    if (id === 'sauce') {
-      if (pizza.state !== 'raw') { say('too late, it is cooked'); return; }
-      if (pizza.sauce) { say('it has sauce already'); return; }
-      pizza.sauce = true;
-      say('sauce on');
-      return;
+  // WHAT WOULD E DO RIGHT NOW? One answer, used by the key AND by the
+  // words on screen. If they worked it out separately they'd disagree
+  // the first time either changed.
+  function whatEDoes() {
+    if (inField && nearestStalk() && player.carryWheat < CARRY_MAX) {
+      return { do: 'cut', text: 'CUT THE WHEAT' };
     }
+    if (!nearSpot) return null;
+    const s = nearSpot;
 
-    if (id === 'cheese') {
-      if (pizza.state !== 'raw') { say('too late, it is cooked'); return; }
-      if (!pizza.sauce) { say('sauce goes on before cheese'); return; }
-      if (pizza.cheese) { say('it has cheese already'); return; }
-      pizza.cheese = true;
-      say('cheese on');
-      return;
-    }
-
-    if (s.top !== undefined) {
-      if (pizza.state !== 'raw') { say('too late, it is cooked'); return; }
-      if (!pizza.cheese) { say('cheese goes on before toppings'); return; }
-      const t = TOPPINGS[s.top];
-      if (pizza.tops.indexOf(t.key) >= 0) { say('already got ' + t.name.toLowerCase()); return; }
-      pizza.tops.push(t.key);
-      say(t.name.toLowerCase() + ' on');
-      return;
-    }
-
-    // ---- THE OVEN ---------------------------------------------------
-    if (id === 'oven') {
-      if (pizza.state === 'raw') {
-        if (!pizza.cheese) { say('a bare bit of dough? put something on it'); return; }
-        pizza.state = 'baking';
-        pizza.bakeT = 0;
-        say('in the oven');
-      } else if (pizza.state === 'baked' || pizza.state === 'burnt') {
-        say('it is already out');
+    if (s.id === 'mill') {
+      if (player.pizza) return { do: 'no', text: 'your hands are full' };
+      if (player.carryWheat < WHEAT_PER_DOUGH) {
+        return { do: 'no', text: 'need ' + WHEAT_PER_DOUGH + ' wheat  -  you have ' +
+                                 player.carryWheat };
       }
+      return { do: 'mill', text: 'GRIND WHEAT INTO DOUGH' };
+    }
+
+    if (s.id === 'bin') {
+      if (!player.pizza) return { do: 'no', text: 'nothing to throw away' };
+      return { do: 'bin', text: 'THROW IT AWAY' };
+    }
+
+    if (s.id === 'oven') {
+      if (player.pizza && !ovenPizza) {
+        if (!player.pizza.cheese) return { do: 'no', text: 'put something on it first' };
+        return { do: 'in', text: 'PUT IT IN THE OVEN' };
+      }
+      if (!player.pizza && ovenPizza) return { do: 'out', text: 'TAKE IT OUT' };
+      if (player.pizza && ovenPizza) return { do: 'no', text: 'the oven is busy' };
+      return { do: 'no', text: 'the oven is empty' };
+    }
+
+    if (s.id === 'window') {
+      if (!player.pizza) return { do: 'no', text: 'fetch a pizza first' };
+      if (!order) return { do: 'no', text: 'nobody is waiting' };
+      if (player.pizza.state === 'raw') return { do: 'no', text: 'that dough is RAW' };
+      return { do: 'sell', text: 'SELL IT  -  ' + priceOf(player.pizza) + ' coins' };
+    }
+
+    // A bin of something that goes on a pizza.
+    if (!player.pizza) return { do: 'no', text: 'you need dough first' };
+    if (player.pizza.state !== 'raw') return { do: 'no', text: 'too late, it is cooked' };
+
+    if (s.id === 'sauce') {
+      if (player.pizza.sauce) return { do: 'no', text: 'it has sauce already' };
+      return { do: 'add', text: 'ADD SAUCE' };
+    }
+    if (s.id === 'cheese') {
+      if (!player.pizza.sauce) return { do: 'no', text: 'sauce goes on before cheese' };
+      if (player.pizza.cheese) return { do: 'no', text: 'it has cheese already' };
+      return { do: 'add', text: 'ADD CHEESE' };
+    }
+    if (s.top !== undefined) {
+      if (!player.pizza.cheese) return { do: 'no', text: 'cheese goes on before toppings' };
+      const t = TOPPINGS[s.top];
+      if (player.pizza.tops.indexOf(t.key) >= 0) {
+        return { do: 'no', text: 'already got ' + t.name.toLowerCase() };
+      }
+      return { do: 'add', text: 'ADD ' + t.name };
+    }
+    return null;
+  }
+
+  function pressE() {
+    const act = whatEDoes();
+    if (!act) return;
+    if (act.do === 'no') { say(act.text); return; }
+
+    if (act.do === 'cut') {
+      // Cutting takes a moment - held down, not tapped. The bar under
+      // his feet fills up.
+      player.cutting = Math.max(player.cutting, 0.0001);
       return;
     }
 
-    // ---- THE WINDOW -------------------------------------------------
-    if (id === 'window') {
-      if (!order) { say('nobody is waiting'); return; }
-      if (pizza.state === 'raw') { say('that dough is raw! bake it first'); return; }
+    if (act.do === 'mill') {
+      player.carryWheat -= WHEAT_PER_DOUGH;
+      player.pizza = newPizza();
+      say('dough made');
+      return;
+    }
 
-      const coins = priceOf();
+    if (act.do === 'bin') { player.pizza = null; say('binned it'); return; }
+
+    if (act.do === 'in') {
+      ovenPizza = player.pizza;
+      ovenPizza.state = 'baking';
+      ovenPizza.bakeT = 0;
+      player.pizza = null;
+      say('in the oven');
+      return;
+    }
+
+    if (act.do === 'out') {
+      player.pizza = ovenPizza;
+      ovenPizza = null;
+      say(player.pizza.state === 'burnt' ? 'burnt...' : 'out and cooked');
+      return;
+    }
+
+    if (act.do === 'sell') {
+      const coins = priceOf(player.pizza);
       money += coins;
       served++;
-      if (pizza.state === 'burnt') { burnt++; say('burnt. they paid nothing'); }
+      if (player.pizza.state === 'burnt') { burnt++; say('burnt. they paid nothing'); }
       else say('sold for ' + coins);
-
-      pizza = null;
+      player.pizza = null;
       order = null;
-      orderWait = customerGap() * (0.6 + Math.random() * 0.6);
+      orderWait = 4 + Math.random() * 4;
       return;
+    }
+
+    if (act.do === 'add') {
+      const s = nearSpot;
+      if (s.id === 'sauce')  { player.pizza.sauce = true;  say('sauce on'); }
+      else if (s.id === 'cheese') { player.pizza.cheese = true; say('cheese on'); }
+      else {
+        const t = TOPPINGS[s.top];
+        player.pizza.tops.push(t.key);
+        say(t.name.toLowerCase() + ' on');
+      }
     }
   }
 
-
-  // ---- THE SHOP ------------------------------------------------------
   function buy(key) {
     const u = upgrades[key];
-    if (!u) return;
-    if (u.bought >= u.max) { say(u.name + ' is as good as it gets'); return; }
+    if (!u || u.bought >= u.max) { say('as good as it gets'); return; }
     const cost = costOf(u);
     if (money < cost) { say('need ' + cost + ' coins, you have ' + money); return; }
     money -= cost;
@@ -452,30 +473,81 @@
 //  THE CLOCK
 // -------------------------------------------------------------------
 
+  const keys = {};
+  let shopOpen = false;
+
   function update(dt) {
     clock += dt;
     if (saysT > 0) saysT -= dt;
 
-    // ---- THE OVEN --------------------------------------------------
-    if (pizza && pizza.state === 'baking') {
-      pizza.bakeT += dt * bakeSpeed();
+    if (!shopOpen) {
+      // ---- WALKING --------------------------------------------------
+      // North is up the screen and it stays there, so LEFT always means
+      // left. In a top-down game that never turns, that's the whole
+      // reason it feels easy to steer.
+      let mx = 0, mz = 0;
+      if (keys['a'] || keys['arrowleft'])  mx -= 1;
+      if (keys['d'] || keys['arrowright']) mx += 1;
+      if (keys['w'] || keys['arrowup'])    mz += 1;
+      if (keys['s'] || keys['arrowdown'])  mz -= 1;
 
-      if (pizza.bakeT >= BAKE_PERFECT + BURN_AFTER * burnSlow()) {
-        pizza.state = 'burnt';
-        say('BURNT! get it out sooner next time');
-      } else if (pizza.bakeT >= BAKE_PERFECT) {
-        // Cooked, and it will sit here happily until it starts to
-        // catch. The bar on screen tells you how long you've got.
-        pizza.state = 'baked';
+      const len = Math.hypot(mx, mz);
+      if (len > 0) {
+        // Divide by the length, or walking diagonally would be 1.4
+        // times faster than walking straight - a bug in a LOT of games.
+        mx /= len; mz /= len;
+        player.x += mx * walkSpeed() * dt;
+        player.z += mz * walkSpeed() * dt;
+        player.yaw = Math.atan2(mx, mz);
+        player.step += dt * 9;
+
+        // Moving cancels a cut. You can't stroll off mid-swing.
+        player.cutting = 0;
+      }
+
+      // Fences, near enough - the shop and the field are one long strip
+      // and there's no reason to wander off the edge of the world.
+      player.x = clamp(player.x, -58, 58);
+      player.z = clamp(player.z, -124, 172);
+
+      lookAround();
+
+      // ---- CUTTING ----------------------------------------------------
+      if (player.cutting > 0) {
+        if (keys['e']) {
+          player.cutting += dt * cutSpeed();
+          if (player.cutting >= CUT_TIME) {
+            const st = nearestStalk();
+            player.cutting = 0;
+            if (st) {
+              st.ready = false;
+              st.back = WHEAT_REGROW;
+              player.carryWheat = Math.min(CARRY_MAX, player.carryWheat + 1);
+              say('wheat: ' + player.carryWheat + ' / ' + CARRY_MAX);
+            }
+          }
+        } else {
+          player.cutting = 0;      // let go and you stop cutting
+        }
       }
     }
 
-    // A pizza that's cooked and LEFT in the oven still burns.
-    if (pizza && pizza.state === 'baked') {
-      pizza.bakeT += dt * bakeSpeed();
-      if (pizza.bakeT >= BAKE_PERFECT + BURN_AFTER * burnSlow()) {
-        pizza.state = 'burnt';
-        say('BURNT! you left it in');
+    // ---- THE FIELD GROWS BACK ----------------------------------------
+    for (const s of wheatStalks) {
+      if (s.ready) continue;
+      s.back -= dt;
+      if (s.back <= 0) s.ready = true;
+    }
+
+    // ---- THE OVEN ------------------------------------------------------
+    if (ovenPizza) {
+      ovenPizza.bakeT += dt * bakeSpeed();
+      const ruinAt = BAKE_PERFECT + BURN_AFTER * burnSlow();
+      if (ovenPizza.bakeT >= ruinAt) {
+        if (ovenPizza.state !== 'burnt') say('SOMETHING IS BURNING');
+        ovenPizza.state = 'burnt';
+      } else if (ovenPizza.bakeT >= BAKE_PERFECT) {
+        ovenPizza.state = 'baked';
       }
     }
 
@@ -484,127 +556,185 @@
       orderWait -= dt;
       if (orderWait <= 0) makeOrder();
     } else {
-      // They wait. They wait FOREVER. Nothing here is trying to kill
-      // you and nothing here storms off in a huff either.
-      order.waited += dt;
+      order.waited += dt;      // they wait for ever. nobody storms off.
     }
+
+    // ---- THE CAMERA ---------------------------------------------------
+    // It lags a little, which stops the whole world twitching every
+    // time he changes direction.
+    const k = Math.min(1, dt * 6);
+    cam.x += (player.x - cam.x) * k;
+    cam.z += (player.z - CAM_BACK - cam.z) * k;
+    cam.y = CAM_UP;
   }
 
 
 // -------------------------------------------------------------------
-//  DRAWING THE SHOP
+//  DRAWING
 // -------------------------------------------------------------------
 
+  const GRASS  = [86, 116, 62];
+  const DIRT   = [128, 104, 74];
+  const FLOOR  = [176, 160, 138];
+  const WALL   = [92, 66, 54];
   const WOOD   = [126, 88, 58];
-  const TOP    = [186, 154, 112];
-  const WALL   = [86, 62, 52];
-  const TILE   = [188, 176, 158];
   const STEEL  = [128, 132, 136];
+  const WHEATC = [214, 178, 84];
 
-  function drawKitchen() {
-    // Back wall and floor - just enough to feel like a room.
-    addBox(0, 34, 98, 240, 70, 6, WALL);
-    addBox(0, -2, 40, 260, 4, 170, shade(WOOD, 0.55));
-
-    // The worktop you're stood at.
-    addBox(0, COUNTER_Y - 3, 30, 150, 6, 72, TOP);
-    addBox(0, COUNTER_Y - 9, 30, 146, 8, 68, WOOD);
-
-    // A tiled splashback, because a kitchen needs one.
-    for (let i = -6; i <= 6; i++) {
-      addBox(i * 16, 26, 96, 14, 24, 1.5, shade(TILE, 0.9 + (i % 2) * 0.12));
+  function drawGround() {
+    // Only the tiles near him - drawing the whole world every frame
+    // would be hundreds of boxes nobody can see.
+    const TILE = 26;
+    const cx = Math.round(player.x / TILE), cz = Math.round(player.z / TILE);
+    for (let gx = cx - 4; gx <= cx + 4; gx++) {
+      for (let gz = cz - 3; gz <= cz + 5; gz++) {
+        const wx = gx * TILE, wz = gz * TILE;
+        const inShop = Math.abs(wx) <= 62 && wz >= -6 && wz <= 176;
+        const base = inShop ? FLOOR : GRASS;
+        // A checker, so you can see yourself moving. Without it a flat
+        // colour makes walking feel like standing still.
+        const tint = ((gx + gz) % 2 === 0) ? 1 : 0.92;
+        addBox(wx, -1, wz, TILE, 2, TILE, shade(base, tint));
+      }
     }
+
+    // The path from the door out to the field.
+    for (let i = 0; i < 5; i++) addBox(0, 0.2, -12 - i * 14, 22, 1.6, 12, DIRT);
   }
 
-  function drawStations() {
-    for (const s of STATIONS) {
+  function drawShop() {
+    // Walls down both sides, with a gap at the front you walk in
+    // through. Low, so they never hide him.
+    for (let z = 0; z <= 176; z += 22) {
+      addBox(-64, 7, z, 6, 16, 22, WALL);
+      addBox( 64, 7, z, 6, 16, 22, WALL);
+    }
+    addBox(0, 7, 178, 134, 16, 6, WALL);
+    for (const s of [-1, 1]) addBox(s * 45, 7, -6, 44, 16, 6, WALL);
+  }
+
+  function drawSpots() {
+    for (const s of SPOTS) {
       if (s.id === 'oven')   { drawOven(s);   continue; }
       if (s.id === 'window') { drawWindow(s); continue; }
-      if (s.id === 'bin')    { drawBin(s);    continue; }
+      if (s.id === 'bin')    { addBox(s.x, 6, s.z, 13, 12, 13, shade(STEEL, 0.5)); continue; }
+      if (s.id === 'mill')   { drawMill(s);   continue; }
 
-      // An ingredient bin: a tub with the stuff heaped inside it.
-      addBox(s.x, COUNTER_Y + 2, s.z, 11, 4, 11, STEEL);
-      addBox(s.x, COUNTER_Y + 4.4, s.z, 9.4, 1.6, 9.4, s.colour);
+      // An ingredient tub with the stuff heaped in it.
+      addBox(s.x, 5, s.z, 17, 10, 17, WOOD);
+      addBox(s.x, 10.4, s.z, 15, 2.4, 15, s.colour);
     }
+  }
+
+  function drawMill(s) {
+    addBox(s.x, 7, s.z, 22, 14, 22, shade(WOOD, 0.85));
+    addBox(s.x, 15, s.z, 16, 3, 16, shade(STEEL, 0.8));
+    // A wheel that turns when you've got enough wheat to grind - the
+    // only moving part in the shop, so your eye goes straight to it.
+    const spin = (player.carryWheat >= WHEAT_PER_DOUGH) ? clock * 2.2 : 0;
+    addBox(s.x, 18, s.z, 20, 2, 5, shade(WOOD, 1.1), spin);
+    addBox(s.x, 18, s.z, 5, 2, 20, shade(WOOD, 1.1), spin);
   }
 
   function drawOven(s) {
-    addBox(s.x, COUNTER_Y + 6, s.z, 30, 26, 26, shade(STEEL, 0.8));
-    addBox(s.x, COUNTER_Y + 6, s.z - 13.5, 22, 16, 1.5, [40, 34, 30]);   // the mouth
-
-    // GLOWING WHEN IT IS ON. You should be able to tell across the
-    // room whether there's a pizza in there.
-    if (pizza && (pizza.state === 'baking' || pizza.state === 'baked'
-                  || pizza.state === 'burnt')) {
-      const hot = pizza.state === 'burnt' ? [90, 40, 30]
-                : pizza.state === 'baked' ? [255, 190, 80]
-                                          : [230, 120, 50];
-      addBox(s.x, COUNTER_Y + 4, s.z - 14.2, 19, 11, 1.0, hot);
+    addBox(s.x, 11, s.z, 30, 24, 26, shade(STEEL, 0.75));
+    addBox(s.x, 10, s.z - 13.5, 20, 14, 1.5, [38, 32, 28]);
+    if (ovenPizza) {
+      const hot = ovenPizza.state === 'burnt' ? [90, 40, 30]
+                : ovenPizza.state === 'baked' ? [255, 190, 80] : [230, 120, 50];
+      addBox(s.x, 9, s.z - 14.2, 17, 10, 1.0, hot);
     }
-    addBox(s.x, COUNTER_Y + 21, s.z, 12, 4, 12, shade(STEEL, 0.7));      // chimney
+    addBox(s.x, 26, s.z, 10, 6, 10, shade(STEEL, 0.6));
   }
 
   function drawWindow(s) {
-    addBox(s.x, COUNTER_Y + 8, s.z, 44, 30, 5, shade(WOOD, 0.8));
-    addBox(s.x, COUNTER_Y + 9, s.z - 0.5, 34, 20, 3, [30, 26, 24]);
+    addBox(s.x, 8, s.z, 46, 18, 8, shade(WOOD, 0.8));
+    addBox(s.x, 12, s.z + 1, 34, 12, 4, [28, 24, 22]);
+    if (order) {
+      const bob = Math.sin(clock * 2) * 0.6;
+      addBox(s.x, 14 + bob, s.z + 9, 13, 12, 8, [78, 96, 128]);
+      addBox(s.x, 23 + bob, s.z + 9, 8, 8, 8, [206, 168, 132]);
+    }
   }
 
-  function drawBin(s) {
-    addBox(s.x, COUNTER_Y + 2, s.z, 12, 12, 12, shade(STEEL, 0.55));
+  function drawField() {
+    // The soil, then a stalk everywhere one is standing.
+    addBox(FIELD.x, -0.4, FIELD.z, FIELD.w, 2, FIELD.d, shade(DIRT, 0.9));
+    for (const s of wheatStalks) {
+      if (!s.ready) {
+        addBox(s.x, 0.8, s.z, 3, 1.2, 3, shade(DIRT, 0.75));   // stubble
+        continue;
+      }
+      const sway = Math.sin(clock * 1.6 + s.x * 0.1) * 0.5;
+      addBox(s.x + sway, 5, s.z, 2.2, 10, 2.2, shade(WHEATC, 0.8));
+      addBox(s.x + sway * 1.6, 11, s.z, 4.4, 4, 4.4, WHEATC);
+    }
   }
 
-  // ---- THE PIZZA ITSELF ---------------------------------------------
-  //
-  // Built up in layers, in the order you put them on, so you can SEE
-  // what you've made without reading anything.
-  const BOARD_X = 0, BOARD_Z = 6;
+  // ---- A PIZZA, wherever it happens to be ----------------------------
+  function drawPizzaAt(p, x, y, z, size) {
+    const cook = p.state === 'burnt' ? 0.3
+               : p.state === 'baked' ? 0.85
+               : p.state === 'baking' ? 0.94 : 1;
+    const r = size;
+    addBox(x, y, z, r, 1.2, r, shade([226, 192, 138], cook));
+    if (p.sauce)  addBox(x, y + 0.9, z, r * 0.88, 0.7, r * 0.88, shade([170, 44, 36], cook));
+    if (p.cheese) addBox(x, y + 1.5, z, r * 0.84, 0.7, r * 0.84, shade([238, 206, 110], cook));
 
-  function drawPizza() {
-    // The board is always there, pizza or no pizza.
-    addBox(BOARD_X, COUNTER_Y + 0.8, BOARD_Z, 34, 1.6, 34, shade(WOOD, 1.15));
-    if (!pizza) return;
-
-    // In the oven? Then it isn't on the board.
-    const inOven = (pizza.state === 'baking');
-    const px = inOven ? stationById('oven').x : BOARD_X;
-    const pz = inOven ? stationById('oven').z : BOARD_Z;
-    const py = COUNTER_Y + (inOven ? 4 : 2);
-
-    // Cooking browns everything, and burning blackens it.
-    const cook = pizza.state === 'burnt' ? 0.32
-               : pizza.state === 'baked' ? 0.86
-               : pizza.state === 'baking' ? 0.95 : 1;
-
-    addBox(px, py, pz, 24, 1.4, 24, shade([226, 192, 138], cook));       // base
-    if (pizza.sauce)  addBox(px, py + 1.1, pz, 21, 0.8, 21, shade([170, 44, 36], cook));
-    if (pizza.cheese) addBox(px, py + 1.7, pz, 20, 0.8, 20, shade([238, 206, 110], cook));
-
-    // The lumps. Where each one sits is worked out from a fixed sum,
-    // NOT from Math.random() - or they would jump to a new spot sixty
-    // times a second and the pizza would fizz.
-    for (let ti = 0; ti < pizza.tops.length; ti++) {
-      const t = toppingByKey(pizza.tops[ti]);
+    for (let ti = 0; ti < p.tops.length; ti++) {
+      const t = toppingByKey(p.tops[ti]);
       if (!t) continue;
       for (let i = 0; i < t.lumps; i++) {
-        const a = (i * 2.39996 + ti * 1.1);          // spiral, evenly spread
-        const r = 2 + (i / t.lumps) * 7.6;
-        addBox(px + Math.cos(a) * r, py + 2.4, pz + Math.sin(a) * r,
-               2.6, 0.7, 2.6, shade(t.colour, cook));
+        // A fixed spiral, NOT Math.random() - random here would make
+        // every lump jump to a new spot sixty times a second.
+        const a = i * 2.39996 + ti * 1.1;
+        const rr = r * 0.08 + (i / t.lumps) * r * 0.34;
+        addBox(x + Math.cos(a) * rr, y + 2.1, z + Math.sin(a) * rr,
+               r * 0.11, 0.6, r * 0.11, shade(t.colour, cook));
       }
     }
   }
 
-  // ---- THE CUSTOMER --------------------------------------------------
-  function drawCustomer() {
-    if (!order) return;
-    const s = stationById('window');
-    const bob = Math.sin(clock * 2) * 0.5;
+  // ---- THE LITTLE CHARACTER -------------------------------------------
+  function drawPlayer() {
+    const co = Math.cos(player.yaw), si = Math.sin(player.yaw);
+    function bit(ox, oy, oz, w, h, d, rgb) {
+      addBox(player.x + ox * co + oz * si, oy, player.z - ox * si + oz * co,
+             w, h, d, rgb, player.yaw);
+    }
 
-    // Head and shoulders in the serving hatch, and that's all you ever
-    // see of them - which is all you need.
-    addBox(s.x, COUNTER_Y + 6 + bob, s.z + 4, 13, 12, 8, [78, 96, 128]);
-    addBox(s.x, COUNTER_Y + 15 + bob, s.z + 4, 8, 8, 8, [206, 168, 132]);
-    addBox(s.x, COUNTER_Y + 19.4 + bob, s.z + 4, 9, 2, 9, [60, 70, 96]);
+    const swing = Math.sin(player.step) * 2.2;
+    bit(-2.2, 3, swing * 0.4, 3.4, 6, 3.4, [58, 62, 82]);       // legs
+    bit( 2.2, 3, -swing * 0.4, 3.4, 6, 3.4, [58, 62, 82]);
+    bit(0, 9.4, 0, 9, 7, 6, [226, 232, 236]);                    // white apron top
+    bit(0, 9.0, -3.2, 7, 6, 0.8, [214, 96, 74]);                 // a red neckerchief
+    bit(0, 14.6, 0, 5.4, 4.6, 5.4, [216, 176, 140]);             // head
+    bit(0, 18.2, 0, 7.4, 2.6, 7.4, [244, 244, 246]);             // CHEF'S HAT
+    bit(0, 20.2, 0, 6.0, 2.2, 6.0, [244, 244, 246]);
+
+    // Arms out in front when he's carrying something, down when he isn't.
+    const holding = player.pizza || player.carryWheat > 0;
+    for (const s of [-1, 1]) {
+      bit(s * 5.6, holding ? 11 : 9.5, holding ? -3 : 0,
+          2.4, holding ? 2.4 : 6, holding ? 6 : 2.4, [216, 176, 140]);
+    }
+
+    // ---- WHAT'S IN HIS HANDS -------------------------------------------
+    if (player.pizza) {
+      drawPizzaAt(player.pizza, player.x - si * 6, 13.4, player.z - co * 6, 13);
+    } else if (player.carryWheat > 0) {
+      for (let i = 0; i < player.carryWheat; i++) {
+        const a = i * 1.1;
+        bit(Math.cos(a) * 1.8, 13.4 + i * 0.5, -6 + Math.sin(a) * 1.4,
+            2, 7, 2, WHEATC);
+      }
+    }
+
+    // A cutting bar under his feet while he's swinging.
+    if (player.cutting > 0) {
+      const t = clamp(player.cutting / CUT_TIME, 0, 1);
+      addBox(player.x - 7 + t * 7, 1.6, player.z + 9, t * 14, 1, 3, [255, 226, 120]);
+    }
   }
 
 
@@ -612,146 +742,124 @@
 //  THE WRITING ON TOP
 // -------------------------------------------------------------------
 
-  // THE SHOP IS A DRAWER, NOT A WALL.
-  //
-  // First go, the upgrade list sat permanently down the right-hand side
-  // - and the topping bins are drawn over there too. One bin ended up
-  // UNDERNEATH the buttons, where clicking it bought an upgrade
-  // instead, and on a narrow phone it fell off the screen altogether.
-  //
-  // So it opens when you ask for it and gets out of the way when you
-  // don't, the same as the quest board in the wasteland. That also
-  // leaves room for the list to grow as long as Max likes.
-  let shopOpen = false;
+  const SHOP_KEYS = ['oven', 'boots', 'scythe', 'boxes'];
 
   function shopTab() {
     const w = Math.min(W * 0.16, 150), h = 40;
     return { x: W - w - 16, y: 16, w: w, h: h };
   }
-
   function shopBox(i) {
-    const w = Math.min(W * 0.62, 460), h = 62;
-    return { x: W / 2 - w / 2, y: H * 0.28 + i * (h + 12), w: w, h: h };
+    const w = Math.min(W * 0.62, 460), h = 58;
+    return { x: W / 2 - w / 2, y: H * 0.22 + i * (h + 10), w: w, h: h };
   }
 
-  const SHOP_KEYS = ['oven', 'sign', 'boxes'];
-
   function drawHud() {
-    // ---- MONEY -------------------------------------------------------
     ctx.textAlign = 'left';
-    ctx.font = 'bold ' + Math.min(W * 0.055, 46) + 'px system-ui, sans-serif';
+    ctx.font = 'bold ' + Math.min(W * 0.05, 42) + 'px system-ui, sans-serif';
     ctx.fillStyle = '#ffd76a';
-    ctx.fillText(money + ' coins', 20, 54);
+    ctx.fillText(money + ' coins', 20, 50);
 
     ctx.font = Math.min(W * 0.024, 15) + 'px system-ui, sans-serif';
     ctx.fillStyle = '#a08c78';
-    ctx.fillText(served + ' pizzas sold' + (burnt ? '   -   ' + burnt + ' burnt' : ''),
-                 22, 78);
+    ctx.fillText(served + ' sold' + (burnt ? '   -   ' + burnt + ' burnt' : '') +
+                 '   -   wheat ' + player.carryWheat + '/' + CARRY_MAX, 22, 74);
 
     // ---- THE ORDER ---------------------------------------------------
     if (order) {
       ctx.textAlign = 'center';
-      ctx.font = 'bold ' + Math.min(W * 0.03, 20) + 'px system-ui, sans-serif';
+      ctx.font = 'bold ' + Math.min(W * 0.028, 19) + 'px system-ui, sans-serif';
       ctx.fillStyle = '#ffe9c8';
-      ctx.fillText('ORDER', W / 2, 40);
+      ctx.fillText('ORDER', W / 2, 34);
 
-      // The wanted toppings as coloured blobs, in the same colours as
-      // the bins - so you match a colour, not read a word.
-      const n = order.want.length;
-      const size = 34, gap = 12;
-      const total = n * size + (n - 1) * gap;
-      let bx = W / 2 - total / 2;
+      const n = order.want.length, size = 30, gap = 10;
+      let bx = W / 2 - (n * size + (n - 1) * gap) / 2;
       for (const k of order.want) {
         const t = toppingByKey(k);
         ctx.fillStyle = rgbText(t.colour);
-        ctx.fillRect(bx, 54, size, size);
+        ctx.fillRect(bx, 46, size, size);
         ctx.lineWidth = 2;
         ctx.strokeStyle = 'rgba(0,0,0,0.5)';
-        ctx.strokeRect(bx, 54, size, size);
-
-        // A tick once it's on the pizza.
-        if (pizza && pizza.tops.indexOf(k) >= 0) {
-          ctx.strokeStyle = '#8fe07a';
-          ctx.lineWidth = 4;
+        ctx.strokeRect(bx, 46, size, size);
+        const got = player.pizza && player.pizza.tops.indexOf(k) >= 0;
+        if (got) {
+          ctx.strokeStyle = '#8fe07a'; ctx.lineWidth = 4;
           ctx.beginPath();
-          ctx.moveTo(bx + 7, 54 + 18);
-          ctx.lineTo(bx + 14, 54 + 26);
-          ctx.lineTo(bx + 27, 54 + 9);
-          ctx.stroke();
+          ctx.moveTo(bx + 6, 46 + 16); ctx.lineTo(bx + 12, 46 + 23);
+          ctx.lineTo(bx + 24, 46 + 8); ctx.stroke();
         }
         bx += size + gap;
       }
-
-      ctx.font = Math.min(W * 0.022, 14) + 'px system-ui, sans-serif';
-      ctx.fillStyle = '#a08c78';
-      ctx.fillText('with sauce and cheese, baked', W / 2, 108);
     }
 
     // ---- THE OVEN BAR ------------------------------------------------
-    if (pizza && pizza.state !== 'raw') {
-      const bw = Math.min(W * 0.34, 320), bx2 = W / 2 - bw / 2, by = H - 96;
+    if (ovenPizza) {
+      const bw = Math.min(W * 0.3, 300), bx2 = W / 2 - bw / 2, by = H - 92;
       const full = BAKE_PERFECT + BURN_AFTER * burnSlow();
-      const t = clamp(pizza.bakeT / full, 0, 1);
-      const perfectAt = BAKE_PERFECT / full;
+      const t = clamp(ovenPizza.bakeT / full, 0, 1);
+      const perfect = BAKE_PERFECT / full;
 
       ctx.fillStyle = 'rgba(0,0,0,0.45)';
-      ctx.fillRect(bx2, by, bw, 16);
-
-      // The green stripe is the window where it's cooked and not yet
-      // ruined. Aim for the green.
+      ctx.fillRect(bx2, by, bw, 15);
       ctx.fillStyle = 'rgba(120,200,110,0.35)';
-      ctx.fillRect(bx2 + bw * perfectAt, by, bw * (1 - perfectAt), 16);
-
-      ctx.fillStyle = pizza.state === 'burnt' ? '#d64a3c'
-                    : pizza.state === 'baked' ? '#8fe07a' : '#e0a83c';
-      ctx.fillRect(bx2, by, bw * t, 16);
+      ctx.fillRect(bx2 + bw * perfect, by, bw * (1 - perfect), 15);
+      ctx.fillStyle = ovenPizza.state === 'burnt' ? '#d64a3c'
+                    : ovenPizza.state === 'baked' ? '#8fe07a' : '#e0a83c';
+      ctx.fillRect(bx2, by, bw * t, 15);
 
       ctx.textAlign = 'center';
-      ctx.font = 'bold ' + Math.min(W * 0.026, 17) + 'px system-ui, sans-serif';
-      ctx.fillStyle = pizza.state === 'burnt' ? '#d64a3c'
-                    : pizza.state === 'baked' ? '#8fe07a' : '#e0a83c';
-      ctx.fillText(pizza.state === 'burnt' ? 'BURNT'
-                 : pizza.state === 'baked' ? 'COOKED - TAKE IT TO THE WINDOW'
-                 : 'BAKING', W / 2, by - 8);
+      ctx.font = 'bold ' + Math.min(W * 0.024, 16) + 'px system-ui, sans-serif';
+      ctx.fillText(ovenPizza.state === 'burnt' ? 'BURNT'
+                 : ovenPizza.state === 'baked' ? 'COOKED - GO AND GET IT'
+                 : 'BAKING', W / 2, by - 7);
     }
 
     // ---- THE SHOP TAB ------------------------------------------------
-    // Always there, always small. It glows when you can afford
-    // something, so you never have to open it to find out.
     const tab = shopTab();
-    let affordable = false;
+    let can = false;
     for (const k of SHOP_KEYS) {
       const u = upgrades[k];
-      if (u.bought < u.max && money >= costOf(u)) affordable = true;
+      if (u.bought < u.max && money >= costOf(u)) can = true;
     }
-    ctx.fillStyle = affordable ? 'rgba(255,215,106,0.22)' : 'rgba(0,0,0,0.4)';
+    ctx.fillStyle = can ? 'rgba(255,215,106,0.22)' : 'rgba(0,0,0,0.4)';
     ctx.fillRect(tab.x, tab.y, tab.w, tab.h);
     ctx.lineWidth = 2;
-    ctx.strokeStyle = affordable ? '#ffd76a' : 'rgba(255,255,255,0.2)';
+    ctx.strokeStyle = can ? '#ffd76a' : 'rgba(255,255,255,0.2)';
     ctx.strokeRect(tab.x, tab.y, tab.w, tab.h);
     ctx.textAlign = 'center';
     ctx.font = 'bold ' + Math.min(W * 0.026, 17) + 'px system-ui, sans-serif';
-    ctx.fillStyle = affordable ? '#ffd76a' : '#a08c78';
+    ctx.fillStyle = can ? '#ffd76a' : '#a08c78';
     ctx.fillText(shopOpen ? 'CLOSE' : 'SHOP', tab.x + tab.w / 2, tab.y + 26);
 
-    if (!shopOpen) { drawLabels(); drawSays(); return; }
+    if (shopOpen) { drawShopPanel(); return; }
 
-    // Everything behind the shop goes dim, so it's obvious the game is
-    // waiting for you rather than carrying on underneath.
-    ctx.fillStyle = 'rgba(12,8,6,0.78)';
+    // ---- WHAT E WOULD DO ---------------------------------------------
+    const act = whatEDoes();
+    if (act) {
+      ctx.textAlign = 'center';
+      ctx.font = 'bold ' + Math.min(W * 0.032, 21) + 'px system-ui, sans-serif';
+      ctx.fillStyle = act.do === 'no' ? '#c8a488' : '#8fe07a';
+      ctx.fillText(act.do === 'no' ? act.text : 'E  -  ' + act.text, W / 2, H - 118);
+    }
+
+    if (saysT > 0) {
+      ctx.textAlign = 'center';
+      ctx.font = 'bold ' + Math.min(W * 0.03, 20) + 'px system-ui, sans-serif';
+      ctx.fillStyle = 'rgba(255,233,200,' + clamp(saysT, 0, 1) + ')';
+      ctx.fillText(says, W / 2, H - 146);
+    }
+  }
+
+  function drawShopPanel() {
+    ctx.fillStyle = 'rgba(12,8,6,0.8)';
     ctx.fillRect(0, 0, W, H);
-
     ctx.textAlign = 'center';
-    ctx.font = 'bold ' + Math.min(W * 0.042, 32) + 'px system-ui, sans-serif';
+    ctx.font = 'bold ' + Math.min(W * 0.04, 30) + 'px system-ui, sans-serif';
     ctx.fillStyle = '#ffd76a';
-    ctx.fillText('SHOP  -  ' + money + ' coins', W / 2, H * 0.2);
+    ctx.fillText('SHOP  -  ' + money + ' coins', W / 2, H * 0.15);
 
     for (let i = 0; i < SHOP_KEYS.length; i++) {
-      const u = upgrades[SHOP_KEYS[i]];
-      const b = shopBox(i);
-      const maxed = u.bought >= u.max;
-      const cost = costOf(u);
-      const can = !maxed && money >= cost;
+      const u = upgrades[SHOP_KEYS[i]], b = shopBox(i);
+      const maxed = u.bought >= u.max, cost = costOf(u), can = !maxed && money >= cost;
 
       ctx.fillStyle = can ? 'rgba(255,215,106,0.16)' : 'rgba(0,0,0,0.35)';
       ctx.fillRect(b.x, b.y, b.w, b.h);
@@ -762,103 +870,90 @@
       ctx.textAlign = 'left';
       ctx.font = 'bold ' + Math.min(W * 0.024, 15) + 'px system-ui, sans-serif';
       ctx.fillStyle = maxed ? '#8fe07a' : can ? '#ffe9c8' : '#8a7a68';
-      ctx.fillText(u.name, b.x + 10, b.y + 20);
-
+      ctx.fillText(u.name, b.x + 10, b.y + 22);
       ctx.font = Math.min(W * 0.02, 13) + 'px system-ui, sans-serif';
       ctx.fillStyle = '#a08c78';
-      ctx.fillText(u.blurb, b.x + 10, b.y + 36);
+      ctx.fillText(u.blurb, b.x + 10, b.y + 40);
 
       ctx.textAlign = 'right';
       ctx.font = 'bold ' + Math.min(W * 0.022, 14) + 'px system-ui, sans-serif';
       ctx.fillStyle = maxed ? '#8fe07a' : can ? '#ffd76a' : '#8a7a68';
-      ctx.fillText(maxed ? 'MAXED' : cost + ' coins', b.x + b.w - 10, b.y + 46);
+      ctx.fillText(maxed ? 'MAXED' : cost + ' coins', b.x + b.w - 10, b.y + 42);
 
-      // Little pips showing how many you've bought.
       for (let p = 0; p < u.max; p++) {
         ctx.fillStyle = p < u.bought ? '#8fe07a' : 'rgba(255,255,255,0.18)';
-        ctx.fillRect(b.x + b.w - 12 - (u.max - p) * 11, b.y + 12, 8, 8);
+        ctx.fillRect(b.x + b.w - 12 - (u.max - p) * 11, b.y + 10, 8, 8);
       }
     }
 
     ctx.textAlign = 'center';
-    ctx.font = Math.min(W * 0.024, 15) + 'px system-ui, sans-serif';
+    ctx.font = Math.min(W * 0.022, 14) + 'px system-ui, sans-serif';
     ctx.fillStyle = '#a08c78';
-    ctx.fillText('tap anywhere else to go back to the counter', W / 2, H * 0.82);
-
-    drawSays();
+    ctx.fillText('tap anywhere else to get back to work', W / 2, H * 0.86);
   }
 
-  // ---- LABELS ON THE STATIONS ----------------------------------------
-  // Drawn from the SAME position the box uses, so the word is always on
-  // the thing it names.
+  // Labels floating over each spot, from the SAME position the box uses.
   function drawLabels() {
     ctx.textAlign = 'center';
-    ctx.font = 'bold ' + Math.min(W * 0.018, 12) + 'px system-ui, sans-serif';
-    for (const s of STATIONS) {
-      const p = stationScreen(s);
-      if (!p) continue;
-      ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.font = 'bold ' + Math.min(W * 0.017, 12) + 'px system-ui, sans-serif';
+    for (const s of SPOTS) {
+      const p = project(s.x, s.big ? 30 : 20, s.z);
+      if (!p || p.x < -40 || p.x > W + 40 || p.y < 0 || p.y > H) continue;
+      const near = nearSpot === s;
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
       ctx.fillText(s.name, p.x + 1, p.y + 1);
-      ctx.fillStyle = '#ffe9c8';
+      ctx.fillStyle = near ? '#8fe07a' : 'rgba(255,233,200,0.75)';
       ctx.fillText(s.name, p.x, p.y);
     }
-  }
 
-  function drawSays() {
-    if (saysT <= 0) return;
-    ctx.textAlign = 'center';
-    ctx.font = 'bold ' + Math.min(W * 0.032, 21) + 'px system-ui, sans-serif';
-    ctx.fillStyle = 'rgba(255,233,200,' + clamp(saysT, 0, 1) + ')';
-    ctx.fillText(says, W / 2, H - 128);
-  }
-
-
-// -------------------------------------------------------------------
-//  CLICKING
-// -------------------------------------------------------------------
-
-  function hitStation(mx, my) {
-    let best = null, bestD = 70;      // how close a click has to be
-    for (const s of STATIONS) {
-      const p = stationScreen(s);
-      if (!p) continue;
-      const d = Math.hypot(mx - p.x, my - p.y);
-      if (d < bestD) { bestD = d; best = s; }
+    const fp = project(FIELD.x, 16, FIELD.z);
+    if (fp && fp.y > 0 && fp.y < H) {
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fillText('WHEAT FIELD', fp.x + 1, fp.y + 1);
+      ctx.fillStyle = inField ? '#8fe07a' : 'rgba(255,233,200,0.75)';
+      ctx.fillText('WHEAT FIELD', fp.x, fp.y);
     }
-    return best;
   }
+
+
+// -------------------------------------------------------------------
+//  CONTROLS
+// -------------------------------------------------------------------
+
+  window.addEventListener('keydown', function (e) {
+    const k = e.key.toLowerCase();
+    if (k === 'e' && !keys['e'] && !shopOpen) { keys['e'] = true; pressE(); return; }
+    keys[k] = true;
+    if (e.key.startsWith('Arrow') || e.key === ' ') e.preventDefault();
+  });
+  window.addEventListener('keyup', function (e) { keys[e.key.toLowerCase()] = false; });
 
   function inBox(mx, my, b) {
     return mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h;
   }
 
   function tap(mx, my) {
-    // The tab opens and shuts the shop, and it works either way round.
     if (inBox(mx, my, shopTab())) { shopOpen = !shopOpen; return; }
-
-    // With the shop open, NOTHING behind it can be clicked. That's the
-    // whole point of a drawer - otherwise you'd reach through it and
-    // put pineapple on a pizza you couldn't even see.
     if (shopOpen) {
       for (let i = 0; i < SHOP_KEYS.length; i++) {
         if (inBox(mx, my, shopBox(i))) { buy(SHOP_KEYS[i]); return; }
       }
-      shopOpen = false;          // tapped anywhere else = back to work
+      shopOpen = false;
       return;
     }
-
-    const s = hitStation(mx, my);
-    if (s) useStation(s.id);
+    // Tapping anywhere in the world does whatever E would do, so a
+    // phone gets the same game a keyboard does.
+    keys['e'] = true;
+    pressE();
   }
 
-  canvas.addEventListener('mousedown', function (e) {
-    tap(e.clientX, e.clientY);
-  });
-
+  canvas.addEventListener('mousedown', function (e) { tap(e.clientX, e.clientY); });
+  canvas.addEventListener('mouseup', function () { keys['e'] = false; });
   canvas.addEventListener('touchstart', function (e) {
     e.preventDefault();
     for (const t of e.changedTouches) tap(t.clientX, t.clientY);
   }, { passive: false });
+  canvas.addEventListener('touchend', function () { keys['e'] = false; });
 
 
 // -------------------------------------------------------------------
@@ -867,29 +962,30 @@
 
   let last = 0;
   function frame(now) {
-    // dt is how long the last frame took. Everything that changes over
-    // time gets multiplied by it, so the game runs at the same speed on
-    // a fast computer and a slow one.
     const dt = Math.min(0.05, Math.max(0.0005, (now - last) / 1000));
     last = now;
 
     update(dt);
 
-    ctx.fillStyle = '#1a1210';
+    ctx.fillStyle = '#14100e';
     ctx.fillRect(0, 0, W, H);
 
     faces = [];
-    drawKitchen();
-    drawStations();
-    drawPizza();
-    drawCustomer();
+    drawGround();
+    drawField();
+    drawShop();
+    drawSpots();
+    drawPlayer();
     paint();
 
+    drawLabels();
     drawHud();
 
     requestAnimationFrame(frame);
   }
 
+  cam.x = player.x; cam.z = player.z - CAM_BACK; cam.y = CAM_UP;
+  lookAround();
   makeOrder();
   requestAnimationFrame(frame);
 
