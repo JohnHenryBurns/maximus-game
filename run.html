@@ -150,6 +150,8 @@
   let bits = [];           // flying debris
   let crates = [];         // still falling out of the sky
   let crateTimer = 3.5;
+  let booms = [];          // the flashes going off behind you
+  let lastHalf = 0;        // the last half-square you crossed
 
   const player = {
     x: 0, y: 0, vy: 0,
@@ -173,8 +175,8 @@
 
   function reset() {
     camX = 0; dist = 0; speed = START_SPEED; lead = LEAD_START; clock = 0;
-    blocks = []; pits = []; scenery = []; bits = []; crates = [];
-    crateTimer = 3.5;
+    blocks = []; pits = []; scenery = []; bits = []; crates = []; booms = [];
+    crateTimer = 3.5; lastHalf = 0;
     player.x = 0; player.y = 0; player.vy = 0;
     player.onGround = true; player.jumps = 0; player.holding = 0;
     player.stumble = 0; player.run = 0;
@@ -259,6 +261,7 @@
     pits    = pits.filter(function (p) { return p.x + p.w > back; });
     scenery = scenery.filter(function (s) { return s.x + s.w > back; });
     bits    = bits.filter(function (b) { return b.life > 0 && b.x > back - 300; });
+    if (bits.length > BITS_MAX) bits = bits.slice(bits.length - BITS_MAX);
     while (madeTo < player.x + W + 1600) makeMore();
   }
 
@@ -450,6 +453,7 @@
     }
 
     updateCrates(dt);
+    updateBooms(dt);
 
     camX = player.x - W * 0.32;
     tidyUp();
@@ -546,6 +550,81 @@
     crates = crates.filter(function (c) {
       return !c.dead && c.x > player.x - 400;
     });
+  }
+
+  // -------------------------------------------------------------------
+  //  EVERYTHING BEHIND YOU GOES UP
+  // -------------------------------------------------------------------
+  //
+  //  Every HALF SQUARE you travel, something behind you detonates. At
+  //  full pelt that's about twenty-five a second, which is not a bang -
+  //  it's a wall of fire following you down the street. Exactly the
+  //  point, so it stays.
+  //
+  //  Which means each one has to be CHEAP. Twenty-five big explosions a
+  //  second would bury the frame rate in a few seconds, so each is a
+  //  handful of specks and a short flash, and the whole lot is capped.
+  //  The effect comes from how MANY there are, not how big each one is.
+
+  const BITS_MAX = 260;
+
+  function blowUpBehind() {
+    const front = monsterX();
+    const room = player.x - 40 - front;
+    if (room < 30) return;                 // it's right on top of you
+
+    // Somewhere between the monster's teeth and your heels, leaning
+    // towards just-behind-you, which is where you'll actually see it.
+    const x = player.x - 40 - Math.pow(Math.random(), 1.7) * room;
+
+    // A block or crate caught in it is simply gone.
+    for (let i = blocks.length - 1; i >= 0; i--) {
+      const b = blocks[i];
+      if (b.x + b.w < x - 40 || b.x > x + 40) continue;
+      bits.push({ x: b.x + b.w / 2, y: -b.h / 2,
+                  vx: (Math.random() - 0.4) * 300, vy: -260 - Math.random() * 300,
+                  size: 8 + Math.random() * 14, life: 0.7 + Math.random() * 0.5,
+                  spin: Math.random() * 6,
+                  col: b.crate ? [176, 124, 62] : b.platform ? [126, 110, 160] : [150, 98, 58] });
+      blocks.splice(i, 1);
+      break;                                // one thing per bang
+    }
+
+    booms.push({ x: x, y: -8 - Math.random() * 30, r: 0, life: 0.28 });
+
+    // Four or five specks. That's all one bang needs when there are
+    // twenty-five of them a second.
+    if (bits.length < BITS_MAX) {
+      const n = 4 + Math.floor(Math.random() * 3);
+      for (let i = 0; i < n; i++) {
+        bits.push({
+          x: x, y: -4,
+          vx: (Math.random() - 0.35) * 420,
+          vy: -220 - Math.random() * 380,
+          size: 4 + Math.random() * 9,
+          life: 0.45 + Math.random() * 0.5,
+          spin: Math.random() * 6,
+          col: Math.random() < 0.55 ? [255, 176 + Math.random() * 60, 90]
+                                    : [120 + Math.random() * 50, 90, 110]
+        });
+      }
+    }
+  }
+
+  function updateBooms(dt) {
+    // ONE BANG PER HALF SQUARE, however fast the frame rate is. Counting
+    // boundaries instead of counting frames means a slow computer gets
+    // exactly the same number of explosions as a fast one - it just gets
+    // several of them in the same frame.
+    const half = GRID() * 0.5;
+    const nowHalf = Math.floor(player.x / half);
+    let owed = nowHalf - lastHalf;
+    lastHalf = nowHalf;
+    if (owed > 6) owed = 6;                // after a stumble, don't flood
+    while (owed-- > 0) blowUpBehind();
+
+    for (const b of booms) { b.life -= dt; b.r += dt * 420; }
+    booms = booms.filter(function (b) { return b.life > 0; });
   }
 
   function bump(x, y, cols, n) {
@@ -787,6 +866,29 @@
     }
   }
 
+  // The flash of each bang - a bright ring that swells and vanishes.
+  // Drawn UNDER the debris so the specks fly out of the middle of it.
+  function drawBooms() {
+    const gy = groundY();
+    for (const b of booms) {
+      const x = sx(b.x);
+      if (x < -80 || x > W + 80) continue;
+      const fade = clamp(b.life / 0.28, 0, 1);
+      ctx.globalAlpha = fade * 0.85;
+      ctx.fillStyle = 'rgb(255,' + Math.round(150 + 90 * fade) + ',80)';
+      ctx.beginPath();
+      ctx.arc(x, gy + b.y, 6 + b.r * 0.35, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = fade * 0.4;
+      ctx.strokeStyle = '#fff2c8';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(x, gy + b.y, 8 + b.r * 0.6, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
   function drawBits() {
     for (const b of bits) {
       const x = sx(b.x), y = groundY() + b.y;
@@ -991,6 +1093,7 @@
     drawGround();
     drawBlocks();
     drawCrates();
+    drawBooms();
     drawBits();
     drawPlayer();
     drawMonster();
