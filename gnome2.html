@@ -195,6 +195,14 @@
 const canvas = document.getElementById("screen");
 const ctx    = canvas.getContext("2d");
 
+// A spare, hidden canvas the same size as the real one. The PSYCHEDELIC
+// power-up copies the finished picture onto this, then paints it back in
+// wavy horizontal strips - which is what makes the whole screen ripple.
+// Made once and reused, because making a new one every frame would be
+// wasteful. See applyPsychWarp().
+const warpCanvas = document.createElement("canvas");
+const warpCtx = warpCanvas.getContext("2d");
+
 // The size we PRETEND the screen is. Everything below uses these two
 // numbers instead of the real window size, so the game is always fair.
 const W = 460;
@@ -358,9 +366,14 @@ const RAPID_TIME   = 8  * 60;   // machine-gun fire
 const SPREAD_TIME  = 8  * 60;   // three shots at once
 const FREEZE_TIME  = 5  * 60;   // the lava stops dead
 const ROCKET_TIME  = 4  * 60;   // hold JUMP to fly
+const BIG_TIME     = 15 * 60;   // mushroom: you're huge
+const PIERCE_TIME  = 8  * 60;   // shots punch through everything
+const BIGSHOT_TIME = 8  * 60;   // giant cannon rounds
+const PSYCH_TIME   = 9  * 60;   // the screen goes wooOOoo
 
 const RAPID_GAP    = 4;         // frames between shots while rapid-firing
 const ROCKET_THRUST = 0.92;     // how hard the rocket boots push up
+const BIG_SCALE    = 1.8;       // how many times bigger the mushroom makes you
 
 // After a shield saves you, you get a moment where nothing can touch you,
 // so you don't just die again on the very next frame to the same monster.
@@ -400,6 +413,12 @@ let bossShots;     // things the boss throws at you
 let bossPlatform;  // the big safe floor you fight a boss from (falls when it dies)
 let clearedBossStages;  // a Set of stage numbers whose boss is already dead
 let banner;        // { text, sub, timer } - the big words that flash in the middle
+
+// Held items - the ones you keep in your "bag" until you use them up.
+let doubleJumps;   // how many mid-air jumps you've got saved up
+let usedAirJump;   // have you already spent your double-jump this leap?
+let jumpEdge;      // did a jump button get FRESHLY pressed this frame?
+let itemPopups;    // the little "you got X" notes that fade away
 
 // How many ledges have been built this game. Drives the every-fifth
 // monster, and nothing else.
@@ -446,9 +465,14 @@ function newGame() {
 
   // --- fresh version-2 state, all zeroed for a new run ---
   powerups    = [];
-  powerTimers = { rapid: 0, spread: 0, freeze: 0, rockets: 0 };
+  powerTimers = { rapid: 0, spread: 0, freeze: 0, rockets: 0,
+                  big: 0, pierce: 0, bigshot: 0, psych: 0 };
   shield      = false;
   invuln      = 0;
+  doubleJumps = 0;
+  usedAirJump = false;
+  jumpEdge    = false;
+  itemPopups  = [];
   coins       = 0;
   stage       = 1;
   boss        = null;
@@ -554,10 +578,18 @@ function makeLedge(y) {
 const keys = {};
 
 addEventListener("keydown", e => {
-  keys[e.key.toLowerCase()] = true;
+  const k = e.key.toLowerCase();
+  const wasDown = keys[k];
+  keys[k] = true;
+
+  // A FRESH jump press (not a key auto-repeating while held). This is the
+  // spark the double-jump needs: it must fire on the press, not on holding.
+  const isJumpKey = (k === " " || k === "arrowup" || k === "w");
+  if (isJumpKey && !wasDown) { jumpEdge = true; jumpBuffer = 8; }
+
   if (e.key === " ") e.preventDefault();   // stop space scrolling the page
-  if (e.key.toLowerCase() === "f") toggleFullscreen();
-  if (e.key.toLowerCase() === "m") audio.muted = !audio.muted;
+  if (k === "f") toggleFullscreen();
+  if (k === "m") audio.muted = !audio.muted;
   if (dead && deadTimer > 40) newGame();
 });
 
@@ -654,7 +686,8 @@ function handleTouch(e) {
     // Only count a jump when a finger ARRIVES on the button - not every
     // frame it sits there. Otherwise holding JUMP would make the gnome
     // bounce like a pogo stick the instant he touched anything.
-    if (hit === "jump" && was !== "jump") jumpBuffer = 8;
+    // jumpEdge is the FRESH-press flag the double-jump watches for.
+    if (hit === "jump" && was !== "jump") { jumpBuffer = 8; jumpEdge = true; }
 
     fingers.set(t.identifier, hit);
   }
@@ -705,6 +738,7 @@ function forgetAllInput() {
   touchShooting = false;
   mouseShooting = false;
   jumpBuffer = 0;
+  jumpEdge = false;
 }
 
 addEventListener("blur", forgetAllInput);
@@ -1038,13 +1072,21 @@ function addLedge(y) {
 //
 // A "weight" is just how many tickets each type puts in the hat. Coin
 // has 40 tickets, shield has 8, so coins come up five times as often.
+// Each entry also carries a title and a one-line description - that's what
+// pops up and fades away when you grab it, so you learn what a new goody
+// does the first time you touch one.
 const POWERUP_KINDS = [
-  { kind: "coin",    weight: 40, emoji: "💰", color: "#ffd24a" },
-  { kind: "rapid",   weight: 12, emoji: "🔫", color: "#8fd0ff" },
-  { kind: "spread",  weight: 12, emoji: "🌟", color: "#ffe08a" },
-  { kind: "freeze",  weight: 10, emoji: "❄️", color: "#b6ecff" },
-  { kind: "rockets", weight: 10, emoji: "🚀", color: "#ff9a6b" },
-  { kind: "shield",  weight: 8,  emoji: "🛡️", color: "#b7ffcf" },
+  { kind: "coin",       weight: 40, emoji: "💰", color: "#ffd24a", title: "COIN",         desc: "+5 points" },
+  { kind: "rapid",      weight: 12, emoji: "🔫", color: "#8fd0ff", title: "RAPID FIRE",   desc: "machine-gun for 8s" },
+  { kind: "spread",     weight: 11, emoji: "🌟", color: "#ffe08a", title: "SPREAD SHOT",  desc: "three shots at once" },
+  { kind: "freeze",     weight: 10, emoji: "❄️", color: "#b6ecff", title: "FREEZE",       desc: "the lava stops for 5s" },
+  { kind: "rockets",    weight: 10, emoji: "🚀", color: "#ff9a6b", title: "ROCKET BOOTS", desc: "hold JUMP to fly" },
+  { kind: "shield",     weight: 8,  emoji: "🛡️", color: "#b7ffcf", title: "SHIELD",       desc: "blocks one hit" },
+  { kind: "doublejump", weight: 10, emoji: "⏫", color: "#c9b6ff", title: "DOUBLE JUMP",  desc: "jump again in mid-air" },
+  { kind: "mushroom",   weight: 8,  emoji: "🍄", color: "#ff6b8a", title: "MEGA MUSHROOM", desc: "get HUGE for 15s - stomp monsters!" },
+  { kind: "pierce",     weight: 8,  emoji: "🏹", color: "#9affc0", title: "PIERCE SHOT",  desc: "shots punch through everything" },
+  { kind: "bigshot",    weight: 8,  emoji: "💥", color: "#ffb14a", title: "BIG SHOT",     desc: "giant cannon rounds" },
+  { kind: "psych",      weight: 7,  emoji: "🌀", color: "#ff8ae0", title: "PSYCHEDELIC",  desc: "whooOOoaaa, man" },
 ];
 
 function pickPowerupKind() {
@@ -1208,6 +1250,12 @@ function grabPowerups() {
       p.taken = true;
       applyPowerup(p.kind);
       chime();
+      // Pop up a little note saying what you just grabbed - but not for
+      // coins, they'd nag at you constantly.
+      if (p.kind !== "coin") {
+        const meta = POWERUP_KINDS.find(k => k.kind === p.kind);
+        if (meta) showItemPopup(meta);
+      }
     }
   }
   // Keep the ones that are still floating above the lava and haven't been
@@ -1215,16 +1263,42 @@ function grabPowerups() {
   powerups = powerups.filter(p => !p.taken && p.y < lavaY + 20);
 }
 
+// THE "YOU GOT X" NOTE. Newest goes on top; we only ever keep the last
+// three so they don't stack up into a wall of text.
+function showItemPopup(meta) {
+  itemPopups.unshift({ emoji: meta.emoji, title: meta.title, desc: meta.desc, timer: 150 });
+  if (itemPopups.length > 3) itemPopups.pop();
+}
+
 // WHAT EACH GOODY DOES. One little switchboard - add a new kind of
 // power-up and this is the only place you have to teach the game what it
 // means.
 function applyPowerup(kind) {
-  if (kind === "coin")    coins += 5;
-  if (kind === "rapid")   powerTimers.rapid   = RAPID_TIME;
-  if (kind === "spread")  powerTimers.spread  = SPREAD_TIME;
-  if (kind === "freeze")  powerTimers.freeze  = FREEZE_TIME;
-  if (kind === "rockets") powerTimers.rockets = ROCKET_TIME;
-  if (kind === "shield")  shield = true;
+  if (kind === "coin")       coins += 5;
+  if (kind === "rapid")      powerTimers.rapid   = RAPID_TIME;
+  if (kind === "spread")     powerTimers.spread  = SPREAD_TIME;
+  if (kind === "freeze")     powerTimers.freeze  = FREEZE_TIME;
+  if (kind === "rockets")    powerTimers.rockets = ROCKET_TIME;
+  if (kind === "shield")     shield = true;
+  if (kind === "doublejump") doubleJumps++;
+  if (kind === "mushroom")   powerTimers.big     = BIG_TIME;
+  if (kind === "pierce")     powerTimers.pierce  = PIERCE_TIME;
+  if (kind === "bigshot")    powerTimers.bigshot = BIGSHOT_TIME;
+  if (kind === "psych")      powerTimers.psych   = PSYCH_TIME;
+}
+
+// BUILD A BULLET, stamping on whatever gun upgrades are running right now:
+//   pierce - the shot punches THROUGH things instead of stopping at the
+//            first one, so it can rake a whole row. `hit` remembers what
+//            it has already struck so it can't hit the same thing twice.
+//   big    - a fat cannon round: bigger on screen, and does triple damage.
+function makeBullet(x, y, vx, vy) {
+  return {
+    x: x, y: y, vx: vx, vy: vy, life: BULLET_LIFE,
+    pierce: powerTimers.pierce > 0,
+    big: powerTimers.bigshot > 0,
+    hit: null,
+  };
 }
 
 // THE BIG WORDS THAT FLASH IN THE MIDDLE. Used for "STAGE 3", boss names,
@@ -1273,12 +1347,18 @@ function enterStage(s) {
 // code below just asks "which type?" whenever they need to behave
 // differently. One boss on screen at a time, ever.
 
-const BOSS_TYPES = ["golem", "dragon", "blob"];
-const BOSS_NAMES = { golem: "LAVA GOLEM", dragon: "ASH DRAGON", blob: "THE BLOB KING" };
+// Six of them now, taking turns in this order every 5th stage.
+const BOSS_TYPES = ["golem", "dragon", "blob", "skull", "spider", "ghost"];
+const BOSS_NAMES = {
+  golem: "LAVA GOLEM", dragon: "ASH DRAGON", blob: "THE BLOB KING",
+  skull: "FLAMING SKULL", spider: "GIANT SPIDER", ghost: "ANGRY GHOST",
+};
+// How fast each one slides sideways.
+const BOSS_SPEED = { golem: 1.4, dragon: 3.4, blob: 2.2, skull: 1.4, spider: 3.0, ghost: 2.4 };
 
 function spawnBoss(s) {
-  // Stage 5 -> the 1st boss, stage 10 -> the 2nd, and so on, wrapping
-  // back round to the start once you've met all three.
+  // Stage 5 -> the 1st boss, stage 10 -> the 2nd, and so on, wrapping back
+  // round to the start once you've met all six.
   const which = (s / BOSS_STAGE - 1) % BOSS_TYPES.length;
   const type = BOSS_TYPES[which];
   const hp = BOSS_BASE_HP + s * BOSS_HP_PER_STAGE;
@@ -1291,7 +1371,7 @@ function spawnBoss(s) {
     x: W / 2,
     y: cameraY + 150,     // drop in near the top of the view
     dir: Math.random() < 0.5 ? -1 : 1,
-    vx: type === "dragon" ? 3.4 : type === "blob" ? 2.2 : 1.4,
+    vx: BOSS_SPEED[type] || 1.8,
     t: 0,
     nextAttack: 80,       // a moment's grace before it opens fire
     hurtUntil: 0,
@@ -1345,11 +1425,32 @@ function updateBoss() {
     if (boss.x > W - 44) boss.dir = -1;
     if (boss.t >= boss.nextAttack) { dragonAttack(); boss.nextAttack = boss.t + 52; }
 
-  } else { // blob
+  } else if (boss.type === "blob") {
     boss.x += boss.vx * boss.dir;
     if (boss.x < 64)     boss.dir = 1;
     if (boss.x > W - 64) boss.dir = -1;
     if (boss.t >= boss.nextAttack) { blobAttack(); boss.nextAttack = boss.t + 150; }
+
+  } else if (boss.type === "skull") {
+    // Glides smoothly back and forth on a sine wave rather than bouncing
+    // off walls, and rains a fan of flames down the middle.
+    boss.x = W / 2 + Math.sin(boss.t * 0.02) * 150;
+    if (boss.t >= boss.nextAttack) { skullAttack(); boss.nextAttack = boss.t + 75; }
+
+  } else if (boss.type === "spider") {
+    // Scuttles fast side to side and drops two sticky web globs straight
+    // down.
+    boss.x += boss.vx * boss.dir;
+    if (boss.x < 50)     boss.dir = 1;
+    if (boss.x > W - 50) boss.dir = -1;
+    if (boss.t >= boss.nextAttack) { spiderAttack(); boss.nextAttack = boss.t + 70; }
+
+  } else { // ghost
+    // Drifts about and lobs a spread of slow ecto-blobs aimed at you.
+    boss.x += boss.vx * boss.dir;
+    if (boss.x < 50)     boss.dir = 1;
+    if (boss.x > W - 50) boss.dir = -1;
+    if (boss.t >= boss.nextAttack) { ghostAttack(); boss.nextAttack = boss.t + 85; }
   }
 
   // Touching the boss itself cooks you (a shield will save you once).
@@ -1402,6 +1503,46 @@ function blobAttack() {
   }
 }
 
+// The flaming skull spits three flames in a downward fan.
+function skullAttack() {
+  for (let i = -1; i <= 1; i++) {
+    bossShots.push({
+      x: boss.x, y: boss.y + 18,
+      vx: i * 1.8, vy: 4.6,
+      gravity: 0.05, kind: "fire", spin: 0, r: 11,
+    });
+  }
+}
+
+// The giant spider drops two sticky web globs straight down, one either
+// side of it, so you have to slip between them.
+function spiderAttack() {
+  for (const off of [-16, 16]) {
+    bossShots.push({
+      x: boss.x + off, y: boss.y + 16,
+      vx: 0, vy: 5.0,
+      gravity: 0.02, kind: "web", spin: 0, r: 12,
+    });
+  }
+}
+
+// The angry ghost throws a spread of three slow ecto-blobs aimed at wherever
+// you are. Slow, but they chase your general direction, so keep moving.
+function ghostAttack() {
+  const dx = gnome.x - boss.x;
+  const dy = (gnome.y - 17) - boss.y;
+  const d = Math.hypot(dx, dy) || 1;
+  const bx = (dx / d) * 3.1, by = (dy / d) * 3.1;
+  for (const a of [-0.25, 0, 0.25]) {
+    const c = Math.cos(a), s = Math.sin(a);
+    bossShots.push({
+      x: boss.x, y: boss.y,
+      vx: bx * c - by * s, vy: bx * s + by * c,
+      gravity: 0, kind: "ecto", spin: 0, r: 11,
+    });
+  }
+}
+
 // Move the boss's thrown things, and check whether any of them got you.
 function updateBossShots() {
   for (const s of bossShots) {
@@ -1447,14 +1588,16 @@ function startBossDeath() {
   boing();
 }
 
-// A little pile of goodies rains down where the boss was, as a reward.
+// A little pile of goodies rains down where the boss was, as a reward -
+// now including a taste of the fancier new toys.
 function dropBossLoot() {
-  const drops = ["shield", "rapid", "freeze", "coin", "coin", "spread"];
+  const drops = ["shield", "mushroom", "doublejump", "bigshot", "coin", "spread", "pierce"];
+  const mid = (drops.length - 1) / 2;    // centre the row on the pole
   drops.forEach((kind, i) => {
     const kd = POWERUP_KINDS.find(k => k.kind === kind);
     powerups.push({
       kind: kind, emoji: kd.emoji, color: kd.color,
-      x: W / 2 + (i - 2.5) * 42,
+      x: W / 2 + (i - mid) * 42,
       y: boss.y + 24,
       bob: Math.random() * 6,
       guarded: false,
@@ -1485,6 +1628,10 @@ function update() {
   if (invuln > 0) invuln--;
   if (banner && banner.timer > 0) { banner.timer--; if (banner.timer <= 0) banner = null; }
 
+  // The "you got X" notes age and drop off once their timer runs out.
+  for (const pop of itemPopups) pop.timer--;
+  itemPopups = itemPopups.filter(pop => pop.timer > 0);
+
   // --- steering ---
   let dir = 0;
   if (keys["arrowleft"]  || keys["a"]) dir -= 1;
@@ -1512,6 +1659,18 @@ function update() {
     if (JUMP_BOING) boing();
     if (JUMP_FART) fart();
   }
+  // --- DOUBLE JUMP ---
+  // A held item. If you've got one saved and you press jump FRESH while in
+  // the air (and haven't already spent your mid-air jump this leap), you
+  // get one more shove upward. It's an `else if` so it can never fire on
+  // the very same frame as a normal ground jump.
+  else if (jumpEdge && !gnome.onGround && doubleJumps > 0 && !usedAirJump) {
+    gnome.vy = -JUMP_POWER;
+    doubleJumps--;
+    usedAirJump = true;      // only one mid-air jump per leap
+    if (JUMP_BOING) boing();
+  }
+  jumpEdge = false;          // a fresh press only ever counts once
 
   // --- ROCKET BOOTS ---
   // While you've got rockets AND you're holding jump, you get pushed up
@@ -1563,6 +1722,10 @@ function update() {
       }
     }
   }
+
+  // Back on solid ground? Then your mid-air jump is refreshed, ready for
+  // the next leap. (You still need to OWN a double-jump to use it.)
+  if (gnome.onGround) usedAirJump = false;
 
   // --- ledges give way ---
   // The timer belongs to the LEDGE, not to the gnome, and it never gets
@@ -1646,21 +1809,10 @@ function update() {
     if (powerTimers.spread > 0) {
       for (const ang of [-0.22, 0, 0.22]) {
         const c = Math.cos(ang), s = Math.sin(ang);
-        bullets.push({
-          x: originX, y: handY,
-          vx: vx * c - vy * s,
-          vy: vx * s + vy * c,
-          life: BULLET_LIFE,
-        });
+        bullets.push(makeBullet(originX, handY, vx * c - vy * s, vx * s + vy * c));
       }
     } else {
-      bullets.push({
-        x: originX,
-        y: handY,
-        vx: vx,
-        vy: vy,          // bullets can climb and dive now, not just fly flat
-        life: BULLET_LIFE,
-      });
+      bullets.push(makeBullet(originX, handY, vx, vy));
     }
     gnome.recoil = 5;                // shoves the pistol back for 5 frames
   }
@@ -1716,16 +1868,26 @@ function update() {
   // breakfast. Worry about it when there are thousands, not before.
   for (const b of bullets) {
     if (b.life <= 0) continue;
+    // A big cannon round is a fatter target-finder and hits harder.
+    const rad = b.big ? 30 : 22;
+    const dmg = b.big ? 3 : 1;
     for (const m of monsters) {
       if (m.health <= 0) continue;
+      if (b.hit && b.hit.includes(m)) continue;   // a pierce shot never re-hits
       const dx = b.x - m.x;
       const dy = b.y - (m.y - 14);
-      if (dx * dx + dy * dy < 22 * 22) {
-        m.health--;
+      if (dx * dx + dy * dy < rad * rad) {
+        m.health -= dmg;
         m.hurtUntil = shakeClock + 8;
-        b.life = 0;                  // the bullet is used up
         if (m.health <= 0) kills++;
-        break;                       // one bullet, one monster
+        if (b.pierce) {
+          // Punch through: remember this one and keep flying so the same
+          // shot can hit the next monster in the row too.
+          (b.hit || (b.hit = [])).push(m);
+        } else {
+          b.life = 0;                // the bullet is used up
+          break;                     // one bullet, one monster
+        }
       }
     }
   }
@@ -1737,17 +1899,19 @@ function update() {
   if (boss && boss.dying === 0) {
     for (const b of bullets) {
       if (b.life <= 0) continue;
+      if (b.hit && b.hit.includes(boss)) continue;   // pierce shot already counted
       const dx = b.x - boss.x;
       const dy = b.y - boss.y;
-      // A generous 46-pixel hittable radius. A boss keeps moving while the
-      // bullet is in the air, so an aimed shot usually lands a little
-      // behind it - a wider target means those near-misses still count,
-      // and the auto-gun actually chews the boss down instead of mostly
-      // whiffing. It's bigger than the boss LOOKS, and that's on purpose.
-      if (dx * dx + dy * dy < 46 * 46) {
-        boss.hp--;
+      // A generous hittable radius (bigger still for a cannon round). A
+      // boss keeps moving while the bullet is in the air, so an aimed shot
+      // usually lands a little behind it - a wider target means those
+      // near-misses still count and the auto-gun actually chews it down.
+      const rad = b.big ? 58 : 46;
+      if (dx * dx + dy * dy < rad * rad) {
+        boss.hp -= b.big ? 3 : 1;
         boss.hurtUntil = shakeClock + 6;
-        b.life = 0;
+        if (b.pierce) (b.hit || (b.hit = [])).push(boss);
+        else b.life = 0;
         if (boss.hp <= 0) { startBossDeath(); break; }
       }
     }
@@ -1806,11 +1970,21 @@ function update() {
   fireballs = fireballs.filter(f => f.y < lavaY + 40);
 
   // --- a monster catching you ---
+  // Normally a touch cooks you. But if the MEGA MUSHROOM is running you're
+  // huge, so you stomp the monster flat instead and just plough on through.
   for (const m of monsters) {
     if (m.health <= 0) continue;
     const dx = m.x - gnome.x;
     const dy = (m.y - 14) - (gnome.y - 17);
-    if (dx * dx + dy * dy < 26 * 26) killGnome(true);
+    if (dx * dx + dy * dy < 26 * 26) {
+      if (powerTimers.big > 0) {
+        m.health = 0;
+        m.hurtUntil = shakeClock + 8;
+        kills++;
+      } else {
+        killGnome(true);
+      }
+    }
   }
 
   // --- the version-2 movers ---
@@ -1949,10 +2123,48 @@ function draw() {
     ctx.fillRect(0, 0, W, H);
   }
 
+  // PSYCHEDELIC MODE. Two tricks stacked:
+  //   1. A CSS hue-rotate on the whole canvas, spinning the colours round
+  //      and round, so everything shimmers through the rainbow.
+  //   2. The strip-warp below, which makes the whole game world ripple.
+  // We warp the WORLD (drawn above) but leave the buttons and HUD (drawn
+  // below) crisp, so you can still read your score and hit the controls
+  // while everything else goes wooOOoo.
+  if (powerTimers.psych > 0) {
+    const hue = (performance.now() / 12) % 360;
+    canvas.style.filter = "hue-rotate(" + hue + "deg) saturate(1.9) contrast(1.1)";
+    applyPsychWarp();
+  } else if (canvas.style.filter) {
+    canvas.style.filter = "";     // snap back to normal the moment it ends
+  }
+
   drawBossBar();
   drawHud();
   drawBanner();
+  drawItemPopups();
   drawButtons();
+}
+
+// Ripple the finished picture. Copy it to the spare canvas, then paint it
+// back one thin horizontal strip at a time, each nudged sideways by a sine
+// wave. Strips that don't line up any more = a lovely wobbly heat-haze.
+function applyPsychWarp() {
+  if (warpCanvas.width !== W) { warpCanvas.width = W; warpCanvas.height = H; }
+  const t = performance.now() / 200;
+
+  warpCtx.clearRect(0, 0, W, H);
+  warpCtx.drawImage(canvas, 0, 0);
+
+  // A dark backdrop so the shifted strips don't leave see-through gaps.
+  ctx.fillStyle = "#0a0014";
+  ctx.fillRect(0, 0, W, H);
+
+  const strip = 6;
+  const amp = 14 * (0.6 + 0.4 * Math.sin(t * 0.7));
+  for (let y = 0; y < H; y += strip) {
+    const dx = Math.sin(y / 26 + t) * amp;
+    ctx.drawImage(warpCanvas, 0, y, W, strip, dx, y, W, strip);
+  }
 }
 
 // The three thumb buttons. They light up while a finger is on them -
@@ -2119,21 +2331,31 @@ function drawBullet(b, screenY) {
   // just go flat sideways, which was fine when bullets only ever flew
   // sideways - now an aimed shot would have had a streak pointing
   // somewhere it had never been.
-  const speed = Math.sqrt(b.vx * b.vx + b.vy * b.vy) || 1;
-  const tailX = b.x - (b.vx / speed) * 13;
-  const tailY = sy - (b.vy / speed) * 13;
+  // A big cannon round is fatter, longer, and a hotter colour, so you can
+  // tell at a glance the BIG SHOT upgrade is running. A pierce shot gets a
+  // cool green tint. Both at once? Green wins the colour, big wins the size.
+  const big = b.big;
+  const tail = big ? 20 : 13;
+  const width = big ? 6 : 3;
+  const dotR = big ? 5 : 2.4;
+  const streakColor = b.pierce ? "#9affc0" : "#ffe08a";
+  const coreColor = b.pierce ? "#e8fff0" : "#fffbe8";
 
-  ctx.strokeStyle = "#ffe08a";
-  ctx.lineWidth = 3;
+  const speed = Math.sqrt(b.vx * b.vx + b.vy * b.vy) || 1;
+  const tailX = b.x - (b.vx / speed) * tail;
+  const tailY = sy - (b.vy / speed) * tail;
+
+  ctx.strokeStyle = streakColor;
+  ctx.lineWidth = width;
   ctx.lineCap = "round";
   ctx.beginPath();
   ctx.moveTo(b.x, sy);
   ctx.lineTo(tailX, tailY);
   ctx.stroke();
 
-  ctx.fillStyle = "#fffbe8";
+  ctx.fillStyle = coreColor;
   ctx.beginPath();
-  ctx.arc(b.x, sy, 2.4, 0, Math.PI * 2);
+  ctx.arc(b.x, sy, dotR, 0, Math.PI * 2);
   ctx.fill();
 }
 
@@ -2299,9 +2521,20 @@ function drawGnome(screenY) {
   const sy = screenY(gnome.y);
   const x = gnome.x;
 
+  // MEGA MUSHROOM: scale the whole gnome up. We scale around his feet
+  // (the origin after translate), so he grows UPWARD off the ledge instead
+  // of sinking into it. A gentle throb in the last second warns you it's
+  // about to wear off.
+  const big = powerTimers.big > 0;
+  let bigScale = 1;
+  if (big) {
+    bigScale = BIG_SCALE;
+    if (powerTimers.big < 60) bigScale = 1 + (BIG_SCALE - 1) * (powerTimers.big / 60);
+  }
+
   ctx.save();
   ctx.translate(x, sy);
-  ctx.scale(gnome.facing, 1);   // flips the whole gnome when he turns around
+  ctx.scale(gnome.facing * bigScale, bigScale);   // flip + mushroom size in one go
 
   // boots
   ctx.fillStyle = "#4a2c14";
@@ -2369,7 +2602,8 @@ function drawGnome(screenY) {
     ctx.strokeStyle = "#b7ffcf";
     ctx.lineWidth = 3;
     ctx.beginPath();
-    ctx.arc(x, sy - 16, 26, 0, Math.PI * 2);
+    // Grow the bubble with the mushroom so it still wraps a giant gnome.
+    ctx.arc(x, sy - 16 * bigScale, 26 * bigScale, 0, Math.PI * 2);
     ctx.stroke();
     ctx.fillStyle = "rgba(150,255,200,0.12)";
     ctx.fill();
@@ -2517,6 +2751,31 @@ function drawBossShot(s, screenY) {
     ctx.beginPath();
     ctx.arc(-4, -3, s.r * 0.5, 0, Math.PI * 2);
     ctx.fill();
+  } else if (s.kind === "web") {
+    // A pale sticky glob with a little cross of threads across it.
+    ctx.fillStyle = "#d8d8e8";
+    ctx.beginPath();
+    ctx.arc(s.x, sy, s.r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(90,90,110,0.8)";
+    ctx.lineWidth = 1.5;
+    for (const a of [0, Math.PI / 2, Math.PI / 4, -Math.PI / 4]) {
+      ctx.beginPath();
+      ctx.moveTo(s.x - Math.cos(a) * s.r, sy - Math.sin(a) * s.r);
+      ctx.lineTo(s.x + Math.cos(a) * s.r, sy + Math.sin(a) * s.r);
+      ctx.stroke();
+    }
+  } else if (s.kind === "ecto") {
+    // A wobbly purple ghost-blob with a soft glow.
+    const glow = ctx.createRadialGradient(s.x, sy, 2, s.x, sy, s.r + 8);
+    glow.addColorStop(0, "rgba(200,140,255,0.9)");
+    glow.addColorStop(1, "rgba(120,40,200,0)");
+    ctx.fillStyle = glow;
+    ctx.fillRect(s.x - s.r - 8, sy - s.r - 8, (s.r + 8) * 2, (s.r + 8) * 2);
+    ctx.fillStyle = "#b06aff";
+    ctx.beginPath();
+    ctx.arc(s.x, sy, s.r, 0, Math.PI * 2);
+    ctx.fill();
   } else {
     const glow = ctx.createRadialGradient(s.x, sy, 2, s.x, sy, s.r + 8);
     glow.addColorStop(0, "rgba(255,224,138,0.9)");
@@ -2598,7 +2857,7 @@ function drawBoss(screenY) {
       ctx.beginPath(); ctx.arc(28, -9, 3, 0, Math.PI * 2); ctx.fill();
     }
 
-  } else {
+  } else if (boss.type === "blob") {
     // The Blob King: a wobbly green jelly wearing a crown.
     const squash = 1 + Math.sin(boss.t * 0.12) * 0.12;
     ctx.scale(1 / squash, squash);
@@ -2623,6 +2882,92 @@ function drawBoss(screenY) {
       ctx.lineTo(18, -44);  ctx.lineTo(18, -30);
       ctx.closePath();
       ctx.fill();
+    }
+
+  } else if (boss.type === "skull") {
+    // A giant bone-white skull with a crown of flickering flames.
+    if (!flashing) {
+      for (let i = 0; i < 7; i++) {
+        const fx = -30 + i * 10;
+        const fh = 14 + Math.sin(boss.t * 0.3 + i) * 8;
+        ctx.fillStyle = i % 2 ? "#ff9a2a" : "#ffd166";
+        ctx.beginPath();
+        ctx.moveTo(fx - 5, -26);
+        ctx.lineTo(fx, -26 - fh);
+        ctx.lineTo(fx + 5, -26);
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
+    ctx.fillStyle = flashing ? "#ffffff" : "#efeadd";
+    ctx.beginPath();
+    ctx.arc(0, -4, 32, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillRect(-18, 10, 36, 20);        // the jaw
+    if (!flashing) {
+      ctx.fillStyle = "#1a1410";
+      ctx.beginPath(); ctx.arc(-13, -6, 8, 0, Math.PI * 2); ctx.fill();   // eye sockets
+      ctx.beginPath(); ctx.arc(13, -6, 8, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(0, 2); ctx.lineTo(-5, 12); ctx.lineTo(5, 12);            // nose
+      ctx.closePath(); ctx.fill();
+      // two glowing pinprick eyes deep in the sockets
+      ctx.fillStyle = "#ff6a1a";
+      ctx.beginPath(); ctx.arc(-13, -6, 3, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(13, -6, 3, 0, Math.PI * 2); ctx.fill();
+      // teeth
+      ctx.fillStyle = "#1a1410";
+      for (let tx = -14; tx <= 12; tx += 8) ctx.fillRect(tx, 10, 3, 18);
+    }
+
+  } else if (boss.type === "spider") {
+    // A fat dark body with eight scuttling legs and a cluster of red eyes.
+    ctx.strokeStyle = flashing ? "#ffffff" : "#241a24";
+    ctx.lineWidth = 4;
+    ctx.lineCap = "round";
+    const wig = Math.sin(boss.t * 0.3) * 6;
+    for (const side of [-1, 1]) {
+      for (let i = 0; i < 4; i++) {
+        const ky = -12 + i * 9;
+        ctx.beginPath();
+        ctx.moveTo(0, ky);
+        ctx.lineTo(side * 26, ky - 6 + wig);
+        ctx.lineTo(side * 40, ky + 10 - wig);
+        ctx.stroke();
+      }
+    }
+    ctx.fillStyle = flashing ? "#ffffff" : "#2e2230";
+    ctx.beginPath(); ctx.arc(0, 6, 24, 0, Math.PI * 2); ctx.fill();   // abdomen
+    ctx.beginPath(); ctx.arc(0, -16, 15, 0, Math.PI * 2); ctx.fill(); // head
+    if (!flashing) {
+      ctx.fillStyle = "#ff3b3b";
+      for (const ex of [-8, -3, 3, 8]) {
+        ctx.beginPath(); ctx.arc(ex, -18, 2.4, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+
+  } else { // ghost
+    // A pale, see-through wavy sheet with a hollow moaning face.
+    ctx.globalAlpha *= 0.82;
+    ctx.fillStyle = flashing ? "#ffffff" : "#dfe6ff";
+    ctx.beginPath();
+    ctx.arc(0, -6, 28, Math.PI, 0, false);          // rounded head
+    // a wavy hem along the bottom
+    const hem = -6 + 34;
+    ctx.lineTo(28, hem);
+    for (let i = 0; i <= 6; i++) {
+      const wx = 28 - i * (56 / 6);
+      const wy = hem + (i % 2 === 0 ? 0 : 10) + Math.sin(boss.t * 0.2 + i) * 3;
+      ctx.lineTo(wx, wy);
+    }
+    ctx.lineTo(-28, -6);
+    ctx.closePath();
+    ctx.fill();
+    if (!flashing) {
+      ctx.fillStyle = "#3a2a5a";
+      ctx.beginPath(); ctx.arc(-10, -8, 5, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(10, -8, 5, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(0, 6, 5, 8, 0, 0, Math.PI * 2); ctx.fill();  // wailing mouth
     }
   }
 
@@ -2669,14 +3014,20 @@ function drawBanner() {
 }
 
 // The row of active power-ups down the left side, under the height. Each
-// timed one gets an emoji and a little draining bar; the shield, which
-// isn't on a timer, just gets its emoji.
+// TIMED one gets an emoji and a little draining bar so you can see it
+// running out. Underneath, a mini "bag" shows the items you're HOLDING -
+// the ones with no timer, that wait until you use them (shield, double
+// jump). Coins aren't shown here; they've got their own counter up top.
 function drawPowerHud() {
   const rows = [
-    { t: powerTimers.rapid,   max: RAPID_TIME,  e: "🔫" },
-    { t: powerTimers.spread,  max: SPREAD_TIME, e: "🌟" },
-    { t: powerTimers.freeze,  max: FREEZE_TIME, e: "❄️" },
-    { t: powerTimers.rockets, max: ROCKET_TIME, e: "🚀" },
+    { t: powerTimers.rapid,   max: RAPID_TIME,   e: "🔫" },
+    { t: powerTimers.spread,  max: SPREAD_TIME,  e: "🌟" },
+    { t: powerTimers.freeze,  max: FREEZE_TIME,  e: "❄️" },
+    { t: powerTimers.rockets, max: ROCKET_TIME,  e: "🚀" },
+    { t: powerTimers.big,     max: BIG_TIME,     e: "🍄" },
+    { t: powerTimers.pierce,  max: PIERCE_TIME,  e: "🏹" },
+    { t: powerTimers.bigshot, max: BIGSHOT_TIME, e: "💥" },
+    { t: powerTimers.psych,   max: PSYCH_TIME,   e: "🌀" },
   ];
   let py = 60;
   ctx.textAlign = "left";
@@ -2692,13 +3043,75 @@ function drawPowerHud() {
     ctx.fillRect(40, py - 4, 46 * (r.t / r.max), 7);
     py += 18;
   }
-  if (shield) {
-    ctx.font = "15px system-ui, sans-serif";
-    ctx.fillStyle = "#b7ffcf";
-    ctx.fillText("🛡️", 16, py);
-    py += 18;
+
+  // --- the mini INVENTORY of held items ---
+  const bag = [];
+  if (shield) bag.push({ e: "🛡️", n: "" });
+  if (doubleJumps > 0) bag.push({ e: "⏫", n: doubleJumps > 1 ? "x" + doubleJumps : "" });
+
+  if (bag.length) {
+    py += 4;
+    ctx.font = "10px system-ui, sans-serif";
+    ctx.fillStyle = "rgba(255,233,196,0.6)";
+    ctx.fillText("BAG", 16, py);
+    py += 14;
+    let bx = 16;
+    for (const it of bag) {
+      // a little slot box so it reads as "inventory", not "active effect"
+      ctx.fillStyle = "rgba(20,12,10,0.5)";
+      ctx.fillRect(bx, py - 12, 26, 24);
+      ctx.strokeStyle = "rgba(255,214,130,0.5)";
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(bx, py - 12, 26, 24);
+      ctx.font = "15px system-ui, sans-serif";
+      ctx.fillStyle = "#ffe9c4";
+      ctx.fillText(it.e, bx + 4, py);
+      if (it.n) {
+        ctx.font = "bold 10px system-ui, sans-serif";
+        ctx.fillStyle = "#ffd27a";
+        ctx.fillText(it.n, bx + 15, py + 8);
+      }
+      bx += 32;
+    }
   }
   ctx.textBaseline = "alphabetic";
+}
+
+// THE "YOU GOT X" NOTES. A little stack near the middle that fades away,
+// so you learn what each new goody does the first time you grab one.
+function drawItemPopups() {
+  if (!itemPopups.length) return;
+  ctx.save();
+  ctx.textBaseline = "middle";
+  const boxW = 300, boxH = 40;
+  let py = H * 0.60;
+  for (const pop of itemPopups) {
+    const a = Math.min(1, pop.timer / 30);      // fade over the last half-second
+    ctx.globalAlpha = a;
+    const x0 = W / 2 - boxW / 2;
+    ctx.fillStyle = "rgba(18,10,20,0.82)";
+    ctx.fillRect(x0, py - boxH / 2, boxW, boxH);
+    ctx.strokeStyle = "rgba(255,214,130,0.7)";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x0, py - boxH / 2, boxW, boxH);
+
+    ctx.textAlign = "center";
+    ctx.font = "22px system-ui, sans-serif";
+    ctx.fillStyle = "#fff";
+    ctx.fillText(pop.emoji, x0 + 26, py);
+
+    ctx.textAlign = "left";
+    ctx.font = "bold 15px system-ui, sans-serif";
+    ctx.fillStyle = "#ffd27a";
+    ctx.fillText(pop.title, x0 + 50, py - 8);
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillStyle = "#e8e0d0";
+    ctx.fillText(pop.desc, x0 + 50, py + 9);
+
+    py += boxH + 6;
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
 }
 
 function drawHud() {
