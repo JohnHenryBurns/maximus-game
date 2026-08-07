@@ -212,7 +212,19 @@
   const FIELD = { x: 0, z: -78, w: 130, d: 76 };
   const WHEAT_REGROW = 11;     // seconds for one stalk to come back
   const CUT_TIME = 0.55;       // how long one swing takes
-  const CARRY_MAX = 9;         // three doughs' worth before you head back
+  const CARRY_MAX = 9;         // three doughs' worth carried by hand
+
+  // HOW MUCH WHEAT YOU CAN HAVE AT ONCE.
+  //
+  // There used to be TWO piles: yours, and a separate hopper the
+  // harvester filled. Which meant you could buy a machine, watch it
+  // work all day, and still have to go and cut your own wheat - the
+  // two piles never met. Now there is one pile. You fill it, the
+  // machine fills it, and you both take from it.
+  //
+  // The harvester brings a silo with it, so buying one doesn't just
+  // gather faster, it gives you somewhere to put the lot.
+  function stockMax() { return CARRY_MAX + upgrades.harvester.bought * 20; }
 
   // HOW WIDE THE SWING IS.
   //
@@ -305,14 +317,13 @@
   // one in your hands - otherwise the topper would put pineapple on
   // something you were halfway through carrying.
   const auto = {
-    hopper: 0,        // wheat piled up at the mill
     line: null,       // the pizza the robots are building
     ownOven: false,   // is the thing in the oven THEIRS or yours?
     tCut: 0, tMill: 0, tTop: 0, tChef: 0,
     botX: 0, botZ: -78,      // where the harvester has trundled to
     madeByRobots: 0
   };
-  const HOPPER_MAX = 40;
+
 
   function bakeSpeed()  { return 1 + upgrades.oven.bought * 0.45; }
   function burnSlow()   { return 1 + upgrades.oven.bought * 0.5; }
@@ -383,7 +394,7 @@
   // words on screen. If they worked it out separately they'd disagree
   // the first time either changed.
   function whatEDoes() {
-    if (inField && nearestStalk() && player.carryWheat < CARRY_MAX) {
+    if (inField && nearestStalk() && player.carryWheat < stockMax()) {
       return { do: 'cut', text: 'CUT THE WHEAT' };
     }
     if (!nearSpot) return null;
@@ -535,21 +546,24 @@
         auto.botX += dx / L * Math.min(L, sp * dt);
         auto.botZ += dz / L * Math.min(L, sp * dt);
 
-        if (auto.tCut <= 0 && bd < 9 && auto.hopper < HOPPER_MAX) {
+        // STRAIGHT INTO YOUR STOCK. Whatever it cuts is yours, ready to
+        // use at the mill yourself - not squirrelled away in a pile only
+        // the robot can reach.
+        if (auto.tCut <= 0 && bd < 9 && player.carryWheat < stockMax()) {
           auto.tCut = 1.6 / upgrades.harvester.bought;
           target.ready = false;
           target.back = WHEAT_REGROW;
-          auto.hopper++;
+          player.carryWheat++;
         }
       }
     }
 
     // ---- THE MILL ROBOT: hopper wheat becomes dough ------------------
-    if (upgrades.millbot.bought > 0 && !auto.line && auto.hopper >= WHEAT_PER_DOUGH) {
+    if (upgrades.millbot.bought > 0 && !auto.line && player.carryWheat >= WHEAT_PER_DOUGH) {
       auto.tMill -= dt;
       if (auto.tMill <= 0) {
         auto.tMill = 3.0 / upgrades.millbot.bought;
-        auto.hopper -= WHEAT_PER_DOUGH;
+        player.carryWheat -= WHEAT_PER_DOUGH;
         auto.line = newPizza();
       }
     }
@@ -677,7 +691,7 @@
             const reach = cutReach();
             for (const st of wheatStalks) {
               if (!st.ready) continue;
-              if (player.carryWheat + took >= CARRY_MAX) break;
+              if (player.carryWheat + took >= stockMax()) break;
               if (Math.hypot(player.x - st.x, player.z - st.z) > reach) continue;
               st.ready = false;
               st.back = WHEAT_REGROW;
@@ -686,8 +700,8 @@
             player.carryWheat += took;
             swingFlash = 1;
             say(took > 1 ? 'cut ' + took + ' at once!  wheat ' + player.carryWheat +
-                           ' / ' + CARRY_MAX
-                         : 'wheat: ' + player.carryWheat + ' / ' + CARRY_MAX);
+                           ' / ' + stockMax()
+                         : 'wheat: ' + player.carryWheat + ' / ' + stockMax());
           }
         } else {
           player.cutting = 0;      // let go and you stop cutting
@@ -900,10 +914,10 @@
     if (upgrades.millbot.bought > 0) {
       const m = spotById('mill');
       drawRobot(m.x + 20, m.z, [96, 132, 178],
-                auto.hopper >= WHEAT_PER_DOUGH && !auto.line);
-      // The pile of wheat waiting in the hopper - the bigger the pile,
-      // the further ahead the harvester is running.
-      const heap = Math.min(10, auto.hopper);
+                player.carryWheat >= WHEAT_PER_DOUGH && !auto.line);
+      // Your wheat, stacked by the mill - the bigger the stack, the
+      // further ahead the harvester is running.
+      const heap = Math.min(10, player.carryWheat);
       for (let i = 0; i < heap; i++) {
         addBox(m.x - 19 + (i % 5) * 3.4, 2 + Math.floor(i / 5) * 3, m.z - 4 + (i % 3) * 3,
                3, 3, 3, WHEATC);
@@ -962,7 +976,10 @@
     if (player.pizza) {
       drawPizzaAt(player.pizza, player.x - si * 6, 13.4, player.z - co * 6, 13);
     } else if (player.carryWheat > 0) {
-      for (let i = 0; i < player.carryWheat; i++) {
+      // An armful is an armful however big the stock is - drawing sixty
+      // stalks in his hands would bury him.
+      const inHands = Math.min(player.carryWheat, 6);
+      for (let i = 0; i < inHands; i++) {
         const a = i * 1.1;
         bit(Math.cos(a) * 1.8, 13.4 + i * 0.5, -6 + Math.sin(a) * 1.4,
             2, 7, 2, WHEATC);
@@ -1024,8 +1041,7 @@
     ctx.font = Math.min(W * 0.024, 15) + 'px system-ui, sans-serif';
     ctx.fillStyle = '#a08c78';
     ctx.fillText(served + ' sold' + (burnt ? '   -   ' + burnt + ' burnt' : '') +
-                 '   -   wheat ' + player.carryWheat + '/' + CARRY_MAX +
-                 (upgrades.harvester.bought ? '   -   hopper ' + auto.hopper : '') +
+                 '   -   wheat ' + player.carryWheat + '/' + stockMax() +
                  (auto.madeByRobots ? '   -   robots made ' + auto.madeByRobots : ''),
                  22, 74);
 
