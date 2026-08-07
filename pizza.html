@@ -157,12 +157,16 @@
 // -------------------------------------------------------------------
 
   const TOPPINGS = [
-    { key: 'pepperoni', name: 'PEPPERONI', colour: [178, 52, 44],   lumps: 9 },
-    { key: 'mushroom',  name: 'MUSHROOM',  colour: [206, 190, 158], lumps: 8 },
-    { key: 'pineapple', name: 'PINEAPPLE', colour: [238, 200, 70],  lumps: 7 },
-    { key: 'olive',     name: 'OLIVES',    colour: [66, 58, 74],    lumps: 10 },
-    { key: 'pepper',    name: 'PEPPERS',   colour: [96, 158, 74],   lumps: 8 }
+    { key: 'pepperoni', name: 'PEPPERONI',  colour: [178, 52, 44],   lumps: 9,  size: 1.0 },
+    { key: 'bogeys',    name: 'BOGEYS',     colour: [126, 190, 84],  lumps: 7,  size: 1.3 },
+    { key: 'beans',     name: 'BAKED BEANS',colour: [214, 118, 44],  lumps: 14, size: 0.7 },
+    { key: 'worms',     name: 'GUMMY WORMS',colour: [232, 96, 150],  lumps: 6,  size: 1.6 },
+    { key: 'sprouts',   name: 'SPROUTS',    colour: [72, 128, 56],   lumps: 8,  size: 1.1 },
+    { key: 'marsh',     name: 'MARSHMALLOWS', colour: [246, 226, 232], lumps: 6, size: 1.5 },
+    { key: 'fish',      name: 'FISH FINGERS', colour: [222, 162, 74], lumps: 5, size: 1.8 },
+    { key: 'jelly',     name: 'JELLY BEANS',colour: [150, 92, 210],  lumps: 12, size: 0.8 }
   ];
+
   function toppingByKey(k) {
     return TOPPINGS.find(function (t) { return t.key === k; });
   }
@@ -177,23 +181,26 @@
 //  Write a position out twice and one day you nudge one copy, and then
 //  there's an invisible button in an empty bit of floor.
 
-  const REACH = 16;          // how close you have to stand to use a thing
+  const REACH = 13;          // how close you have to stand to use a thing
 
   const SPOTS = [
-    { id: 'mill',   name: 'MILL',      x:   0, z:  16, colour: [150, 122, 88] },
+    { id: 'mill',   name: 'MILL',        x:   0, z:  12, colour: [150, 122, 88] },
 
-    { id: 'sauce',  name: 'SAUCE',     x: -40, z:  40, colour: [176, 46, 38] },
-    { id: 'cheese', name: 'CHEESE',    x: -40, z:  64, colour: [240, 206, 96] },
-    { id: 'top0',   name: 'PEPPERONI', x: -40, z:  88, colour: TOPPINGS[0].colour, top: 0 },
-    { id: 'top1',   name: 'MUSHROOM',  x: -40, z: 112, colour: TOPPINGS[1].colour, top: 1 },
+    { id: 'sauce',  name: 'SAUCE',       x: -40, z:  34, colour: [176, 46, 38] },
+    { id: 'cheese', name: 'CHEESE',      x: -40, z:  56, colour: [240, 206, 96] },
+    { id: 'top0',   name: 'PEPPERONI',   x: -40, z:  78, colour: TOPPINGS[0].colour, top: 0 },
+    { id: 'top1',   name: 'BOGEYS',      x: -40, z: 100, colour: TOPPINGS[1].colour, top: 1 },
+    { id: 'top2',   name: 'BAKED BEANS', x: -40, z: 122, colour: TOPPINGS[2].colour, top: 2 },
 
-    { id: 'top2',   name: 'PINEAPPLE', x:  40, z:  40, colour: TOPPINGS[2].colour, top: 2 },
-    { id: 'top3',   name: 'OLIVES',    x:  40, z:  64, colour: TOPPINGS[3].colour, top: 3 },
-    { id: 'top4',   name: 'PEPPERS',   x:  40, z:  88, colour: TOPPINGS[4].colour, top: 4 },
+    { id: 'top3',   name: 'GUMMY WORMS', x:  40, z:  34, colour: TOPPINGS[3].colour, top: 3 },
+    { id: 'top4',   name: 'SPROUTS',     x:  40, z:  56, colour: TOPPINGS[4].colour, top: 4 },
+    { id: 'top5',   name: 'MARSHMALLOWS',x:  40, z:  78, colour: TOPPINGS[5].colour, top: 5 },
+    { id: 'top6',   name: 'FISH FINGERS',x:  40, z: 100, colour: TOPPINGS[6].colour, top: 6 },
+    { id: 'top7',   name: 'JELLY BEANS', x:  40, z: 122, colour: TOPPINGS[7].colour, top: 7 },
 
-    { id: 'oven',   name: 'OVEN',      x:  40, z: 124, colour: [96, 92, 88], big: true },
-    { id: 'bin',    name: 'BIN',       x: -40, z: 136, colour: [70, 74, 78] },
-    { id: 'window', name: 'SERVE',     x:   0, z: 156, colour: [150, 128, 96], big: true }
+    { id: 'oven',   name: 'OVEN',        x:  40, z: 152, colour: [96, 92, 88], big: true },
+    { id: 'bin',    name: 'BIN',         x: -40, z: 152, colour: [70, 74, 78] },
+    { id: 'window', name: 'SERVE',       x:   0, z: 178, colour: [150, 128, 96], big: true }
   ];
 
   function spotById(id) { return SPOTS.find(function (s) { return s.id === id; }); }
@@ -524,7 +531,7 @@
       // Fences, near enough - the shop and the field are one long strip
       // and there's no reason to wander off the edge of the world.
       player.x = clamp(player.x, -58, 58);
-      player.z = clamp(player.z, -124, 172);
+      player.z = clamp(player.z, -124, 196);
 
       lookAround();
 
@@ -617,7 +624,7 @@
     for (let gx = cx - 4; gx <= cx + 4; gx++) {
       for (let gz = cz - 3; gz <= cz + 5; gz++) {
         const wx = gx * TILE, wz = gz * TILE;
-        const inShop = Math.abs(wx) <= 62 && wz >= -6 && wz <= 176;
+        const inShop = Math.abs(wx) <= 62 && wz >= -6 && wz <= 200;
         const base = inShop ? FLOOR : GRASS;
         // A checker, so you can see yourself moving. Without it a flat
         // colour makes walking feel like standing still.
@@ -633,11 +640,11 @@
   function drawShop() {
     // Walls down both sides, with a gap at the front you walk in
     // through. Low, so they never hide him.
-    for (let z = 0; z <= 176; z += 22) {
+    for (let z = 0; z <= 200; z += 22) {
       addBox(-64, 7, z, 6, 16, 22, WALL);
       addBox( 64, 7, z, 6, 16, 22, WALL);
     }
-    addBox(0, 7, 178, 134, 16, 6, WALL);
+    addBox(0, 7, 202, 134, 16, 6, WALL);
     for (const s of [-1, 1]) addBox(s * 45, 7, -6, 44, 16, 6, WALL);
   }
 
@@ -717,8 +724,12 @@
         // every lump jump to a new spot sixty times a second.
         const a = i * 2.39996 + ti * 1.1;
         const rr = r * 0.08 + (i / t.lumps) * r * 0.34;
+        // Each topping has its own lump size, so a marshmallow is a
+        // fat pillow and a baked bean is a speck. Same code, and the
+        // pizza still tells you what's on it from across the room.
+        const lump = r * 0.11 * (t.size || 1);
         addBox(x + Math.cos(a) * rr, y + 2.1, z + Math.sin(a) * rr,
-               r * 0.11, 0.6, r * 0.11, shade(t.colour, cook));
+               lump, 0.6, lump, shade(t.colour, cook));
       }
     }
   }
