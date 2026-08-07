@@ -190,6 +190,7 @@
     blocks = []; pits = []; scenery = []; bits = []; crates = []; booms = [];
     crateTimer = 3.5; lastHalf = 0; flash = 0; shake = 0;
     cracks = []; crackTimer = 5; trailPit = null;
+    tickTimer = 0; tock = false;
     player.x = 0; player.y = 0; player.vy = 0;
     player.onGround = true; player.jumps = 0; player.holding = 0;
     player.stumble = 0; player.run = 0;
@@ -299,8 +300,9 @@
   let held = false;
 
   function jump() {
-    if (state === 'ready') { state = 'run'; return; }
-    if (state === 'dead')  { reset(); state = 'run'; return; }
+    startAudio();
+    if (state === 'ready') { state = 'run'; tickTimer = 0; return; }
+    if (state === 'dead')  { reset(); state = 'run'; tickTimer = 0; return; }
 
     // Two jumps: one off the ground, one in mid-air. The second one is
     // what makes a double block clearable instead of just cruel.
@@ -481,6 +483,7 @@
     updateCrates(dt);
     updateCracks(dt);
     updateBooms(dt);
+    updateTicking(dt);
 
     camX = player.x - W * 0.32;
     tidyUp();
@@ -1474,6 +1477,84 @@
       ctx.fillStyle = '#a595c4';
       ctx.fillText('press SPACE or click to go again', W / 2, H * 0.51);
     }
+  }
+
+
+// -------------------------------------------------------------------
+//  THE TICKING
+// -------------------------------------------------------------------
+//
+//  The first sound in this game, and it's the clocks. It starts as a
+//  slow tick-tock and winds up into a clatter as you run, so you can
+//  HEAR the same thing the hands are showing you.
+//
+//  Browsers refuse to make a sound until the player has touched
+//  something, which is why this waits for the first press rather than
+//  starting on its own. That's not a bug in the browser, it's a rule -
+//  nobody wants a page that starts shouting at them.
+
+  let audio = null;
+  let tickTimer = 0;
+  let tock = false;      // clocks alternate: tick, tock, tick, tock
+
+  function startAudio() {
+    if (audio) return;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    try { audio = new AC(); } catch (e) { audio = null; }
+  }
+
+  // HOW MANY TICKS A SECOND. Tied to how far you've RUN, like the hands
+  // are - so the sound and the picture are saying the same thing, and a
+  // fresh go starts calm.
+  function tickRate() { return 1 + dist * 0.009; }
+
+  function playTick() {
+    if (!audio) return;
+
+    // A tick is a very short, very sharp click - a note that drops in
+    // pitch almost instantly. Hold it any longer and it stops being a
+    // clock and starts being a beep.
+    const o = audio.createOscillator();
+    const g = audio.createGain();
+    const now = audio.currentTime;
+
+    // Tick and tock are two different pitches. One pitch alone doesn't
+    // sound like a clock; it sounds like a metronome.
+    const base = (tock ? 1500 : 2100) + Math.min(900, dist * 0.45);
+    o.type = 'square';
+    o.frequency.setValueAtTime(base, now);
+    o.frequency.exponentialRampToValueAtTime(base * 0.45, now + 0.018);
+
+    g.gain.setValueAtTime(0.09, now);
+    g.gain.exponentialRampToValueAtTime(0.0005, now + 0.05);
+
+    o.connect(g); g.connect(audio.destination);
+    o.start(now);
+    o.stop(now + 0.06);
+    tock = !tock;
+  }
+
+  function updateTicking(dt) {
+    if (state !== 'run') return;
+    tickTimer -= dt;
+
+    // CARRY THE OVERSHOOT, don't reset to a full gap.
+    //
+    // Setting the timer back to a whole interval quietly rounds every
+    // tick up to the next frame - at nineteen ticks a second that's a
+    // 3.16-frame gap becoming a 4-frame gap, and 190 ticks in ten
+    // seconds coming out as 150. Adding the interval on keeps the
+    // leftover, so the rate is the rate.
+    //
+    // The guard is in case the rate ever goes silly: at most four ticks
+    // in one frame, so a long pause can't fire a machine-gun burst.
+    let guard = 0;
+    while (tickTimer <= 0 && guard++ < 4) {
+      playTick();
+      tickTimer += 1 / tickRate();
+    }
+    if (tickTimer < 0) tickTimer = 1 / tickRate();
   }
 
 
