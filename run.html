@@ -1072,40 +1072,48 @@
     const top = gy - h;
     const body = hit ? '#141118' : '#07060b';
 
-    // ---- THE SPIKES ---------------------------------------------------
-    // Four to a side, all four sides, each pointing straight out. Drawn
-    // BEFORE the body so their bases are hidden underneath it and they
-    // look like they're growing out of the thing rather than stuck on.
-    ctx.fillStyle = hit ? '#6d6558' : '#cfc3ab';
-    const len = Math.min(w, h) * 0.30;
-
-    function spikes(count, ax, ay, bx, by, outx, outy) {
-      for (let i = 0; i < count; i++) {
-        const t0 = (i + 0.12) / count, t1 = (i + 0.88) / count, tm = (i + 0.5) / count;
-        ctx.beginPath();
-        ctx.moveTo(ax + (bx - ax) * t0, ay + (by - ay) * t0);
-        ctx.lineTo(ax + (bx - ax) * tm + outx, ay + (by - ay) * tm + outy);
-        ctx.lineTo(ax + (bx - ax) * t1, ay + (by - ay) * t1);
-        ctx.closePath();
-        ctx.fill();
-      }
-    }
-    spikes(4, x, top, x + w, top, 0, -len);              // out of the top
-    spikes(4, x, gy, x + w, gy, 0, len);                 // out of the bottom
-    spikes(4, x, top, x, gy, -len, 0);                   // out of the left
-    spikes(4, x + w, top, x + w, gy, len, 0);            // out of the right
-
-    // ---- THE BODY ------------------------------------------------------
+    // ---- THE BODY FIRST -------------------------------------------------
+    // The teeth point INWARDS now, so they have to go on TOP of the body
+    // instead of underneath it. Pointing out, hiding their bases under
+    // the box made them look grown-on; pointing in, that same trick
+    // would hide the teeth completely and you'd see a plain black box.
+    // Which way they point decides which order they're drawn in.
     ctx.fillStyle = body;
     ctx.fillRect(x, top, w, h);
     ctx.strokeStyle = 'rgba(255,255,255,0.13)';
     ctx.lineWidth = 2;
     ctx.strokeRect(x, top, w, h);
 
+    // ---- THE TEETH ------------------------------------------------------
+    // Four to a side, all four sides, every one pointing INTO the middle
+    // - so the box reads as a mouth with three eyes at the back of it.
+    ctx.fillStyle = hit ? '#6d6558' : '#cfc3ab';
+    // Short enough to leave a gap in the middle. At 0.26 the teeth from
+    // all four sides met over the eyes and the box read as nothing but
+    // teeth - the three eyes are the point of it, so they have to have
+    // somewhere to be.
+    const len = Math.min(w, h) * 0.19;
+
+    function spikes(count, ax, ay, bx, by, inx, iny) {
+      for (let i = 0; i < count; i++) {
+        const t0 = (i + 0.12) / count, t1 = (i + 0.88) / count, tm = (i + 0.5) / count;
+        ctx.beginPath();
+        ctx.moveTo(ax + (bx - ax) * t0, ay + (by - ay) * t0);
+        ctx.lineTo(ax + (bx - ax) * tm + inx, ay + (by - ay) * tm + iny);
+        ctx.lineTo(ax + (bx - ax) * t1, ay + (by - ay) * t1);
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
+    spikes(4, x, top, x + w, top, 0, len);               // down from the top
+    spikes(4, x, gy, x + w, gy, 0, -len);                // up from the bottom
+    spikes(4, x, top, x, gy, len, 0);                    // in from the left
+    spikes(4, x + w, top, x + w, gy, -len, 0);           // in from the right
+
     // ---- THREE EYES ----------------------------------------------------
     // Two up, one below - and they blink together, from the box's own
     // position rather than Math.random(), so they don't flicker.
-    const r = Math.min(w, h) * 0.13;
+    const r = Math.min(w, h) * 0.15;
     const cx = x + w / 2, cy = top + h * 0.5;
     const ph = (clock * 0.6 + x * 0.021) % 1;
     const open = ph > 0.94 ? Math.abs(ph - 0.97) / 0.03 : 1;
