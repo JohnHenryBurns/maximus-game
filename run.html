@@ -148,6 +148,8 @@
   let pits = [];           // holes in the pavement
   let scenery = [];        // buildings behind, for the monster to eat
   let bits = [];           // flying debris
+  let crates = [];         // still falling out of the sky
+  let crateTimer = 3.5;
 
   const player = {
     x: 0, y: 0, vy: 0,
@@ -171,7 +173,8 @@
 
   function reset() {
     camX = 0; dist = 0; speed = START_SPEED; lead = LEAD_START; clock = 0;
-    blocks = []; pits = []; scenery = []; bits = [];
+    blocks = []; pits = []; scenery = []; bits = []; crates = [];
+    crateTimer = 3.5;
     player.x = 0; player.y = 0; player.vy = 0;
     player.onGround = true; player.jumps = 0; player.holding = 0;
     player.stumble = 0; player.run = 0;
@@ -446,8 +449,103 @@
       if (b.y > 0) { b.y = 0; b.vy *= -0.35; b.vx *= 0.7; }
     }
 
+    updateCrates(dt);
+
     camX = player.x - W * 0.32;
     tidyUp();
+  }
+
+  // -------------------------------------------------------------------
+  //  CRATES OUT OF THE SKY
+  // -------------------------------------------------------------------
+  //
+  //  Everything else in this game is sitting there waiting for you.
+  //  A crate ARRIVES - it drops in front of you while you're running,
+  //  so you get a hazard that changes the road as you're reading it.
+  //
+  //  A shadow marks where it's going to land, and it darkens as the
+  //  crate gets lower. That shadow is the whole fairness of it: you're
+  //  never hit by something you couldn't see coming.
+  //
+  //  And once it lands it just becomes an ordinary solid. Everything
+  //  the platforms already do - landing on top, clattering into the
+  //  side, the grid drawn across it - works on a crate with no new code
+  //  at all. That's the payoff for having one list of solid things.
+
+  function updateCrates(dt) {
+    const g = GRID();
+
+    crateTimer -= dt;
+    if (crateTimer <= 0) {
+      crateTimer = 2.6 + Math.random() * 3.4;
+      const tall = 1 + (Math.random() < 0.35 ? 1 : 0);
+      // HOW FAR AHEAD, IN TIME - not in squares.
+      //
+      // Seven to fourteen squares sounds generous, and at a walk it is:
+      // two seconds' warning. At full pelt those same squares are half
+      // a second, and the crate lands a tenth of a second before you
+      // reach it, which is not a hazard, it's an ambush. So the drop
+      // point is measured in SECONDS ahead, and the warning is the same
+      // however fast you're going.
+      crates.push({
+        x: player.x + speed * (1.1 + Math.random() * 0.7),
+        y: -H * 1.2,                 // y is upside down: this is high up
+        vy: 0,
+        w: g * 0.9,
+        h: tall * g,
+        squares: tall
+      });
+    }
+
+    for (const c of crates) {
+      if (c.dead) continue;
+      c.vy += gravity() * 0.5 * dt;
+      c.y += c.vy * dt;
+
+      // ---- DOES IT LAND ON YOU? --------------------------------------
+      if (player.x + PLAYER_W > c.x && player.x < c.x + c.w &&
+          c.y > player.y - PLAYER_H && c.y - c.h < player.y) {
+        c.dead = true;
+        player.stumble = 0.55;
+        lead -= HIT_COST;
+        bump(c.x + c.w / 2, -c.y, [[190, 140, 80], [140, 100, 56]], 20);
+        continue;
+      }
+
+      // ---- OR ON THE GROUND? ------------------------------------------
+      const rest = supportUnder(c.x + c.w / 2, c.y);
+      if (rest === null) {
+        // Straight down a hole. Gone.
+        if (c.y > 400) c.dead = true;
+        continue;
+      }
+      if (c.y >= rest) {
+        c.dead = true;
+        const stack = -rest + c.h;
+
+        // NOTHING IN THIS WORLD MAY BE TALLER THAN THE JUMP.
+        //
+        // A crate coming down on a two-square platform would stack to
+        // THREE squares - taller than you can ever get, so a wall you
+        // simply cannot pass. It smashes instead. That's better than
+        // fair, it's satisfying.
+        if (stack > JUMP_UP * GRID() + 2) {
+          bump(c.x + c.w / 2, -rest - c.h, [[190, 140, 80], [140, 100, 56]], 22);
+          shake = 1;
+          continue;
+        }
+
+        // Otherwise it IS the scenery from here on - one of the solid
+        // things, with all their rules, and none written twice.
+        blocks.push({ x: c.x, w: c.w, h: stack,
+                      hit: false, squares: c.squares, crate: true });
+        bump(c.x + c.w / 2, -rest, [[190, 140, 80], [140, 100, 56]], 10);
+        shake = 1;
+      }
+    }
+    crates = crates.filter(function (c) {
+      return !c.dead && c.x > player.x - 400;
+    });
   }
 
   function bump(x, y, cols, n) {
@@ -616,6 +714,20 @@
           ctx.lineTo(x + i * g, gy);
         }
         ctx.stroke();
+      } else if (b.crate) {
+        // A crate that has landed. It's an ordinary solid now - you can
+        // jump it or stand on it like anything else - but it still
+        // looks like the thing that fell out of the sky.
+        ctx.fillStyle = b.hit ? '#7a5a30' : '#b6803f';
+        ctx.fillRect(x, gy - b.h, b.w, b.h);
+        ctx.fillStyle = b.hit ? '#57401f' : '#8a5f2c';
+        ctx.fillRect(x, gy - b.h, b.w, 8);
+        ctx.strokeStyle = '#6d4a21';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(x, gy - b.h); ctx.lineTo(x + b.w, gy);
+        ctx.moveTo(x + b.w, gy - b.h); ctx.lineTo(x, gy);
+        ctx.stroke();
       } else {
         ctx.fillStyle = b.hit ? '#6b4a3a' : '#a8703f';
         ctx.fillRect(x, gy - b.h, b.w, b.h);
@@ -626,6 +738,52 @@
       ctx.strokeStyle = 'rgba(0,0,0,0.35)';
       ctx.lineWidth = 2;
       ctx.strokeRect(x, gy - b.h, b.w, b.h);
+    }
+  }
+
+  // A crate in the air, and the mark on the ground where it's going.
+  function drawCrates() {
+    const gy = groundY();
+
+    for (const c of crates) {
+      if (c.dead) continue;
+      const x = sx(c.x);
+      if (x < -120 || x > W + 120) continue;
+
+      // ---- THE SHADOW -------------------------------------------------
+      // Where it will land, and how soon. It's small and faint when the
+      // crate is miles up and big and dark just before it arrives - so
+      // you can never be hit by something you had no way of seeing.
+      const rest = supportUnder(c.x + c.w / 2, 0);
+      if (rest !== null) {
+        const drop = clamp(1 - (-c.y) / (H * 1.1), 0, 1);
+        const wide = c.w * (0.5 + drop * 0.8);
+        ctx.fillStyle = 'rgba(0,0,0,' + (0.12 + drop * 0.42) + ')';
+        ctx.beginPath();
+        ctx.ellipse(x + c.w / 2, gy + rest + 4, wide / 2, 7 + drop * 5, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // ---- THE CRATE --------------------------------------------------
+      const y = gy + c.y - c.h;
+      const spin = Math.sin(c.y * 0.004) * 0.09;
+      ctx.save();
+      ctx.translate(x + c.w / 2, y + c.h / 2);
+      ctx.rotate(spin);
+      ctx.fillStyle = '#b6803f';
+      ctx.fillRect(-c.w / 2, -c.h / 2, c.w, c.h);
+      ctx.fillStyle = '#8a5f2c';
+      ctx.fillRect(-c.w / 2, -c.h / 2, c.w, 7);
+      // Two planks crossed over the front - what makes it read "crate"
+      // instead of "brown rectangle".
+      ctx.strokeStyle = '#6d4a21';
+      ctx.lineWidth = 5;
+      ctx.beginPath();
+      ctx.moveTo(-c.w / 2, -c.h / 2); ctx.lineTo(c.w / 2, c.h / 2);
+      ctx.moveTo(c.w / 2, -c.h / 2);  ctx.lineTo(-c.w / 2, c.h / 2);
+      ctx.stroke();
+      ctx.strokeRect(-c.w / 2, -c.h / 2, c.w, c.h);
+      ctx.restore();
     }
   }
 
@@ -832,6 +990,7 @@
     drawScenery();
     drawGround();
     drawBlocks();
+    drawCrates();
     drawBits();
     drawPlayer();
     drawMonster();
