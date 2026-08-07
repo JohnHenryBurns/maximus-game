@@ -117,33 +117,34 @@
       border-color: #ff3ba7; box-shadow: 0 0 34px rgba(255,59,167,0.7);
     }
 
-    #again {
+    /* The two corner nav pills - Arcade and Level. They share one look so
+       they read as a matching pair, and a soft border + blur lifts them
+       off whatever's behind them without a hard black box. */
+    #back, #again {
       position: fixed;
-      top: 8px;
-      right: 10px;
-      color: #ffb27a;
-      background: rgba(0,0,0,0.45);
-      border: none;
+      top: 10px;
+      color: #ffe0c4;
+      background: rgba(24, 14, 28, 0.55);
+      border: 1px solid rgba(255, 200, 150, 0.35);
       font-family: inherit;
-      font-size: 14px;
-      padding: 6px 11px;
-      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.3px;
+      padding: 7px 12px;
+      border-radius: 999px;
+      text-decoration: none;
       cursor: pointer;
       z-index: 10;
+      -webkit-backdrop-filter: blur(4px);
+      backdrop-filter: blur(4px);
+      transition: transform 0.12s, border-color 0.12s, background 0.12s;
     }
-
-    /* A little "back to the menu" link, parked in the corner. */
-    #back {
-      position: fixed;
-      top: 8px;
-      left: 10px;
-      color: #ffb27a;
-      background: rgba(0,0,0,0.45);
-      padding: 6px 11px;
-      border-radius: 8px;
-      text-decoration: none;
-      font-size: 14px;
-      z-index: 10;
+    #back  { left: 10px; }
+    #again { right: 10px; }
+    #back:hover, #back:active, #again:hover, #again:active {
+      transform: scale(1.05);
+      border-color: rgba(255, 200, 150, 0.8);
+      background: rgba(40, 22, 44, 0.7);
     }
   </style>
 </head>
@@ -2974,24 +2975,29 @@ function drawBoss(screenY) {
   ctx.restore();
 }
 
-// The boss's health bar, pinned across the top of the screen so it's
-// always readable no matter where the boss has wandered to.
+// The boss's health bar. It sits in its own strip just under the stat bar
+// so it never collides with the score above or the effects below: the
+// boss's NAME on the left, its health bar filling the rest.
 function drawBossBar() {
   if (!boss || boss.dying > 0) return;
-  const barW = W - 60, x = 30, y = 92;
-  ctx.fillStyle = "rgba(0,0,0,0.5)";
-  ctx.fillRect(x - 2, y - 2, barW + 4, 16);
-  ctx.fillStyle = "#3a1010";
-  ctx.fillRect(x, y, barW, 12);
-  const frac = Math.max(0, boss.hp) / boss.maxHp;
-  ctx.fillStyle = "#ff4a4a";
-  ctx.fillRect(x, y, barW * frac, 12);
-  ctx.fillStyle = "#ffe9c4";
-  ctx.font = "bold 13px system-ui, sans-serif";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "alphabetic";
-  ctx.fillText(BOSS_NAMES[boss.type], W / 2, y - 5);
+
+  ctx.save();
+  const x = 12, y = 80, w = W - 24, h = 24;
+  panel(x, y, w, h, 8, "rgba(34,8,10,0.62)", "rgba(255,90,90,0.45)");
+
+  ctx.textBaseline = "middle";
   ctx.textAlign = "left";
+  ctx.font = "bold 12px system-ui, sans-serif";
+  ctx.fillStyle = "#ffd0d0";
+  ctx.fillText(BOSS_NAMES[boss.type], x + 12, y + h / 2);
+
+  // The health bar takes up whatever's left after the name.
+  const bx = x + 132, bw = x + w - 12 - bx, by = y + h / 2 - 5, bh = 10;
+  panel(bx, by, bw, bh, 5, "rgba(0,0,0,0.5)", null);
+  const frac = Math.max(0, boss.hp) / boss.maxHp;
+  if (frac > 0) panel(bx, by, Math.max(5, bw * frac), bh, 5, "#ff4a4a", null);
+
+  ctx.restore();
 }
 
 // The big words in the middle - stage changes, boss names, victories.
@@ -3020,28 +3026,33 @@ function drawBanner() {
 // jump). Coins aren't shown here; they've got their own counter up top.
 function drawPowerHud() {
   const rows = [
-    { t: powerTimers.rapid,   max: RAPID_TIME,   e: "🔫" },
-    { t: powerTimers.spread,  max: SPREAD_TIME,  e: "🌟" },
-    { t: powerTimers.freeze,  max: FREEZE_TIME,  e: "❄️" },
-    { t: powerTimers.rockets, max: ROCKET_TIME,  e: "🚀" },
-    { t: powerTimers.big,     max: BIG_TIME,     e: "🍄" },
-    { t: powerTimers.pierce,  max: PIERCE_TIME,  e: "🏹" },
-    { t: powerTimers.bigshot, max: BIGSHOT_TIME, e: "💥" },
-    { t: powerTimers.psych,   max: PSYCH_TIME,   e: "🌀" },
+    { t: powerTimers.rapid,   max: RAPID_TIME,   e: "🔫", c: "#8fd0ff" },
+    { t: powerTimers.spread,  max: SPREAD_TIME,  e: "🌟", c: "#ffe08a" },
+    { t: powerTimers.freeze,  max: FREEZE_TIME,  e: "❄️", c: "#b6ecff" },
+    { t: powerTimers.rockets, max: ROCKET_TIME,  e: "🚀", c: "#ff9a6b" },
+    { t: powerTimers.big,     max: BIG_TIME,     e: "🍄", c: "#ff6b8a" },
+    { t: powerTimers.pierce,  max: PIERCE_TIME,  e: "🏹", c: "#9affc0" },
+    { t: powerTimers.bigshot, max: BIGSHOT_TIME, e: "💥", c: "#ffb14a" },
+    { t: powerTimers.psych,   max: PSYCH_TIME,   e: "🌀", c: "#ff8ae0" },
   ];
-  let py = 60;
+
+  ctx.save();
   ctx.textAlign = "left";
   ctx.textBaseline = "middle";
+
+  // Start below the stat bar - and below the boss health bar too, when a
+  // boss is up, so the effects never sit on top of it.
+  let py = (boss && boss.dying === 0) ? 116 : 88;
+
   for (const r of rows) {
     if (r.t <= 0) continue;
-    ctx.font = "15px system-ui, sans-serif";
+    ctx.font = "14px system-ui, sans-serif";
     ctx.fillStyle = "#ffe9c4";
     ctx.fillText(r.e, 16, py);
-    ctx.fillStyle = "rgba(255,255,255,0.22)";
-    ctx.fillRect(40, py - 4, 46, 7);
-    ctx.fillStyle = "#8fd0ff";
-    ctx.fillRect(40, py - 4, 46 * (r.t / r.max), 7);
-    py += 18;
+    // a rounded track with a coloured, draining fill on top
+    panel(38, py - 5, 52, 10, 5, "rgba(0,0,0,0.42)", null);
+    panel(38, py - 5, Math.max(4, 52 * (r.t / r.max)), 10, 5, r.c, null);
+    py += 20;
   }
 
   // --- the mini INVENTORY of held items ---
@@ -3051,30 +3062,29 @@ function drawPowerHud() {
 
   if (bag.length) {
     py += 4;
-    ctx.font = "10px system-ui, sans-serif";
-    ctx.fillStyle = "rgba(255,233,196,0.6)";
+    ctx.font = "9px system-ui, sans-serif";
+    ctx.fillStyle = "rgba(255,233,196,0.55)";
     ctx.fillText("BAG", 16, py);
-    py += 14;
+    py += 15;
     let bx = 16;
     for (const it of bag) {
-      // a little slot box so it reads as "inventory", not "active effect"
-      ctx.fillStyle = "rgba(20,12,10,0.5)";
-      ctx.fillRect(bx, py - 12, 26, 24);
-      ctx.strokeStyle = "rgba(255,214,130,0.5)";
-      ctx.lineWidth = 1.5;
-      ctx.strokeRect(bx, py - 12, 26, 24);
-      ctx.font = "15px system-ui, sans-serif";
+      // a rounded slot so it reads as "inventory", not "active effect"
+      panel(bx, py - 13, 28, 26, 7, "rgba(20,12,22,0.55)", "rgba(255,214,130,0.5)");
+      ctx.font = "16px system-ui, sans-serif";
       ctx.fillStyle = "#ffe9c4";
-      ctx.fillText(it.e, bx + 4, py);
+      ctx.textAlign = "center";
+      ctx.fillText(it.e, bx + 14, py);
       if (it.n) {
         ctx.font = "bold 10px system-ui, sans-serif";
         ctx.fillStyle = "#ffd27a";
-        ctx.fillText(it.n, bx + 15, py + 8);
+        ctx.textAlign = "right";
+        ctx.fillText(it.n, bx + 27, py + 9);
       }
-      bx += 32;
+      ctx.textAlign = "left";
+      bx += 34;
     }
   }
-  ctx.textBaseline = "alphabetic";
+  ctx.restore();
 }
 
 // THE "YOU GOT X" NOTES. A little stack near the middle that fades away,
@@ -3114,30 +3124,76 @@ function drawItemPopups() {
   ctx.restore();
 }
 
+// A rounded rectangle. Canvas doesn't have one built in that works
+// everywhere, so this traces the path by hand: four corners, each a little
+// arc. Pass a fill colour and/or a stroke colour.
+function panel(x, y, w, h, r, fill, stroke) {
+  r = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y,     x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x,     y + h, r);
+  ctx.arcTo(x,     y + h, x,     y,     r);
+  ctx.arcTo(x,     y,     x + w, y,     r);
+  ctx.closePath();
+  if (fill)   { ctx.fillStyle = fill;     ctx.fill(); }
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 1.5; ctx.stroke(); }
+}
+
+// THE TOP STATUS BAR. Everything up top now lives in tidy zones so nothing
+// piles on top of anything else:
+//   row 1  - the STAGE pill, centred between the Arcade / Level buttons
+//   row 2  - a stat bar: HEIGHT on the left, kills + coins on the right
+// The boss health bar (drawBossBar) and the effects column (drawPowerHud)
+// slot in underneath, in that order, so they never collide either.
+function drawTopBar() {
+  ctx.save();
+
+  // --- row 1: STAGE pill ---
+  ctx.font = "bold 12px system-ui, sans-serif";
+  const stageText = "STAGE " + stage;
+  const sw = ctx.measureText(stageText).width + 24;
+  panel(W / 2 - sw / 2, 8, sw, 22, 11, "rgba(24,12,28,0.62)", "rgba(255,214,130,0.55)");
+  ctx.fillStyle = "#ffd27a";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(stageText, W / 2, 20);
+
+  // --- row 2: the stat bar ---
+  const y = 40, h = 34, cy = y + h / 2;
+  panel(10, y, W - 20, h, 10, "rgba(14,9,18,0.55)", "rgba(255,255,255,0.12)");
+
+  // HEIGHT: a small faded label, then the big number, on one line.
+  ctx.textAlign = "left";
+  ctx.fillStyle = "rgba(255,233,196,0.6)";
+  ctx.font = "11px system-ui, sans-serif";
+  ctx.fillText("HEIGHT", 22, cy);
+  const labW = ctx.measureText("HEIGHT").width;
+  ctx.fillStyle = "#ffe9c4";
+  ctx.font = "bold 20px system-ui, sans-serif";
+  ctx.fillText(best + "m", 22 + labW + 8, cy);
+
+  // kills + coins, right-aligned, coins on the far right.
+  ctx.textAlign = "right";
+  ctx.font = "bold 16px system-ui, sans-serif";
+  ctx.fillStyle = "#ffd24a";
+  const coinStr = "💰 " + coins;
+  ctx.fillText(coinStr, W - 22, cy);
+  const coinW = ctx.measureText(coinStr).width;
+  ctx.fillStyle = "#ff9a9a";
+  ctx.fillText("☠ " + kills, W - 22 - coinW - 18, cy);
+
+  ctx.restore();
+}
+
 function drawHud() {
   ctx.textBaseline = "alphabetic";
-  ctx.fillStyle = "#ffe9c4";
-  ctx.font = "bold 26px system-ui, sans-serif";
-  ctx.textAlign = "left";
-  ctx.fillText("HEIGHT " + best + "m", 16, 40);
 
-  // STAGE, centred up top, so you always know how deep in it you are.
-  ctx.textAlign = "center";
-  ctx.font = "bold 15px system-ui, sans-serif";
-  ctx.fillStyle = "#ffd27a";
-  ctx.fillText("STAGE " + stage, W / 2, 26);
-
-  ctx.textAlign = "right";
-  ctx.fillStyle = "#ffb27a";
-  ctx.font = "bold 26px system-ui, sans-serif";
-  ctx.fillText("☠ " + kills, W - 16, 40);
-  // coins, tucked just under the kill count
-  ctx.fillStyle = "#ffd24a";
-  ctx.font = "bold 18px system-ui, sans-serif";
-  ctx.fillText("💰 " + coins, W - 16, 62);
+  // The tidy top bar (STAGE / HEIGHT / kills / coins).
+  drawTopBar();
 
   // A little stack of the power-ups you've got running right now, each
-  // with a bar that drains as it runs out.
+  // with a bar that drains as it runs out, plus the held-item bag.
   drawPowerHud();
 
   ctx.textAlign = "left";
