@@ -286,8 +286,33 @@
     scythe: { name: 'BETTER SCYTHE', cost: 55,  bought: 0, max: 3,
               blurb: 'cut wheat faster' },
     boxes:  { name: 'FANCY BOXES',   cost: 80,  bought: 0, max: 3,
-              blurb: 'every pizza sells for more' }
+              blurb: 'every pizza sells for more' },
+
+    // ---- THE FACTORY ------------------------------------------------
+    // Each one buys you out of one step of the job, in the order you do
+    // it. Buy all four and the shop runs itself and you can just watch.
+    harvester: { name: 'HARVESTER',   cost: 150, bought: 0, max: 3,
+                 blurb: 'a machine that cuts wheat for you' },
+    millbot:   { name: 'MILL ROBOT',  cost: 260, bought: 0, max: 3,
+                 blurb: 'feeds the wheat in and makes the dough' },
+    topper:    { name: 'TOPPER ARM',  cost: 420, bought: 0, max: 3,
+                 blurb: 'puts the order on the pizza by itself' },
+    chefbot:   { name: 'CHEF ROBOT',  cost: 650, bought: 0, max: 3,
+                 blurb: 'bakes it and serves the customer' }
   };
+
+  // THE PRODUCTION LINE. The robots work on their OWN pizza, never the
+  // one in your hands - otherwise the topper would put pineapple on
+  // something you were halfway through carrying.
+  const auto = {
+    hopper: 0,        // wheat piled up at the mill
+    line: null,       // the pizza the robots are building
+    ownOven: false,   // is the thing in the oven THEIRS or yours?
+    tCut: 0, tMill: 0, tTop: 0, tChef: 0,
+    botX: 0, botZ: -78,      // where the harvester has trundled to
+    madeByRobots: 0
+  };
+  const HOPPER_MAX = 40;
 
   function bakeSpeed()  { return 1 + upgrades.oven.bought * 0.45; }
   function burnSlow()   { return 1 + upgrades.oven.bought * 0.5; }
@@ -480,6 +505,109 @@
     }
   }
 
+  // -------------------------------------------------------------------
+  //  THE ROBOTS
+  // -------------------------------------------------------------------
+  //
+  //  Each one only ever does its own step, and only when the step in
+  //  front of it is free. That's what stops them treading on each other:
+  //  the mill robot won't make dough while a pizza is already on the
+  //  line, and the chef robot won't use the oven while YOUR pizza is in
+  //  it. Everything waits its turn instead of everything fighting.
+
+  function updateRobots(dt) {
+    // ---- THE HARVESTER: cuts wheat into the hopper -------------------
+    if (upgrades.harvester.bought > 0) {
+      auto.tCut -= dt;
+
+      // It trundles towards whatever is still standing, so you can see
+      // it working rather than it just conjuring wheat out of nothing.
+      let target = null, bd = 1e9;
+      for (const st of wheatStalks) {
+        if (!st.ready) continue;
+        const d = Math.hypot(st.x - auto.botX, st.z - auto.botZ);
+        if (d < bd) { bd = d; target = st; }
+      }
+      if (target) {
+        const dx = target.x - auto.botX, dz = target.z - auto.botZ;
+        const L = Math.hypot(dx, dz) || 1;
+        const sp = 26 + upgrades.harvester.bought * 10;
+        auto.botX += dx / L * Math.min(L, sp * dt);
+        auto.botZ += dz / L * Math.min(L, sp * dt);
+
+        if (auto.tCut <= 0 && bd < 9 && auto.hopper < HOPPER_MAX) {
+          auto.tCut = 1.6 / upgrades.harvester.bought;
+          target.ready = false;
+          target.back = WHEAT_REGROW;
+          auto.hopper++;
+        }
+      }
+    }
+
+    // ---- THE MILL ROBOT: hopper wheat becomes dough ------------------
+    if (upgrades.millbot.bought > 0 && !auto.line && auto.hopper >= WHEAT_PER_DOUGH) {
+      auto.tMill -= dt;
+      if (auto.tMill <= 0) {
+        auto.tMill = 3.0 / upgrades.millbot.bought;
+        auto.hopper -= WHEAT_PER_DOUGH;
+        auto.line = newPizza();
+      }
+    }
+
+    // ---- THE TOPPER ARM: sauce, cheese, then the order ---------------
+    // It waits for an order before it starts on toppings, because
+    // otherwise it has no idea what the customer wants and would just
+    // guess. Sauce and cheese go on regardless - they always do.
+    if (upgrades.topper.bought > 0 && auto.line && auto.line.state === 'raw'
+        && !auto.line.done) {
+      auto.tTop -= dt;
+      if (auto.tTop <= 0) {
+        const p = auto.line;
+        auto.tTop = 1.3 / upgrades.topper.bought;
+        if (!p.sauce)       p.sauce = true;
+        else if (!p.cheese) p.cheese = true;
+        else if (order) {
+          const next = order.want.find(function (k) { return p.tops.indexOf(k) < 0; });
+          if (next) p.tops.push(next);
+          else p.done = true;
+        }
+      }
+    }
+
+    // ---- THE CHEF ROBOT: the oven and the window ---------------------
+    if (upgrades.chefbot.bought > 0) {
+      auto.tChef -= dt;
+      if (auto.tChef <= 0) {
+        auto.tChef = 1.4 / upgrades.chefbot.bought;
+
+        // Something cooked and burning? Out it comes, whoever put it in.
+        if (auto.ownOven && ovenPizza &&
+            (ovenPizza.state === 'baked' || ovenPizza.state === 'burnt')) {
+          const done = ovenPizza;
+          ovenPizza = null;
+          auto.ownOven = false;
+          if (done.state === 'burnt') { burnt++; }
+          else if (order) {
+            money += priceOf(done);
+            served++;
+            auto.madeByRobots++;
+            order = null;
+            orderWait = 4 + Math.random() * 4;
+          }
+        }
+        // A finished pizza and a free oven? In it goes. It will NOT
+        // touch the oven while your own pizza is in there.
+        else if (auto.line && auto.line.done && !ovenPizza) {
+          ovenPizza = auto.line;
+          ovenPizza.state = 'baking';
+          ovenPizza.bakeT = 0;
+          auto.line = null;
+          auto.ownOven = true;
+        }
+      }
+    }
+  }
+
   function buy(key) {
     const u = upgrades[key];
     if (!u || u.bought >= u.max) { say('as good as it gets'); return; }
@@ -585,6 +713,8 @@
         ovenPizza.state = 'baked';
       }
     }
+
+    updateRobots(dt);
 
     // ---- CUSTOMERS -------------------------------------------------
     if (!order) {
@@ -734,6 +864,76 @@
     }
   }
 
+  // ---- THE ROBOTS YOU BOUGHT -------------------------------------------
+  //
+  // Each one stands at the step it does, so what you paid for is a thing
+  // you can point at. A robot you can't see isn't worth 650 coins.
+
+  function drawRobot(x, z, body, busy, lift) {
+    const bob = busy ? Math.sin(clock * 7 + x) * 0.9 : Math.sin(clock * 1.4 + x) * 0.25;
+    const y = (lift || 0) + bob;
+    addBox(x, y + 4, z, 8, 8, 8, body);                       // body
+    addBox(x, y + 10.5, z, 6, 5, 6, shade(body, 0.75));       // head
+    // The eye goes green while it's working and dim when it's waiting -
+    // so you can tell at a glance which robot is stuck.
+    addBox(x, y + 10.8, z - 3.2, 3.4, 1.6, 0.6,
+           busy ? [140, 250, 140] : [90, 100, 96]);
+    addBox(x, y + 14.2, z, 0.8, 3, 0.8, shade(body, 0.6));    // antenna
+    addBox(x, y + 16, z, 2, 2, 2, busy ? [255, 220, 120] : [80, 80, 84]);
+    for (const sgn of [-1, 1]) addBox(x + sgn * 5.4, y + 4, z, 2.4, 6, 2.4, shade(body, 0.7));
+  }
+
+  function drawRobots() {
+    // ---- THE HARVESTER out in the field --------------------------------
+    if (upgrades.harvester.bought > 0) {
+      const x = auto.botX, z = auto.botZ;
+      addBox(x, 3, z, 16, 6, 20, [172, 128, 60]);              // hopper body
+      addBox(x, 7.5, z - 2, 13, 3, 12, [120, 88, 44]);
+      addBox(x, 2.4, z - 11, 18, 4, 4, shade(STEEL, 0.9));     // the cutting bar
+      for (const sgn of [-1, 1]) addBox(x + sgn * 8.6, 2.6, z + 6, 3, 5, 5, [42, 40, 38]);
+      // A spinning reel at the front, so it looks like it's doing it.
+      addBox(x, 6, z - 10, 16, 2, 4, [214, 178, 84], clock * 5);
+      addBox(x, 6, z - 10, 4, 2, 16, [214, 178, 84], clock * 5);
+    }
+
+    // ---- THE MILL ROBOT ------------------------------------------------
+    if (upgrades.millbot.bought > 0) {
+      const m = spotById('mill');
+      drawRobot(m.x + 20, m.z, [96, 132, 178],
+                auto.hopper >= WHEAT_PER_DOUGH && !auto.line);
+      // The pile of wheat waiting in the hopper - the bigger the pile,
+      // the further ahead the harvester is running.
+      const heap = Math.min(10, auto.hopper);
+      for (let i = 0; i < heap; i++) {
+        addBox(m.x - 19 + (i % 5) * 3.4, 2 + Math.floor(i / 5) * 3, m.z - 4 + (i % 3) * 3,
+               3, 3, 3, WHEATC);
+      }
+    }
+
+    // ---- THE TOPPER ARM ------------------------------------------------
+    if (upgrades.topper.bought > 0) {
+      const tx = 0, tz = 96;
+      addBox(tx, 4, tz, 26, 8, 22, shade(STEEL, 0.6));         // the bench
+      for (const sgn of [-1, 1]) addBox(tx + sgn * 11, 14, tz, 3, 14, 3, shade(STEEL, 0.8));
+      addBox(tx, 21, tz, 25, 3, 3, shade(STEEL, 0.9));         // the gantry
+      // The arm slides side to side while it's working.
+      const busy = auto.line && auto.line.state === 'raw' && !auto.line.done;
+      const slide = busy ? Math.sin(clock * 4) * 7 : 0;
+      addBox(tx + slide, 16, tz, 3, 8, 3, [214, 132, 72]);
+      addBox(tx + slide, 12, tz, 5, 2, 5, [240, 170, 90]);
+
+      // THE PIZZA ON THE LINE. You can watch it being built.
+      if (auto.line) drawPizzaAt(auto.line, tx, 9, tz, 15);
+    }
+
+    // ---- THE CHEF ROBOT ------------------------------------------------
+    if (upgrades.chefbot.bought > 0) {
+      const ov = spotById('oven');
+      drawRobot(ov.x - 22, ov.z - 6, [190, 96, 96],
+                !!(auto.line && auto.line.done) || auto.ownOven);
+    }
+  }
+
   // ---- THE LITTLE CHARACTER -------------------------------------------
   function drawPlayer() {
     const co = Math.cos(player.yaw), si = Math.sin(player.yaw);
@@ -794,15 +994,25 @@
 //  THE WRITING ON TOP
 // -------------------------------------------------------------------
 
-  const SHOP_KEYS = ['oven', 'boots', 'scythe', 'boxes'];
+  const SHOP_KEYS = ['oven', 'boots', 'scythe', 'boxes',
+                     'harvester', 'millbot', 'topper', 'chefbot'];
 
   function shopTab() {
     const w = Math.min(W * 0.16, 150), h = 40;
     return { x: W - w - 16, y: 16, w: w, h: h };
   }
+  // TWO COLUMNS. Eight of these stacked in one column is 540 pixels of
+  // list, which runs straight off the bottom of a laptop screen - and a
+  // button you cannot see is a button you cannot buy.
   function shopBox(i) {
-    const w = Math.min(W * 0.62, 460), h = 58;
-    return { x: W / 2 - w / 2, y: H * 0.22 + i * (h + 10), w: w, h: h };
+    const cols = W > 640 ? 2 : 1;
+    const w = cols === 2 ? Math.min(W * 0.44, 400) : Math.min(W * 0.8, 420);
+    const h = 54, gap = 9;
+    const col = cols === 2 ? i % 2 : 0;
+    const row = cols === 2 ? Math.floor(i / 2) : i;
+    const totalW = cols * w + (cols - 1) * 18;
+    return { x: W / 2 - totalW / 2 + col * (w + 18),
+             y: H * 0.2 + row * (h + gap), w: w, h: h };
   }
 
   function drawHud() {
@@ -814,7 +1024,10 @@
     ctx.font = Math.min(W * 0.024, 15) + 'px system-ui, sans-serif';
     ctx.fillStyle = '#a08c78';
     ctx.fillText(served + ' sold' + (burnt ? '   -   ' + burnt + ' burnt' : '') +
-                 '   -   wheat ' + player.carryWheat + '/' + CARRY_MAX, 22, 74);
+                 '   -   wheat ' + player.carryWheat + '/' + CARRY_MAX +
+                 (upgrades.harvester.bought ? '   -   hopper ' + auto.hopper : '') +
+                 (auto.madeByRobots ? '   -   robots made ' + auto.madeByRobots : ''),
+                 22, 74);
 
     // ---- THE ORDER ---------------------------------------------------
     if (order) {
@@ -1027,6 +1240,7 @@
     drawField();
     drawShop();
     drawSpots();
+    drawRobots();
     drawPlayer();
     paint();
 
