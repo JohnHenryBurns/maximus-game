@@ -1217,6 +1217,7 @@ function killGnome(shieldable) {
 
   dead = true;
   deadTimer = 0;
+  itemPopups = [];      // clear any "you got X" notes so the death screen is clean
   deathSound();
 }
 
@@ -3215,39 +3216,49 @@ function drawPowerHud() {
   ctx.restore();
 }
 
-// THE "YOU GOT X" NOTES. A little stack near the middle that fades away,
-// so you learn what each new goody does the first time you grab one.
+// THE "YOU GOT X" NOTES. Small, see-through toasts that fade away, so you
+// learn what each new goody does without them blocking half the screen.
+// They're only as wide as their text, they never go fully opaque, and they
+// stack UPWARD from just below the middle - up and out of the way of the
+// climbing above and the thumb buttons below.
 function drawItemPopups() {
   if (!itemPopups.length) return;
   ctx.save();
   ctx.textBaseline = "middle";
-  const boxW = 300, boxH = 40;
-  let py = H * 0.60;
-  for (const pop of itemPopups) {
-    const a = Math.min(1, pop.timer / 30);      // fade over the last half-second
-    ctx.globalAlpha = a;
+  const boxH = 30;
+  const anchor = H * 0.62;
+
+  itemPopups.forEach((pop, i) => {
+    // Measure the text so the box hugs it instead of being a fixed slab.
+    ctx.font = "bold 13px system-ui, sans-serif";
+    const tw = ctx.measureText(pop.title).width;
+    ctx.font = "11px system-ui, sans-serif";
+    const dw = ctx.measureText(pop.desc).width;
+    const boxW = Math.min(288, 42 + Math.max(tw, dw) + 14);
+
+    const yy = anchor - i * (boxH + 5);
     const x0 = W / 2 - boxW / 2;
-    ctx.fillStyle = "rgba(18,10,20,0.82)";
-    ctx.fillRect(x0, py - boxH / 2, boxW, boxH);
-    ctx.strokeStyle = "rgba(255,214,130,0.7)";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(x0, py - boxH / 2, boxW, boxH);
+
+    // Softer than before: lower opacity overall, and it fades in its last
+    // half-second, so it's a hint you can see THROUGH rather than a wall.
+    const a = Math.min(1, pop.timer / 30) * 0.85;
+    ctx.globalAlpha = a;
+    panel(x0, yy - boxH / 2, boxW, boxH, 8, "rgba(18,10,20,0.5)", "rgba(255,214,130,0.5)");
 
     ctx.textAlign = "center";
-    ctx.font = "22px system-ui, sans-serif";
+    ctx.font = "17px system-ui, sans-serif";
     ctx.fillStyle = "#fff";
-    ctx.fillText(pop.emoji, x0 + 26, py);
+    ctx.fillText(pop.emoji, x0 + 21, yy);
 
     ctx.textAlign = "left";
-    ctx.font = "bold 15px system-ui, sans-serif";
+    ctx.font = "bold 13px system-ui, sans-serif";
     ctx.fillStyle = "#ffd27a";
-    ctx.fillText(pop.title, x0 + 50, py - 8);
-    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillText(pop.title, x0 + 40, yy - 6);
+    ctx.font = "11px system-ui, sans-serif";
     ctx.fillStyle = "#e8e0d0";
-    ctx.fillText(pop.desc, x0 + 50, py + 9);
+    ctx.fillText(pop.desc, x0 + 40, yy + 7);
+  });
 
-    py += boxH + 6;
-  }
   ctx.globalAlpha = 1;
   ctx.restore();
 }
