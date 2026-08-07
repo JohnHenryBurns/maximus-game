@@ -1,0 +1,676 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>RUN!</title>
+
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#141020">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="RUN!">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="icon" href="icon-192.png">
+
+<style>
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: #141020; color: #ffe9c8;
+    font-family: system-ui, sans-serif;
+    -webkit-user-select: none; user-select: none;
+    overscroll-behavior: none; touch-action: none;
+  }
+  canvas { display: block; cursor: pointer; }
+  #hud {
+    position: fixed; left: 0; right: 0; bottom: 6px;
+    text-align: center; font-size: 14px; color: #6f6288;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+
+<canvas id="screen"></canvas>
+<div id="hud">SPACE or CLICK to jump &nbsp;&nbsp; hold it to jump higher &nbsp;&nbsp; press it again in the air to double jump</div>
+
+<script>
+// ===================================================================
+//  RUN!
+//
+//  THIS ONE IS 2D, and that is the whole point of it.
+//
+//  Every other game in Max's arcade is built the same way: work out
+//  where a 3D corner lands on the screen, make a list of flat faces,
+//  sort them furthest-away-first and fill them in. None of that here.
+//  In 2D a thing at x,y IS at x,y - you subtract where the camera is
+//  and draw a rectangle. No maths in between.
+//
+//  What that buys you is speed and certainty. What it costs you is
+//  depth, so the sense of SPEED has to come from somewhere else: from
+//  layers moving at different rates, from the ground streaking past,
+//  and from the enormous thing behind you eating the scenery.
+// ===================================================================
+
+  const canvas = document.getElementById('screen');
+  const ctx = canvas.getContext('2d');
+
+  let W = 0, H = 0;
+  function resize() {
+    W = canvas.width  = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+  function groundY() { return H * 0.78; }     // where the pavement is
+
+
+// -------------------------------------------------------------------
+//  THE NUMBERS
+// -------------------------------------------------------------------
+
+  const START_SPEED = 380;     // pixels a second at the start
+  const TOP_SPEED   = 900;     // and it never gets faster than this
+  const SPEED_UP    = 9;       // how much quicker per second survived
+
+  const GRAVITY   = 2600;
+  const JUMP_KICK = 900;       // the shove you get when you press it
+  const HOLD_LIFT = 1500;      // extra push while you keep holding
+  const HOLD_MAX  = 0.20;      // ...for this long, so a tap is a small hop
+
+  const PLAYER_W = 26, PLAYER_H = 44;
+
+  // HOW CLOSE THE MONSTER IS. This is the whole game in one number:
+  // 0 means it's got you, 1 means it's a long way back.
+  const LEAD_START = 0.72;
+  const LEAD_BACK  = 0.055;    // you claw this much back per second, running clean
+  const HIT_COST   = 0.26;     // and lose this much every time you clatter into something
+
+
+// -------------------------------------------------------------------
+//  THE WORLD
+// -------------------------------------------------------------------
+//
+//  It's made as you go and thrown away behind you. Nothing is stored
+//  for a place you'll never see again - the whole world is a couple of
+//  short lists that keep getting topped up in front and trimmed off
+//  the back.
+
+  let camX = 0;
+  let dist = 0;            // how far you've run, in metres
+  let speed = START_SPEED;
+  let lead = LEAD_START;
+  let clock = 0;
+  let state = 'ready';     // 'ready', 'run', 'dead'
+  let best = 0;
+
+  let blocks = [];         // things to jump over
+  let pits = [];           // holes in the pavement
+  let scenery = [];        // buildings behind, for the monster to eat
+  let bits = [];           // flying debris
+
+  const player = {
+    x: 0, y: 0, vy: 0,
+    onGround: true,
+    jumps: 0,              // how many jumps used since last touching the ground
+    holding: 0,            // how long the button has been held this jump
+    stumble: 0,            // slowed down after clattering into something
+    run: 0                 // the leg-swing timer
+  };
+
+  // Where the front of the monster is, in world x. Everything behind
+  // this line is gone.
+  function monsterX() {
+    // These two numbers decide how much of it you can SEE, and the
+    // first go had it fully off the left of the screen until you were
+    // nearly dead - which rather wastes a monster. Now its teeth are
+    // in shot from the very first stride, and it fills more and more
+    // of the screen as it gains.
+    return player.x - lead * (W * 0.42) - 60;
+  }
+
+  function reset() {
+    camX = 0; dist = 0; speed = START_SPEED; lead = LEAD_START; clock = 0;
+    blocks = []; pits = []; scenery = []; bits = [];
+    player.x = 0; player.y = 0; player.vy = 0;
+    player.onGround = true; player.jumps = 0; player.holding = 0;
+    player.stumble = 0; player.run = 0;
+    madeTo = 0;
+    // Fill the road ahead so you're never running at an empty screen.
+    while (madeTo < 3000) makeMore();
+    state = 'ready';
+  }
+
+  // ---- MAKING THE ROAD AHEAD ------------------------------------------
+  let madeTo = 0;
+
+  function makeMore() {
+    // Gets meaner the further you get, but never so mean it's unfair -
+    // there's always a gap you can land in.
+    const hard = Math.min(1, dist / 900);
+    const gap = 320 + Math.random() * 380 - hard * 120;
+    madeTo += gap;
+
+    const roll = Math.random();
+
+    if (roll < 0.16 + hard * 0.12) {
+      // A HOLE. Wide enough to need a real jump, never wider than one.
+      const w = 90 + Math.random() * (70 + hard * 90);
+      pits.push({ x: madeTo, w: w });
+      madeTo += w;
+    } else if (roll < 0.72) {
+      // A BLOCK to clear.
+      const h = 34 + Math.random() * (30 + hard * 46);
+      blocks.push({ x: madeTo, w: 34 + Math.random() * 26, h: h, hit: false });
+    } else {
+      // TWO BLOCKS with a breath between them - the double jump's job.
+      const h = 30 + Math.random() * 34;
+      blocks.push({ x: madeTo, w: 30, h: h, hit: false });
+      blocks.push({ x: madeTo + 150 + Math.random() * 60, w: 30, h: h + 16, hit: false });
+      madeTo += 210;
+    }
+
+    // Something in the background for the monster to smash.
+    scenery.push({
+      x: madeTo - gap * 0.5,
+      w: 90 + Math.random() * 140,
+      h: 120 + Math.random() * 260,
+      shade: 0.5 + Math.random() * 0.4,
+      gone: false
+    });
+  }
+
+  function tidyUp() {
+    // Anything behind the monster is gone for good.
+    const back = monsterX() - 400;
+    blocks  = blocks.filter(function (b) { return b.x + b.w > back; });
+    pits    = pits.filter(function (p) { return p.x + p.w > back; });
+    scenery = scenery.filter(function (s) { return s.x + s.w > back; });
+    bits    = bits.filter(function (b) { return b.life > 0 && b.x > back - 300; });
+    while (madeTo < player.x + W + 1600) makeMore();
+  }
+
+
+// -------------------------------------------------------------------
+//  JUMPING
+// -------------------------------------------------------------------
+
+  let held = false;
+
+  function jump() {
+    if (state === 'ready') { state = 'run'; return; }
+    if (state === 'dead')  { reset(); state = 'run'; return; }
+
+    // Two jumps: one off the ground, one in mid-air. The second one is
+    // what makes a double block clearable instead of just cruel.
+    if (player.jumps >= 2) return;
+    player.jumps++;
+    player.vy = -JUMP_KICK;
+    player.holding = 0;
+    player.onGround = false;
+  }
+
+  // Is there floor under a given world x?
+  function floorAt(x) {
+    for (const p of pits) {
+      if (x > p.x && x < p.x + p.w) return false;
+    }
+    return true;
+  }
+
+
+// -------------------------------------------------------------------
+//  THE CLOCK
+// -------------------------------------------------------------------
+
+  function update(dt) {
+    if (state !== 'run') { clock += dt; return; }
+    clock += dt;
+
+    // ---- SPEED ---------------------------------------------------------
+    speed = Math.min(TOP_SPEED, speed + SPEED_UP * dt);
+    if (player.stumble > 0) player.stumble -= dt;
+    const now = speed * (player.stumble > 0 ? 0.55 : 1);
+
+    player.x += now * dt;
+    dist += now * dt / 30;             // 30 pixels to a metre
+    player.run += dt * now * 0.02;
+
+    // ---- UP AND DOWN ---------------------------------------------------
+    // Holding the button keeps pushing you up for a moment, so a tap is
+    // a hop and a hold is a proper leap. One button, two jumps.
+    if (held && player.holding < HOLD_MAX && player.vy < 0) {
+      player.vy -= HOLD_LIFT * dt;
+      player.holding += dt;
+    }
+    player.vy += GRAVITY * dt;
+    player.y += player.vy * dt;
+
+    if (player.y >= 0) {
+      // Only land if there is actually floor here.
+      if (floorAt(player.x) && floorAt(player.x + PLAYER_W)) {
+        player.y = 0; player.vy = 0;
+        player.onGround = true;
+        player.jumps = 0;
+      } else {
+        // DOWN THE HOLE. Not instant death - the monster simply catches
+        // up while you climb out, which is a punishment you can see.
+        player.onGround = false;
+        if (player.y > 220) {
+          lead -= HIT_COST * 1.6;
+          bump(player.x, 0, [[120, 96, 60], [90, 74, 50]], 14);
+
+          // OUT THE FAR SIDE, on solid ground. The first version put you
+          // back at y = -260, which is 260 pixels UP - so falling down a
+          // hole fired you into the sky. A hole should cost you time,
+          // not turn into a trampoline.
+          let landing = player.x + 60;
+          for (const q of pits) {
+            if (player.x > q.x - 30 && player.x < q.x + q.w + 30) {
+              landing = Math.max(landing, q.x + q.w + 34);
+            }
+          }
+          player.x = landing;
+          player.y = 0; player.vy = 0;
+          player.onGround = true; player.jumps = 0;
+          player.stumble = 0.4;
+        }
+      }
+    }
+
+    // ---- CLATTERING INTO THINGS ----------------------------------------
+    for (const b of blocks) {
+      if (b.hit) continue;
+      if (player.x + PLAYER_W < b.x || player.x > b.x + b.w) continue;
+      // Above it? You cleared it.
+      if (-player.y > b.h - 6) continue;
+      b.hit = true;
+      player.stumble = 0.55;
+      lead -= HIT_COST;
+      bump(b.x + b.w / 2, b.h / 2, [[190, 120, 70], [140, 88, 54]], 16);
+    }
+
+    // ---- THE MONSTER ---------------------------------------------------
+    // Run clean and you pull away. Every mistake hands ground back.
+    // NEVER BELOW ZERO. Left unclamped it kept falling after you died,
+    // and since the monster's front edge is worked out FROM lead, it
+    // quietly slid past you and stood in front - which is not where
+    // the thing chasing you should be.
+    lead = clamp(lead + LEAD_BACK * dt, 0, 1);
+    if (lead <= 0) {
+      state = 'dead';
+      best = Math.max(best, Math.floor(dist));
+      bump(player.x, 30, [[210, 90, 110], [150, 60, 80]], 26);
+    }
+
+    // ---- WHAT THE MONSTER HAS EATEN ------------------------------------
+    const mx = monsterX();
+    for (const s of scenery) {
+      if (s.gone || s.x > mx) continue;
+      s.gone = true;
+      // A building coming down is the whole reason you can feel it
+      // behind you without ever turning round.
+      for (let i = 0; i < 18; i++) {
+        bits.push({
+          x: s.x + Math.random() * s.w,
+          y: -Math.random() * s.h,
+          vx: 120 + Math.random() * 260,
+          vy: -180 - Math.random() * 420,
+          size: 6 + Math.random() * 16,
+          life: 1.1 + Math.random() * 0.8,
+          spin: Math.random() * 6,
+          col: [80 + Math.random() * 60, 70 + Math.random() * 40, 96 + Math.random() * 50]
+        });
+      }
+    }
+
+    // ---- DEBRIS ---------------------------------------------------------
+    for (const b of bits) {
+      b.x += b.vx * dt;
+      b.y += b.vy * dt;
+      b.vy += GRAVITY * 0.55 * dt;
+      b.spin += dt * 5;
+      b.life -= dt;
+      if (b.y > 0) { b.y = 0; b.vy *= -0.35; b.vx *= 0.7; }
+    }
+
+    camX = player.x - W * 0.32;
+    tidyUp();
+  }
+
+  function bump(x, y, cols, n) {
+    for (let i = 0; i < n; i++) {
+      bits.push({
+        x: x, y: -y,
+        vx: (Math.random() - 0.3) * 420,
+        vy: -120 - Math.random() * 420,
+        size: 4 + Math.random() * 10,
+        life: 0.6 + Math.random() * 0.6,
+        spin: Math.random() * 6,
+        col: cols[Math.floor(Math.random() * cols.length)]
+      });
+    }
+  }
+
+
+// -------------------------------------------------------------------
+//  DRAWING - flat shapes, no maths
+// -------------------------------------------------------------------
+
+  function rgb(c) { return 'rgb(' + (c[0]|0) + ',' + (c[1]|0) + ',' + (c[2]|0) + ')'; }
+
+  // World x to screen x. THIS IS THE WHOLE OF 2D. Everything else is
+  // just rectangles.
+  function sx(x) { return x - camX; }
+
+  function drawSky() {
+    const g = ctx.createLinearGradient(0, 0, 0, groundY());
+    g.addColorStop(0, '#241a3a');
+    g.addColorStop(1, '#5b3350');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, groundY());
+
+    // A moon, parked. It doesn't scroll, which quietly tells your eye
+    // it's a very long way away.
+    ctx.fillStyle = 'rgba(255,238,200,0.85)';
+    ctx.beginPath();
+    ctx.arc(W * 0.78, H * 0.16, Math.min(W, H) * 0.055, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // ---- LAYERS ---------------------------------------------------------
+  // The far hills crawl, the buildings walk, the pavement sprints. Three
+  // speeds is all it takes for flat shapes to feel deep - and it's the
+  // only trick this game has for depth, so it does a lot of work.
+  function drawHills() {
+    ctx.fillStyle = '#2b1f42';
+    const step = 260;
+    const off = (camX * 0.18) % step;
+    ctx.beginPath();
+    ctx.moveTo(-step, groundY());
+    for (let i = -1; i < W / step + 2; i++) {
+      const x = i * step - off;
+      ctx.lineTo(x, groundY() - 90 - ((i * 37) % 70));
+      ctx.lineTo(x + step / 2, groundY() - 30);
+    }
+    ctx.lineTo(W + step, groundY());
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function drawScenery() {
+    for (const s of scenery) {
+      if (s.gone) continue;
+      const x = sx(s.x) * 0.72 + W * 0.14;    // walks slower than the road
+      if (x > W + 200 || x + s.w < -200) continue;
+      const base = groundY() - 6;
+      ctx.fillStyle = rgb([54 * s.shade + 26, 44 * s.shade + 22, 84 * s.shade + 30]);
+      ctx.fillRect(x, base - s.h, s.w, s.h);
+
+      // Windows. Some lit, some not, and always the same ones for a
+      // given building - worked out from its position, not from
+      // Math.random(), or they would flicker every single frame.
+      for (let wy = 0; wy < Math.floor(s.h / 34); wy++) {
+        for (let wx = 0; wx < Math.floor(s.w / 30); wx++) {
+          const lit = ((Math.floor(s.x) + wx * 7 + wy * 13) % 5) < 2;
+          ctx.fillStyle = lit ? 'rgba(255,214,130,0.75)' : 'rgba(20,16,32,0.5)';
+          ctx.fillRect(x + 10 + wx * 30, base - s.h + 14 + wy * 34, 13, 18);
+        }
+      }
+    }
+  }
+
+  function drawGround() {
+    const gy = groundY();
+    ctx.fillStyle = '#1d1730';
+    ctx.fillRect(0, gy, W, H - gy);
+
+    // The pavement, with the holes left out of it.
+    ctx.fillStyle = '#3a2f52';
+    let cut = [];
+    for (const p of pits) cut.push([sx(p.x), sx(p.x + p.w)]);
+    cut.sort(function (a, b) { return a[0] - b[0]; });
+    let at = 0;
+    for (const c of cut) {
+      if (c[0] > at) ctx.fillRect(at, gy, Math.min(c[0], W) - at, 16);
+      at = Math.max(at, c[1]);
+    }
+    if (at < W) ctx.fillRect(at, gy, W - at, 16);
+
+    // Streaks tearing past, so the speed is something you can see even
+    // when the ground is otherwise plain.
+    ctx.fillStyle = 'rgba(255,255,255,0.10)';
+    const period = 90;
+    const off2 = camX % period;
+    for (let i = -1; i < W / period + 2; i++) {
+      ctx.fillRect(i * period - off2, gy + 22, 46, 3);
+    }
+  }
+
+  function drawBlocks() {
+    for (const b of blocks) {
+      const x = sx(b.x);
+      if (x > W + 60 || x + b.w < -60) continue;
+      const gy = groundY();
+      ctx.fillStyle = b.hit ? '#6b4a3a' : '#a8703f';
+      ctx.fillRect(x, gy - b.h, b.w, b.h);
+      ctx.fillStyle = b.hit ? '#4d362a' : '#7d5330';
+      ctx.fillRect(x, gy - b.h, b.w, 7);
+      ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x, gy - b.h, b.w, b.h);
+    }
+  }
+
+  function drawBits() {
+    for (const b of bits) {
+      const x = sx(b.x), y = groundY() + b.y;
+      if (x < -60 || x > W + 60) continue;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(b.spin);
+      ctx.globalAlpha = clamp(b.life, 0, 1);
+      ctx.fillStyle = rgb(b.col);
+      ctx.fillRect(-b.size / 2, -b.size / 2, b.size, b.size);
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ---- THE RUNNER ------------------------------------------------------
+  function drawPlayer() {
+    const x = sx(player.x), y = groundY() + player.y;
+    const swing = Math.sin(player.run) * 12;
+    const air = !player.onGround;
+
+    ctx.fillStyle = '#2a2340';
+    // legs
+    if (air) {
+      ctx.fillRect(x + 3, y - 16, 8, 18);
+      ctx.fillRect(x + 15, y - 20, 8, 18);
+    } else {
+      ctx.fillRect(x + 5 + swing * 0.4, y - 16, 8, 17);
+      ctx.fillRect(x + 13 - swing * 0.4, y - 16, 8, 17);
+    }
+
+    ctx.fillStyle = player.stumble > 0 ? '#e0705a' : '#f2e2c8';
+    ctx.fillRect(x, y - PLAYER_H, PLAYER_W, 30);       // body
+    ctx.fillStyle = '#d8b48a';
+    ctx.fillRect(x + 5, y - PLAYER_H - 16, 17, 17);    // head
+    ctx.fillStyle = '#3a2f52';
+    ctx.fillRect(x + 3, y - PLAYER_H - 20, 21, 7);     // hair
+
+    // An arm pumping, or thrown up in the air.
+    ctx.fillStyle = '#d8b48a';
+    if (air) ctx.fillRect(x + 20, y - PLAYER_H - 8, 8, 20);
+    else     ctx.fillRect(x + 19, y - PLAYER_H + 4 - swing * 0.5, 8, 18);
+  }
+
+  // ---- THE THING BEHIND YOU ---------------------------------------------
+  //
+  // Deliberately not a clear picture of anything. A big dark shape with
+  // eyes and teeth is far more frightening than a drawing, and it can't
+  // be nightmare fuel because there's nothing to look at properly.
+  function drawMonster() {
+    const front = sx(monsterX());
+    if (front < -W) return;
+
+    const gy = groundY();
+    const top = H * 0.06;
+
+    // Everything to the LEFT of the front line is monster.
+    ctx.fillStyle = '#160f22';
+    ctx.beginPath();
+    ctx.moveTo(front, gy + 30);
+    // A lumpy, moving edge - it should look like it's boiling forward.
+    for (let y = gy + 30; y > top; y -= 26) {
+      const wob = Math.sin(y * 0.05 + clock * 6) * 26 +
+                  Math.sin(y * 0.13 - clock * 9) * 12;
+      ctx.lineTo(front + wob - 20, y);
+    }
+    ctx.lineTo(front - 90, top);
+    ctx.lineTo(-W, top);
+    ctx.lineTo(-W, gy + 30);
+    ctx.closePath();
+    ctx.fill();
+
+    // TEETH along the leading edge.
+    ctx.fillStyle = '#f4ecd8';
+    for (let y = gy; y > H * 0.22; y -= 62) {
+      const wob = Math.sin(y * 0.05 + clock * 6) * 26 - 20;
+      const len = 26 + Math.sin(y * 0.4 + clock * 3) * 12;
+      ctx.beginPath();
+      ctx.moveTo(front + wob, y);
+      ctx.lineTo(front + wob + len, y - 16);
+      ctx.lineTo(front + wob, y - 32);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // EYES. Two of them, and they follow you.
+    for (const e of [[0.30, 0.34], [0.18, 0.52]]) {
+      const ex = front - W * e[0] * 0.5 - 40;
+      const ey = H * e[1];
+      const r = Math.min(W, H) * 0.035;
+      ctx.fillStyle = '#ffb340';
+      ctx.beginPath(); ctx.arc(ex, ey, r, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#1a0c06';
+      ctx.beginPath(); ctx.arc(ex + r * 0.4, ey, r * 0.45, 0, Math.PI * 2); ctx.fill();
+    }
+
+    // The closer it gets, the redder the edge of the screen.
+    const near = clamp(1 - lead / LEAD_START, 0, 1);
+    if (near > 0.02) {
+      const g = ctx.createLinearGradient(0, 0, W * 0.55, 0);
+      g.addColorStop(0, 'rgba(190,40,60,' + (near * 0.55) + ')');
+      g.addColorStop(1, 'rgba(190,40,60,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W * 0.55, H);
+    }
+  }
+
+  function drawHud() {
+    ctx.textAlign = 'left';
+    ctx.font = 'bold ' + Math.min(W * 0.05, 44) + 'px system-ui, sans-serif';
+    ctx.fillStyle = '#ffe9c8';
+    ctx.fillText(Math.floor(dist) + ' m', 20, 54);
+
+    if (best > 0) {
+      ctx.font = Math.min(W * 0.024, 15) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#8f7fb0';
+      ctx.fillText('best ' + best + ' m', 22, 78);
+    }
+
+    // HOW CLOSE IT IS. The bar you actually watch.
+    const bw = Math.min(W * 0.3, 300), bx = W - bw - 20, by = 30;
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.fillRect(bx, by, bw, 16);
+    const t = clamp(lead / LEAD_START, 0, 1);
+    ctx.fillStyle = t > 0.6 ? '#8fe07a' : t > 0.3 ? '#e0c83c' : '#e05a4a';
+    ctx.fillRect(bx + bw * (1 - t), by, bw * t, 16);
+    ctx.textAlign = 'right';
+    ctx.font = 'bold ' + Math.min(W * 0.022, 14) + 'px system-ui, sans-serif';
+    ctx.fillStyle = '#8f7fb0';
+    ctx.fillText('HOW CLOSE IT IS', W - 20, by - 6);
+
+    ctx.textAlign = 'center';
+    if (state === 'ready') {
+      ctx.font = 'bold ' + Math.min(W * 0.07, 62) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#ffe9c8';
+      ctx.fillText('RUN!', W / 2, H * 0.36);
+      ctx.font = Math.min(W * 0.03, 20) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#a595c4';
+      ctx.fillText('press SPACE or click to start', W / 2, H * 0.44);
+    }
+    if (state === 'dead') {
+      ctx.font = 'bold ' + Math.min(W * 0.07, 62) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#e05a4a';
+      ctx.fillText('IT GOT YOU', W / 2, H * 0.34);
+      ctx.font = 'bold ' + Math.min(W * 0.04, 30) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#ffe9c8';
+      ctx.fillText(Math.floor(dist) + ' metres', W / 2, H * 0.43);
+      ctx.font = Math.min(W * 0.03, 20) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#a595c4';
+      ctx.fillText('press SPACE or click to go again', W / 2, H * 0.51);
+    }
+  }
+
+
+// -------------------------------------------------------------------
+//  CONTROLS
+// -------------------------------------------------------------------
+
+  window.addEventListener('keydown', function (e) {
+    const k = e.key.toLowerCase();
+    if (k === ' ' || k === 'w' || k === 'arrowup') {
+      if (!held) jump();
+      held = true;
+      e.preventDefault();
+    }
+  });
+  window.addEventListener('keyup', function (e) {
+    const k = e.key.toLowerCase();
+    if (k === ' ' || k === 'w' || k === 'arrowup') held = false;
+  });
+
+  canvas.addEventListener('mousedown', function () { jump(); held = true; });
+  canvas.addEventListener('mouseup',   function () { held = false; });
+  canvas.addEventListener('touchstart', function (e) {
+    e.preventDefault(); jump(); held = true;
+  }, { passive: false });
+  canvas.addEventListener('touchend',  function () { held = false; });
+
+
+// -------------------------------------------------------------------
+//  THE LOOP
+// -------------------------------------------------------------------
+
+  let last = 0;
+  function frame(now) {
+    const dt = Math.min(0.05, Math.max(0.0005, (now - last) / 1000));
+    last = now;
+
+    update(dt);
+
+    drawSky();
+    drawHills();
+    drawScenery();
+    drawGround();
+    drawBlocks();
+    drawBits();
+    drawPlayer();
+    drawMonster();
+    drawHud();
+
+    requestAnimationFrame(frame);
+  }
+
+  reset();
+  requestAnimationFrame(frame);
+
+</script>
+</body>
+</html>
