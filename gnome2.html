@@ -397,6 +397,7 @@ let coins;         // shiny things collected, just for score and bragging
 let stage;         // which stage you're on (goes up as you climb)
 let boss;          // the current boss, or null when there isn't one
 let bossShots;     // things the boss throws at you
+let bossPlatform;  // the big safe floor you fight a boss from (falls when it dies)
 let clearedBossStages;  // a Set of stage numbers whose boss is already dead
 let banner;        // { text, sub, timer } - the big words that flash in the middle
 
@@ -452,6 +453,7 @@ function newGame() {
   stage       = 1;
   boss        = null;
   bossShots   = [];
+  bossPlatform = null;
   // A Set is a bag that only ever holds one of each thing. We use it to
   // remember which bosses are already beaten, so a boss you've killed
   // doesn't come straight back the moment you climb one metre higher.
@@ -1109,6 +1111,44 @@ function nearestMonster() {
   return best;
 }
 
+// WHAT THE AUTO-AIM SHOULD SHOOT AT.
+//
+// Normally that's the nearest monster. But a BOSS isn't in the monsters
+// list - it's its own thing - so the old auto-aim never even saw it, and
+// you had to hit a moving giant by hand. That's why the boss fights felt
+// impossible. Now the gun sees the boss too.
+//
+// The boss gets a longer reach than a little monster (620 instead of 330)
+// so the gun locks onto it the moment it's anywhere on screen. If a
+// monster - like one of the Blob King's minions - is actually closer, we
+// still deal with that first, because it's the more immediate danger.
+function autoTarget() {
+  const monster = nearestMonster();
+  const handY = gnome.y - 20;
+  const monsterDist = monster
+    ? Math.hypot(monster.x - gnome.x, (monster.y - 14) - handY)
+    : Infinity;
+
+  if (boss && boss.dying === 0) {
+    const bossDist = Math.hypot(boss.x - gnome.x, boss.y - handY);
+    if (bossDist < 620 && bossDist <= monsterDist) {
+      // LEAD THE TARGET. A boss keeps sliding sideways while the bullet is
+      // in the air, so if we aimed straight at it every shot would land
+      // just behind it. Instead we guess where it'll BE: how long the
+      // bullet takes to arrive (distance / speed) times the boss's
+      // sideways speed tells us how far ahead to aim. This is exactly what
+      // a duck hunter does - point in front of the duck, not at it.
+      const flight = bossDist / BULLET_SPEED;
+      const leadX = boss.x + boss.vx * boss.dir * flight;
+      // The aim maths below subtracts 14 from a target's y to find its
+      // middle (that's where a monster's body sits). A boss's middle is
+      // right on boss.y, so we hand over boss.y + 14 to cancel that out.
+      return { x: leadX, y: boss.y + 14 };
+    }
+  }
+  return monster;
+}
+
 // --- 4f. VERSION 2 SYSTEMS ---------------------------------------------
 //
 // Everything new lives down here in its own room: dying (now that a
@@ -1259,6 +1299,19 @@ function spawnBoss(s) {
   };
 
   fireballs = [];         // clear the sky so the fight starts clean
+
+  // Drop in a big, STABLE floor to fight from, right under the gnome's
+  // feet. It stretches the whole width and never crumbles while the boss
+  // is alive, so you finally have somewhere solid to stand and shoot
+  // instead of hopping between disappearing ledges. (And the lava holds
+  // still during a boss fight too - see the sinking code.) The moment the
+  // boss dies, this floor drops away like any other ledge: see
+  // startBossDeath().
+  bossPlatform = newLedge(-40, Math.round(gnome.y), W + 80);
+  bossPlatform.safe = true;      // never crumbles while you're fighting
+  bossPlatform.arena = true;     // marks it as the special boss floor
+  platforms.push(bossPlatform);
+
   showBanner(BOSS_NAMES[type], "STAGE " + s + " BOSS");
 }
 
@@ -1378,6 +1431,18 @@ function startBossDeath() {
   clearedBossStages.add(boss.stage);
   dropBossLoot();
   bossShots = [];          // its last shots shouldn't kill you AFTER you win
+
+  // The stable floor you fought from now gives way and tumbles into the
+  // lava, exactly like a crumbling ledge. `noRegrow` means it doesn't
+  // rebuild itself afterwards - it's gone for good, so you have to get
+  // moving again and can't just camp on it forever.
+  if (bossPlatform) {
+    bossPlatform.safe = false;
+    bossPlatform.falling = true;
+    bossPlatform.noRegrow = true;
+    bossPlatform = null;
+  }
+
   showBanner("BOSS DOWN!", "+50 💰");
   boing();
 }
@@ -1519,8 +1584,10 @@ function update() {
     p.y += p.vy;
     p.gone++;
 
-    // ...and then it builds itself back, exactly where it was.
-    if (p.gone > REGROW_TIME) {
+    // ...and then it builds itself back, exactly where it was - UNLESS
+    // it's a one-time floor like the boss arena, which is meant to be
+    // gone for good. Those just keep falling until they're tidied away.
+    if (p.gone > REGROW_TIME && !p.noRegrow) {
       p.falling = false;
       p.y = p.homeY;      // this is what homeY was for
       p.vy = 0;
@@ -1537,7 +1604,7 @@ function update() {
   const wantsShoot = keys["x"] || keys["j"] || touchShooting || mouseShooting;
 
   // Nothing to aim at unless auto-aim is on AND you're not already firing.
-  const target = (AUTO_AIM && !wantsShoot) ? nearestMonster() : null;
+  const target = (AUTO_AIM && !wantsShoot) ? autoTarget() : null;
 
   if ((wantsShoot || target) && tick >= nextShotAt) {
     // Rapid-fire power-up? Then the gap between shots gets tiny and the
@@ -1672,7 +1739,12 @@ function update() {
       if (b.life <= 0) continue;
       const dx = b.x - boss.x;
       const dy = b.y - boss.y;
-      if (dx * dx + dy * dy < 34 * 34) {
+      // A generous 46-pixel hittable radius. A boss keeps moving while the
+      // bullet is in the air, so an aimed shot usually lands a little
+      // behind it - a wider target means those near-misses still count,
+      // and the auto-gun actually chews the boss down instead of mostly
+      // whiffing. It's bigger than the boss LOOKS, and that's on purpose.
+      if (dx * dx + dy * dy < 46 * 46) {
         boss.hp--;
         boss.hurtUntil = shakeClock + 6;
         b.life = 0;
@@ -1779,15 +1851,14 @@ function update() {
   // Really the lava climbs, which is the same thing from where you're
   // standing, and much easier to write.
   //
-  // ...unless you grabbed a FREEZE. Then the lava holds dead still. We
-  // still let its SPEED creep up quietly underneath, so the moment it
-  // thaws it isn't suddenly a walk in the park - but it doesn't MOVE.
-  if (powerTimers.freeze > 0) {
-    lavaSpeed += LAVA_SPEEDUP;
-  } else {
-    lavaSpeed += LAVA_SPEEDUP;
-    lavaY -= lavaSpeed;
-  }
+  // The lava HOLDS STILL in two cases: while a FREEZE power-up is running,
+  // and while you're in a boss fight (so the stable floor really is
+  // stable and the boss gets your full attention). Either way the SPEED
+  // still creeps up quietly underneath, so the moment things un-freeze it
+  // isn't suddenly a walk in the park - the lava just doesn't MOVE.
+  const lavaHeld = powerTimers.freeze > 0 || (boss && boss.dying === 0);
+  lavaSpeed += LAVA_SPEEDUP;
+  if (!lavaHeld) lavaY -= lavaSpeed;
 
   // --- the camera ---
   // The gnome stays put around 60% down the screen; the world slides.
@@ -1817,7 +1888,12 @@ function update() {
   // `y` way down near the lava - check that and we'd throw it away a
   // moment before it was due to build itself back, and ledges would
   // randomly stop returning. It's where it LIVES that decides.
-  platforms = platforms.filter(p => p.homeY < lavaY + 200);
+  // The boss arena floor is the one exception to the homeY rule: it never
+  // rebuilds, so once it's tumbled well below the screen we just drop it
+  // rather than keeping it falling forever.
+  platforms = platforms.filter(p =>
+    p.homeY < lavaY + 200 &&
+    !(p.noRegrow && p.y > cameraY + H + 300));
 
   // --- cooked? ---
   // A shield can't save you from being IN the lava, so this one passes
@@ -1985,6 +2061,22 @@ function drawLedge(p, screenY) {
     // Fading back IN. Appearing instantly would look like a glitch;
     // half a second of shimmer reads as "it rebuilt itself".
     ctx.globalAlpha = 1 - p.fadeIn / 14;
+  }
+
+  // THE BOSS ARENA FLOOR gets its own gold-lit look (while it's still
+  // solid), so it reads as "stand here and fight the boss" rather than a
+  // normal ledge that's about to crumble. Once it's falling it drops the
+  // special treatment and tumbles away grey, like any other ledge.
+  if (p.arena && !p.falling) {
+    const pulse = 0.5 + 0.5 * Math.sin(shakeClock * 0.12);
+    ctx.fillStyle = "#7a5a2a";
+    ctx.fillRect(x, sy, p.w, 14);
+    ctx.fillStyle = "#3a2c14";
+    ctx.fillRect(x, sy + 10, p.w, 6);       // shadow under the lip
+    ctx.fillStyle = "rgba(255, 214, 130, " + (0.55 + pulse * 0.4) + ")";
+    ctx.fillRect(x, sy, p.w, 3);            // a glowing top edge that breathes
+    ctx.restore();
+    return;
   }
 
   // Redden as it strains. Mixing from grey towards a hot orange, so it
