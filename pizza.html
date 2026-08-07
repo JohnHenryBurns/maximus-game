@@ -204,8 +204,22 @@
   // and fills in again while you're inside making the pizza.
   const FIELD = { x: 0, z: -78, w: 130, d: 76 };
   const WHEAT_REGROW = 11;     // seconds for one stalk to come back
-  const CUT_TIME = 0.85;       // how long the cutting takes
-  const CARRY_MAX = 6;
+  const CUT_TIME = 0.55;       // how long one swing takes
+  const CARRY_MAX = 9;         // three doughs' worth before you head back
+
+  // HOW WIDE THE SWING IS.
+  //
+  // A scythe doesn't pick one stalk at a time - it SWEEPS. The first
+  // version cut a single stalk per swing, which meant three separate
+  // stands-still-holding-E for one lump of dough, and that is exactly
+  // as boring as it sounds. Now one swing takes everything inside this
+  // circle, and a better scythe makes the circle wider as well as the
+  // swing quicker.
+  // The stalks stand about ten apart, so a circle this wide catches
+  // two or three of them - a swing you can feel, not one that empties
+  // your arms' worth in a single tap. Fifteen caught SEVEN, which
+  // filled you up in one go and deleted the job entirely.
+  function cutReach() { return 9 + upgrades.scythe.bought * 3; }
 
   let wheatStalks = [];
   function plantField() {
@@ -254,6 +268,7 @@
   let ovenPizza = null;        // the pizza IN the oven, if any
   let order = null, orderWait = 3;
   let says = '', saysT = 0;
+  let swingFlash = 0;    // the arc that flashes when he swings
   function say(words) { says = words; saysT = 3.0; }
 
   const upgrades = {
@@ -323,7 +338,7 @@
 
   // The nearest stalk still standing, if you're close enough to cut it.
   function nearestStalk() {
-    let best = null, bestD = 13;
+    let best = null, bestD = cutReach();
     for (const s of wheatStalks) {
       if (!s.ready) continue;
       const d = Math.hypot(player.x - s.x, player.z - s.z);
@@ -479,6 +494,7 @@
   function update(dt) {
     clock += dt;
     if (saysT > 0) saysT -= dt;
+    if (swingFlash > 0) swingFlash -= dt * 2.6;
 
     if (!shopOpen) {
       // ---- WALKING --------------------------------------------------
@@ -517,14 +533,26 @@
         if (keys['e']) {
           player.cutting += dt * cutSpeed();
           if (player.cutting >= CUT_TIME) {
-            const st = nearestStalk();
             player.cutting = 0;
-            if (st) {
+
+            // THE WHOLE SWATHE. Every standing stalk inside the swing,
+            // not just the closest one - and it stops at what you can
+            // actually carry, so nothing is cut and wasted.
+            let took = 0;
+            const reach = cutReach();
+            for (const st of wheatStalks) {
+              if (!st.ready) continue;
+              if (player.carryWheat + took >= CARRY_MAX) break;
+              if (Math.hypot(player.x - st.x, player.z - st.z) > reach) continue;
               st.ready = false;
               st.back = WHEAT_REGROW;
-              player.carryWheat = Math.min(CARRY_MAX, player.carryWheat + 1);
-              say('wheat: ' + player.carryWheat + ' / ' + CARRY_MAX);
+              took++;
             }
+            player.carryWheat += took;
+            swingFlash = 1;
+            say(took > 1 ? 'cut ' + took + ' at once!  wheat ' + player.carryWheat +
+                           ' / ' + CARRY_MAX
+                         : 'wheat: ' + player.carryWheat + ' / ' + CARRY_MAX);
           }
         } else {
           player.cutting = 0;      // let go and you stop cutting
@@ -727,6 +755,19 @@
         const a = i * 1.1;
         bit(Math.cos(a) * 1.8, 13.4 + i * 0.5, -6 + Math.sin(a) * 1.4,
             2, 7, 2, WHEATC);
+      }
+    }
+
+    // THE SWEEP. A ring of little marks showing exactly how far the
+    // swing reaches, so the scythe upgrade is something you can SEE
+    // rather than a number you have to trust.
+    if (player.cutting > 0 || swingFlash > 0) {
+      const r = cutReach();
+      const bright = swingFlash > 0 ? 1 : 0.45;
+      for (let i = 0; i < 16; i++) {
+        const a = i / 16 * Math.PI * 2;
+        addBox(player.x + Math.cos(a) * r, 1.2, player.z + Math.sin(a) * r,
+               2.6, 0.8, 2.6, shade([255, 226, 120], bright));
       }
     }
 
