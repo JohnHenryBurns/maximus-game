@@ -382,15 +382,17 @@ const BIG_TIME     = 15 * 60;   // mushroom: you're huge
 const PIERCE_TIME  = 8  * 60;   // shots punch through everything
 const BIGSHOT_TIME = 8  * 60;   // giant cannon rounds
 const PSYCH_TIME   = 9  * 60;   // the screen goes wooOOoo
-const INVINCIBLE_TIME = 8 * 60; // nothing can hurt you
-const RABBIT_TIME  = 12 * 60;   // you're a bunny that jumps twice as high
-const SNAIL_TIME   = 12 * 60;   // you're a slow snail (but still springy)
+const INVINCIBLE_TIME  = 8 * 60;  // nothing can hurt you
+const RABBIT_TIME      = 12 * 60; // you're a bunny that jumps twice as high
+const SNAIL_TIME       = 12 * 60; // you're a slow snail (but still springy)
+const GRASSHOPPER_TIME = 12 * 60; // you're a grasshopper: springy & light-footed
 
 // A rabbit jumps twice as HIGH. In a platformer the peak of a jump is the
 // launch speed times itself, divided by gravity (height goes up with the
 // SQUARE of the speed). So to double the height we don't double the speed
 // - we multiply it by the square root of 2. Neat bit of real physics.
 const RABBIT_JUMP  = Math.SQRT2;   // ~1.414 -> exactly double the height
+const GRASSHOPPER_JUMP = 1.5;      // a springier hop, but not as high as a rabbit
 const SNAIL_SPEED  = 0.45;         // a snail runs at under half speed
 
 const RAPID_GAP    = 4;         // frames between shots while rapid-firing
@@ -507,7 +509,7 @@ function newGame() {
   powerups    = [];
   powerTimers = { rapid: 0, spread: 0, freeze: 0, rockets: 0,
                   big: 0, pierce: 0, bigshot: 0, psych: 0,
-                  invincible: 0, rabbit: 0, snail: 0 };
+                  invincible: 0, rabbit: 0, snail: 0, grasshopper: 0 };
   shield      = false;
   invuln      = 0;
   doubleJumps = 0;
@@ -1131,7 +1133,8 @@ const POWERUP_KINDS = [
   { kind: "psych",      weight: 7,  emoji: "🌀", color: "#ff8ae0", title: "PSYCHEDELIC",  desc: "whooOOoaaa, man" },
   { kind: "invincible", weight: 6,  emoji: "⭐", color: "#fff27a", title: "INVINCIBLE",   desc: "nothing can hurt you!" },
   { kind: "rabbit",     weight: 9,  emoji: "🐰", color: "#f4c9ff", title: "BUNNY HOP",    desc: "a rabbit that jumps twice as high!" },
-  { kind: "snail",      weight: 8,  emoji: "🐌", color: "#bfe3a0", title: "SNAIL",        desc: "slooow... but you still spring high" },
+  { kind: "snail",      weight: 8,  emoji: "🐌", color: "#bfe3a0", title: "SNAIL",        desc: "slow, but ledges never crumble" },
+  { kind: "grasshopper", weight: 9, emoji: "🦗", color: "#a8e05f", title: "GRASSHOPPER",  desc: "1.5x hop, and ledges don't crumble!" },
 ];
 
 function pickPowerupKind() {
@@ -1358,8 +1361,17 @@ function applyPowerup(kind) {
   if (kind === "bigshot")    powerTimers.bigshot = BIGSHOT_TIME;
   if (kind === "psych")      powerTimers.psych   = PSYCH_TIME;
   if (kind === "invincible") powerTimers.invincible = INVINCIBLE_TIME;
-  if (kind === "rabbit")   { powerTimers.rabbit = RABBIT_TIME; powerTimers.snail = 0; }
-  if (kind === "snail")    { powerTimers.snail  = SNAIL_TIME;  powerTimers.rabbit = 0; }
+  // The three animal shapes are one-at-a-time: grabbing one drops the
+  // others, so you're never a rabbit-snail-grasshopper all at once.
+  if (kind === "rabbit")      setForm("rabbit",      RABBIT_TIME);
+  if (kind === "snail")       setForm("snail",       SNAIL_TIME);
+  if (kind === "grasshopper") setForm("grasshopper", GRASSHOPPER_TIME);
+}
+
+// Switch on ONE animal form and switch the other two off.
+function setForm(which, time) {
+  powerTimers.rabbit = powerTimers.snail = powerTimers.grasshopper = 0;
+  powerTimers[which] = time;
 }
 
 // BUILD A BULLET, stamping on whatever gun upgrades are running right now:
@@ -1430,13 +1442,17 @@ const BOSS_NAMES = {
 };
 // How fast each one slides sideways.
 const BOSS_SPEED = { golem: 1.4, dragon: 3.4, blob: 2.2, skull: 1.4, spider: 3.0, ghost: 2.4 };
+// A per-boss health tweak. Most are 1 (the normal amount); the skull was
+// too tough, so it gets 0.75 - a noticeably shorter fight to match its
+// eased-off attacks.
+const BOSS_HP_MULT = { skull: 0.75 };
 
 function spawnBoss(s) {
   // Stage 5 -> the 1st boss, stage 10 -> the 2nd, and so on, wrapping back
   // round to the start once you've met all six.
   const which = (s / BOSS_STAGE - 1) % BOSS_TYPES.length;
   const type = BOSS_TYPES[which];
-  const hp = BOSS_BASE_HP + s * BOSS_HP_PER_STAGE;
+  const hp = Math.round((BOSS_BASE_HP + s * BOSS_HP_PER_STAGE) * (BOSS_HP_MULT[type] || 1));
 
   boss = {
     type: type,
@@ -1510,7 +1526,9 @@ function updateBoss() {
     // Glides smoothly back and forth on a sine wave rather than bouncing
     // off walls, and rains a fan of flames down the middle.
     boss.x = W / 2 + Math.sin(boss.t * 0.02) * 150;
-    if (boss.t >= boss.nextAttack) { skullAttack(); boss.nextAttack = boss.t + 75; }
+    // Eased off: it used to spit every 75 frames, which was relentless.
+    // 115 gives you room to breathe and reposition between volleys.
+    if (boss.t >= boss.nextAttack) { skullAttack(); boss.nextAttack = boss.t + 115; }
 
   } else if (boss.type === "spider") {
     // Scuttles fast side to side and drops two sticky web globs straight
@@ -1578,12 +1596,14 @@ function blobAttack() {
   }
 }
 
-// The flaming skull spits three flames in a downward fan.
+// The flaming skull spits three flames in a downward fan. Eased off: the
+// flames are a touch slower and closer together than they were, so there's
+// a clear gap to stand in instead of a wall of fire.
 function skullAttack() {
   for (let i = -1; i <= 1; i++) {
     bossShots.push({
       x: boss.x, y: boss.y + 18,
-      vx: i * 1.8, vy: 4.6,
+      vx: i * 1.5, vy: 3.8,
       gravity: 0.05, kind: "fire", spin: 0, r: 11,
     });
   }
@@ -1722,10 +1742,13 @@ function update() {
   // You can only jump if your feet are actually on something.
   if (jumpBuffer > 0) jumpBuffer--;
 
-  // A RABBIT springs twice as high; everyone else (snail included!) jumps
-  // the normal amount. We work the jump strength out once here and reuse
-  // it for both the ground jump and the double jump.
-  const jumpPower = JUMP_POWER * (powerTimers.rabbit > 0 ? RABBIT_JUMP : 1);
+  // How springy is this jump? A RABBIT doubles the height, a GRASSHOPPER
+  // is 1.5x; a snail (and everyone else) jumps the normal amount. Worked
+  // out once here and reused for both the ground jump and the double jump.
+  let jumpMult = 1;
+  if (powerTimers.rabbit > 0)      jumpMult = RABBIT_JUMP;
+  else if (powerTimers.grasshopper > 0) jumpMult = GRASSHOPPER_JUMP;
+  const jumpPower = JUMP_POWER * jumpMult;
 
   const wantsJump = keys[" "] || keys["arrowup"] || keys["w"] || jumpBuffer > 0;
   if (wantsJump && gnome.onGround) {
@@ -1812,7 +1835,13 @@ function update() {
   // The timer belongs to the LEDGE, not to the gnome, and it never gets
   // reset. Hop off and back on and you pick up where you left off - so
   // bouncing on the spot buys you nothing. The only way up is up.
-  if (standingOn && !standingOn.safe) {
+  //
+  // ...UNLESS you're light on your feet: a GRASSHOPPER or a SNAIL is
+  // dainty enough that ledges don't count down or crumble under them at
+  // all. That's the snail's consolation prize for being so slow, and half
+  // the grasshopper's charm.
+  const lightFoot = powerTimers.grasshopper > 0 || powerTimers.snail > 0;
+  if (standingOn && !standingOn.safe && !lightFoot) {
     standingOn.stood++;
     if (standingOn.stood > CRUMBLE_TIME) standingOn.falling = true;
   }
@@ -2705,6 +2734,39 @@ function drawSnailBody() {
   }
 }
 
+// THE GRASSHOPPER: a green bug standing up, with big bent hind legs built
+// for hopping and two waggly antennae. Feet at the origin, facing right.
+function drawGrasshopperBody() {
+  ctx.strokeStyle = "#6fa62f";
+  ctx.lineWidth = 3;
+  ctx.lineCap = "round";
+  // the big springy hind leg: thigh up-and-back, then shin down to a foot
+  ctx.beginPath();
+  ctx.moveTo(-3, -9); ctx.lineTo(-12, -21); ctx.lineTo(-15, -3);
+  ctx.stroke();
+  // two little front legs
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(3, -9); ctx.lineTo(9, -2); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(1, -9); ctx.lineTo(6, -1); ctx.stroke();
+
+  // long green body, tilted
+  ctx.fillStyle = "#8ec63f";
+  ctx.beginPath();
+  ctx.ellipse(-1, -15, 11, 6.5, -0.18, 0, Math.PI * 2);
+  ctx.fill();
+  // head at the front
+  ctx.beginPath(); ctx.arc(9, -19, 6, 0, Math.PI * 2); ctx.fill();
+  // a folded wing line along the body
+  ctx.strokeStyle = "#6fa62f"; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(-10, -17); ctx.lineTo(4, -13); ctx.stroke();
+  // eye
+  ctx.fillStyle = "#123"; ctx.beginPath(); ctx.arc(11, -20, 2, 0, Math.PI * 2); ctx.fill();
+  // antennae
+  ctx.strokeStyle = "#6fa62f"; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(13, -23); ctx.lineTo(21, -31); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(12, -24); ctx.lineTo(17, -33); ctx.stroke();
+}
+
 // THE INVINCIBLE STAR AURA. A pulsing rainbow glow with a few sparkles
 // orbiting round him, drawn in screen coordinates BEHIND the body. The
 // colour spins through the rainbow using HSL, where the first number is
@@ -2757,9 +2819,10 @@ function drawGnome(screenY) {
   // WHICH SHAPE is he right now - a snail, a rabbit, or his usual self?
   // Each is drawn with feet at 0, so everything after here (the pistol!)
   // works the same whichever one it was.
-  if (powerTimers.snail > 0)       drawSnailBody();
-  else if (powerTimers.rabbit > 0) drawRabbitBody();
-  else                             drawGnomeBody();
+  if (powerTimers.snail > 0)            drawSnailBody();
+  else if (powerTimers.rabbit > 0)      drawRabbitBody();
+  else if (powerTimers.grasshopper > 0) drawGrasshopperBody();
+  else                                  drawGnomeBody();
 
   // THE PISTOL. Drawn after the hat so it sits in front of him.
   // Because we already flipped the whole gnome with ctx.scale further up,
@@ -3330,6 +3393,7 @@ function drawPowerHud() {
     { t: powerTimers.invincible, max: INVINCIBLE_TIME, e: "⭐", c: "#fff27a" },
     { t: powerTimers.rabbit,  max: RABBIT_TIME,  e: "🐰", c: "#f4c9ff" },
     { t: powerTimers.snail,   max: SNAIL_TIME,   e: "🐌", c: "#bfe3a0" },
+    { t: powerTimers.grasshopper, max: GRASSHOPPER_TIME, e: "🦗", c: "#a8e05f" },
   ];
 
   ctx.save();
