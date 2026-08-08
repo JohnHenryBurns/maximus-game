@@ -33,7 +33,7 @@
 <body>
 
 <canvas id="screen"></canvas>
-<div id="hud">W A S D or ARROWS to swim &nbsp;&nbsp; SPACE to leap</div>
+<div id="hud">W S to swim &nbsp;&nbsp; A D to change lane &nbsp;&nbsp; SPACE to leap</div>
 
 <script>
 // ===================================================================
@@ -209,6 +209,25 @@
     return RIVER_HALF * (currentAt(z) > 1 ? 0.62 : 1);
   }
 
+  // ---- FOUR LANES ----------------------------------------------------
+  //
+  //  The river is four lanes wide and you snap between them instantly.
+  //  That turns steering into CHOOSING - you aren't nudging a fish
+  //  sideways any more, you're picking which channel to take, and you
+  //  can see all four of them at once from up here.
+  //
+  //  Lane centres are worked out from the bank width, so when the river
+  //  narrows into a rapid the four lanes squeeze together with it. One
+  //  function, used by the fish, the rocks, the bears and the lines
+  //  drawn on the water - so a rock "in lane 2" is exactly where lane 2
+  //  is drawn, always.
+  const LANES = 4;
+
+  function laneX(lane, z) {
+    const w = bankAt(z) * 2 / LANES;
+    return (lane - (LANES - 1) / 2) * w;
+  }
+
 
 // -------------------------------------------------------------------
 //  THE FISH
@@ -223,6 +242,7 @@
 
   const fish = {
     x: 0, z: 0, y: 0, vy: 0,
+    lane: 1,                  // which of the four channels you're in
     yaw: 0,
     tail: 0,
     stun: 0,                  // knocked silly by a rock
@@ -254,24 +274,26 @@
     const z = madeTo;
     const half = bankAt(z);
 
-    // ---- ROCKS ------------------------------------------------------
-    // Never right across the river - there is always a way through, and
-    // finding it is the game. A wall you cannot pass isn't difficulty,
-    // it's a dead end.
-    const n = 1 + Math.floor(Math.random() * 3);
-    const gapAt = (Math.random() * 2 - 1) * half * 0.6;
-    for (let i = 0; i < n; i++) {
-      let x = (Math.random() * 2 - 1) * half;
-      if (Math.abs(x - gapAt) < 26) continue;        // leave the gap open
-      rocks.push({ x: x, z: z + (Math.random() - 0.5) * 60,
-                   r: 9 + Math.random() * 11, spin: Math.random() * 6 });
+    // ---- ROCKS, ONE TO A LANE ---------------------------------------
+    // Never all four - at least one lane is always open, and finding it
+    // is the game. A wall you cannot pass isn't difficulty, it's a dead
+    // end. With lanes this is easy to guarantee instead of hoping.
+    const open = Math.floor(Math.random() * LANES);
+    for (let l = 0; l < LANES; l++) {
+      if (l === open) continue;
+      if (Math.random() < 0.45) continue;            // and often fewer
+      rocks.push({ lane: l, z: z + (Math.random() - 0.5) * 30,
+                   r: 9 + Math.random() * 8, spin: Math.random() * 6 });
     }
 
     // ---- BEARS ------------------------------------------------------
     // Stood on a bank, swiping at whatever comes near their side.
     if (Math.random() < 0.42) {
       const side = Math.random() < 0.5 ? -1 : 1;
-      bears.push({ x: side * (half + 16), z: z, side: side,
+      // A bear can only reach the lane nearest its own bank. Which
+      // means a bear doesn't block the river, it CLOSES A LANE - and
+      // that's a much better thing for it to do.
+      bears.push({ lane: side < 0 ? 0 : LANES - 1, z: z, side: side,
                    swipe: 0, cool: 1 + Math.random() * 2, got: false });
     }
 
@@ -279,7 +301,7 @@
     // Circling. They only ever take a fish that's OUT OF THE WATER, so
     // leaping is a real decision and not a free button.
     if (Math.random() < 0.3) {
-      eagles.push({ x: (Math.random() * 2 - 1) * half, z: z,
+      eagles.push({ lane: Math.floor(Math.random() * LANES), z: z,
                     a: Math.random() * 6, dive: 0 });
     }
   }
@@ -310,7 +332,7 @@
   function reset() {
     fish.x = 0; fish.z = 0; fish.y = 0; fish.vy = 0;
     fish.yaw = 0; fish.tail = 0; fish.stun = 0;
-    fish.leaping = false; fish.caught = 0;
+    fish.leaping = false; fish.caught = 0; fish.lane = 1;
     dist = 0; clock = 0; deadWhy = '';
     rocks = []; bears = []; eagles = []; bits = [];
     madeTo = 120;
@@ -326,6 +348,16 @@
 // -------------------------------------------------------------------
 
   const keys = {};
+
+  // INSTANTLY. No sliding, no animation to wait through - press it and
+  // you're there, which is the whole appeal of lanes.
+  function goLane(dir) {
+    if (state !== 'swim' || fish.stun > 0) return;
+    const want = clamp(fish.lane + dir, 0, LANES - 1);
+    if (want === fish.lane) return;
+    fish.lane = want;
+    splash(fish.x, fish.z, 6, [[210, 235, 245], [170, 210, 228]]);
+  }
 
   function leap() {
     if (state === 'ready') { state = 'swim'; return; }
@@ -344,29 +376,26 @@
     const strong = currentAt(fish.z);
 
     // ---- SWIMMING ----------------------------------------------------
-    let mx = 0, mz = 0;
-    if (keys['a'] || keys['arrowleft'])  mx -= 1;
-    if (keys['d'] || keys['arrowright']) mx += 1;
+    // ---- FORWARD AND BACK, and that's all the steering there is ------
+    let mz = 0;
     if (keys['w'] || keys['arrowup'])    mz += 1;
     if (keys['s'] || keys['arrowdown'])  mz -= 1;
+    if (stick.on && -stick.dy / STICK_MAX > 0.25) mz += 1;
+    if (stick.on && -stick.dy / STICK_MAX < -0.25) mz -= 1;
 
-    if (stick.on && stick.push > 0.08) {
-      mx += stick.dx / STICK_MAX;
-      mz += -stick.dy / STICK_MAX;
-    }
-
-    const len = Math.hypot(mx, mz);
-    if (len > 0 && fish.stun <= 0) {
-      // Divide by the length, or swimming diagonally would be 1.4 times
-      // faster than swimming straight.
-      mx /= len; mz /= len;
-      fish.x += mx * SWIM * dt;
+    if (mz !== 0 && fish.stun <= 0) {
       fish.z += mz * SWIM * dt;
-      fish.yaw = Math.atan2(mx, mz);
       fish.tail += dt * 16;
     } else {
       fish.tail += dt * 5;               // still flicking, just drifting
     }
+
+    // ---- AND THE LANE YOU'RE IN --------------------------------------
+    // Snapped, not slid. The fish IS wherever its lane is, worked out
+    // fresh every frame - so when the river narrows into a rapid the
+    // fish is carried in with it rather than ending up on the bank.
+    fish.x = laneX(fish.lane, fish.z);
+    fish.yaw = 0;
 
     // ---- THE WATER PUSHING BACK --------------------------------------
     // In the air you're out of the current - that's what a leap is FOR.
@@ -390,16 +419,15 @@
       }
     }
 
-    // ---- THE BANKS -----------------------------------------------------
-    const half = bankAt(fish.z);
-    fish.x = clamp(fish.x, -half + 5, half - 5);
-
     // ---- ROCKS ---------------------------------------------------------
     // Only if you're IN the water. Sail over them if you're in the air.
     if (!fish.leaping) {
       for (const r of rocks) {
-        if (Math.abs(r.z - fish.z) > 30) continue;
-        if (Math.hypot(r.x - fish.x, r.z - fish.z) > r.r + 6) continue;
+        // SAME LANE, and close along the river. With lanes the whole
+        // question becomes "are we in the same channel" - no measuring
+        // across, no near-misses that were really hits.
+        if (r.lane !== fish.lane) continue;
+        if (Math.abs(r.z - fish.z) > r.r + 8) continue;
         if (fish.stun > 0) continue;
         fish.stun = 0.7;
         fish.z -= 14;
@@ -413,16 +441,14 @@
       if (b.swipe > 0) b.swipe -= dt;
       b.cool -= dt;
 
-      const near = Math.abs(b.z - fish.z) < 26 &&
-                   Math.abs(b.x - fish.x) < 40 &&
-                   Math.sign(fish.x) === b.side;
+      const near = Math.abs(b.z - fish.z) < 26 && b.lane === fish.lane;
       if (near && b.cool <= 0 && !b.got) {
         b.cool = 1.4;
         b.swipe = 0.35;
         // A bear can't reach a fish in the air. Leaping past a bear is
         // the right answer, and it's the same button that gets you
         // eaten by an eagle - so you have to pick.
-        if (!fish.leaping && Math.abs(b.x - fish.x) < 30) {
+        if (!fish.leaping) {
           b.got = true;
           state = 'dead';
           deadWhy = 'A BEAR GOT YOU';
@@ -435,14 +461,13 @@
     // ---- EAGLES -----------------------------------------------------------
     for (const e of eagles) {
       e.a += dt * 1.5;
-      // They circle over their patch of river, and only ever stoop on a
-      // fish that has left the water.
-      const cxx = e.x + Math.cos(e.a) * 34;
-      const czz = e.z + Math.sin(e.a) * 34;
-      e.cx = cxx; e.cz = czz;
+      // They hold station over ONE lane, drifting up and down it, and
+      // only ever stoop on a fish that has left the water.
+      e.cz = e.z + Math.sin(e.a) * 30;
+      e.cx = laneX(e.lane, e.cz);
 
-      if (fish.leaping && fish.y > 6 &&
-          Math.hypot(cxx - fish.x, czz - fish.z) < 26) {
+      if (fish.leaping && fish.y > 6 && e.lane === fish.lane &&
+          Math.abs(e.cz - fish.z) < 26) {
         e.dive = 1;
         state = 'dead';
         deadWhy = 'AN EAGLE TOOK YOU';
@@ -523,11 +548,35 @@
     }
   }
 
+  // The four channels, marked on the water. You can't choose a lane you
+  // can't see, and these come from the same laneX() everything else
+  // uses - so the line you aim at is the line the rocks sit on.
+  function drawLanes() {
+    const TILE = 30;
+    const cz = Math.round(fish.z / TILE);
+    for (let gz = cz - 3; gz <= cz + 11; gz++) {
+      const z = gz * TILE;
+      for (let l = 0; l <= LANES; l++) {
+        const w = bankAt(z) * 2 / LANES;
+        const x = laneX(0, z) - w / 2 + l * w;
+        addBox(x, 0.25, z, 1.2, 1, TILE * 0.62, [150, 200, 220]);
+      }
+    }
+
+    // And a brighter pair of marks under the fish, so which lane you're
+    // in is never a question.
+    for (const s2 of [-1, 1]) {
+      const w = bankAt(fish.z) * 2 / LANES;
+      addBox(fish.x + s2 * w / 2, 0.4, fish.z, 2, 1.2, 26, [225, 245, 252]);
+    }
+  }
+
   function drawRocks() {
     for (const r of rocks) {
       if (r.z < fish.z - 120 || r.z > fish.z + 700) continue;
-      addBox(r.x, 3, r.z, r.r * 1.7, 8, r.r * 1.7, ROCK, r.spin);
-      addBox(r.x, 6, r.z, r.r * 1.1, 5, r.r * 1.1, shade(ROCK, 1.18), r.spin);
+      const x = laneX(r.lane, r.z);
+      addBox(x, 3, r.z, r.r * 1.7, 8, r.r * 1.7, ROCK, r.spin);
+      addBox(x, 6, r.z, r.r * 1.1, 5, r.r * 1.1, shade(ROCK, 1.18), r.spin);
     }
   }
 
@@ -535,7 +584,8 @@
     for (const b of bears) {
       if (b.z < fish.z - 120 || b.z > fish.z + 700) continue;
       const lean = b.swipe > 0 ? 16 : 0;
-      const px = b.x - b.side * lean;
+      // Stood on its own bank, reaching for the lane it guards.
+      const px = b.side * (bankAt(b.z) + 16) - b.side * lean;
 
       addBox(px, 7, b.z, 20, 14, 26, FUR);                       // body
       addBox(px - b.side * 4, 15, b.z + 11, 12, 11, 12, shade(FUR, 1.12));  // head
@@ -549,8 +599,8 @@
   function drawEagles() {
     for (const e of eagles) {
       if (e.z < fish.z - 120 || e.z > fish.z + 700) continue;
-      const x = e.cx !== undefined ? e.cx : e.x;
       const z = e.cz !== undefined ? e.cz : e.z;
+      const x = e.cx !== undefined ? e.cx : laneX(e.lane, z);
       const hi = 48 + Math.sin(e.a * 1.3) * 6;
 
       // The shadow on the water is the warning. It's directly under the
@@ -599,7 +649,7 @@
 // -------------------------------------------------------------------
 
   const STICK_MAX = 52;
-  const stick = { on: false, ox: 0, oy: 0, dx: 0, dy: 0, push: 0 };
+  const stick = { on: false, ox: 0, oy: 0, dx: 0, dy: 0, push: 0, flicked: false };
   const roles = {};
   let touchMode = false;
 
@@ -695,8 +745,8 @@
 //  CONTROLS
 // -------------------------------------------------------------------
 
-  const HELP_KEYS  = 'W A S D or ARROWS to swim &nbsp;&nbsp; SPACE to leap';
-  const HELP_TOUCH = 'DRAG to swim &nbsp;&nbsp; LEAP to jump the rapids';
+  const HELP_KEYS  = 'W S to swim &nbsp;&nbsp; A D to change lane &nbsp;&nbsp; SPACE to leap';
+  const HELP_TOUCH = 'DRAG up to swim &nbsp;&nbsp; FLICK sideways for a lane &nbsp;&nbsp; LEAP to jump';
 
   function setHelpLine() {
     const el = document.getElementById('hud');
@@ -706,6 +756,13 @@
   window.addEventListener('keydown', function (e) {
     const k = e.key.toLowerCase();
     if (k === ' ' || k === 'space') { leap(); e.preventDefault(); return; }
+
+    // ONE LANE PER PRESS, not per frame. Without the `keys[k]` guard,
+    // holding left would fly you across all four lanes in a twentieth
+    // of a second and you could never pick the second one.
+    if ((k === 'a' || k === 'arrowleft')  && !keys[k]) goLane(-1);
+    if ((k === 'd' || k === 'arrowright') && !keys[k]) goLane(1);
+
     keys[k] = true;
     if (e.key.startsWith('Arrow')) e.preventDefault();
   });
@@ -738,9 +795,19 @@
         if (len > STICK_MAX) { dx *= STICK_MAX / len; dy *= STICK_MAX / len; }
         stick.dx = dx; stick.dy = dy;
         stick.push = Math.min(1, len / STICK_MAX);
+
+        // A FLICK SIDEWAYS IS ONE LANE. The thumb has to come back
+        // towards the middle before it moves you again - otherwise
+        // holding it over slides you across all four lanes at once,
+        // which is the same bug the keyboard guard prevents.
+        const sideways = stick.dx / STICK_MAX;
+        if (!stick.flicked && sideways >  0.5) { goLane(1);  stick.flicked = true; }
+        if (!stick.flicked && sideways < -0.5) { goLane(-1); stick.flicked = true; }
+        if (Math.abs(sideways) < 0.25) stick.flicked = false;
       } else {
         if (roles[t.identifier] === 'swim') {
           stick.on = false; stick.push = 0; stick.dx = 0; stick.dy = 0;
+          stick.flicked = false;
         }
         delete roles[t.identifier];
       }
@@ -778,6 +845,7 @@
 
     faces = [];
     drawRiver();
+    drawLanes();
     drawRocks();
     drawBears();
     drawEagles();
