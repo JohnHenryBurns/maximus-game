@@ -395,6 +395,11 @@ const RABBIT_JUMP  = Math.SQRT2;   // ~1.414 -> exactly double the height
 const GRASSHOPPER_JUMP = 1.5;      // a springier hop, but not as high as a rabbit
 const SNAIL_SPEED  = 0.45;         // a snail runs at under half speed
 
+// BALLOONS. They carry you steadily UPWARD until they pop - either when an
+// enemy hits them (they're a shield too) or when the timer runs out.
+const BALLOON_TIME  = 330;         // ~5.5 seconds of floating before they pop
+const BALLOON_FLOAT = 9;           // steady rise speed - a bit under the 13.4 jump launch
+
 const RAPID_GAP    = 4;         // frames between shots while rapid-firing
 const ROCKET_THRUST = 0.92;     // how hard the rocket boots push up
 const BIG_SCALE    = 1.8;       // how many times bigger the mushroom makes you
@@ -443,6 +448,7 @@ let doubleJumps;   // how many mid-air jumps you've got saved up
 let usedAirJump;   // have you already spent your double-jump this leap?
 let jumpEdge;      // did a jump button get FRESHLY pressed this frame?
 let itemPopups;    // the little "you got X" notes that fade away
+let balloonBurst;  // a little pop effect when your balloons go, or null
 
 // THE HIGH SCORE. This one is special: it does NOT reset when you start a
 // new game, and it's saved in the browser so it's still there tomorrow.
@@ -509,13 +515,14 @@ function newGame() {
   powerups    = [];
   powerTimers = { rapid: 0, spread: 0, freeze: 0, rockets: 0,
                   big: 0, pierce: 0, bigshot: 0, psych: 0,
-                  invincible: 0, rabbit: 0, snail: 0, grasshopper: 0 };
+                  invincible: 0, rabbit: 0, snail: 0, grasshopper: 0, balloon: 0 };
   shield      = false;
   invuln      = 0;
   doubleJumps = 0;
   usedAirJump = false;
   jumpEdge    = false;
   itemPopups  = [];
+  balloonBurst = null;
   beatBest    = false;
   coins       = 0;
   stage       = 1;
@@ -1135,6 +1142,7 @@ const POWERUP_KINDS = [
   { kind: "rabbit",     weight: 9,  emoji: "🐰", color: "#f4c9ff", title: "BUNNY HOP",    desc: "a rabbit that jumps twice as high!" },
   { kind: "snail",      weight: 8,  emoji: "🐌", color: "#bfe3a0", title: "SNAIL",        desc: "slow, but ledges never crumble" },
   { kind: "grasshopper", weight: 9, emoji: "🦗", color: "#a8e05f", title: "GRASSHOPPER",  desc: "1.5x hop, and ledges don't crumble!" },
+  { kind: "balloon",    weight: 9,  emoji: "🎈", color: "#ff8fb0", title: "BALLOONS",     desc: "float up! they pop when hit" },
 ];
 
 function pickPowerupKind() {
@@ -1261,6 +1269,14 @@ function killGnome(shieldable) {
   // so you can't just stand still and win.
   if (shieldable && powerTimers.invincible > 0) return;
 
+  // BALLOONS take a hit for you and pop, just like a shield does. (They
+  // don't save you from the lava either - same rule as everything else.)
+  if (shieldable && powerTimers.balloon > 0) {
+    popBalloons();
+    invuln = INVULN_TIME;
+    return;
+  }
+
   if (shieldable && shield) {
     shield = false;                    // pop! the bubble is spent
     invuln = INVULN_TIME;              // and you get a breather so you don't die instantly
@@ -1291,6 +1307,30 @@ function deathSound() {
   g.gain.exponentialRampToValueAtTime(0.0001, t + 0.58);
   o.connect(g); g.connect(c.destination);
   o.start(t); o.stop(t + 0.62);
+}
+
+// POP THE BALLOONS. One place for both ways they go - an enemy hit or the
+// timer running out - so the sound and the little burst always match.
+function popBalloons() {
+  powerTimers.balloon = 0;
+  balloonBurst = { x: gnome.x, y: gnome.y - 44, t: 0 };
+  balloonPop();
+}
+
+// A quick "POP!" - a short high blip that snaps downward and dies away
+// fast, which is exactly what a bursting balloon sounds like.
+function balloonPop() {
+  if (!audio.on || audio.muted) return;
+  const c = audio.ctx, t = c.currentTime;
+  const o = c.createOscillator();
+  o.type = "triangle";
+  o.frequency.setValueAtTime(900, t);
+  o.frequency.exponentialRampToValueAtTime(200, t + 0.07);
+  const g = c.createGain();
+  g.gain.setValueAtTime(0.3, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.09);
+  o.connect(g); g.connect(c.destination);
+  o.start(t); o.stop(t + 0.1);
 }
 
 // A CHEERFUL LITTLE PICKUP NOISE. Two quick rising notes - the sound of
@@ -1361,6 +1401,7 @@ function applyPowerup(kind) {
   if (kind === "bigshot")    powerTimers.bigshot = BIGSHOT_TIME;
   if (kind === "psych")      powerTimers.psych   = PSYCH_TIME;
   if (kind === "invincible") powerTimers.invincible = INVINCIBLE_TIME;
+  if (kind === "balloon")    powerTimers.balloon    = BALLOON_TIME;
   // The three animal shapes are one-at-a-time: grabbing one drops the
   // others, so you're never a rabbit-snail-grasshopper all at once.
   if (kind === "rabbit")      setForm("rabbit",      RABBIT_TIME);
@@ -1719,9 +1760,17 @@ function update() {
   // Every timed power-up counts down one frame. When it hits zero it's
   // just... zero, and the effect quietly switches itself off wherever it's
   // read below. The banner fades on its own timer too.
+  const hadBalloon = powerTimers.balloon > 0;
   for (const k in powerTimers) if (powerTimers[k] > 0) powerTimers[k]--;
+  // If the balloons just ran out of time (rather than being popped by a
+  // hit), give them the same cheerful pop so it never feels like they
+  // silently vanished.
+  if (hadBalloon && powerTimers.balloon === 0) popBalloons();
   if (invuln > 0) invuln--;
   if (banner && banner.timer > 0) { banner.timer--; if (banner.timer <= 0) banner = null; }
+
+  // Age the little balloon-pop burst and clear it when it's done.
+  if (balloonBurst) { balloonBurst.t++; if (balloonBurst.t > 18) balloonBurst = null; }
 
   // The "you got X" notes age and drop off once their timer runs out.
   for (const pop of itemPopups) pop.timer--;
@@ -1791,11 +1840,20 @@ function update() {
     gnome.onGround = false;
   }
 
-  // --- gravity ---
-  // This is the whole secret of platformers. Every single frame, fall
-  // a tiny bit faster than last frame. That's what makes jumps arc.
-  gnome.vy += GRAVITY;
-  if (gnome.vy > MAX_FALL) gnome.vy = MAX_FALL;
+  // --- gravity (or BALLOONS) ---
+  if (powerTimers.balloon > 0) {
+    // Balloons beat gravity: instead of falling, you ease up to a steady
+    // gentle rise and float up the pole until they pop. Easing toward the
+    // speed (rather than snapping to it) is what makes it feel like being
+    // lifted rather than yanked.
+    gnome.vy += (-BALLOON_FLOAT - gnome.vy) * 0.14;
+    gnome.onGround = false;
+  } else {
+    // This is the whole secret of platformers. Every single frame, fall
+    // a tiny bit faster than last frame. That's what makes jumps arc.
+    gnome.vy += GRAVITY;
+    if (gnome.vy > MAX_FALL) gnome.vy = MAX_FALL;
+  }
 
   // --- actually move ---
   gnome.x += gnome.vx;
@@ -2231,6 +2289,7 @@ function draw() {
   for (const s of bossShots) drawBossShot(s, screenY);
   for (const f of fireballs) drawFireball(f, screenY);
   if (!dead) drawGnome(screenY);
+  drawBalloonBurst(screenY);
   drawLava(screenY);
 
   // A cold blue frost creeps in from the edges while the lava's frozen,
@@ -2862,6 +2921,61 @@ function drawGnome(screenY) {
     ctx.fill();
     ctx.restore();
   }
+
+  // THE BALLOONS. A little bunch bobbing above his head on strings, drawn
+  // in screen coordinates so they don't get flipped when he turns. They
+  // sway gently, and there's a nervous quicker wobble in their last second
+  // so you can see they're about to pop.
+  if (powerTimers.balloon > 0) {
+    ctx.save();
+    const headY = sy - 44 * bigScale;
+    const soon = powerTimers.balloon < 60;
+    const sway = Math.sin(shakeClock * (soon ? 0.5 : 0.08)) * (soon ? 3 : 5);
+    const cols = ["#ff5a6a", "#5aa8ff", "#ffd24a"];
+    for (let i = 0; i < 3; i++) {
+      const off = (i - 1) * 12;
+      const bxp = x + off + sway * (1 + i * 0.08);
+      const byp = headY - 24 - Math.abs(off) * 0.35;
+      // string from his hand up to the balloon
+      ctx.strokeStyle = "rgba(255,255,255,0.45)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x, sy - 34 * bigScale);
+      ctx.lineTo(bxp, byp + 11);
+      ctx.stroke();
+      // the balloon
+      ctx.fillStyle = cols[i];
+      ctx.beginPath(); ctx.ellipse(bxp, byp, 8, 10, 0, 0, Math.PI * 2); ctx.fill();
+      // a shine, and the little knot at the bottom
+      ctx.fillStyle = "rgba(255,255,255,0.5)";
+      ctx.beginPath(); ctx.arc(bxp - 2.5, byp - 3.5, 2, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = cols[i];
+      ctx.beginPath();
+      ctx.moveTo(bxp - 2, byp + 10); ctx.lineTo(bxp + 2, byp + 10); ctx.lineTo(bxp, byp + 13);
+      ctx.closePath(); ctx.fill();
+    }
+    ctx.restore();
+  }
+}
+
+// THE BALLOON POP. A quick starburst of coloured bits where the balloons
+// used to be - drawn for the ~18 frames after they go.
+function drawBalloonBurst(screenY) {
+  if (!balloonBurst) return;
+  const sy = screenY(balloonBurst.y);
+  const k = balloonBurst.t / 18;          // 0 -> 1 over its life
+  const cols = ["#ff5a6a", "#5aa8ff", "#ffd24a", "#a8e05f", "#ff8fb0", "#c9b6ff"];
+  ctx.save();
+  ctx.globalAlpha = 1 - k;
+  for (let i = 0; i < 6; i++) {
+    const a = i * (Math.PI * 2 / 6);
+    const r = 6 + k * 26;
+    ctx.fillStyle = cols[i];
+    ctx.beginPath();
+    ctx.arc(balloonBurst.x + Math.cos(a) * r, sy + Math.sin(a) * r, 3 * (1 - k) + 1, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
 }
 
 // THE CUTE DEATH. When the gnome cops it, he doesn't just vanish - his
@@ -3394,6 +3508,7 @@ function drawPowerHud() {
     { t: powerTimers.rabbit,  max: RABBIT_TIME,  e: "🐰", c: "#f4c9ff" },
     { t: powerTimers.snail,   max: SNAIL_TIME,   e: "🐌", c: "#bfe3a0" },
     { t: powerTimers.grasshopper, max: GRASSHOPPER_TIME, e: "🦗", c: "#a8e05f" },
+    { t: powerTimers.balloon, max: BALLOON_TIME, e: "🎈", c: "#ff8fb0" },
   ];
 
   ctx.save();
