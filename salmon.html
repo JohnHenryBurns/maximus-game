@@ -1,0 +1,784 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>SALMON</title>
+
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#0b1c26">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Salmon">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="icon" href="icon-192.png">
+
+<style>
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: #0b1c26; color: #dff0f6;
+    font-family: system-ui, sans-serif;
+    -webkit-user-select: none; user-select: none;
+    overscroll-behavior: none; touch-action: none;
+  }
+  canvas { display: block; }
+  #hud {
+    position: fixed; left: 0; right: 0; bottom: 6px;
+    text-align: center; font-size: 14px; color: #5e8496;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+
+<canvas id="screen"></canvas>
+<div id="hud">W A S D or ARROWS to swim &nbsp;&nbsp; SPACE to leap</div>
+
+<script>
+// ===================================================================
+//  SALMON
+//
+//  You are a fish going the wrong way up a river, and the river does
+//  not care. The whole game is that one idea: the water is ALWAYS
+//  pushing you back down, so standing still means losing ground. Stop
+//  swimming and you're washed away.
+//
+//  Looking straight down at the river, so you can see its whole width -
+//  which is what the choices are about: which side to pass a rock,
+//  which bank the bear is on, whether the middle is worth the fast
+//  water.
+//
+//  Same box painter as the cavern, the wasteland and the pizza shop:
+//  a list of flat faces, sorted furthest-away-first, filled in order.
+// ===================================================================
+
+  const canvas = document.getElementById('screen');
+  const ctx = canvas.getContext('2d');
+
+  let W = 0, H = 0;
+  function resize() {
+    W = canvas.width  = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+
+// -------------------------------------------------------------------
+//  LOOKING DOWN AT THE RIVER
+// -------------------------------------------------------------------
+//
+//  High up and behind, tilted steeply down, following the fish. It
+//  never turns - upstream is always up the screen. A view that spun
+//  with the fish would make "which bank is the bear on" impossible to
+//  answer at a glance, and that question IS the game.
+
+  const cam = { x: 0, y: 0, z: 0, pitch: -1.02 };
+  // HIGH ENOUGH TO SEE WHAT'S COMING.
+  //
+  // At 96 up and 56 back the fish filled a third of the screen and you
+  // could see about a boat-length of river - which is useless in a game
+  // whose whole point is choosing which side of a rock to take and
+  // which bank the bear is on. You have to be able to READ the river.
+  const CAM_UP = 168, CAM_BACK = 104;
+
+  function focal() { return Math.min(H, W) * 0.82; }
+
+  function project(x, y, z) {
+    const dx = x - cam.x, dy = y - cam.y, dz = z - cam.z;
+    const cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch);
+    const fz = dz * cp + dy * sp;
+    const fy = dy * cp - dz * sp;
+    if (fz < 1) return null;
+    const f = focal() / fz;
+    return { x: W / 2 + dx * f, y: H / 2 - fy * f, depth: fz };
+  }
+
+
+// -------------------------------------------------------------------
+//  BOXES
+// -------------------------------------------------------------------
+
+  let faces = [];
+
+  function shade(rgb, amount) {
+    return [clamp(rgb[0] * amount, 0, 255),
+            clamp(rgb[1] * amount, 0, 255),
+            clamp(rgb[2] * amount, 0, 255)];
+  }
+  function rgbText(c) {
+    return 'rgb(' + (c[0] | 0) + ',' + (c[1] | 0) + ',' + (c[2] | 0) + ')';
+  }
+
+  function addBox(cx, cy, cz, w, h, d, rgb, spin) {
+    spin = spin || 0;
+    const co = Math.cos(spin), si = Math.sin(spin);
+    const hw = w / 2, hh = h / 2, hd = d / 2;
+
+    const pts = [];
+    for (const sx of [-1, 1])
+      for (const sy of [-1, 1])
+        for (const sz of [-1, 1]) {
+          const lx = sx * hw, lz = sz * hd;
+          pts.push(project(cx + lx * co + lz * si, cy + sy * hh,
+                           cz - lx * si + lz * co));
+        }
+    for (const p of pts) if (!p) return;
+
+    const sides = [
+      { pts: [2, 3, 7, 6], light: 1.18 },   // top - we're above it
+      { pts: [0, 1, 5, 4], light: 0.55 },
+      { pts: [0, 2, 6, 4], light: 0.92 },
+      { pts: [1, 3, 7, 5], light: 0.72 },
+      { pts: [0, 1, 3, 2], light: 0.80 },
+      { pts: [4, 5, 7, 6], light: 0.86 }
+    ];
+
+    for (const s of sides) {
+      const p = s.pts.map(function (i) { return pts[i]; });
+      let depth = 0;
+      for (const q of p) depth += q.depth;
+      faces.push({ points: p, depth: depth / 4, colour: rgbText(shade(rgb, s.light)) });
+    }
+  }
+
+  function paint() {
+    faces.sort(function (a, b) { return b.depth - a.depth; });
+    for (const f of faces) {
+      ctx.beginPath();
+      ctx.moveTo(f.points[0].x, f.points[0].y);
+      for (let i = 1; i < f.points.length; i++) ctx.lineTo(f.points[i].x, f.points[i].y);
+      ctx.closePath();
+      ctx.fillStyle = f.colour;
+      ctx.fill();
+    }
+  }
+
+
+// -------------------------------------------------------------------
+//  THE RIVER
+// -------------------------------------------------------------------
+//
+//  Upstream is +z, which is up the screen. The current pushes you the
+//  other way, always, and harder in the rapids.
+
+  const RIVER_HALF = 56;      // how far the water reaches either side
+  const SWIM       = 44;      // how fast you can swim
+  const CURRENT    = 26;      // how hard the water pushes back
+  const RAPID_MUL  = 2.0;     // ...and how much worse a rapid is
+
+  // HOW STRONG THE WATER IS HERE.
+  //
+  // One function, and the drawing, the pushing and the "is this a
+  // rapid" test all ask it - so the white water you can SEE is exactly
+  // the water that's shoving you.
+  function currentAt(z) {
+    // Long smooth stretches with faster runs between them. Two waves at
+    // different lengths, so it never falls into an obvious pattern.
+    const a = Math.sin(z * 0.0032);
+    const b = Math.sin(z * 0.0111 + 1.7);
+    const mix = a * 0.65 + b * 0.35;
+    // 0.55, not 0.35. At 0.35 the river was rapid from about twenty
+    // metres in - so swimming flat out from the start gained ONE metre
+    // a second instead of eighteen, and it felt broken rather than
+    // hard. Rapids have to be stretches you come to, not the default.
+    return mix > 0.55 ? RAPID_MUL : 1;
+  }
+
+  // The banks close in on the rapids, which is what makes them feel
+  // fast and gives the bears somewhere to stand.
+  function bankAt(z) {
+    return RIVER_HALF * (currentAt(z) > 1 ? 0.62 : 1);
+  }
+
+
+// -------------------------------------------------------------------
+//  THE FISH
+// -------------------------------------------------------------------
+
+  // 80, not 46. At 46 a salmon cleared the water by eight units - a
+  // hop, when the whole reason anyone knows what a salmon IS happens to
+  // be the leap. Height comes out as v*v / 2g, so this is about 25.
+  const LEAP_UP   = 80;       // how hard a leap throws you upwards
+  const GRAVITY   = 130;
+  const LEAP_PUSH = 34;       // and how much forward shove it gives
+
+  const fish = {
+    x: 0, z: 0, y: 0, vy: 0,
+    yaw: 0,
+    tail: 0,
+    stun: 0,                  // knocked silly by a rock
+    leaping: false,
+    caught: 0
+  };
+
+  let best = 0;
+  let dist = 0;               // how far upstream, in metres
+  let clock = 0;
+  let state = 'ready';        // 'ready', 'swim', 'dead'
+  let deadWhy = '';
+  let says = '', saysT = 0;
+  function say(w) { says = w; saysT = 2.6; }
+
+
+// -------------------------------------------------------------------
+//  WHAT IS IN THE RIVER
+// -------------------------------------------------------------------
+
+  let rocks = [];
+  let bears = [];
+  let eagles = [];
+  let madeTo = 0;
+  let bits = [];
+
+  function makeMore() {
+    madeTo += 90 + Math.random() * 130;
+    const z = madeTo;
+    const half = bankAt(z);
+
+    // ---- ROCKS ------------------------------------------------------
+    // Never right across the river - there is always a way through, and
+    // finding it is the game. A wall you cannot pass isn't difficulty,
+    // it's a dead end.
+    const n = 1 + Math.floor(Math.random() * 3);
+    const gapAt = (Math.random() * 2 - 1) * half * 0.6;
+    for (let i = 0; i < n; i++) {
+      let x = (Math.random() * 2 - 1) * half;
+      if (Math.abs(x - gapAt) < 26) continue;        // leave the gap open
+      rocks.push({ x: x, z: z + (Math.random() - 0.5) * 60,
+                   r: 9 + Math.random() * 11, spin: Math.random() * 6 });
+    }
+
+    // ---- BEARS ------------------------------------------------------
+    // Stood on a bank, swiping at whatever comes near their side.
+    if (Math.random() < 0.42) {
+      const side = Math.random() < 0.5 ? -1 : 1;
+      bears.push({ x: side * (half + 16), z: z, side: side,
+                   swipe: 0, cool: 1 + Math.random() * 2, got: false });
+    }
+
+    // ---- EAGLES -----------------------------------------------------
+    // Circling. They only ever take a fish that's OUT OF THE WATER, so
+    // leaping is a real decision and not a free button.
+    if (Math.random() < 0.3) {
+      eagles.push({ x: (Math.random() * 2 - 1) * half, z: z,
+                    a: Math.random() * 6, dive: 0 });
+    }
+  }
+
+  function tidy() {
+    const back = fish.z - 260;
+    rocks  = rocks.filter(function (r) { return r.z > back; });
+    bears  = bears.filter(function (b) { return b.z > back; });
+    eagles = eagles.filter(function (e) { return e.z > back; });
+    bits   = bits.filter(function (b) { return b.life > 0; });
+    while (madeTo < fish.z + 900) makeMore();
+  }
+
+  function splash(x, z, n, cols) {
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const p = 14 + Math.random() * 40;
+      bits.push({
+        x: x, y: 2 + Math.random() * 6, z: z,
+        vx: Math.cos(a) * p, vy: 18 + Math.random() * 40, vz: Math.sin(a) * p,
+        size: 1.4 + Math.random() * 3.4,
+        life: 0.5 + Math.random() * 0.6,
+        col: cols[Math.floor(Math.random() * cols.length)]
+      });
+    }
+  }
+
+  function reset() {
+    fish.x = 0; fish.z = 0; fish.y = 0; fish.vy = 0;
+    fish.yaw = 0; fish.tail = 0; fish.stun = 0;
+    fish.leaping = false; fish.caught = 0;
+    dist = 0; clock = 0; deadWhy = '';
+    rocks = []; bears = []; eagles = []; bits = [];
+    madeTo = 120;
+    while (madeTo < 900) makeMore();
+    cam.x = 0; cam.z = -CAM_BACK; cam.y = CAM_UP;
+    state = 'ready';
+    says = ''; saysT = 0;
+  }
+
+
+// -------------------------------------------------------------------
+//  SWIMMING
+// -------------------------------------------------------------------
+
+  const keys = {};
+
+  function leap() {
+    if (state === 'ready') { state = 'swim'; return; }
+    if (state === 'dead')  { reset(); state = 'swim'; return; }
+    if (fish.leaping || fish.stun > 0) return;
+    fish.leaping = true;
+    fish.vy = LEAP_UP;
+    splash(fish.x, fish.z, 14, [[210, 235, 245], [170, 210, 228]]);
+  }
+
+  function update(dt) {
+    clock += dt;
+    if (saysT > 0) saysT -= dt;
+    if (state !== 'swim') { camera(dt); return; }
+
+    const strong = currentAt(fish.z);
+
+    // ---- SWIMMING ----------------------------------------------------
+    let mx = 0, mz = 0;
+    if (keys['a'] || keys['arrowleft'])  mx -= 1;
+    if (keys['d'] || keys['arrowright']) mx += 1;
+    if (keys['w'] || keys['arrowup'])    mz += 1;
+    if (keys['s'] || keys['arrowdown'])  mz -= 1;
+
+    if (stick.on && stick.push > 0.08) {
+      mx += stick.dx / STICK_MAX;
+      mz += -stick.dy / STICK_MAX;
+    }
+
+    const len = Math.hypot(mx, mz);
+    if (len > 0 && fish.stun <= 0) {
+      // Divide by the length, or swimming diagonally would be 1.4 times
+      // faster than swimming straight.
+      mx /= len; mz /= len;
+      fish.x += mx * SWIM * dt;
+      fish.z += mz * SWIM * dt;
+      fish.yaw = Math.atan2(mx, mz);
+      fish.tail += dt * 16;
+    } else {
+      fish.tail += dt * 5;               // still flicking, just drifting
+    }
+
+    // ---- THE WATER PUSHING BACK --------------------------------------
+    // In the air you're out of the current - that's what a leap is FOR.
+    if (!fish.leaping) {
+      fish.z -= CURRENT * strong * dt;
+      // Fast water also shoves you towards the middle, where the rocks
+      // are. It isn't only slower, it's more dangerous.
+      if (strong > 1) fish.x -= Math.sign(fish.x) * 8 * dt;
+    }
+
+    if (fish.stun > 0) fish.stun -= dt;
+
+    // ---- LEAPING -------------------------------------------------------
+    if (fish.leaping) {
+      fish.z += LEAP_PUSH * dt;
+      fish.vy -= GRAVITY * dt;
+      fish.y += fish.vy * dt;
+      if (fish.y <= 0) {
+        fish.y = 0; fish.vy = 0; fish.leaping = false;
+        splash(fish.x, fish.z, 16, [[210, 235, 245], [150, 195, 216]]);
+      }
+    }
+
+    // ---- THE BANKS -----------------------------------------------------
+    const half = bankAt(fish.z);
+    fish.x = clamp(fish.x, -half + 5, half - 5);
+
+    // ---- ROCKS ---------------------------------------------------------
+    // Only if you're IN the water. Sail over them if you're in the air.
+    if (!fish.leaping) {
+      for (const r of rocks) {
+        if (Math.abs(r.z - fish.z) > 30) continue;
+        if (Math.hypot(r.x - fish.x, r.z - fish.z) > r.r + 6) continue;
+        if (fish.stun > 0) continue;
+        fish.stun = 0.7;
+        fish.z -= 14;
+        splash(fish.x, fish.z, 12, [[210, 235, 245], [140, 120, 110]]);
+        say('OW');
+      }
+    }
+
+    // ---- BEARS ----------------------------------------------------------
+    for (const b of bears) {
+      if (b.swipe > 0) b.swipe -= dt;
+      b.cool -= dt;
+
+      const near = Math.abs(b.z - fish.z) < 26 &&
+                   Math.abs(b.x - fish.x) < 40 &&
+                   Math.sign(fish.x) === b.side;
+      if (near && b.cool <= 0 && !b.got) {
+        b.cool = 1.4;
+        b.swipe = 0.35;
+        // A bear can't reach a fish in the air. Leaping past a bear is
+        // the right answer, and it's the same button that gets you
+        // eaten by an eagle - so you have to pick.
+        if (!fish.leaping && Math.abs(b.x - fish.x) < 30) {
+          b.got = true;
+          state = 'dead';
+          deadWhy = 'A BEAR GOT YOU';
+          best = Math.max(best, Math.floor(dist));
+          splash(fish.x, fish.z, 30, [[220, 90, 90], [210, 235, 245]]);
+        }
+      }
+    }
+
+    // ---- EAGLES -----------------------------------------------------------
+    for (const e of eagles) {
+      e.a += dt * 1.5;
+      // They circle over their patch of river, and only ever stoop on a
+      // fish that has left the water.
+      const cxx = e.x + Math.cos(e.a) * 34;
+      const czz = e.z + Math.sin(e.a) * 34;
+      e.cx = cxx; e.cz = czz;
+
+      if (fish.leaping && fish.y > 6 &&
+          Math.hypot(cxx - fish.x, czz - fish.z) < 26) {
+        e.dive = 1;
+        state = 'dead';
+        deadWhy = 'AN EAGLE TOOK YOU';
+        best = Math.max(best, Math.floor(dist));
+        splash(fish.x, fish.z, 30, [[220, 90, 90], [230, 220, 200]]);
+      }
+    }
+
+    // ---- HOW FAR -----------------------------------------------------------
+    dist = Math.max(dist, fish.z / 10);
+
+    // WASHED BACK DOWN. Not instant death - you have to lose a long way
+    // before it counts, so one bad rapid is a setback and not the end.
+    if (fish.z < (dist * 10) - 460) {
+      state = 'dead';
+      deadWhy = 'THE RIVER WASHED YOU BACK';
+      best = Math.max(best, Math.floor(dist));
+    }
+
+    // ---- SPLASHES ----------------------------------------------------------
+    for (const b of bits) {
+      b.x += b.vx * dt; b.z += b.vz * dt;
+      b.y += b.vy * dt; b.vy -= 150 * dt;
+      b.life -= dt;
+      if (b.y < 0) { b.y = 0; b.vy = 0; }
+    }
+
+    tidy();
+    camera(dt);
+  }
+
+  function camera(dt) {
+    const k = Math.min(1, dt * 5);
+    cam.x += (fish.x * 0.5 - cam.x) * k;
+    cam.z += (fish.z - CAM_BACK - cam.z) * k;
+    cam.y = CAM_UP;
+  }
+
+
+// -------------------------------------------------------------------
+//  DRAWING
+// -------------------------------------------------------------------
+
+  const WATER  = [38, 96, 124];
+  const FAST   = [92, 150, 174];
+  const BANK   = [122, 112, 92];
+  const GRASS  = [64, 96, 56];
+  const ROCK   = [110, 106, 100];
+  const FUR    = [92, 66, 46];
+  const SALMON = [188, 92, 78];
+
+  function drawRiver() {
+    const TILE = 30;
+    const cz = Math.round(fish.z / TILE), cx = Math.round(fish.x / TILE);
+
+    for (let gz = cz - 4; gz <= cz + 12; gz++) {
+      const z = gz * TILE;
+      const half = bankAt(z);
+      const strong = currentAt(z);
+
+      for (let gx = cx - 5; gx <= cx + 5; gx++) {
+        const x = gx * TILE;
+        if (Math.abs(x) > half + TILE * 2.5) continue;
+
+        if (Math.abs(x) < half) {
+          // WATER. It's paler and it MOVES in the rapids - the white
+          // water you can see is exactly the water that's shoving you,
+          // because both come out of currentAt().
+          const flow = Math.sin(z * 0.06 + clock * (strong > 1 ? 7 : 2.4)) * 0.5 + 0.5;
+          const base = strong > 1 ? FAST : WATER;
+          addBox(x, -1, z, TILE, 2, TILE, shade(base, 0.86 + flow * 0.3));
+        } else {
+          const tint = ((gx + gz) % 2 === 0) ? 1 : 0.92;
+          addBox(x, 0.6, z, TILE, 3, TILE, shade(Math.abs(x) < half + TILE * 1.2
+                                                 ? BANK : GRASS, tint));
+        }
+      }
+    }
+  }
+
+  function drawRocks() {
+    for (const r of rocks) {
+      if (r.z < fish.z - 120 || r.z > fish.z + 700) continue;
+      addBox(r.x, 3, r.z, r.r * 1.7, 8, r.r * 1.7, ROCK, r.spin);
+      addBox(r.x, 6, r.z, r.r * 1.1, 5, r.r * 1.1, shade(ROCK, 1.18), r.spin);
+    }
+  }
+
+  function drawBears() {
+    for (const b of bears) {
+      if (b.z < fish.z - 120 || b.z > fish.z + 700) continue;
+      const lean = b.swipe > 0 ? 16 : 0;
+      const px = b.x - b.side * lean;
+
+      addBox(px, 7, b.z, 20, 14, 26, FUR);                       // body
+      addBox(px - b.side * 4, 15, b.z + 11, 12, 11, 12, shade(FUR, 1.12));  // head
+      for (const s of [-1, 1]) addBox(px - b.side * 4 + s * 4, 21, b.z + 11, 4, 4, 4, shade(FUR, 0.8));
+      // The paw, out over the water when it swipes.
+      addBox(px - b.side * (14 + lean), 8, b.z + 8, 10, 6, 10,
+             b.swipe > 0 ? [150, 110, 80] : shade(FUR, 0.9));
+    }
+  }
+
+  function drawEagles() {
+    for (const e of eagles) {
+      if (e.z < fish.z - 120 || e.z > fish.z + 700) continue;
+      const x = e.cx !== undefined ? e.cx : e.x;
+      const z = e.cz !== undefined ? e.cz : e.z;
+      const hi = 48 + Math.sin(e.a * 1.3) * 6;
+
+      // The shadow on the water is the warning. It's directly under the
+      // bird, so you can read where it is without looking up.
+      addBox(x, 0.4, z, 14, 1, 14, [16, 40, 54]);
+
+      addBox(x, hi, z, 7, 5, 16, [64, 52, 44]);
+      const flap = Math.sin(clock * 7 + e.a) * 4;
+      for (const s of [-1, 1]) {
+        addBox(x + s * 15, hi + flap * s, z, 24, 2, 9, [78, 64, 52]);
+      }
+      addBox(x, hi + 2, z - 9, 5, 4, 5, [222, 216, 204]);        // white head
+    }
+  }
+
+  function drawFish() {
+    const co = Math.cos(fish.yaw), si = Math.sin(fish.yaw);
+    function bit(ox, oy, oz, w, h, d, rgb) {
+      addBox(fish.x + ox * co + oz * si, fish.y + oy, fish.z - ox * si + oz * co,
+             w, h, d, rgb, fish.yaw);
+    }
+    const flick = Math.sin(fish.tail) * 0.5;
+    const hurt = fish.stun > 0 ? 1.5 : 1;
+
+    bit(0, 2, 2, 9, 6, 20, shade(SALMON, hurt));                 // body
+    bit(0, 3.6, 4, 6, 3, 14, shade([232, 150, 130], hurt));      // belly stripe
+    bit(0, 2, 12, 6, 5, 7, shade(SALMON, 0.9 * hurt));           // head
+    bit(2.4, 3, 14, 1.6, 1.6, 1.6, [24, 20, 18]);                // eye
+    bit(-2.4, 3, 14, 1.6, 1.6, 1.6, [24, 20, 18]);
+
+    // The tail sweeps side to side, and that's the whole animation.
+    bit(flick * 5, 2, -10, 3, 8, 8, shade(SALMON, 0.8 * hurt));
+    bit(flick * 8, 2, -14, 2, 11, 5, shade(SALMON, 0.7 * hurt));
+    for (const s of [-1, 1]) bit(s * 5, 1.4, 2, 7, 1.5, 5, shade(SALMON, 0.85 * hurt));
+  }
+
+  function drawBits() {
+    for (const b of bits) {
+      addBox(b.x, b.y, b.z, b.size, b.size, b.size, b.col);
+    }
+  }
+
+
+// -------------------------------------------------------------------
+//  THE WRITING ON TOP
+// -------------------------------------------------------------------
+
+  const STICK_MAX = 52;
+  const stick = { on: false, ox: 0, oy: 0, dx: 0, dy: 0, push: 0 };
+  const roles = {};
+  let touchMode = false;
+
+  function leapBtn() {
+    const r = Math.min(W, H) * 0.11;
+    return { x: W - r - 26, y: H - r - 26, r: r };
+  }
+
+  function drawHud() {
+    ctx.textAlign = 'left';
+    ctx.font = 'bold ' + Math.min(W * 0.05, 44) + 'px system-ui, sans-serif';
+    ctx.fillStyle = '#dff0f6';
+    ctx.fillText(Math.floor(dist) + ' m upstream', 20, 52);
+
+    if (best > 0) {
+      ctx.font = Math.min(W * 0.024, 15) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#5e8496';
+      ctx.fillText('best ' + best + ' m', 22, 76);
+    }
+
+    // HOW FAST THE WATER IS HERE. The thing you plan around.
+    const strong = currentAt(fish.z);
+    ctx.textAlign = 'right';
+    ctx.font = 'bold ' + Math.min(W * 0.026, 17) + 'px system-ui, sans-serif';
+    ctx.fillStyle = strong > 1 ? '#ffd76a' : '#5e8496';
+    ctx.fillText(strong > 1 ? 'RAPIDS' : 'calm water', W - 20, 40);
+
+    // How far you can slip back before the river wins.
+    const slack = clamp(1 - ((dist * 10) - fish.z) / 460, 0, 1);
+    const bw = Math.min(W * 0.3, 300), bx = W - bw - 20, by = 52;
+    ctx.fillStyle = 'rgba(0,0,0,0.4)';
+    ctx.fillRect(bx, by, bw, 12);
+    ctx.fillStyle = slack > 0.6 ? '#7fd0a0' : slack > 0.3 ? '#e0c83c' : '#e05a4a';
+    ctx.fillRect(bx, by, bw * slack, 12);
+
+    ctx.textAlign = 'center';
+    if (saysT > 0) {
+      ctx.font = 'bold ' + Math.min(W * 0.03, 20) + 'px system-ui, sans-serif';
+      ctx.fillStyle = 'rgba(223,240,246,' + clamp(saysT, 0, 1) + ')';
+      ctx.fillText(says, W / 2, H * 0.72);
+    }
+
+    if (state === 'ready') {
+      ctx.font = 'bold ' + Math.min(W * 0.07, 60) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#dff0f6';
+      ctx.fillText('SALMON', W / 2, H * 0.34);
+      ctx.font = Math.min(W * 0.028, 19) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#7fa8bb';
+      ctx.fillText('swim up the river. it will not help you.', W / 2, H * 0.41);
+      ctx.fillText(touchMode ? 'tap to start' : 'press SPACE to start', W / 2, H * 0.47);
+    }
+    if (state === 'dead') {
+      ctx.font = 'bold ' + Math.min(W * 0.06, 52) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#e05a4a';
+      ctx.fillText(deadWhy, W / 2, H * 0.34);
+      ctx.font = 'bold ' + Math.min(W * 0.04, 30) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#dff0f6';
+      ctx.fillText(Math.floor(dist) + ' metres upstream', W / 2, H * 0.42);
+      ctx.font = Math.min(W * 0.028, 19) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#7fa8bb';
+      ctx.fillText(touchMode ? 'tap to go again' : 'press SPACE to go again', W / 2, H * 0.49);
+    }
+  }
+
+  function drawPads() {
+    if (!touchMode) return;
+
+    const b = leapBtn();
+    const can = state === 'swim' && !fish.leaping && fish.stun <= 0;
+    ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+    ctx.fillStyle = can ? 'rgba(127,208,160,0.22)' : 'rgba(0,0,0,0.35)';
+    ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = can ? '#7fd0a0' : 'rgba(255,255,255,0.3)';
+    ctx.stroke();
+    ctx.textAlign = 'center';
+    ctx.font = 'bold ' + Math.round(b.r * 0.38) + 'px system-ui, sans-serif';
+    ctx.fillStyle = can ? '#7fd0a0' : '#5e8496';
+    ctx.fillText('LEAP', b.x, b.y + b.r * 0.14);
+
+    if (!stick.on) return;
+    ctx.beginPath(); ctx.arc(stick.ox, stick.oy, STICK_MAX, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+    ctx.lineWidth = 2; ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(stick.ox + stick.dx, stick.oy + stick.dy, STICK_MAX * 0.4, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(223,240,246,0.45)';
+    ctx.fill();
+  }
+
+
+// -------------------------------------------------------------------
+//  CONTROLS
+// -------------------------------------------------------------------
+
+  const HELP_KEYS  = 'W A S D or ARROWS to swim &nbsp;&nbsp; SPACE to leap';
+  const HELP_TOUCH = 'DRAG to swim &nbsp;&nbsp; LEAP to jump the rapids';
+
+  function setHelpLine() {
+    const el = document.getElementById('hud');
+    if (el) el.innerHTML = touchMode ? HELP_TOUCH : HELP_KEYS;
+  }
+
+  window.addEventListener('keydown', function (e) {
+    const k = e.key.toLowerCase();
+    if (k === ' ' || k === 'space') { leap(); e.preventDefault(); return; }
+    keys[k] = true;
+    if (e.key.startsWith('Arrow')) e.preventDefault();
+  });
+  window.addEventListener('keyup', function (e) { keys[e.key.toLowerCase()] = false; });
+
+  function nearBtn(mx, my, b) { return Math.hypot(mx - b.x, my - b.y) < b.r * 1.35; }
+
+  // MOBILE FROM THE START. Every finger gets a role kept by its
+  // identifier, so swimming while pressing LEAP works and lifting one
+  // doesn't cancel the other.
+  function readTouches(e) {
+    for (const t of e.changedTouches) {
+      const x = t.clientX, y = t.clientY;
+
+      if (e.type === 'touchstart') {
+        if (state !== 'swim') { leap(); continue; }     // tap to start or retry
+        if (nearBtn(x, y, leapBtn())) {
+          roles[t.identifier] = 'leap';
+          leap();
+        } else {
+          roles[t.identifier] = 'swim';
+          stick.on = true;
+          stick.ox = x; stick.oy = y;
+          stick.dx = 0; stick.dy = 0; stick.push = 0;
+        }
+      } else if (e.type === 'touchmove') {
+        if (roles[t.identifier] !== 'swim') continue;
+        let dx = x - stick.ox, dy = y - stick.oy;
+        const len = Math.hypot(dx, dy);
+        if (len > STICK_MAX) { dx *= STICK_MAX / len; dy *= STICK_MAX / len; }
+        stick.dx = dx; stick.dy = dy;
+        stick.push = Math.min(1, len / STICK_MAX);
+      } else {
+        if (roles[t.identifier] === 'swim') {
+          stick.on = false; stick.push = 0; stick.dx = 0; stick.dy = 0;
+        }
+        delete roles[t.identifier];
+      }
+    }
+  }
+
+  canvas.addEventListener('mousedown', function () { leap(); });
+  canvas.addEventListener('touchstart', function (e) {
+    e.preventDefault();
+    if (!touchMode) { touchMode = true; setHelpLine(); }
+    readTouches(e);
+  }, { passive: false });
+  canvas.addEventListener('touchmove', function (e) {
+    e.preventDefault(); readTouches(e);
+  }, { passive: false });
+  canvas.addEventListener('touchend', function (e) {
+    e.preventDefault(); readTouches(e);
+  }, { passive: false });
+  canvas.addEventListener('touchcancel', function (e) { readTouches(e); }, { passive: false });
+
+
+// -------------------------------------------------------------------
+//  THE LOOP
+// -------------------------------------------------------------------
+
+  let last = 0;
+  function frame(now) {
+    const dt = Math.min(0.05, Math.max(0.0005, (now - last) / 1000));
+    last = now;
+
+    update(dt);
+
+    ctx.fillStyle = '#0b1c26';
+    ctx.fillRect(0, 0, W, H);
+
+    faces = [];
+    drawRiver();
+    drawRocks();
+    drawBears();
+    drawEagles();
+    drawBits();
+    drawFish();
+    paint();
+
+    drawHud();
+    drawPads();
+
+    requestAnimationFrame(frame);
+  }
+
+  reset();
+  requestAnimationFrame(frame);
+
+</script>
+</body>
+</html>
