@@ -656,6 +656,14 @@
       if (keys['w'] || keys['arrowup'])    mz += 1;
       if (keys['s'] || keys['arrowdown'])  mz -= 1;
 
+      // THE THUMB STICK pushes the SAME two directions the keys do, so
+      // there is only ever one walking rule to get right. Up the screen
+      // is north, which is why dy is subtracted.
+      if (stick.on && stick.push > 0.08) {
+        mx += stick.dx / STICK_MAX;
+        mz += -stick.dy / STICK_MAX;
+      }
+
       const len = Math.hypot(mx, mz);
       if (len > 0) {
         // Divide by the length, or walking diagonally would be 1.4
@@ -1209,6 +1217,34 @@
   });
   window.addEventListener('keyup', function (e) { keys[e.key.toLowerCase()] = false; });
 
+  // -------------------------------------------------------------------
+  //  TOUCH
+  // -------------------------------------------------------------------
+  //
+  //  This game is WALKING, and a phone has no W A S D - so without a
+  //  stick it isn't merely awkward on a phone, it's unplayable. Drag
+  //  anywhere on the left to walk; the USE button on the right does
+  //  whatever E does.
+  //
+  //  Every finger gets a ROLE, remembered by its identifier. The stick
+  //  has to know where it started, so it can't be worked out fresh from
+  //  wherever the finger happens to be now - and two fingers down at
+  //  once (walking while pressing USE) must not tread on each other.
+
+  const STICK_MAX = 52;          // pixels from the origin for full speed
+  const stick = { on: false, ox: 0, oy: 0, dx: 0, dy: 0, push: 0 };
+  const roles = {};              // touch identifier -> what that finger is doing
+  let touchMode = false;         // has a finger ever touched this? then show the pads
+
+  function useBtn() {
+    const r = Math.min(W, H) * 0.11;
+    return { x: W - r - 26, y: H - r - 26, r: r };
+  }
+
+  function nearBtn(mx, my, b) {
+    return Math.hypot(mx - b.x, my - b.y) < b.r * 1.35;
+  }
+
   function inBox(mx, my, b) {
     return mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h;
   }
@@ -1229,17 +1265,119 @@
   }
 
   canvas.addEventListener('mousedown', function (e) { tap(e.clientX, e.clientY); });
-  canvas.addEventListener('mouseup', function () { keys['e'] = false; });
+  canvas.addEventListener('mouseup',   function () { keys['e'] = false; });
+
+  function readTouches(e) {
+    for (const t of e.changedTouches) {
+      const x = t.clientX, y = t.clientY;
+
+      if (e.type === 'touchstart') {
+        // The shop first - it sits on top of everything.
+        if (inBox(x, y, shopTab())) { shopOpen = !shopOpen; continue; }
+        if (shopOpen) {
+          let took = false;
+          for (let i = 0; i < SHOP_KEYS.length; i++) {
+            if (inBox(x, y, shopBox(i))) { buy(SHOP_KEYS[i]); took = true; }
+          }
+          if (!took) shopOpen = false;
+          continue;
+        }
+
+        if (nearBtn(x, y, useBtn())) {
+          roles[t.identifier] = 'use';
+          keys['e'] = true;
+          pressE();
+        } else {
+          // Anywhere else is the stick, and it starts where you put your
+          // thumb down rather than in a fixed corner - so it's always
+          // under your thumb whatever size the phone is.
+          roles[t.identifier] = 'move';
+          stick.on = true;
+          stick.ox = x; stick.oy = y;
+          stick.dx = 0; stick.dy = 0; stick.push = 0;
+        }
+      } else if (e.type === 'touchmove') {
+        if (roles[t.identifier] !== 'move') continue;
+        let dx = x - stick.ox, dy = y - stick.oy;
+        const len = Math.hypot(dx, dy);
+        if (len > STICK_MAX) { dx *= STICK_MAX / len; dy *= STICK_MAX / len; }
+        stick.dx = dx; stick.dy = dy;
+        stick.push = Math.min(1, len / STICK_MAX);
+      } else {
+        // Lifted. Only clear the thing THIS finger was doing.
+        if (roles[t.identifier] === 'move') {
+          stick.on = false; stick.push = 0; stick.dx = 0; stick.dy = 0;
+        }
+        if (roles[t.identifier] === 'use') keys['e'] = false;
+        delete roles[t.identifier];
+      }
+    }
+  }
+
+  // The help line has to tell the truth about the controls you're
+  // actually using. It says keyboard until a finger touches the screen,
+  // and then it says touch.
+  function setHelpLine() {
+    const el = document.getElementById('hud');
+    if (el) el.innerHTML = touchMode ? HELP_TOUCH : HELP_KEYS;
+  }
+
   canvas.addEventListener('touchstart', function (e) {
     e.preventDefault();
-    for (const t of e.changedTouches) tap(t.clientX, t.clientY);
+    if (!touchMode) { touchMode = true; setHelpLine(); }
+    readTouches(e);
   }, { passive: false });
-  canvas.addEventListener('touchend', function () { keys['e'] = false; });
+  canvas.addEventListener('touchmove', function (e) {
+    e.preventDefault(); readTouches(e);
+  }, { passive: false });
+  canvas.addEventListener('touchend', function (e) {
+    e.preventDefault(); readTouches(e);
+  }, { passive: false });
+  canvas.addEventListener('touchcancel', function (e) { readTouches(e); }, { passive: false });
+
+
+// -------------------------------------------------------------------
+//  DRAWING THE PADS
+// -------------------------------------------------------------------
+
+  function drawPads() {
+    if (!touchMode || shopOpen) return;
+
+    // The USE button. Green when it would actually do something, so you
+    // can see whether you're stood at anything without reading a word.
+    const b = useBtn();
+    const act = whatEDoes();
+    const live = act && act.do !== 'no';
+    ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+    ctx.fillStyle = keys['e'] ? 'rgba(143,224,122,0.4)'
+                  : live ? 'rgba(143,224,122,0.2)' : 'rgba(0,0,0,0.35)';
+    ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = live ? '#8fe07a' : 'rgba(255,255,255,0.3)';
+    ctx.stroke();
+    ctx.textAlign = 'center';
+    ctx.font = 'bold ' + Math.round(b.r * 0.42) + 'px system-ui, sans-serif';
+    ctx.fillStyle = live ? '#8fe07a' : '#a08c78';
+    ctx.fillText('USE', b.x, b.y + b.r * 0.15);
+
+    // The stick, only while a thumb is on it.
+    if (!stick.on) return;
+    ctx.beginPath(); ctx.arc(stick.ox, stick.oy, STICK_MAX, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+    ctx.lineWidth = 2; ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(stick.ox + stick.dx, stick.oy + stick.dy, STICK_MAX * 0.4, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,215,106,0.5)';
+    ctx.fill();
+  }
 
 
 // -------------------------------------------------------------------
 //  THE LOOP
 // -------------------------------------------------------------------
+
+  const HELP_KEYS  = 'W A S D or ARROWS to walk &nbsp;&nbsp; E uses whatever you stand at';
+  const HELP_TOUCH = 'DRAG to walk &nbsp;&nbsp; USE for whatever you stand at';
 
   let last = 0;
   function frame(now) {
@@ -1262,6 +1400,7 @@
 
     drawLabels();
     drawHud();
+    drawPads();
 
     requestAnimationFrame(frame);
   }
