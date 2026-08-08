@@ -309,6 +309,18 @@
   const GEYSER_WARN  = 0.8;    // how long it bubbles before it blows
   let geysers = [];
 
+  // ---- TACOS ----------------------------------------------------------
+  //  Somebody drops their lunch in the river. You eat it. It has
+  //  consequences, and the consequences are propulsion.
+  //
+  //  It's the only thing in the game you go TOWARDS, which is worth
+  //  something on its own - up to now every single object has been a
+  //  reason to change lane, and a river of nothing but "avoid that"
+  //  gets tiring. A taco makes a lane worth wanting.
+  const BOOST_SPEED = 82;      // on top of your own swimming
+  const BOOST_TIME  = 1.2;     // per taco, and they stack
+  let tacos = [];
+
   const LOG_EVERY = 2.4;
   let logs = [];
   let logTimer = 1.6;
@@ -364,6 +376,17 @@
                    swipe: 0, cool: 1 + Math.random() * 2, got: false });
     }
 
+    // ---- A TACO ------------------------------------------------------
+    // Often out on the edges, so the safe middle lane isn't also the
+    // rewarding one. You should have to go and GET it.
+    if (Math.random() < 0.5) {
+      const edge = Math.random() < 0.6;
+      tacos.push({ lane: edge ? (Math.random() < 0.5 ? 0 : LANES - 1)
+                              : Math.floor(Math.random() * LANES),
+                   z: z + (Math.random() - 0.5) * 70, bob: Math.random() * 6,
+                   eaten: false });
+    }
+
     // ---- GEYSERS ----------------------------------------------------
     if (Math.random() < 0.34) {
       const cycle = 2.6 + Math.random() * 2.4;
@@ -385,6 +408,7 @@
     logs = logs.filter(function (l) { return l.z > back; });
     fallers = fallers.filter(function (f) { return f.z > back && !f.gone; });
     geysers = geysers.filter(function (g) { return g.z > back; });
+    tacos = tacos.filter(function (t) { return t.z > back && !t.eaten; });
     rocks  = rocks.filter(function (r) { return r.z > back; });
     bears  = bears.filter(function (b) { return b.z > back; });
     eagles = eagles.filter(function (e) { return e.z > back; });
@@ -410,10 +434,11 @@
     fish.x = 0; fish.z = 0; fish.y = 0; fish.vy = 0;
     fish.yaw = 0; fish.tail = 0; fish.stun = 0;
     fish.leaping = false; fish.caught = 0; fish.lane = 1;
+    fish.boost = 0; fish.parp = 0;
     dist = 0; clock = 0; deadWhy = '';
     wave.z = -WAVE_LEAD; wave.foam = 0;
     rocks = []; bears = []; eagles = []; bits = []; logs = []; fallers = [];
-    geysers = [];
+    geysers = []; tacos = [];
     logTimer = 1.6; fallTimer = 2.4;
     madeTo = 120;
     while (madeTo < 900) makeMore();
@@ -558,6 +583,35 @@
 
     // ---- HOW FAR -----------------------------------------------------------
     dist = Math.max(dist, fish.z / 10);
+
+    // ---- LUNCH --------------------------------------------------------
+    for (const t of tacos) {
+      if (t.eaten) continue;
+      t.bob += dt * 2.2;
+      if (t.lane !== fish.lane) continue;
+      if (Math.abs(t.z - fish.z) > 14) continue;
+      t.eaten = true;
+      // THEY STACK. Eat three in a row and you get three times the
+      // trumping, which is the correct reward for going out of your way
+      // three times.
+      fish.boost += BOOST_TIME;
+      fish.parp = 1;
+      say('PARP!');
+      splash(fish.x, fish.z, 10, [[196, 216, 90], [232, 196, 84]]);
+    }
+
+    // ---- THE CONSEQUENCES ---------------------------------------------
+    if (fish.boost > 0) {
+      fish.boost -= dt;
+      fish.z += BOOST_SPEED * dt;
+      if (fish.parp > 0) fish.parp -= dt * 2;
+
+      // A trail of, ah, bubbles. Behind you, obviously.
+      if (Math.random() < 0.8) {
+        splash(fish.x + (Math.random() - 0.5) * 8, fish.z - 16, 1,
+               [[176, 206, 96], [206, 226, 128]]);
+      }
+    }
 
     // ---- GEYSERS ------------------------------------------------------
     for (const g of geysers) {
@@ -782,6 +836,30 @@
   // A geyser: a churn of bubbles that you can see coming, then a column
   // of white water. The bubbling IS the warning - it's the difference
   // between a boost you chose and one that happened to you.
+  // A taco, bobbing in the river. Shell, filling, and a bit of lettuce.
+  function drawTacos() {
+    for (const t of tacos) {
+      if (t.eaten) continue;
+      if (t.z < fish.z - 120 || t.z > fish.z + 700) continue;
+      const x = laneX(t.lane, t.z);
+      const bob = Math.sin(t.bob) * 1.2;
+      const tip = Math.sin(t.bob * 0.7) * 0.18;
+
+      // The shell: two sides leaning together.
+      for (const sgn of [-1, 1]) {
+        addBox(x + sgn * 3.4, 4 + bob, t.z, 3, 9, 13, [232, 190, 84], tip);
+      }
+      addBox(x, 7.5 + bob, t.z, 9, 3, 13, [214, 168, 70], tip);   // the fold
+      addBox(x, 5.6 + bob, t.z, 5.5, 3, 12, [178, 66, 52], tip);  // the filling
+      addBox(x, 7 + bob, t.z, 6.5, 1.6, 10, [124, 178, 70], tip); // the lettuce
+
+      // A little shine on top so it reads as a THING TO GET rather than
+      // as one more lump in the water to dodge.
+      const glow = 0.5 + Math.sin(clock * 4 + t.bob) * 0.5;
+      addBox(x, 11 + bob, t.z, 3, 1.4, 3, [255, 240 - glow * 60, 120]);
+    }
+  }
+
   function drawGeysers() {
     for (const g of geysers) {
       if (g.z < fish.z - 120 || g.z > fish.z + 700) continue;
@@ -925,6 +1003,17 @@
   }
 
   function drawFish() {
+    // The, ahem, exhaust. Only while it's working.
+    if (fish.boost > 0) {
+      for (let i = 0; i < 4; i++) {
+        const puff = 12 + i * 7;
+        const wob = Math.sin(clock * 14 + i * 1.3) * 2.4;
+        addBox(fish.x + wob, 2 + i * 0.6, fish.z - puff,
+               7 - i, 5 - i * 0.7, 7 - i,
+               [150 + i * 14, 190 + i * 10, 80 + i * 12]);
+      }
+    }
+
     const co = Math.cos(fish.yaw), si = Math.sin(fish.yaw);
     function bit(ox, oy, oz, w, h, d, rgb) {
       addBox(fish.x + ox * co + oz * si, fish.y + oy, fish.z - ox * si + oz * co,
@@ -1158,6 +1247,7 @@
     faces = [];
     drawRiver();
     drawLanes();
+    drawTacos();
     drawRocks();
     drawLogs();
     drawGeysers();
