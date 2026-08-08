@@ -94,7 +94,11 @@
   // And it sits a little way UPSTREAM of the fish rather than behind
   // it, so the fish rides low on the screen and most of what you can
   // see is the water you're about to swim into.
-  const CAM_UP = 148, LOOK_AHEAD = 42;
+  // Sitting 42 ahead meant you could only see 46 units of river BEHIND
+  // you - so the wave chasing you was invisible until it was almost on
+  // top of you, which is no warning at all. Higher, and less far ahead:
+  // about 88 behind and 113 in front.
+  const CAM_UP = 166, LOOK_AHEAD = 12;
 
   function focal() { return Math.min(H, W) * 0.82; }
 
@@ -250,6 +254,23 @@
     caught: 0
   };
 
+  // -----------------------------------------------------------------
+  //  THE WAVE
+  // -----------------------------------------------------------------
+  //  A wall of white water coming up the river behind you, and it never
+  //  stops. It was always there in spirit - the old game killed you if
+  //  you slipped too far back - but it was an invisible rule. Now it's
+  //  a thing you can SEE, and being chased is very different from being
+  //  told off by a number.
+  //
+  //  It speeds up the further you get, so a run always ends.
+  const WAVE_START = 12;      // how fast it comes, at the start
+  const WAVE_GAIN  = 0.016;   // and how much faster per metre you make
+  const WAVE_LEAD  = 300;     // how far back it starts
+
+  const wave = { z: -WAVE_LEAD, foam: 0 };
+  function waveSpeed() { return WAVE_START + dist * WAVE_GAIN; }
+
   let best = 0;
   let dist = 0;               // how far upstream, in metres
   let clock = 0;
@@ -334,6 +355,7 @@
     fish.yaw = 0; fish.tail = 0; fish.stun = 0;
     fish.leaping = false; fish.caught = 0; fish.lane = 1;
     dist = 0; clock = 0; deadWhy = '';
+    wave.z = -WAVE_LEAD; wave.foam = 0;
     rocks = []; bears = []; eagles = []; bits = [];
     madeTo = 120;
     while (madeTo < 900) makeMore();
@@ -479,12 +501,25 @@
     // ---- HOW FAR -----------------------------------------------------------
     dist = Math.max(dist, fish.z / 10);
 
-    // WASHED BACK DOWN. Not instant death - you have to lose a long way
-    // before it counts, so one bad rapid is a setback and not the end.
-    if (fish.z < (dist * 10) - 460) {
+    // ---- THE WAVE ---------------------------------------------------
+    wave.z += waveSpeed() * dt;
+    wave.foam += dt;
+
+    // Spray thrown off the front of it, so you can hear it coming with
+    // your eyes.
+    if (Math.random() < 0.5 && wave.z > fish.z - 200) {
+      const half = bankAt(wave.z);
+      splash((Math.random() * 2 - 1) * half, wave.z + 6, 2,
+             [[230, 245, 250], [190, 220, 235]]);
+    }
+
+    // It doesn't care whether you're in the air. There is no leaping
+    // over a wall of water the width of the river.
+    if (wave.z >= fish.z - 4) {
       state = 'dead';
-      deadWhy = 'THE RIVER WASHED YOU BACK';
+      deadWhy = 'THE WAVE TOOK YOU';
       best = Math.max(best, Math.floor(dist));
+      splash(fish.x, fish.z, 40, [[230, 245, 250], [188, 92, 78]]);
     }
 
     // ---- SPLASHES ----------------------------------------------------------
@@ -616,6 +651,30 @@
     }
   }
 
+  // A WALL OF WATER, right across the river. Tall enough that it reads
+  // as a wall from straight above - and it's built from the same
+  // bankAt() as everything else, so it always exactly spans the river,
+  // narrow bits included.
+  function drawWave() {
+    if (wave.z < fish.z - 300 || wave.z > fish.z + 400) return;
+    const half = bankAt(wave.z) + 14;
+
+    // The face of it, in slabs across the river, each rearing a
+    // different amount so the crest is ragged rather than a ruler.
+    const n = 14;
+    for (let i = 0; i < n; i++) {
+      const x = -half + (i + 0.5) * (half * 2 / n);
+      const rear = 16 + Math.sin(i * 1.7 + wave.foam * 6) * 5;
+      addBox(x, rear / 2, wave.z, half * 2 / n + 2, rear, 26, [116, 176, 200]);
+      // White water on top of the crest.
+      addBox(x, rear, wave.z + 8, half * 2 / n + 2, 5,
+             12 + Math.sin(i * 2.3 + wave.foam * 8) * 5, [236, 248, 252]);
+    }
+
+    // And the dark water piled up behind it.
+    addBox(0, 6, wave.z - 40, half * 2, 12, 70, [52, 104, 132]);
+  }
+
   function drawFish() {
     const co = Math.cos(fish.yaw), si = Math.sin(fish.yaw);
     function bit(ox, oy, oz, w, h, d, rgb) {
@@ -677,13 +736,17 @@
     ctx.fillStyle = strong > 1 ? '#ffd76a' : '#5e8496';
     ctx.fillText(strong > 1 ? 'RAPIDS' : 'calm water', W - 20, 40);
 
-    // How far you can slip back before the river wins.
-    const slack = clamp(1 - ((dist * 10) - fish.z) / 460, 0, 1);
+    // HOW CLOSE THE WAVE IS. The bar you actually watch.
+    const slack = clamp((fish.z - wave.z) / WAVE_LEAD, 0, 1);
     const bw = Math.min(W * 0.3, 300), bx = W - bw - 20, by = 52;
     ctx.fillStyle = 'rgba(0,0,0,0.4)';
     ctx.fillRect(bx, by, bw, 12);
     ctx.fillStyle = slack > 0.6 ? '#7fd0a0' : slack > 0.3 ? '#e0c83c' : '#e05a4a';
-    ctx.fillRect(bx, by, bw * slack, 12);
+    ctx.fillRect(bx + bw * (1 - slack), by, bw * slack, 12);
+    ctx.textAlign = 'right';
+    ctx.font = 'bold ' + Math.min(W * 0.02, 13) + 'px system-ui, sans-serif';
+    ctx.fillStyle = '#5e8496';
+    ctx.fillText('THE WAVE', W - 20, by + 26);
 
     ctx.textAlign = 'center';
     if (saysT > 0) {
@@ -849,6 +912,7 @@
     drawRocks();
     drawBears();
     drawEagles();
+    drawWave();
     drawBits();
     drawFish();
     paint();
