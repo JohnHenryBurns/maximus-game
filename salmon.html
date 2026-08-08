@@ -76,14 +76,25 @@
 //  with the fish would make "which bank is the bear on" impossible to
 //  answer at a glance, and that question IS the game.
 
-  const cam = { x: 0, y: 0, z: 0, pitch: -1.02 };
-  // HIGH ENOUGH TO SEE WHAT'S COMING.
+  // STRAIGHT DOWN. Not tilted - pitch is a dead quarter turn.
   //
-  // At 96 up and 56 back the fish filled a third of the screen and you
-  // could see about a boat-length of river - which is useless in a game
-  // whose whole point is choosing which side of a rock to take and
-  // which bank the bear is on. You have to be able to READ the river.
-  const CAM_UP = 168, CAM_BACK = 104;
+  // At exactly this angle the maths falls out beautifully: how far a
+  // thing is from the camera stops depending on where it is along the
+  // river and depends only on HOW TALL IT IS. So the whole river is one
+  // flat scale - a rock forty metres upstream is exactly the same size
+  // as one right beside you, which is what makes a map readable.
+  //
+  // And things that stick UP are nearer the camera, so they're bigger:
+  // the bears loom a little and the eagles loom a lot. That's not an
+  // effect anyone had to add, it's just what looking down does.
+  const cam = { x: 0, y: 0, z: 0, pitch: -Math.PI / 2 };
+  // How high the camera floats, which IS the zoom now - straight down,
+  // the scale is simply focal / height.
+  //
+  // And it sits a little way UPSTREAM of the fish rather than behind
+  // it, so the fish rides low on the screen and most of what you can
+  // see is the water you're about to swim into.
+  const CAM_UP = 148, LOOK_AHEAD = 42;
 
   function focal() { return Math.min(H, W) * 0.82; }
 
@@ -165,7 +176,11 @@
 //  Upstream is +z, which is up the screen. The current pushes you the
 //  other way, always, and harder in the rapids.
 
-  const RIVER_HALF = 56;      // how far the water reaches either side
+  // 72, not 56. Straight down on a wide screen, a 56-wide river left
+  // more than half the picture as riverbank - and the bank is the one
+  // place you can never go. The river should be the thing you're
+  // looking at.
+  const RIVER_HALF = 72;      // how far the water reaches either side
   const SWIM       = 44;      // how fast you can swim
   const CURRENT    = 26;      // how hard the water pushes back
   const RAPID_MUL  = 2.0;     // ...and how much worse a rapid is
@@ -300,7 +315,7 @@
     rocks = []; bears = []; eagles = []; bits = [];
     madeTo = 120;
     while (madeTo < 900) makeMore();
-    cam.x = 0; cam.z = -CAM_BACK; cam.y = CAM_UP;
+    cam.x = 0; cam.z = LOOK_AHEAD; cam.y = CAM_UP;
     state = 'ready';
     says = ''; saysT = 0;
   }
@@ -462,7 +477,7 @@
   function camera(dt) {
     const k = Math.min(1, dt * 5);
     cam.x += (fish.x * 0.5 - cam.x) * k;
-    cam.z += (fish.z - CAM_BACK - cam.z) * k;
+    cam.z += (fish.z + LOOK_AHEAD - cam.z) * k;
     cam.y = CAM_UP;
   }
 
