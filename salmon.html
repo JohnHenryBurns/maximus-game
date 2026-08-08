@@ -284,6 +284,21 @@
 //  WHAT IS IN THE RIVER
 // -------------------------------------------------------------------
 
+  // ---- LOGS ----------------------------------------------------------
+  //  Rocks sit still and wait for you. LOGS COME AT YOU - they float
+  //  down while you're swimming up, so the two of you close fast, and
+  //  the gap you picked a second ago may not be there when you arrive.
+  //
+  //  They're long: one or two lanes wide, never more. Two lanes shut is
+  //  a decision; four would just be a wall.
+  //
+  //  And they ride low in the water, so a leap clears them. That's a
+  //  third job for the leap, and every one of them is a reason to spend
+  //  a jump you might want later.
+  const LOG_EVERY = 2.4;
+  let logs = [];
+  let logTimer = 1.6;
+
   let rocks = [];
   let bears = [];
   let eagles = [];
@@ -329,6 +344,7 @@
 
   function tidy() {
     const back = fish.z - 260;
+    logs = logs.filter(function (l) { return l.z > back; });
     rocks  = rocks.filter(function (r) { return r.z > back; });
     bears  = bears.filter(function (b) { return b.z > back; });
     eagles = eagles.filter(function (e) { return e.z > back; });
@@ -356,7 +372,8 @@
     fish.leaping = false; fish.caught = 0; fish.lane = 1;
     dist = 0; clock = 0; deadWhy = '';
     wave.z = -WAVE_LEAD; wave.foam = 0;
-    rocks = []; bears = []; eagles = []; bits = [];
+    rocks = []; bears = []; eagles = []; bits = []; logs = [];
+    logTimer = 1.6;
     madeTo = 120;
     while (madeTo < 900) makeMore();
     cam.x = 0; cam.z = LOOK_AHEAD; cam.y = CAM_UP;
@@ -501,6 +518,36 @@
     // ---- HOW FAR -----------------------------------------------------------
     dist = Math.max(dist, fish.z / 10);
 
+    // ---- LOGS COMING DOWN ---------------------------------------------
+    logTimer -= dt;
+    if (logTimer <= 0) {
+      logTimer = LOG_EVERY + Math.random() * LOG_EVERY;
+      const span = Math.random() < 0.4 ? 2 : 1;
+      const lane = Math.floor(Math.random() * (LANES - span + 1));
+      logs.push({ lane: lane, span: span,
+                  z: fish.z + 380 + Math.random() * 220,
+                  bob: Math.random() * 6, spin: (Math.random() - 0.5) * 0.25 });
+    }
+
+    for (const l of logs) {
+      // They float at the water's own speed, and a bit over - so even
+      // holding station, one is always closing on you. In a rapid they
+      // come down twice as fast, which is exactly when you can least
+      // afford to be looking.
+      l.z -= CURRENT * currentAt(l.z) * 1.15 * dt;
+      l.bob += dt * 1.6;
+
+      if (fish.leaping) continue;            // you're over the top of it
+      if (Math.abs(l.z - fish.z) > 12) continue;
+      if (fish.lane < l.lane || fish.lane > l.lane + l.span - 1) continue;
+      if (fish.stun > 0) continue;
+
+      fish.stun = 0.8;
+      fish.z -= 20;
+      splash(fish.x, fish.z, 14, [[210, 235, 245], [126, 92, 60]]);
+      say('THUMP');
+    }
+
     // ---- THE WAVE ---------------------------------------------------
     wave.z += waveSpeed() * dt;
     wave.foam += dt;
@@ -612,6 +659,29 @@
       const x = laneX(r.lane, r.z);
       addBox(x, 3, r.z, r.r * 1.7, 8, r.r * 1.7, ROCK, r.spin);
       addBox(x, 6, r.z, r.r * 1.1, 5, r.r * 1.1, shade(ROCK, 1.18), r.spin);
+    }
+  }
+
+  function drawLogs() {
+    for (const l of logs) {
+      if (l.z < fish.z - 120 || l.z > fish.z + 700) continue;
+      const w = bankAt(l.z) * 2 / LANES;
+      // Centre of the lanes it covers, from the same laneX() as
+      // everything else - so a log that LOOKS like it shuts lanes 1 and
+      // 2 is the log that shuts lanes 1 and 2.
+      const x = (laneX(l.lane, l.z) + laneX(l.lane + l.span - 1, l.z)) / 2;
+      const long = w * l.span * 0.94;
+      const bob = Math.sin(l.bob) * 0.7;
+
+      addBox(x, 2.4 + bob, l.z, long, 7, 11, [104, 74, 48], l.spin);
+      addBox(x, 4.6 + bob, l.z, long * 0.96, 3, 8, [130, 96, 62], l.spin);
+      // The cut ends, paler, so it reads as a log and not a plank.
+      for (const e of [-1, 1]) {
+        addBox(x + e * long / 2, 2.6 + bob, l.z, 2.5, 8, 10,
+               [166, 132, 92], l.spin);
+      }
+      // A couple of stubs of branch.
+      addBox(x + long * 0.18, 3 + bob, l.z + 8, 3, 4, 9, [92, 66, 42], l.spin);
     }
   }
 
@@ -910,6 +980,7 @@
     drawRiver();
     drawLanes();
     drawRocks();
+    drawLogs();
     drawBears();
     drawEagles();
     drawWave();
