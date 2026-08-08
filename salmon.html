@@ -227,6 +227,25 @@
   //  is drawn, always.
   const LANES = 4;
 
+  // ---- HOW FAR A BEAR CAN REACH ---------------------------------------
+  //  Three lanes of the four, so there is exactly ONE lane a given bear
+  //  cannot touch - and it's the one against the opposite bank.
+  //
+  //  A reach that big has to be announced or it's just an instant death
+  //  you could not have avoided, so the bear REARS BACK first. That
+  //  wind-up is the game: you get about half a second to decide between
+  //  running for the far lane or leaping over the paw.
+  const BEAR_REACH = 3;
+  const BEAR_WIND  = 0.55;
+
+  // Which lanes this bear can reach. Left-bank bears take the left three,
+  // right-bank bears the right three. One function, so the arm you SEE
+  // sweeping and the lanes that actually kill you are the same lanes.
+  function bearLanes(b) {
+    return b.side < 0 ? { from: 0, to: BEAR_REACH - 1 }
+                      : { from: LANES - BEAR_REACH, to: LANES - 1 };
+  }
+
   function laneX(lane, z) {
     const w = bankAt(z) * 2 / LANES;
     return (lane - (LANES - 1) / 2) * w;
@@ -373,7 +392,7 @@
       // means a bear doesn't block the river, it CLOSES A LANE - and
       // that's a much better thing for it to do.
       bears.push({ lane: side < 0 ? 0 : LANES - 1, z: z, side: side,
-                   swipe: 0, cool: 1 + Math.random() * 2, got: false });
+                   swipe: 0, wind: 0, cool: 1 + Math.random() * 2, got: false });
     }
 
     // ---- A TACO ------------------------------------------------------
@@ -546,20 +565,38 @@
       if (b.swipe > 0) b.swipe -= dt;
       b.cool -= dt;
 
-      const near = Math.abs(b.z - fish.z) < 26 && b.lane === fish.lane;
-      if (near && b.cool <= 0 && !b.got) {
-        b.cool = 1.4;
+      const reach = bearLanes(b);
+      const inReach = Math.abs(b.z - fish.z) < 30 &&
+                      fish.lane >= reach.from && fish.lane <= reach.to;
+
+      // ---- REARING BACK ------------------------------------------------
+      if (b.wind > 0) {
+        b.wind -= dt;
+        if (b.wind > 0) continue;
+
+        // ---- AND DOWN IT COMES ------------------------------------------
         b.swipe = 0.35;
-        // A bear can't reach a fish in the air. Leaping past a bear is
-        // the right answer, and it's the same button that gets you
-        // eaten by an eagle - so you have to pick.
-        if (!fish.leaping) {
+        b.cool = 1.6;
+
+        // Checked NOW, not when it started. Half a second to get out of
+        // the way is only a chance if getting out of the way works - and
+        // a bear cannot reach a fish in the air, which is the same
+        // button that feeds you to an eagle.
+        const still = Math.abs(b.z - fish.z) < 30 &&
+                      fish.lane >= reach.from && fish.lane <= reach.to;
+        if (still && !fish.leaping) {
           b.got = true;
           state = 'dead';
           deadWhy = 'A BEAR GOT YOU';
           best = Math.max(best, Math.floor(dist));
           splash(fish.x, fish.z, 30, [[220, 90, 90], [210, 235, 245]]);
         }
+        continue;
+      }
+
+      if (inReach && b.cool <= 0 && !b.got) {
+        b.wind = BEAR_WIND;
+        say('LOOK OUT');
       }
     }
 
@@ -945,16 +982,55 @@
   function drawBears() {
     for (const b of bears) {
       if (b.z < fish.z - 120 || b.z > fish.z + 700) continue;
-      const lean = b.swipe > 0 ? 16 : 0;
-      // Stood on its own bank, reaching for the lane it guards.
-      const px = b.side * (bankAt(b.z) + 16) - b.side * lean;
 
-      addBox(px, 7, b.z, 20, 14, 26, FUR);                       // body
+      const reach = bearLanes(b);
+      const bank = b.side * (bankAt(b.z) + 16);
+
+      // How far out the paw is: pulled BACK while it winds up, then
+      // flung right across the three lanes.
+      const wind = b.wind > 0 ? 1 - b.wind / BEAR_WIND : 0;
+      const out  = b.swipe > 0 ? 1 : 0;
+      const pull = b.wind > 0 ? -10 * (1 - wind) : 0;
+
+      // The far edge of what it can reach - straight out of bearLanes(),
+      // so the arm you see and the lanes that kill you cannot disagree.
+      const tipX = laneX(b.side < 0 ? reach.to : reach.from, b.z);
+      const armEnd = out ? tipX : bank - b.side * 6 + pull * b.side;
+      const armMid = (bank + armEnd) / 2;
+      const armLen = Math.abs(bank - armEnd);
+
+      // ---- WHERE IT'S ABOUT TO HIT ------------------------------------
+      // While it rears back, the lanes it covers light up. Half a second
+      // is only fair if you can see WHICH WAY to run.
+      if (b.wind > 0) {
+        for (let l = reach.from; l <= reach.to; l++) {
+          const w = bankAt(b.z) * 2 / LANES;
+          addBox(laneX(l, b.z), 0.7, b.z, w * 0.86, 1.4, 30,
+                 [150 + wind * 90, 70, 60]);
+        }
+      }
+
+      const px = bank + pull * b.side;
+      addBox(px, 7, b.z, 20, 14, 26, FUR);                                  // body
       addBox(px - b.side * 4, 15, b.z + 11, 12, 11, 12, shade(FUR, 1.12));  // head
-      for (const s of [-1, 1]) addBox(px - b.side * 4 + s * 4, 21, b.z + 11, 4, 4, 4, shade(FUR, 0.8));
-      // The paw, out over the water when it swipes.
-      addBox(px - b.side * (14 + lean), 8, b.z + 8, 10, 6, 10,
-             b.swipe > 0 ? [150, 110, 80] : shade(FUR, 0.9));
+      for (const s2 of [-1, 1]) {
+        addBox(px - b.side * 4 + s2 * 4, 21, b.z + 11, 4, 4, 4, shade(FUR, 0.8));
+      }
+
+      // THE ARM. A long one - it has to actually span three lanes when
+      // it swipes, or the reach is a lie you can't see.
+      if (armLen > 4) {
+        addBox(armMid, 9, b.z + 6, armLen, 6, 9,
+               b.swipe > 0 ? [150, 110, 80] : shade(FUR, 0.95));
+      }
+      addBox(armEnd, 9, b.z + 6, 12, 8, 12,
+             b.swipe > 0 ? [176, 132, 96] : shade(FUR, 0.9));               // the paw
+      // Claws, out only when the paw is.
+      if (b.swipe > 0) {
+        for (const c of [-4, 0, 4]) {
+          addBox(armEnd - b.side * 7, 10, b.z + 6 + c, 6, 3, 2.5, [236, 228, 210]);
+        }
+      }
     }
   }
 
