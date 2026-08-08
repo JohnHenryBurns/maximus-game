@@ -298,6 +298,7 @@
 // -------------------------------------------------------------------
 
   let held = false;
+  let touchMode = false;   // has a finger ever touched this?
 
   function jump() {
     startAudio();
@@ -1585,8 +1586,18 @@
 
   canvas.addEventListener('mousedown', function () { jump(); held = true; });
   canvas.addEventListener('mouseup',   function () { release(); });
+  // The help line has to tell the truth about the controls you're
+  // actually using. It says keyboard until a finger touches the screen,
+  // and then it says touch.
+  function setHelpLine() {
+    const el = document.getElementById('hud');
+    if (el) el.innerHTML = touchMode ? HELP_TOUCH : HELP_KEYS;
+  }
+
   canvas.addEventListener('touchstart', function (e) {
-    e.preventDefault(); jump(); held = true;
+    e.preventDefault();
+    if (!touchMode) { touchMode = true; setHelpLine(); }
+    jump(); held = true;
   }, { passive: false });
   canvas.addEventListener('touchend',  function () { release(); });
 
@@ -1594,6 +1605,9 @@
 // -------------------------------------------------------------------
 //  THE LOOP
 // -------------------------------------------------------------------
+
+  const HELP_KEYS  = 'SPACE or CLICK to jump &nbsp;&nbsp; hold it for the full 3 squares &nbsp;&nbsp; press again in the air to double jump';
+  const HELP_TOUCH = 'TAP to jump &nbsp;&nbsp; HOLD for the full 3 squares &nbsp;&nbsp; tap again in the air to double jump';
 
   let last = 0;
   function frame(now) {
