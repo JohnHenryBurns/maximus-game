@@ -299,6 +299,23 @@
   let logs = [];
   let logTimer = 1.6;
 
+  // ---- ROCKS OUT OF THE SKY ------------------------------------------
+  //  Everything else in this river you can plan around. These ARRIVE.
+  //
+  //  A ring on the water shows where one is going to land, and it
+  //  tightens and brightens as the rock drops - that ring is the whole
+  //  fairness of it, because you are never hit by something you had no
+  //  way of seeing.
+  //
+  //  AND YOU CANNOT LEAP ONE. A rock falling out of the sky doesn't care
+  //  that you're in the air - it would hit you there too. So the only
+  //  answer is to be in another lane, which makes it the one hazard the
+  //  leap is no use against at all.
+  const FALL_EVERY = 3.2;
+  const FALL_TIME  = 1.35;      // how long it takes to come down
+  let fallers = [];
+  let fallTimer = 2.4;
+
   let rocks = [];
   let bears = [];
   let eagles = [];
@@ -345,6 +362,7 @@
   function tidy() {
     const back = fish.z - 260;
     logs = logs.filter(function (l) { return l.z > back; });
+    fallers = fallers.filter(function (f) { return f.z > back && !f.gone; });
     rocks  = rocks.filter(function (r) { return r.z > back; });
     bears  = bears.filter(function (b) { return b.z > back; });
     eagles = eagles.filter(function (e) { return e.z > back; });
@@ -372,8 +390,8 @@
     fish.leaping = false; fish.caught = 0; fish.lane = 1;
     dist = 0; clock = 0; deadWhy = '';
     wave.z = -WAVE_LEAD; wave.foam = 0;
-    rocks = []; bears = []; eagles = []; bits = []; logs = [];
-    logTimer = 1.6;
+    rocks = []; bears = []; eagles = []; bits = []; logs = []; fallers = [];
+    logTimer = 1.6; fallTimer = 2.4;
     madeTo = 120;
     while (madeTo < 900) makeMore();
     cam.x = 0; cam.z = LOOK_AHEAD; cam.y = CAM_UP;
@@ -518,6 +536,50 @@
     // ---- HOW FAR -----------------------------------------------------------
     dist = Math.max(dist, fish.z / 10);
 
+    // ---- ROCKS COMING DOWN OUT OF THE SKY -----------------------------
+    fallTimer -= dt;
+    if (fallTimer <= 0) {
+      fallTimer = FALL_EVERY + Math.random() * FALL_EVERY;
+      fallers.push({
+        lane: Math.floor(Math.random() * LANES),
+        z: fish.z + 60 + Math.random() * 180,
+        // 60 up, not 150. Looking STRAIGHT down, a thing 150 up is
+        // nearly at the camera - so it drew three times the size and
+        // slid right off the side of the screen, nowhere near the ring
+        // marking where it was going to land. From 60 it stays over its
+        // own ring and just grows as it comes.
+        y: 60, t: FALL_TIME,
+        r: 9 + Math.random() * 8,
+        spin: Math.random() * 6
+      });
+    }
+
+    for (const fr of fallers) {
+      if (fr.gone) continue;
+      fr.t -= dt;
+      fr.y = 60 * clamp(fr.t / FALL_TIME, 0, 1);
+
+      if (fr.t > 0) continue;
+      fr.gone = true;
+
+      // ---- IT LANDS ---------------------------------------------------
+      splash(laneX(fr.lane, fr.z), fr.z, 22, [[230, 245, 250], [150, 140, 132]]);
+
+      // On your head? Being in the air is no help at all.
+      if (fr.lane === fish.lane && Math.abs(fr.z - fish.z) < fr.r + 10) {
+        if (fish.stun <= 0) {
+          fish.stun = 1.0;
+          fish.z -= 26;
+          say('ROCKFALL!');
+        }
+      }
+
+      // From here on it IS a rock. Everything rocks already do - the
+      // lane collision, the drawing, being cleared away behind you -
+      // works on it with no new code at all.
+      rocks.push({ lane: fr.lane, z: fr.z, r: fr.r, spin: fr.spin });
+    }
+
     // ---- LOGS COMING DOWN ---------------------------------------------
     logTimer -= dt;
     if (logTimer <= 0) {
@@ -659,6 +721,31 @@
       const x = laneX(r.lane, r.z);
       addBox(x, 3, r.z, r.r * 1.7, 8, r.r * 1.7, ROCK, r.spin);
       addBox(x, 6, r.z, r.r * 1.1, 5, r.r * 1.1, shade(ROCK, 1.18), r.spin);
+    }
+  }
+
+  // A rock still in the air, and the ring on the water marking where
+  // it's going to land. The ring tightens and brightens as it drops.
+  function drawFallers() {
+    for (const fr of fallers) {
+      if (fr.gone) continue;
+      if (fr.z < fish.z - 120 || fr.z > fish.z + 700) continue;
+      const x = laneX(fr.lane, fr.z);
+      const soon = clamp(1 - fr.t / FALL_TIME, 0, 1);
+
+      // THE RING. Eight marks in a circle, closing in.
+      const ring = fr.r * (2.6 - soon * 1.4);
+      const bright = 120 + soon * 135;
+      for (let i = 0; i < 8; i++) {
+        const a = i / 8 * Math.PI * 2 + soon * 2;
+        addBox(x + Math.cos(a) * ring, 0.6, fr.z + Math.sin(a) * ring,
+               3, 1.4, 3, [bright, bright * 0.62, 60]);
+      }
+
+      // And the rock itself, tumbling down.
+      addBox(x, fr.y + 5, fr.z, fr.r * 1.6, 8, fr.r * 1.6, ROCK, fr.spin + fr.y * 0.05);
+      addBox(x, fr.y + 9, fr.z, fr.r * 1.0, 5, fr.r * 1.0,
+             shade(ROCK, 1.18), fr.spin + fr.y * 0.05);
     }
   }
 
@@ -981,6 +1068,7 @@
     drawLanes();
     drawRocks();
     drawLogs();
+    drawFallers();
     drawBears();
     drawEagles();
     drawWave();
