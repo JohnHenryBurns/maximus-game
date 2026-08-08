@@ -295,6 +295,20 @@
   //  And they ride low in the water, so a leap clears them. That's a
   //  third job for the leap, and every one of them is a reason to spend
   //  a jump you might want later.
+  // ---- GEYSERS --------------------------------------------------------
+  //  Everything else in this river is trying to STOP you. A geyser is
+  //  the one thing that helps: sit over one as it blows and it throws
+  //  you up and a long way upstream, right over a rapid.
+  //
+  //  But being in the air is exactly what an eagle is waiting for. So
+  //  the best thing in the game and the worst thing in the game are the
+  //  same thing, and which one it turns out to be depends on whether
+  //  you looked up first.
+  const GEYSER_UP    = 132;    // far harder than your own leap of 80
+  const GEYSER_ON    = 0.9;    // how long it blows for
+  const GEYSER_WARN  = 0.8;    // how long it bubbles before it blows
+  let geysers = [];
+
   const LOG_EVERY = 2.4;
   let logs = [];
   let logTimer = 1.6;
@@ -350,6 +364,13 @@
                    swipe: 0, cool: 1 + Math.random() * 2, got: false });
     }
 
+    // ---- GEYSERS ----------------------------------------------------
+    if (Math.random() < 0.34) {
+      const cycle = 2.6 + Math.random() * 2.4;
+      geysers.push({ lane: Math.floor(Math.random() * LANES), z: z,
+                     cycle: cycle, t: Math.random() * cycle, on: 0 });
+    }
+
     // ---- EAGLES -----------------------------------------------------
     // Circling. They only ever take a fish that's OUT OF THE WATER, so
     // leaping is a real decision and not a free button.
@@ -363,6 +384,7 @@
     const back = fish.z - 260;
     logs = logs.filter(function (l) { return l.z > back; });
     fallers = fallers.filter(function (f) { return f.z > back && !f.gone; });
+    geysers = geysers.filter(function (g) { return g.z > back; });
     rocks  = rocks.filter(function (r) { return r.z > back; });
     bears  = bears.filter(function (b) { return b.z > back; });
     eagles = eagles.filter(function (e) { return e.z > back; });
@@ -391,6 +413,7 @@
     dist = 0; clock = 0; deadWhy = '';
     wave.z = -WAVE_LEAD; wave.foam = 0;
     rocks = []; bears = []; eagles = []; bits = []; logs = []; fallers = [];
+    geysers = [];
     logTimer = 1.6; fallTimer = 2.4;
     madeTo = 120;
     while (madeTo < 900) makeMore();
@@ -535,6 +558,36 @@
 
     // ---- HOW FAR -----------------------------------------------------------
     dist = Math.max(dist, fish.z / 10);
+
+    // ---- GEYSERS ------------------------------------------------------
+    for (const g of geysers) {
+      if (g.on > 0) {
+        g.on -= dt;
+        // Bubbles the whole time it's up.
+        if (Math.random() < 0.6) {
+          splash(laneX(g.lane, g.z) + (Math.random() - 0.5) * 14, g.z, 1,
+                 [[236, 250, 254], [180, 220, 236]]);
+        }
+        continue;
+      }
+
+      g.t -= dt;
+      if (g.t > 0) continue;
+
+      // ---- IT BLOWS ---------------------------------------------------
+      g.on = GEYSER_ON;
+      g.t = g.cycle;
+      splash(laneX(g.lane, g.z), g.z, 18, [[236, 250, 254], [150, 200, 220]]);
+
+      // Over it when it goes? Up you go - and it does NOT care whether
+      // you were already in the air, because a column of water hitting
+      // you is a column of water hitting you.
+      if (g.lane === fish.lane && Math.abs(g.z - fish.z) < 20 && fish.stun <= 0) {
+        fish.leaping = true;
+        fish.vy = GEYSER_UP;
+        say('WHOOSH!');
+      }
+    }
 
     // ---- ROCKS COMING DOWN OUT OF THE SKY -----------------------------
     fallTimer -= dt;
@@ -726,6 +779,45 @@
 
   // A rock still in the air, and the ring on the water marking where
   // it's going to land. The ring tightens and brightens as it drops.
+  // A geyser: a churn of bubbles that you can see coming, then a column
+  // of white water. The bubbling IS the warning - it's the difference
+  // between a boost you chose and one that happened to you.
+  function drawGeysers() {
+    for (const g of geysers) {
+      if (g.z < fish.z - 120 || g.z > fish.z + 700) continue;
+      const x = laneX(g.lane, g.z);
+
+      if (g.on > 0) {
+        // UP. Slabs stacked into a column, tallest in the middle of the
+        // blow and dying away at the end.
+        const left = g.on / GEYSER_ON;
+        const tall = 54 * Math.sin(left * Math.PI) + 8;
+        for (let i = 0; i < 5; i++) {
+          const up = tall * (i / 5);
+          const wob = Math.sin(clock * 18 + i) * 2.5;
+          addBox(x + wob, up + tall / 10, g.z, 15 - i * 1.6, tall / 4,
+                 15 - i * 1.6, [232, 248, 253]);
+        }
+        continue;
+      }
+
+      // Bubbling, and it churns harder the closer it is to going.
+      const soon = clamp(1 - g.t / GEYSER_WARN, 0, 1);
+      if (soon <= 0) {
+        // Resting: just a patch of paler water so you know it's there.
+        addBox(x, 0.5, g.z, 15, 1, 15, [92, 150, 176]);
+        continue;
+      }
+      for (let i = 0; i < 7; i++) {
+        const a = i / 7 * Math.PI * 2 + clock * 4;
+        const r = 7 * (1 - soon * 0.4);
+        addBox(x + Math.cos(a) * r, 1 + Math.sin(clock * 9 + i) * soon * 2.5,
+               g.z + Math.sin(a) * r, 3.4, 2.4, 3.4,
+               [190 + soon * 46, 226 + soon * 22, 240]);
+      }
+    }
+  }
+
   function drawFallers() {
     for (const fr of fallers) {
       if (fr.gone) continue;
@@ -1068,6 +1160,7 @@
     drawLanes();
     drawRocks();
     drawLogs();
+    drawGeysers();
     drawFallers();
     drawBears();
     drawEagles();
