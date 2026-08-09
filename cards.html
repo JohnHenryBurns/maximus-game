@@ -345,9 +345,30 @@
   // bigger collection is not automatically an easier fight - a BETTER
   // one is.
   // Theirs are always plain. The shiny ones are yours.
+  //
+  // Their deck is drawn from the SAME MIX as your collection, so their
+  // monsters are exactly as good as the ones you own. Fill your
+  // collection with dragons and you will be fighting dragons.
+  //
+  // Matching them by some "power" number would have been wrong, and
+  // measuring proved it: a collection of nothing but the biggest
+  // numbers - all PANTS DRAGONS and BELCH BEASTS, average 8.00 - won
+  // only 10 games of 40, worse than a brand new player on 5.88. Six
+  // damage is no use on a monster with two life, because it dies, and
+  // the hole it leaves is where they walk through and hit YOUR king.
+  // So we copy the actual cards, not a score out of ten.
   function theirDeck(size) {
+    const pool = [];
+    for (let f = 0; f < FINISHES.length; f++)
+      for (let i = 0; i < CARDS.length; i++)
+        for (let n = 0; n < own[f][i]; n++) pool.push(i);
+
     const d = [];
-    for (let i = 0; i < size; i++) d.push({ i: randomCardIndex(), f: PLAIN });
+    for (let i = 0; i < size; i++) {
+      const idx = pool.length ? pool[Math.floor(Math.random() * pool.length)]
+                              : randomCardIndex();
+      d.push({ i: idx, f: PLAIN });
+    }
     return d;
   }
 
