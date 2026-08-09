@@ -31,12 +31,84 @@
        how, being told again is just something in the way. */
     transition: opacity 0.6s;
   }
+
+  /* ---- CORNER NAV PILLS -------------------------------------------------
+     The same rounded, blurred treatment the other games use, so tapping
+     out to the arcade (or resetting) looks like part of the same machine.
+     They sit in their own band across the very top; the tower's own HUD
+     (coins, steps) is drawn just below them so nothing overlaps. */
+  #back, #reset {
+    position: fixed; top: 8px; z-index: 20;
+    color: #ffe9c4;
+    background: rgba(20, 26, 38, 0.62);
+    border: 1px solid rgba(255, 215, 106, 0.35);
+    font-family: inherit; font-size: 13px; font-weight: 600; letter-spacing: 0.3px;
+    padding: 7px 13px; border-radius: 999px;
+    text-decoration: none; cursor: pointer;
+    -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px);
+    transition: transform 0.12s, border-color 0.12s, background 0.12s;
+  }
+  #back  { left: 10px; }
+  #reset { right: 10px; }
+  #back:hover, #back:active, #reset:hover, #reset:active {
+    transform: scale(1.05);
+    border-color: rgba(255, 215, 106, 0.85);
+    background: rgba(30, 38, 54, 0.78);
+  }
+
+  /* ---- THE RESET CONFIRMATION ------------------------------------------
+     Resetting throws your whole tower away, so it asks first. A full-screen
+     dimmed backdrop also blocks taps behind it, so you can't accidentally
+     build while the question is up. */
+  #resetModal {
+    position: fixed; inset: 0; z-index: 30;
+    display: none;                 /* flipped to flex when shown */
+    align-items: center; justify-content: center;
+    background: rgba(6, 9, 14, 0.72);
+    -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px);
+  }
+  #resetModal .card {
+    width: min(330px, 86vw);
+    background: #161d29;
+    border: 1px solid rgba(255, 215, 106, 0.3);
+    border-radius: 16px;
+    padding: 24px 22px;
+    text-align: center;
+    box-shadow: 0 12px 44px rgba(0, 0, 0, 0.55);
+  }
+  #resetModal h3 { margin: 0 0 10px; font-size: 21px; color: #ffe9c4; letter-spacing: 1px; }
+  #resetModal p  { margin: 0 0 20px; font-size: 14px; line-height: 1.5; color: #9fb0c6; }
+  #resetModal .row { display: flex; gap: 10px; }
+  #resetModal .btn {
+    flex: 1; padding: 13px 10px; border-radius: 11px;
+    font-family: inherit; font-size: 15px; font-weight: 700; cursor: pointer;
+    border: 1px solid transparent;
+    transition: transform 0.1s;
+  }
+  #resetModal .btn:active { transform: scale(0.97); }
+  #resetModal .cancel { background: #232c3b; color: #e6ecf5; border-color: rgba(255,255,255,0.14); }
+  #resetModal .danger { background: #e05a4a; color: #fff; }
 </style>
 </head>
 <body>
 
 <canvas id="screen"></canvas>
 <div id="hud">TAP to build &nbsp;&nbsp; stop the robots reaching the flag at the TOP</div>
+
+<a id="back" href="index.html">&larr; Arcade</a>
+<button id="reset">&#8635; Reset</button>
+
+<!-- The reset asks first, because it throws the whole tower away. -->
+<div id="resetModal">
+  <div class="card">
+    <h3>RESET?</h3>
+    <p>This clears the whole tower and everything on it, and starts over from round 1.</p>
+    <div class="row">
+      <button id="resetCancel" class="btn cancel">Keep going</button>
+      <button id="resetYes" class="btn danger">Reset</button>
+    </div>
+  </div>
+</div>
 
 <script>
 // ===================================================================
@@ -294,6 +366,20 @@
     layLedges(true);
     think();
     return -1;
+  }
+
+  // START THE WHOLE GAME OVER. Fresh tower, coins and round back to the
+  // beginning, everything you'd placed thrown away. We keep `best` though -
+  // your record for most robots stopped is worth hanging on to.
+  function resetGame() {
+    coins = 26; round = 1;
+    holdingKey = -1; tool = 0;
+    bots = []; route = [];
+    banner = ''; bannerT = 0;
+    says = ''; saysT = 0;
+    state = 'build';
+    newTower();
+    say('fresh tower - stop them reaching the flag');
   }
 
 
@@ -623,7 +709,10 @@
   // the buttons move to a block on the right instead of a row below.
   function wide()   { return W > H * 1.35; }
   function panelW() { return wide() ? Math.min(W * 0.36, 320) : 0; }
-  function topBar() { return wide() ? 62 : 96; }
+  // A slim band across the very top is now reserved for the Arcade / Reset
+  // nav pills, so the game's own HUD is pushed down clear of them.
+  const NAVH = 40;
+  function topBar() { return (wide() ? 62 : 96) + NAVH; }
 
   // Five tools and a GO button will not fit in one row on a phone, so
   // they wrap onto as many rows as they need - and the tower is told
@@ -913,7 +1002,8 @@
   }
 
   function drawHud() {
-    const line1 = wide() ? 30 : 44, line2 = wide() ? 50 : 68;
+    // The +NAVH drops the coins/steps read-out below the nav pill band.
+    const line1 = (wide() ? 30 : 44) + NAVH, line2 = (wide() ? 50 : 68) + NAVH;
 
     ctx.textAlign = 'left';
     ctx.font = 'bold ' + Math.min(W * 0.042, 34) + 'px system-ui, sans-serif';
@@ -1022,7 +1112,7 @@
       ctx.font = 'bold 11px system-ui, sans-serif';
       ctx.fillStyle = '#6b7a90';
       ctx.fillText('turn your phone upright for a much bigger tower',
-                   (W - panelW()) / 2, 30);
+                   (W - panelW()) / 2, 30 + NAVH);
     }
 
     // ---- GOOD JOB / PERFECT --------------------------------------------
@@ -1251,6 +1341,30 @@
 
   newTower();
   requestAnimationFrame(frame);
+
+
+// -------------------------------------------------------------------
+//  THE NAV BUTTONS  (the Arcade link is just an <a>; Reset asks first)
+// -------------------------------------------------------------------
+
+  const resetModal = document.getElementById('resetModal');
+  function showReset() { resetModal.style.display = 'flex'; }
+  function hideReset() { resetModal.style.display = 'none'; }
+
+  document.getElementById('reset').addEventListener('click', showReset);
+  document.getElementById('resetCancel').addEventListener('click', hideReset);
+  document.getElementById('resetYes').addEventListener('click', function () {
+    hideReset();
+    resetGame();
+  });
+  // Tapping the dark area around the card, or pressing Escape, both mean
+  // "no, never mind" - the same as Keep going.
+  resetModal.addEventListener('click', function (e) {
+    if (e.target === resetModal) hideReset();
+  });
+  window.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') hideReset();
+  });
 
 </script>
 </body>
