@@ -305,6 +305,7 @@
   let them  = { hearts: START_HEARTS, board: [null, null, null], hand: [], deck: [] };
 
   let picked = -1;
+  let placedThisTurn = 0;
   let turn = 'you';
   let says = '', saysT = 0;
   function say(w) { says = w; saysT = 2.6; }
@@ -350,8 +351,24 @@
     return d;
   }
 
+  // EVERY card you own gets into the battle. When the pile runs out, the
+  // whole collection is shuffled and comes round again - so a small
+  // collection never simply stops.
+  //
+  // Without this the game was unfair in a way you could measure: with
+  // the starting eight cards you ran dry on about turn six of every
+  // single game and lost all forty, while the opponent - who can always
+  // find another monster - never ran out once in forty.
   function drawFrom(side) {
-    while (side.hand.length < HAND_MAX && side.deck.length) {
+    let guard = 0;
+    while (side.hand.length < HAND_MAX && guard < 200) {
+      guard++;
+      if (!side.deck.length) {
+        side.deck = (side === you) ? yourDeck()
+                                   : theirDeck(Math.max(8, totalOwned()));
+        if (!side.deck.length) break;      // you own nothing at all
+        if (side === you) side.recycled = (side.recycled || 0) + 1;
+      }
       const c = side.deck.pop();
       side.hand.push(newMonster(c.i, c.f));
     }
@@ -364,7 +381,7 @@
              deck: theirDeck(Math.max(8, mine.length)) };
     for (let i = 0; i < 4; i++) { drawFrom(you); drawFrom(them); }
     refillThem();                    // they are three deep from the off
-    picked = -1; turn = 'you'; bits = []; floats = [];
+    picked = -1; placedThisTurn = 0; turn = 'you'; bits = []; floats = [];
     screen = 'duel';
     say('tap a monster, then tap a space');
   }
@@ -447,6 +464,7 @@
       setTimeout(function () { if (turn === 'them') theirTurn(); }, 450);
     } else {
       turn = 'you';
+      placedThisTurn = 0;             // a fresh monster to send in
       drawFrom(you);
     }
   }
@@ -547,13 +565,15 @@
   // space, their king could not be scratched. Sixty games, sixty
   // losses, twenty life untouched every time. This is the compromise
   // Max picked.
-  // TWO, not one, and that is a measured number rather than a guess.
-  // Sixty games each way with the same player:
-  //     they patch 3 -> you win 0   (nothing can ever reach their king)
-  //     they patch 1 -> you win 60  (over in under six turns)
-  //     they patch 2 -> you win 36, they win 24, about twenty turns
-  // One is the rule Max picked; two is the amount that makes it a game.
-  const REFILL_PER_TURN = 2;
+  // ONE each per turn - they patch one hole, you send in one monster.
+  // Back to the number Max picked, because once your cards stopped
+  // running out the whole balance moved. Sixty games each way:
+  //     they patch 3, you play 3 -> nobody EVER wins. 80-turn stalemate.
+  //     they patch 2, you play 3 -> you win 60 of 60.
+  //     they patch 1, you play 1 -> you win 36, they win 24.
+  // Fair, and it makes each card you put down an actual decision.
+  const REFILL_PER_TURN = 1;
+  const PLACE_PER_TURN = 1;
 
   function refillThem(limit) {
     // If YOU have since played a copy of something they already had,
@@ -1143,14 +1163,17 @@
     for (let s = 0; s < SLOTS; s++) {
       const p = slotSpot(true, s);
       if (you.board[s]) drawCard(p.x, p.y, p.w, p.h, you.board[s]);
-      else drawEmptySlot(p.x, p.y, p.w, p.h, picked >= 0 && turn === 'you');
+      else drawEmptySlot(p.x, p.y, p.w, p.h,
+                         picked >= 0 && turn === 'you' && placedThisTurn < PLACE_PER_TURN);
     }
 
     drawKing(true, youHurt);
     ctx.textAlign = 'right';
     ctx.font = Math.min(W * 0.028, 14) + 'px system-ui, sans-serif';
     ctx.fillStyle = '#6b6288';
-    ctx.fillText('deck: ' + you.deck.length, W - 18, kingSpot(true).y + 14);
+    ctx.fillText('deck: ' + you.deck.length +
+                 (you.recycled ? '  (shuffled x' + you.recycled + ')' : ''),
+                 W - 18, kingSpot(true).y + 14);
 
     for (let i = 0; i < you.hand.length; i++) {
       const p = handSpot(i, you.hand.length);
@@ -1383,9 +1406,13 @@
       if (!inBox(mx, my, slotSpot(true, s))) continue;
       if (picked < 0) { say('pick a monster first'); return; }
       if (you.board[s]) { say('something is already standing there'); return; }
+      if (placedThisTurn >= PLACE_PER_TURN) {
+        say('one monster a turn - tap FIGHT'); return;
+      }
       you.board[s] = you.hand[picked];
       you.hand.splice(picked, 1);
       picked = -1;
+      placedThisTurn++;
       say('now tap FIGHT');
       return;
     }
