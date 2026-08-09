@@ -107,7 +107,20 @@
   }
 
   const SLOTS = 3;
-  const START_HEARTS = 20;
+
+  // ---- THE KINGS ----------------------------------------------------
+  //
+  // Your hearts used to be a number in the corner. Now they are a
+  // monster standing behind your line, and the rule is the one it
+  // always was, just visible: a monster with nobody opposite walks past
+  // and hits the KING. Put something in that space and the monster
+  // takes it instead. Twenty damage and the king goes down.
+  const KING_LIFE = 20;
+  const KINGS = [
+    { name: 'KING MAXIMUS',    col: [120, 150, 230] },   // yours
+    { name: 'KING ROTTENTOOTH',col: [180,  90, 120] }    // theirs
+  ];
+  const START_HEARTS = KING_LIFE;
   const HAND_MAX = 5;
   const PACK_SIZE = 5;
   const DAY = 24 * 60 * 60 * 1000;      // how long a day is, in milliseconds
@@ -299,6 +312,7 @@
   let screen = 'collection';       // 'collection', 'pack', 'duel'
   let savedT = 0;                  // how long the SAVED tick stays up
   let shineT = 0;                  // ticks along forever, to sweep the shiny cards
+  let youHurt = 0, themHurt = 0;   // a king flashes white when he is hit
   let bits = [], floats = [];
 
   function newMonster(i, f) {
@@ -416,10 +430,15 @@
       if (st.target.life <= 0) {
         st.foe.board[st.slot] = null;
         st.died = true;
-        if (spare > 0) { st.foe.hearts -= spare; st.spare = spare; }
+        if (spare > 0) {
+          st.foe.hearts -= spare; st.spare = spare;
+          if (st.foe === you) youHurt = 1; else themHurt = 1;
+        }
       }
     } else {
+      // Nobody in the way, so it walks past and hits the king himself.
       st.foe.hearts -= m.hit;
+      if (st.foe === you) youHurt = 1; else themHurt = 1;
     }
     shake = 0.32;
   }
@@ -478,7 +497,7 @@
           say('YOU WIN!  ' + winStreak + '/' + WINS_PER_GOLD + ' towards a gold pack');
         }
       }
-      else if (you.hearts <= 0 && them.hearts > 0) { losses++; say('you lost this one'); }
+      else if (you.hearts <= 0 && them.hearts > 0) { losses++; say('YOUR KING HAS FALLEN'); }
       else say('BOTH OF YOU. wow.');
       save();
       return true;
@@ -585,13 +604,22 @@
 //  WHERE EVERYTHING IS
 // -------------------------------------------------------------------
 
-  function cardW() { return Math.min((W - 50) / SLOTS, 150); }
+  // The kings get a column of their own down the left, and the three
+  // spaces share what is left. Squeezing a king into the gap between
+  // your line and your hand made him 36 pixels wide on a small phone
+  // and sat him on top of both.
+  function kingW() { return Math.min(W * 0.15, 72); }
+  function rowLeft() { return 14 + kingW() + 10; }
+
+  function cardW() {
+    return Math.min((W - rowLeft() - 14 - (SLOTS - 1) * 10) / SLOTS, 150);
+  }
   function cardH() { return cardW() * 1.35; }
 
   function slotSpot(mine, s) {
     const w = cardW(), h = cardH(), gap = 10;
     const totalW = SLOTS * w + (SLOTS - 1) * gap;
-    const x = (W - totalW) / 2 + s * (w + gap);
+    const x = rowLeft() + (W - 14 - rowLeft() - totalW) / 2 + s * (w + gap);
     const midY = H * 0.46;
     return { x: x, y: mine ? midY + 18 : midY - h - 18, w: w, h: h };
   }
@@ -604,15 +632,25 @@
   }
 
   function theirHandSpot(i, n) {
-    const w = Math.min(cardW() * 0.5, (W - 30) / Math.max(1, n) - 6);
-    const h = w * 1.35, gap = 6;
+    const gap = 6;
+    const w = Math.min(cardW() * 0.5, (W - 30) / Math.max(1, n) - gap);
+    const h = w * 1.35;
     const totalW = n * w + (n - 1) * gap;
-    return { x: (W - totalW) / 2 + i * (w + gap), y: 46, w: w, h: h };
+    return { x: (W - totalW) / 2 + i * (w + gap), y: 30, w: w, h: h };
   }
 
   function endBox() {
     const w = Math.min(W * 0.4, 190);
     return { x: (W - w) / 2, y: H - 46, w: w, h: 38 };
+  }
+
+  // The king stands behind his line: theirs up in the top corner, yours
+  // in the gap between your line and your hand.
+  // Each king stands level with his own line, in the left-hand column.
+  function kingSpot(mine) {
+    const w = kingW(), h = w * 1.35;
+    const row = slotSpot(mine, 0);
+    return { x: 14, y: row.y + cardH() / 2 - h / 2, w: w, h: h };
   }
 
   // ---- the collection screen ----
@@ -843,11 +881,75 @@
     ctx.setLineDash([]);
   }
 
-  function drawHearts(n, x, y, size, col) {
-    ctx.textAlign = 'left';
-    ctx.font = 'bold ' + size + 'px system-ui, sans-serif';
-    ctx.fillStyle = col;
-    ctx.fillText('♥ ' + Math.max(0, n), x, y);
+  // A king is a card like any other, with a crown on and his life
+  // written big - because that number IS your health.
+  function drawKing(mine, hurtFlash) {
+    const b = kingSpot(mine);
+    const k = KINGS[mine ? 0 : 1];
+    const life = Math.max(0, mine ? you.hearts : them.hearts);
+    const x = b.x, y = b.y, w = b.w, h = b.h;
+
+    ctx.fillStyle = 'rgba(0,0,0,0.4)';
+    roundRect(x + 3, y + 4, w, h, w * 0.11); ctx.fill();
+    ctx.fillStyle = rgb(k.col);
+    roundRect(x, y, w, h, w * 0.11); ctx.fill();
+
+    if (hurtFlash > 0) {
+      ctx.fillStyle = 'rgba(255,255,255,' + clamp(hurtFlash, 0, 1) * 0.65 + ')';
+      roundRect(x, y, w, h, w * 0.11); ctx.fill();
+    }
+
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = life <= 5 ? '#ff6a6a' : '#ffd76a';
+    roundRect(x, y, w, h, w * 0.11); ctx.stroke();
+
+    // Crown.
+    ctx.fillStyle = '#ffd76a';
+    const cw = w * 0.6, cx = x + w / 2 - cw / 2, cyt = y + h * 0.10;
+    ctx.beginPath();
+    ctx.moveTo(cx, cyt + cw * 0.28);
+    ctx.lineTo(cx, cyt);
+    ctx.lineTo(cx + cw * 0.25, cyt + cw * 0.15);
+    ctx.lineTo(cx + cw * 0.5, cyt - cw * 0.04);
+    ctx.lineTo(cx + cw * 0.75, cyt + cw * 0.15);
+    ctx.lineTo(cx + cw, cyt);
+    ctx.lineTo(cx + cw, cyt + cw * 0.28);
+    ctx.closePath();
+    ctx.fill();
+
+    // Face.
+    ctx.fillStyle = '#1b1428';
+    for (let e = 0; e < 2; e++) {
+      ctx.beginPath();
+      ctx.arc(x + w * (0.34 + e * 0.32), y + h * 0.46, w * 0.075, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.strokeStyle = '#1b1428';
+    ctx.lineWidth = Math.max(2, w * 0.04);
+    ctx.beginPath();
+    if (life <= 5) {                       // he is not enjoying this
+      ctx.arc(x + w / 2, y + h * 0.68, w * 0.16, 1.15 * Math.PI, 1.85 * Math.PI);
+    } else {
+      ctx.arc(x + w / 2, y + h * 0.58, w * 0.16, 0.15 * Math.PI, 0.85 * Math.PI);
+    }
+    ctx.stroke();
+
+    // How much of him is left: the number sits ABOVE the bar, not on it.
+    const bh = h * 0.10, by = y + h - bh - 4;
+
+    ctx.textAlign = 'center';
+    ctx.font = 'bold ' + w * 0.30 + 'px system-ui, sans-serif';
+    ctx.fillStyle = '#1b1428';
+    ctx.fillText(life, x + w / 2, by - h * 0.06);
+
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.fillRect(x + 4, by, w - 8, bh);
+    ctx.fillStyle = life <= 5 ? '#ff6a6a' : '#8fe07a';
+    ctx.fillRect(x + 4, by, (w - 8) * clamp(life / KING_LIFE, 0, 1), bh);
+
+    ctx.font = 'bold ' + Math.max(8, w * 0.13) + 'px system-ui, sans-serif';
+    ctx.fillStyle = mine ? '#9bffb0' : '#ff9ba6';
+    ctx.fillText(mine ? 'YOUR KING' : 'THEIR KING', x + w / 2, y + h + w * 0.2);
   }
 
   function drawButton(b, label, on, colOn) {
@@ -1010,7 +1112,7 @@
     ctx.moveTo(20, H * 0.46); ctx.lineTo(W - 20, H * 0.46);
     ctx.stroke();
 
-    drawHearts(them.hearts, 18, 34, Math.min(W * 0.055, 30), '#ff9ba6');
+    drawKing(false, themHurt);
 
     for (let i = 0; i < them.hand.length; i++) {
       const p = theirHandSpot(i, them.hand.length);
@@ -1039,11 +1141,11 @@
       else drawEmptySlot(p.x, p.y, p.w, p.h, picked >= 0 && turn === 'you');
     }
 
-    drawHearts(you.hearts, 18, H - cardH() * 0.82 - 74, Math.min(W * 0.055, 30), '#9bffb0');
+    drawKing(true, youHurt);
     ctx.textAlign = 'right';
     ctx.font = Math.min(W * 0.028, 14) + 'px system-ui, sans-serif';
     ctx.fillStyle = '#6b6288';
-    ctx.fillText('deck: ' + you.deck.length, W - 18, H - cardH() * 0.82 - 74);
+    ctx.fillText('deck: ' + you.deck.length, W - 18, kingSpot(true).y + 14);
 
     for (let i = 0; i < you.hand.length; i++) {
       const p = handSpot(i, you.hand.length);
@@ -1088,15 +1190,52 @@
     if (st.target) {
       drawCard(rightX, cy, cw, ch, st.target);
     } else {
-      // Nobody was standing there, so it is running straight at the
-      // player. Draw what it is about to hit.
-      ctx.font = 'bold ' + Math.min(W * 0.16, 90) + 'px system-ui, sans-serif';
-      ctx.fillStyle = st.mine ? '#ff9ba6' : '#9bffb0';
-      ctx.fillText('♥', rightX + cw / 2, cy + ch * 0.66);
-      ctx.font = 'bold ' + Math.min(W * 0.05, 26) + 'px system-ui, sans-serif';
-      ctx.fillStyle = '#f0e9ff';
-      ctx.fillText(Math.max(0, st.mine ? them.hearts : you.hearts),
-                   rightX + cw / 2, cy + ch * 0.92);
+      // Nobody was standing there, so it is charging the king. Draw him
+      // properly, at the same size as the monster running at him - this
+      // is the moment the whole rule makes sense.
+      const k = KINGS[st.mine ? 1 : 0];
+      const life = Math.max(0, st.mine ? them.hearts : you.hearts);
+
+      ctx.fillStyle = 'rgba(0,0,0,0.4)';
+      roundRect(rightX + 4, cy + 5, cw, ch, cw * 0.09); ctx.fill();
+      ctx.fillStyle = rgb(k.col);
+      roundRect(rightX, cy, cw, ch, cw * 0.09); ctx.fill();
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = '#ffd76a';
+      roundRect(rightX, cy, cw, ch, cw * 0.09); ctx.stroke();
+
+      ctx.fillStyle = '#ffd76a';
+      const cwd = cw * 0.5, kx = rightX + cw / 2 - cwd / 2, kyt = cy + ch * 0.12;
+      ctx.beginPath();
+      ctx.moveTo(kx, kyt + cwd * 0.28);
+      ctx.lineTo(kx, kyt);
+      ctx.lineTo(kx + cwd * 0.25, kyt + cwd * 0.15);
+      ctx.lineTo(kx + cwd * 0.5, kyt - cwd * 0.04);
+      ctx.lineTo(kx + cwd * 0.75, kyt + cwd * 0.15);
+      ctx.lineTo(kx + cwd, kyt);
+      ctx.lineTo(kx + cwd, kyt + cwd * 0.28);
+      ctx.closePath(); ctx.fill();
+
+      ctx.fillStyle = '#1b1428';
+      for (let e = 0; e < 2; e++) {
+        ctx.beginPath();
+        ctx.arc(rightX + cw * (0.34 + e * 0.32), cy + ch * 0.45, cw * 0.07, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      // Shrink the name until it fits, the same way the monsters do -
+      // KING ROTTENTOOTH is a long word for a small card.
+      ctx.textAlign = 'center';
+      let kf = cw * 0.13;
+      ctx.font = 'bold ' + kf + 'px system-ui, sans-serif';
+      const nameRoom = cw - 12, nameW = ctx.measureText(k.name).width;
+      if (nameW > nameRoom) {
+        kf *= nameRoom / nameW;
+        ctx.font = 'bold ' + kf + 'px system-ui, sans-serif';
+      }
+      ctx.fillStyle = '#1b1428';
+      ctx.fillText(k.name, rightX + cw / 2, cy + ch * 0.72);
+      ctx.font = 'bold ' + cw * 0.3 + 'px system-ui, sans-serif';
+      ctx.fillText(life, rightX + cw / 2, cy + ch * 0.94);
     }
 
     // The clash: a white starburst right where they meet.
@@ -1274,6 +1413,8 @@
 
     if (saysT > 0) saysT -= dt;
     if (savedT > 0) savedT -= dt;
+    if (youHurt > 0) youHurt -= dt * 2.2;
+    if (themHurt > 0) themHurt -= dt * 2.2;
     shineT += dt;
     if (shake > 0) shake -= dt * 1.6;
     if (screen === 'pack') revealT += dt;
