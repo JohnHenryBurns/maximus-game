@@ -4,13 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport"
       content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>BEAT THE BOT</title>
+<title>BOT RUSH</title>
 
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" content="#10141c">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Beat the Bot">
+<meta name="apple-mobile-web-app-title" content="Bot Rush">
 <link rel="apple-touch-icon" href="icon-192.png">
 <link rel="icon" href="icon-192.png">
 
@@ -31,16 +31,164 @@
        how, being told again is just something in the way. */
     transition: opacity 0.6s;
   }
+
+  /* ---- CORNER NAV PILLS -------------------------------------------------
+     The same rounded, blurred treatment the other games use, so tapping
+     out to the arcade (or resetting) looks like part of the same machine.
+     Arcade sits top-left, Reset top-right; the tower's own stat bar is drawn
+     just below them so nothing overlaps. Reset opens a little menu, so one
+     button covers both "clear this level" and "start a new game". */
+  .navpill {
+    color: #ffe9c4;
+    background: rgba(20, 26, 38, 0.62);
+    border: 1px solid rgba(255, 215, 106, 0.35);
+    font-family: inherit; font-size: 13px; font-weight: 600; letter-spacing: 0.3px;
+    padding: 7px 13px; border-radius: 999px;
+    text-decoration: none; cursor: pointer; white-space: nowrap;
+    -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px);
+    transition: transform 0.12s, border-color 0.12s, background 0.12s;
+  }
+  #back  { position: fixed; top: 8px; left: 10px;  z-index: 20; }
+  #reset { position: fixed; top: 8px; right: 10px; z-index: 20; }
+  .navpill:hover, .navpill:active {
+    transform: scale(1.05);
+    border-color: rgba(255, 215, 106, 0.85);
+    background: rgba(30, 38, 54, 0.78);
+  }
+
+  /* ---- THE RESET CONFIRMATION ------------------------------------------
+     Resetting throws your whole tower away, so it asks first. A full-screen
+     dimmed backdrop also blocks taps behind it, so you can't accidentally
+     build while the question is up. */
+  #resetModal {
+    position: fixed; inset: 0; z-index: 30;
+    display: none;                 /* flipped to flex when shown */
+    align-items: center; justify-content: center;
+    background: rgba(6, 9, 14, 0.72);
+    -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px);
+  }
+  #resetModal .card {
+    width: min(330px, 86vw);
+    background: #161d29;
+    border: 1px solid rgba(255, 215, 106, 0.3);
+    border-radius: 16px;
+    padding: 24px 22px;
+    text-align: center;
+    box-shadow: 0 12px 44px rgba(0, 0, 0, 0.55);
+  }
+  #resetModal h3 { margin: 0 0 6px; font-size: 21px; color: #ffe9c4; letter-spacing: 1px; text-align: center; }
+  #resetModal p  { margin: 0 0 18px; font-size: 14px; line-height: 1.5; color: #9fb0c6; text-align: center; }
+  #resetModal .btn {
+    padding: 13px 12px; border-radius: 11px;
+    font-family: inherit; font-size: 15px; font-weight: 700; cursor: pointer;
+    border: 1px solid transparent;
+    transition: transform 0.1s, background 0.12s;
+  }
+  #resetModal .btn:active { transform: scale(0.97); }
+  /* Each choice is its own full-width row with a small line explaining it. */
+  #resetModal .opt {
+    display: block; width: 100%; text-align: left; margin-bottom: 10px;
+    background: #232c3b; color: #e6ecf5; border-color: rgba(255,255,255,0.14);
+  }
+  #resetModal .opt small {
+    display: block; margin-top: 3px; font-weight: 400; font-size: 11px;
+    letter-spacing: 0; color: #9fb0c6;
+  }
+  #resetModal .opt.danger { background: #3a2020; border-color: rgba(224,90,74,0.5); }
+  #resetModal .opt.danger small { color: #e0a59c; }
+  #resetModal .cancel {
+    display: block; width: 100%;
+    background: #232c3b; color: #e6ecf5; border-color: rgba(255,255,255,0.14);
+  }
+
+  /* ---- THE WAVE-COMPLETE SUMMARY ---------------------------------------
+     Instead of a plain NEXT WAVE button, finishing a wave brings up a card
+     that tells you how you did, what you built, what you earned, and what's
+     coming - then lets you send the next lot straight from it. */
+  #waveModal {
+    position: fixed; inset: 0; z-index: 30;
+    display: none;                 /* flipped to flex when a wave ends */
+    align-items: center; justify-content: center;
+    background: rgba(6, 9, 14, 0.72);
+    -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px);
+  }
+  #waveModal .card {
+    width: min(360px, 88vw);
+    background: #161d29;
+    border: 1px solid rgba(255, 215, 106, 0.32);
+    border-radius: 16px;
+    padding: 22px 22px 20px;
+    box-shadow: 0 12px 44px rgba(0, 0, 0, 0.55);
+  }
+  #waveModal h3 { margin: 0; font-size: 15px; color: #9fb0c6; letter-spacing: 2px; text-align: center; }
+  #waveModal .big { text-align: center; font-size: 34px; font-weight: 800; margin: 8px 0 2px; }
+  #waveModal .sub { text-align: center; font-size: 13px; color: #9fb0c6; margin: 0 0 16px; }
+  #waveModal .rows { display: flex; flex-direction: column; gap: 10px; margin-bottom: 18px; }
+  #waveModal .r { display: flex; align-items: baseline; gap: 10px; font-size: 14px; }
+  #waveModal .r .lab {
+    color: #6b7a90; font-size: 10px; text-transform: uppercase; letter-spacing: 1px;
+    width: 78px; flex: none; text-align: right;
+  }
+  #waveModal .r .val { color: #e6ecf5; }
+  #waveModal .r .val.gold { color: #ffd76a; font-weight: 700; }
+  #waveModal .go {
+    width: 100%; padding: 15px; border-radius: 12px;
+    font-family: inherit; font-size: 16px; font-weight: 800; letter-spacing: 0.5px;
+    cursor: pointer; border: none; background: #8fe07a; color: #10141c;
+    transition: transform 0.1s, background 0.12s;
+  }
+  #waveModal .go:hover  { background: #a6ea94; }
+  #waveModal .go:active { transform: scale(0.98); }
+  #waveModal .peek {
+    display: block; margin: 12px auto 0; background: none; border: none;
+    color: #6b7a90; font-family: inherit; font-size: 12px; cursor: pointer;
+    text-decoration: underline;
+  }
 </style>
 </head>
 <body>
 
 <canvas id="screen"></canvas>
-<div id="hud">TAP to build &nbsp;&nbsp; stop the robots reaching the flag at the TOP</div>
+<div id="hud">TAP to build &nbsp;&nbsp; stop the robots escaping through the EXIT at the TOP</div>
+
+<a id="back" class="navpill" href="index.html">&larr; Arcade</a>
+<button id="reset" class="navpill">&#8635; Reset</button>
+
+<!-- One Reset button, one little menu of choices - so the top isn't crowded
+     with two buttons and it's always clear which "start again" you mean. -->
+<div id="resetModal">
+  <div class="card">
+    <h3>RESET</h3>
+    <p>What would you like to do?</p>
+    <button id="optClear" class="btn opt">Clear this level
+      <small>Wipe what you built here &middot; keep your coins, level &amp; power</small></button>
+    <button id="optNew" class="btn opt danger">Start a new game
+      <small>Everything back to Level 1 from scratch</small></button>
+    <button id="optCancel" class="btn cancel">Cancel</button>
+  </div>
+</div>
+
+<!-- Pops up when a wave finishes: how you did, what you built, what you
+     earned, and what's next - with the button to send the next wave. -->
+<div id="waveModal">
+  <div class="card">
+    <h3 id="waveTitle">WAVE CLEARED</h3>
+    <div class="big" id="waveBig">0 / 0</div>
+    <div class="sub" id="waveSub">robots stopped</div>
+    <div class="rows">
+      <div class="r"><span class="lab">Built</span><span class="val" id="waveBuilt">-</span></div>
+      <div class="r"><span class="lab">Got past</span><span class="val" id="wavePast">-</span></div>
+      <div class="r"><span class="lab">Earned</span><span class="val gold" id="waveEarn">-</span></div>
+      <div class="r"><span class="lab">Next wave</span><span class="val" id="waveNext">-</span></div>
+    </div>
+    <button id="waveGo" class="go">Send the next wave &rarr;</button>
+    <button id="wavePeek" class="peek">let me look at the tower first</button>
+  </div>
+</div>
 
 <script>
 // ===================================================================
-//  BEAT THE BOT
+//  BOT RUSH
 //
 //  A line of robots is coming. They all want the flag at the top.
 //  You have coins. Stop them.
@@ -81,16 +229,90 @@
   const FLOOR = ROWS - 1;              // the solid ground at the bottom
   const RISE  = 3;                     // a new ledge every 3 rows going up
 
-  // What a robot's legs can do. Everything the brain works out is built
-  // on these two numbers.
+  // What a robot's legs can do. A hop climbs JUMP_UP and clears JUMP_OVER.
+  // On top of that they have a PARACHUTE: after leaping across a gap they can
+  // drift on DOWN the far side instead of needing a ledge exactly where they
+  // land - a real down-and-around option, so blocking one way up sends them
+  // looking for a lower route instead of just giving up. (They fire a little
+  // rocket when climbing and pop the chute when dropping - see drawRobot.)
+  //
+  // A big upward ROCKET BOOST was tried and cut: letting them blast several
+  // rows straight up meant they skipped right over ground-level saws (a saw
+  // gauntlet caught 0% instead of ~68%). A cheap vertical shortcut always
+  // beats a trapped path, so the climb stays a hop.
   const JUMP_UP = 3, JUMP_OVER = 2;
 
-  const START = { c: 1, r: FLOOR - 1 };        // standing on the ground
   const FLAG  = { c: COLS >> 1, r: 1 };        // right at the top
+
+  // SPAWN POINTS. Every level adds another (up to a cap), all of them making
+  // for the same exit - so higher levels are about routing several streams so
+  // they CONVERGE onto your traps.
+  //
+  // The FIRST spawner is always down on the ground. From the SECOND one on,
+  // they can appear up on the random ledges instead - so higher levels aren't
+  // just streams walking in from the floor; some drop in partway up and take
+  // a shorter, different route you have to catch on its own. STARTS is rebuilt
+  // for the current tower whenever a new one is made (see placeStarts, which
+  // runs AFTER the ledges are laid so it can pick real standable spots).
+  const MAX_SPAWNS = 4;
+  function spawnCount() { return Math.min(MAX_SPAWNS, level); }
+  function placeStarts(n) {
+    const out = [{ c: 1, r: FLOOR - 1 }];        // spawner #1: always the ground
+    if (n > 1) {
+      // Spawner #1's cheapest route, so we can steer the OTHERS away from it.
+      // Otherwise higher spawners tend to land right on #1's path and the
+      // streams look like one line; we want them to start apart and only
+      // converge later. (They'll still share the exit in the end.)
+      const route0 = routeOf(thinkFrom(out[0]));
+      function awayFrom(cells, c, r) {
+        if (!cells.length) return 99;
+        let m = 99;
+        for (let k = 0; k < cells.length; k++) {
+          const d = Math.abs(cells[k].c - c) + Math.abs(cells[k].r - r);
+          if (d < m) m = d;
+        }
+        return m;
+      }
+
+      // Every spot a robot could STAND on above the ground - the top of a
+      // ledge - but never the exit row. These are where higher spawners go.
+      const high = [];
+      for (let r = 2; r <= FLOOR - 2; r++)
+        for (let c = 0; c < COLS; c++)
+          if (grid[r][c] === EMPTY && solid(c, r + 1)) high.push({ c: c, r: r });
+
+      for (let i = 1; i < n; i++) {
+        let pick = null;
+        if (high.length) {
+          // Score every spot: mostly by how FAR it is from #1's route, and a
+          // little by how far from the spawners already placed - so the
+          // streams start well apart. Then pick at random from the farthest
+          // band, to keep it varied instead of always the single farthest.
+          let bestScore = -1;
+          const scored = high.map(function (cand) {
+            const score = awayFrom(route0, cand.c, cand.r) * 2 + awayFrom(out, cand.c, cand.r);
+            if (score > bestScore) bestScore = score;
+            return { cand: cand, score: score };
+          });
+          const band = scored.filter(function (x) { return x.score >= bestScore * 0.6; });
+          pick = band[Math.floor(Math.random() * band.length)].cand;
+          high.splice(high.indexOf(pick), 1);
+        }
+        // if the ledges ran out of room, fall back to a spread-out ground spot
+        if (!pick) pick = { c: Math.round(1 + i * (COLS - 3) / (n - 1)), r: FLOOR - 1 };
+        out.push(pick);
+      }
+    }
+    STARTS = out;
+  }
+  let STARTS = [{ c: 1, r: FLOOR - 1 }];
 
   // What can be in a square.
   const EMPTY = 0, WALL = 1, MUD = 2, PLAT = 3, DOOR = 4, KEY = 5,
         SAW = 6, SMASH = 7;
+  // DEMO isn't a thing that sits in a square - it's a TOOL that smashes the
+  // bolted ledges (PLAT), which nothing else can touch. Handled specially.
+  const DEMO = 8;
 
   // Three colours of door. A door only opens for a key of its colour.
   const LOCKS = [
@@ -105,11 +327,13 @@
     { name: 'MUD',   price: 1, kind: MUD,
       blurb: 'they wade through it - five slow steps' },
     { name: 'DOOR',  price: 5, kind: DOOR,
-      blurb: 'locked. you hide its key too' },
+      blurb: 'place a door, then hide its key' },
     { name: 'SAW',   price: 6, kind: SAW,
-      blurb: 'pops up, then drops. slices them' },
+      blurb: 'pops up, then drops. slices them. ⚡powered' },
     { name: 'HAMMER',price: 4, kind: SMASH,
-      blurb: 'slams down. flattens them' }
+      blurb: 'slams down. flattens them. ⚡powered' },
+    { name: 'BREAK', price: 2, kind: DEMO,
+      blurb: 'smash a bolted ledge to open a new gap' }
   ];
 
   let grid = [];      // what is in each square
@@ -118,6 +342,21 @@
   let tool = 0;
   let coins = 26;
   let round = 1;
+
+  // THE LEVEL = which map you're on. You stay on a map, sending wave after
+  // wave, until you stop EVERY robot in one wave - a clean sweep. That
+  // beats the map, and you move up to a brand-new one. (Later levels will
+  // also add more robot spawn points.) So a good saw-line can't just be
+  // reused forever: beat a map and you're handed a fresh puzzle.
+  let level = 1;
+  let lastPerfect = false;   // was the wave just finished a clean sweep?
+
+  // THE POWER SUPPLY. Saws and hammers are POWERED traps - each one you
+  // build draws on this. It starts big enough for three, so you can't just
+  // sink every coin into saws; past that you have to spend coins GROWING
+  // the supply, which competes with buying more traps. Walls, mud and
+  // doors need no power at all.
+  let powerMax = 3;
   let best = 0;       // the most robots you have ever stopped in one wave
 
   // When you put a door down you are holding its key, and the very next
@@ -127,6 +366,14 @@
   let state = 'build';        // 'build', 'run', 'done'
   let says = '', saysT = 0;
   function say(w) { says = w; saysT = 3.0; }
+
+  // When a build is refused, we don't just say why - we SHOW it. A red X
+  // flashes on the square you tried (for "no way up" / trapped-key), and
+  // the coin counter flashes red when you can't afford something.
+  let badCell = null;      // { c, r, t } - a red flash on a square
+  let coinFlash = 0;       // seconds left flashing the coins red
+  let powerFlash = 0;      // seconds left flashing the power meter red
+  function reject(c, r, msg) { badCell = { c: c, r: r, t: 0.85 }; say(msg); }
 
   // ---- THE BIG WORDS ------------------------------------------------
   // GOOD JOB for roughly half, PERFECT for every last one of them.
@@ -284,17 +531,187 @@
   // build one, ASK A ROBOT if it can climb it, and throw it away if it
   // cannot. We never ship a tower we have not checked.
   function newTower() {
+    // Lay the ledges, THEN drop the spawners onto them (placeStarts needs the
+    // ledges to exist so it can pick real standable spots), then check every
+    // stream can reach the exit - throwing the whole thing away if not, so we
+    // never ship a tower where a higher spawner is stranded.
+    const n = spawnCount();
     for (let tries = 0; tries < 200; tries++) {
       blankGrid();
       layLedges(false);
+      placeStarts(n);
       think();
-      if (canGetThrough()) return tries;
+      if (canGetThrough()) { snapshotBase(); return tries; }  // every spawn reaches the exit
     }
     blankGrid();
-    layLedges(true);
+    layLedges(true);                        // the guaranteed staircase works for all
+    placeStarts(n);
     think();
+    snapshotBase();
     return -1;
   }
+
+  // Remember the tower's original ledges the moment it's built, so Clear can
+  // put back anything you smashed with BREAK (and wipe anything you placed).
+  let baseGrid = [];
+  function snapshotBase() { baseGrid = grid.map(function (row) { return row.slice(); }); }
+
+  // START THE WHOLE GAME OVER. Fresh tower, coins and round back to the
+  // beginning, everything you'd placed thrown away. We keep `best` though -
+  // your record for most robots stopped is worth hanging on to.
+  function resetGame() {
+    coins = 26; round = 1; powerMax = 3; level = 1; lastPerfect = false;
+    holdingKey = -1; tool = 0;
+    badCell = null; coinFlash = 0; powerFlash = 0;
+    bots = []; route = [];
+    banner = ''; bannerT = 0;
+    says = ''; saysT = 0;
+    state = 'build';
+    newTower();
+    say('fresh tower - stop them reaching the exit');
+  }
+
+  // CLEAR THE CURRENT MAP. A do-over of just what you've built on THIS
+  // tower: every trap you placed is handed back as coins, and the map is put
+  // back exactly as it was born - including any bolted ledges you smashed
+  // with BREAK. Your level, wave, coins and power supply all stay. So it's
+  // "let me try my defence again", not "throw my whole game away".
+  function resetMap() {
+    // Hand back the coins for everything you placed (BREAK isn't refunded -
+    // the ledge just comes back below).
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        const k = grid[r][c];
+        if (k === EMPTY || k === PLAT) continue;
+        if      (k === DOOR) coins += priceOf(DOOR);   // key comes with the door
+        else if (k === KEY)  coins += 0;               // ...so the key itself is free
+        else                 coins += priceOf(k);
+      }
+    }
+    // Restore the map to how it was built: original ledges back, all your
+    // placements gone.
+    grid = baseGrid.map(function (row) { return row.slice(); });
+    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) tint[r][c] = 0;
+    holdingKey = -1;
+    badCell = null; coinFlash = 0; powerFlash = 0;
+    bots = []; route = []; scrap = [];
+    banner = ''; bannerT = 0;
+    state = 'build';
+    think();
+    say('tower cleared - your level, coins and power are safe');
+  }
+
+  // STOP THE CURRENT ROBOT RUSH. Just the robots are cleared away - the tower
+  // you built stays exactly as it is - and you drop back into build mode.
+  // This is what the big button does while they're climbing ("RESET"), so a
+  // wave going badly is something you can call off, tweak, and send again.
+  function resetRobots() {
+    bots = []; route = []; scrap = [];
+    banner = ''; bannerT = 0;
+    state = 'build';
+    say('robots called back - change your tower, then send them again');
+  }
+
+  // Move on to the next wave: pay out the coins, bump the round, and drop
+  // back into build mode with the same tower (you keep everything you put
+  // down - each wave you just add more).
+  function nextWave() {
+    round++;
+    coins += 12 + round * 2;        // more to spend every wave
+    state = 'build';
+    bots = []; route = [];
+    say('wave ' + round + ' - ' + waveSize() + ' of them this time');
+  }
+
+  // Beat a map (a clean sweep) and move up a level: a fresh random tower to
+  // solve. You keep your coins and a clean-sweep bonus, so you're better
+  // off than you started - but everything you'd built is gone with the old
+  // map, so it's a new puzzle every time.
+  function nextLevel() {
+    level++;
+    coins += 20 + level * 5;        // a clean-sweep bonus, on top of a fresh start
+    round++;                        // waves keep getting bigger across levels
+    state = 'build';
+    bots = []; route = [];
+    newTower();
+    say('LEVEL ' + level + ' - a fresh tower. clean-sweep bonus paid!');
+  }
+
+  // Count up everything you've built, so the summary can list it back.
+  function countBuilt() {
+    const n = { wall: 0, mud: 0, door: 0, saw: 0, smash: 0 };
+    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+      const g = grid[r][c];
+      if      (g === WALL)  n.wall++;
+      else if (g === MUD)   n.mud++;
+      else if (g === DOOR)  n.door++;
+      else if (g === SAW)   n.saw++;
+      else if (g === SMASH) n.smash++;
+    }
+    return n;
+  }
+
+  // Fill in and show the wave-complete card. Everything shown here matches
+  // exactly what nextWave() will actually do, so there are no surprises.
+  function showWaveComplete() {
+    const total = bots.length;
+    const s     = stopped();
+    const past  = gotThrough();
+    // A CLEAN SWEEP (every robot stopped) beats the map and moves you up a
+    // level; otherwise it's just the next wave on the same map.
+    const perfect = total > 0 && s === total;
+    lastPerfect = perfect;
+
+    // What the "continue" button will actually pay, so the card can't lie.
+    const earned   = perfect ? 20 + (level + 1) * 5 : 12 + (round + 1) * 2;
+    // Next wave's size. A retry stays this level's size; a clean sweep moves
+    // to the next level and its (bigger) size. This matches waveSize(), so
+    // the "N more" the card promises is exactly what actually shows up.
+    const nextSize = waveSizeFor(perfect ? level + 1 : level);
+
+    document.getElementById('waveTitle').textContent =
+      perfect ? 'LEVEL ' + level + ' CLEARED!' : 'WAVE ' + round + ' CLEARED';
+
+    const bigEl = document.getElementById('waveBig');
+    bigEl.textContent = s + ' / ' + total;
+    bigEl.style.color = perfect ? '#8fe07a' : s === 0 ? '#e05a4a' : '#ffd76a';
+    document.getElementById('waveSub').textContent =
+      perfect ? 'CLEAN SWEEP - map beaten!' :
+      s === 0 ? 'they all walked straight past' :
+                'robots stopped';
+
+    // "what you built" - list the things, skipping any you've none of.
+    const b = countBuilt();
+    const parts = [];
+    if (b.wall)  parts.push(b.wall  + (b.wall  > 1 ? ' walls'   : ' wall'));
+    if (b.mud)   parts.push(b.mud   + ' mud');
+    if (b.door)  parts.push(b.door  + (b.door  > 1 ? ' doors'   : ' door'));
+    if (b.saw)   parts.push(b.saw   + (b.saw   > 1 ? ' saws'    : ' saw'));
+    if (b.smash) parts.push(b.smash + (b.smash > 1 ? ' hammers' : ' hammer'));
+    document.getElementById('waveBuilt').textContent = parts.length ? parts.join('  ·  ') : 'nothing - brave!';
+
+    document.getElementById('wavePast').textContent =
+      past === 0 ? 'none - flawless' : past + ' of ' + total;
+
+    document.getElementById('waveEarn').textContent =
+      '+' + earned + ' coins  (you’ll have ' + (coins + earned) + ')';
+
+    // The "next" row and the button change depending on whether you've
+    // beaten the map or you're facing another wave on the same one.
+    const nextRow = document.getElementById('waveNext');
+    const goBtn = document.getElementById('waveGo');
+    if (perfect) {
+      nextRow.textContent = 'a fresh map - LEVEL ' + (level + 1);
+      goBtn.textContent = 'On to level ' + (level + 1) + ' →';
+    } else {
+      const more = nextSize > total ? '   (' + (nextSize - total) + ' more)' : '';
+      nextRow.textContent = nextSize + ' robots' + more;
+      goBtn.textContent = 'Send the next wave →';
+    }
+
+    document.getElementById('waveModal').style.display = 'flex';
+  }
+  function hideWaveComplete() { document.getElementById('waveModal').style.display = 'none'; }
 
 
 // -------------------------------------------------------------------
@@ -312,8 +729,11 @@
   const NSTATES = COLS * ROWS * KEYSETS;
   function id(c, r, keys) { return (r * COLS + c) * KEYSETS + keys; }
 
-  let dist = null, prevOf = null, viaOf = null;
-  let bestCost = Infinity, bestEnd = -1;
+  // One "brain" per spawn point - the full satnav result from THAT spawn:
+  // the cheapest cost to every place-and-pockets, and the cheapest way to
+  // the flag. All the questions below (can they get through? which route?
+  // is a key reachable?) are just asked of each brain in turn.
+  let brains = [];
 
   // Everything a robot could do from where it is standing. Each move
   // remembers the squares it passes THROUGH, because that is what it
@@ -346,12 +766,17 @@
       if (ok) out.push({ c: nc, r: rr, keys: k2, cost: cost, via: via });
     }
 
-    // ---- JUMP ---------------------------------------------------------
-    // Straight up, then across. Simple to picture, simple to check, and
-    // it means a ledge with no gap beside it cannot be jumped onto - you
-    // have to go up through a hole.
+    // ---- JUMP, then maybe PARACHUTE -----------------------------------
+    // Straight up, then across. Going up through a clear column and then
+    // over is simple to picture and check. If nothing's under its feet where
+    // it lands, out comes the parachute and it drifts on down the far side.
+    //
+    // A CLIMB (going up at all) may step over only ONE column at the top, so
+    // a robot always rockets up right beside the ledge it's reaching, never
+    // two tiles away. A flat leap (no climb) can still clear a two-wide gap.
     for (let dy = 0; dy <= JUMP_UP; dy++) {
-      for (let dx = -JUMP_OVER; dx <= JUMP_OVER; dx++) {
+      const over = dy === 0 ? JUMP_OVER : 1;
+      for (let dx = -over; dx <= over; dx++) {
         if (dx === 0 && dy === 0) continue;
 
         let cost = 0, k2 = keys, ok = true;
@@ -378,32 +803,92 @@
         if (!ok) continue;
 
         const tc = c + dx;
-        if (!standable(tc, rr, k2)) continue;           // nothing to land on
-        out.push({ c: tc, r: rr, keys: k2, cost: cost, via: via });
+        if (standable(tc, rr, k2)) {                     // landed on a ledge
+          out.push({ c: tc, r: rr, keys: k2, cost: cost, via: via });
+        } else if (dx !== 0 && passable(tc, rr, k2)) {
+          // PARACHUTE: leaped over a gap onto thin air - drift down the far
+          // side to the first ledge below. (Only after moving across, so a
+          // pure up-hop can't just flop back down where it started.)
+          let dr = rr, k3 = k2, cc2 = cost, ok2 = true;
+          const via2 = via.slice();
+          while (!solid(tc, dr + 1)) {
+            if (!passable(tc, dr + 1, k3)) { ok2 = false; break; }
+            dr++;
+            cc2 += costOf(at(tc, dr));
+            k3 |= keyBitAt(tc, dr);
+            via2.push({ c: tc, r: dr });
+          }
+          if (ok2 && dr > rr) out.push({ c: tc, r: dr, keys: k3, cost: cc2, via: via2 });
+        }
+      }
+    }
+
+    // ---- PARACHUTE GLIDE: drift diagonally DOWN and across ------------
+    // A parachute doesn't just drop straight - it drifts. So a robot can
+    // settle onto a mid-height side ledge one-down-one-over at a time,
+    // instead of plummeting to the very bottom and rocketing back up the
+    // same column. (This is what stops the "down then up the same column"
+    // look - now they glide across to the ledge they want.)
+    for (let dir = -1; dir <= 1; dir += 2) {
+      let cc = c, rr = r, cost = 0, k2 = keys;
+      const via = [];
+      for (let step = 0; step < COLS; step++) {
+        const nc = cc + dir, nr = rr + 1;      // one column over, one row down
+        if (!passable(nc, nr, k2)) break;      // a wall/ledge in the way stops the drift
+        cost += costOf(at(nc, nr));
+        k2 |= keyBitAt(nc, nr);
+        via.push({ c: nc, r: nr });
+        cc = nc; rr = nr;
+        if (standable(cc, rr, k2))
+          out.push({ c: cc, r: rr, keys: k2, cost: cost, via: via.slice() });
       }
     }
 
     return out;
   }
 
-  function think() {
-    dist   = new Float64Array(NSTATES).fill(Infinity);
-    prevOf = new Int32Array(NSTATES).fill(-1);
-    viaOf  = new Array(NSTATES).fill(null);
-    const settled = new Uint8Array(NSTATES);
+  // The satnav, run from ONE spawn. Returns that spawn's whole result as
+  // its own object, so several spawns never tread on each other's answers.
+  //
+  // Uses a binary min-heap (a "priority queue") so that with several spawns
+  // re-planned on every tap it still stays instant. A heap always hands
+  // back the smallest thing in it in one quick step, instead of scanning
+  // every state to find the cheapest each time.
+  function thinkFrom(start) {
+    const dist   = new Float64Array(NSTATES).fill(Infinity);
+    const prevOf = new Int32Array(NSTATES).fill(-1);
+    const viaOf  = new Array(NSTATES).fill(null);
+    const done   = new Uint8Array(NSTATES);
 
-    dist[id(START.c, START.r, 0)] = 0;
-
-    // Always deal with the cheapest place-and-pockets we have not dealt
-    // with yet. Once it is settled, nothing can ever make it cheaper -
-    // that is the guarantee that makes the answer the real answer.
-    for (;;) {
-      let bs = -1, bv = Infinity;
-      for (let s = 0; s < NSTATES; s++) {
-        if (!settled[s] && dist[s] < bv) { bv = dist[s]; bs = s; }
+    const heap = [];   // state ids, kept ordered by dist[] via the sifts
+    function up(i) {
+      while (i > 0) {
+        const p = (i - 1) >> 1;
+        if (dist[heap[i]] < dist[heap[p]]) { const t = heap[i]; heap[i] = heap[p]; heap[p] = t; i = p; }
+        else break;
       }
-      if (bs < 0) break;
-      settled[bs] = 1;
+    }
+    function down(i) {
+      const n = heap.length;
+      for (;;) {
+        let m = i; const l = 2 * i + 1, r = l + 1;
+        if (l < n && dist[heap[l]] < dist[heap[m]]) m = l;
+        if (r < n && dist[heap[r]] < dist[heap[m]]) m = r;
+        if (m === i) break;
+        const t = heap[i]; heap[i] = heap[m]; heap[m] = t; i = m;
+      }
+    }
+
+    const s0 = id(start.c, start.r, 0);
+    dist[s0] = 0; heap.push(s0);
+
+    while (heap.length) {
+      const bs = heap[0];
+      const last = heap.pop();
+      if (heap.length) { heap[0] = last; down(0); }
+      if (done[bs]) continue;              // an old, stale copy - skip it
+      done[bs] = 1;
+      const bv = dist[bs];
 
       const keys = bs % KEYSETS;
       const cell = (bs - keys) / KEYSETS;
@@ -413,48 +898,49 @@
       for (let i = 0; i < moves.length; i++) {
         const m = moves[i];
         const ns = id(m.c, m.r, m.keys);
-        if (bv + m.cost < dist[ns]) {
-          dist[ns] = bv + m.cost;
-          prevOf[ns] = bs;
-          viaOf[ns] = m.via;
+        const nd = bv + m.cost;
+        if (nd < dist[ns]) {
+          dist[ns] = nd; prevOf[ns] = bs; viaOf[ns] = m.via;
+          heap.push(ns); up(heap.length - 1);
         }
       }
     }
 
-    bestCost = Infinity; bestEnd = -1;
+    let bestCost = Infinity, bestEnd = -1;
     for (let k = 0; k < KEYSETS; k++) {
       const s = id(FLAG.c, FLAG.r, k);
       if (dist[s] < bestCost) { bestCost = dist[s]; bestEnd = s; }
     }
+    return { start: start, dist: dist, prevOf: prevOf, viaOf: viaOf,
+             bestCost: bestCost, bestEnd: bestEnd };
   }
 
-  function canGetThrough() { return bestCost < Infinity; }
+  // Re-plan every spawn. Called whenever the tower changes.
+  function think() { brains = STARTS.map(thinkFrom); }
 
-  // Can a robot ever actually GET this key? Not "can it stand on that
-  // square" - it might swipe the key while flying past mid-jump. So the
-  // real question is whether there is any situation it can reach where
-  // the key is already in its pocket.
-  function canFetch(colour) {
-    const bit = 1 << colour;
-    for (let s = 0; s < NSTATES; s++) {
-      if (dist[s] < Infinity && ((s % KEYSETS) & bit)) return true;
-    }
-    return false;
+  // Every stream must be able to reach the exit, or the tower's a dead end.
+  function canGetThrough() {
+    return brains.length > 0 && brains.every(function (b) { return b.bestCost < Infinity; });
   }
 
-  function routeCells() {
-    if (bestEnd < 0) return [];
+  // Reconstruct the cheapest route from a single brain (the list of cells it
+  // walks from its spawn to the exit).
+  function routeOf(b) {
+    if (!b || b.bestEnd < 0) return [];
     const chunks = [];
-    let s = bestEnd;
-    while (s >= 0 && prevOf[s] >= 0) {
-      chunks.push(viaOf[s]);
-      s = prevOf[s];
-    }
+    let s = b.bestEnd;
+    while (s >= 0 && b.prevOf[s] >= 0) { chunks.push(b.viaOf[s]); s = b.prevOf[s]; }
     chunks.reverse();
-    const out = [{ c: START.c, r: START.r }];
-    for (let i = 0; i < chunks.length; i++) {
-      for (let j = 0; j < chunks[i].length; j++) out.push(chunks[i][j]);
-    }
+    const out = [{ c: b.start.c, r: b.start.r }];
+    for (let x = 0; x < chunks.length; x++)
+      for (let j = 0; j < chunks[x].length; j++) out.push(chunks[x][j]);
+    return out;
+  }
+  // The cheapest route for one spawn (by its index in STARTS).
+  function routeCellsFor(i) { return routeOf(brains[i]); }
+  function allRoutes() {
+    const out = [];
+    for (let i = 0; i < brains.length; i++) out.push(routeCellsFor(i));
     return out;
   }
 
@@ -479,14 +965,21 @@
   let route = [];
   let scrap = [];                    // bolts and sparks flying about
 
-  // A hundred in the first wave, fifty more each time, stopping at four
-  // hundred. Whether you stop 8 of 10 or 300 of 400 is the same skill -
-  // what changes is that a crowd this big makes the SHAPE of your
-  // defence visible. You can see the stream thin out at each saw.
+  // A hundred robots on your first map, fifty more each LEVEL, stopping at
+  // four hundred. The count grows only when you BEAT a map and move up -
+  // retrying the same map sends the same size wave every time, so a retry
+  // is a fair second go at the same puzzle, never a harder one.
+  //
+  // Whether you stop 8 of 10 or 300 of 400 is the same skill - what changes
+  // is that a crowd this big makes the SHAPE of your defence visible. You
+  // can see the stream thin out at each saw.
   const WAVE_MIN = 100, WAVE_MAX = 400, WAVE_STEP = 50;
-  function waveSize() {
-    return Math.min(WAVE_MAX, WAVE_MIN + (round - 1) * WAVE_STEP);
+  // Size is tied to the LEVEL, not the round, so retries stay the same size
+  // and only clearing a map (which bumps the level) sends more robots.
+  function waveSizeFor(lvl) {
+    return Math.min(WAVE_MAX, WAVE_MIN + (lvl - 1) * WAVE_STEP);
   }
+  function waveSize() { return waveSizeFor(level); }
   function gotThrough() {
     let n = 0;
     for (let i = 0; i < bots.length; i++) if (bots[i].done) n++;
@@ -498,32 +991,56 @@
     return n;
   }
 
+  // ---- THE POWER SUPPLY ---------------------------------------------
+  // Only saws and hammers are powered.
+  function isPowered(kind) { return kind === SAW || kind === SMASH; }
+  // How much power you're using right now = how many powered traps are up.
+  function poweredUsed() {
+    let n = 0;
+    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++)
+      if (isPowered(grid[r][c])) n++;
+    return n;
+  }
+  // Each extra unit costs more than the last, so power stays a real choice
+  // and you can't buy your way to a wall of saws.
+  function powerUpCost() { return 8 + (powerMax - 3) * 6; }
+  function upgradePower() {
+    const cost = powerUpCost();
+    if (coins < cost) { say('need ' + cost + ' coins to grow the power supply'); return; }
+    coins -= cost;
+    powerMax++;
+    say('power supply grown - room for ' + powerMax + ' powered traps now');
+  }
+
   function go() {
     if (holdingKey >= 0) { say('put the key down first'); return; }
     think();
-    if (!canGetThrough()) { say('they cannot get up there at all'); return; }
+    if (!canGetThrough()) { say('no way up yet - open a route before you send them'); return; }
 
-    route = routeCells();
+    // One route per spawn. Every robot carries its OWN route, so each stream
+    // takes its own cheapest way up - and you get to make them cross.
+    const routes = allRoutes();
     bots = [];
+    const total = waveSize();
+    const n = STARTS.length;
     const gap = waveGap();
-    for (let i = 0; i < waveSize(); i++) {
-      // In a big wave a dozen robots share one square, and drawn dead
-      // centre they would stack into what looks like a single robot -
-      // which throws away the whole point of there being four hundred.
-      // A small fixed shove each, worked out from its place in the
-      // queue, turns that stack into a visible crowd. Not random: the
-      // same robot must sit in the same spot every frame or the swarm
-      // shimmers.
-      bots.push({ at: 0, step: 0, c: START.c, r: START.r,
-                  x: START.c, y: START.r, keys: 0,
+    for (let i = 0; i < total; i++) {
+      const sp = i % n;                     // deal them out across the spawns
+      const st = STARTS[sp];
+      bots.push({ spawn: sp, route: routes[sp],
+                  at: 0, step: 0, c: st.c, r: st.r,
+                  x: st.c, y: st.r, keys: 0,
+                  // a small fixed shove each, so a shared square reads as a
+                  // crowd instead of one fat robot.
                   jx: (((i * 7) % 9) - 4) * 0.075,
                   jy: (((i * 5) % 7) - 3) * 0.055,
-                  alive: true, done: false, wait: i * gap, face: 1 });
+                  alive: true, done: false, wait: Math.floor(i / n) * gap, face: 1 });
     }
     scrap = [];
     clock = 0;
     state = 'run';
-    say('here they come - ' + waveSize() + ' of them');
+    say(n > 1 ? 'here they come - ' + total + ' from ' + n + ' ways in'
+              : 'here they come - ' + total + ' of them');
   }
 
   function burst(x, y) {
@@ -542,6 +1059,10 @@
     if (scrap.length > 260) scrap.splice(0, scrap.length - 260);
   }
 
+  // How long a robot takes to slip up through the exit and vanish, once it
+  // reaches it. Just long enough to SEE it leave instead of blinking out.
+  const EXIT_TIME = 0.5;
+
   function stepRobot(b, dt) {
     if (!b.alive || b.done) return;
     if (b.wait > 0) { b.wait -= dt; return; }
@@ -551,24 +1072,28 @@
     const slow = costOf(here);
     b.step += dt * (4.2 / slow);
 
+    const rt = b.route;
     while (b.step >= 1) {
       b.step -= 1;
-      if (b.at >= route.length - 1) { b.done = true; return; }
+      if (b.at >= rt.length - 1) { b.done = true; b.exitT = EXIT_TIME; return; }
       b.at++;
-      const n = route[b.at];
+      const n = rt[b.at];
       if (n.c !== b.c) b.face = n.c > b.c ? 1 : -1;
       b.c = n.c; b.r = n.r;
       b.keys |= keyBitAt(n.c, n.r);
     }
 
-    const a = route[b.at];
-    const nx = route[Math.min(b.at + 1, route.length - 1)];
+    const a = rt[b.at];
+    const nx = rt[Math.min(b.at + 1, rt.length - 1)];
     b.x = a.c + (nx.c - a.c) * b.step;
     b.y = a.r + (nx.r - a.r) * b.step;
   }
 
   function update(dt) {
     if (saysT > 0) saysT -= dt;
+    if (coinFlash > 0) coinFlash -= dt;
+    if (powerFlash > 0) powerFlash -= dt;
+    if (badCell) { badCell.t -= dt; if (badCell.t <= 0) badCell = null; }
     // Counted down here, above the "are we running?" check, or the words
     // would freeze on screen the moment the wave finished - which is
     // exactly when they appear.
@@ -581,6 +1106,14 @@
       if (p.life <= 0) { scrap.splice(i, 1); continue; }
       p.x += p.vx * dt * 30; p.y += p.vy * dt * 30;
       p.vy += dt * 34;
+    }
+
+    // Robots sliding up through the exit keep fading even after the wave has
+    // ended (same as the scrap), so the last few to leave never freeze
+    // half-gone by the doorway.
+    for (let i = 0; i < bots.length; i++) {
+      const b = bots[i];
+      if (b.done && b.exitT > 0) b.exitT -= dt;
     }
 
     if (state !== 'run') return;
@@ -608,9 +1141,7 @@
       const s = stopped();
       if (s > best) best = s;
       showBanner(s, bots.length);
-      say(s === bots.length ? 'NOT ONE OF THEM GOT THROUGH'
-        : s === 0           ? 'all ' + bots.length + ' walked straight past'
-        : 'you stopped ' + s + ' of ' + bots.length);
+      showWaveComplete();          // the summary card takes over from here
     }
   }
 
@@ -623,18 +1154,27 @@
   // the buttons move to a block on the right instead of a row below.
   function wide()   { return W > H * 1.35; }
   function panelW() { return wide() ? Math.min(W * 0.36, 320) : 0; }
-  function topBar() { return wide() ? 62 : 96; }
+  // The header is two tidy tiers, the same in portrait and landscape:
+  //   row 1  - the nav buttons: Arcade on the left, Reset on the right
+  //            (and the key prompt when hiding a key)
+  //   row 2  - a stat bar: coins | POWER METER | level | steps
+  // topBar() is where the board begins, just under both. Keeping it this
+  // compact also hands the tower back a good chunk of height.
+  const NAV_H  = 40;     // the nav pill row
+  const STAT_H = 42;     // the stat dashboard row
+  function topBar() { return NAV_H + STAT_H + 6; }
 
-  // Five tools and a GO button will not fit in one row on a phone, so
-  // they wrap onto as many rows as they need - and the tower is told
-  // how much room that took, instead of us guessing a number.
+  // The tool buttons wrap onto as many rows as they need, and the big SEND
+  // THEM button is its own full-width bar BELOW the grid - so the tower is
+  // told how much room the whole lot took, instead of us guessing.
   function btnCols()  { return wide() ? 2 : 3; }
-  function btnRows()  { return Math.ceil((TOOLS.length + 1) / btnCols()); }
+  function btnRows()  { return Math.ceil(TOOLS.length / btnCols()); }
+  function goH()      { return wide() ? 42 : 46; }   // the SEND THEM bar height
   function btnH() {
     if (!wide()) return 52;
-    return clamp((H - topBar() - 30 - 8 * (btnRows() - 1)) / btnRows(), 40, 56);
+    return clamp((H - topBar() - 30 - goH() - 8 * btnRows()) / btnRows(), 38, 54);
   }
-  function boxOf(i) {
+  function boxOf(i) {                       // a TOOL's box (GO bar is goBox())
     const cols = btnCols(), h = btnH();
     const cx = i % cols, cy = Math.floor(i / cols);
     if (wide()) {
@@ -643,14 +1183,50 @@
                y: topBar() + 8 + cy * (h + 8), w: w, h: h };
     }
     const w = (W - 40 - 10 * (cols - 1)) / cols;
-    const y0 = H - 26 - btnRows() * h - (btnRows() - 1) * 10;
+    const gridH = btnRows() * h + (btnRows() - 1) * 10;
+    const y0 = H - 26 - goH() - 10 - gridH;         // grid sits above the GO bar
     return { x: 20 + cx * (w + 10), y: y0 + cy * (h + 10), w: w, h: h };
   }
   function toolBox(i) { return boxOf(i); }
-  function goBox()    { return boxOf(TOOLS.length); }
+  // THE GO BAR - a full-width button just below the tool grid (in landscape,
+  // under the tools in the side panel).
+  function goBox() {
+    const h = btnH(), rows = btnRows();
+    if (wide()) {
+      return { x: W - panelW() + 8, y: topBar() + 8 + rows * (h + 8), w: panelW() - 16, h: goH() };
+    }
+    return { x: 20, y: H - 26 - goH(), w: W - 40, h: goH() };
+  }
+
+  // The stat bar spans the width (minus the side panel in landscape) and is
+  // split into three equal cells: coins | power | steps.
+  const STAT_CELLS = 3;
+  function statBarRect() {
+    return { x: 8, y: NAV_H, w: (W - panelW()) - 16, h: STAT_H - 4 };
+  }
+  function statCell(i) {                  // i = 0..2
+    const b = statBarRect(), cw = b.w / STAT_CELLS;
+    return { x: b.x + i * cw, y: b.y, w: cw, h: b.h };
+  }
+  // The middle POWER cell is the tappable one - tap it to grow the supply.
+  function powerBox() { return statCell(1); }
+
+  // A rounded rectangle path, so the pills and the meter aren't hard boxes.
+  function rrect(x, y, w, h, r) {
+    r = Math.min(r, w / 2, h / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y,     x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x,     y + h, r);
+    ctx.arcTo(x,     y + h, x,     y,     r);
+    ctx.arcTo(x,     y,     x + w, y,     r);
+    ctx.closePath();
+  }
 
   function botBar() {
-    return wide() ? 16 : (btnRows() * btnH() + (btnRows() - 1) * 10 + 44);
+    if (wide()) return 16;
+    const gridH = btnRows() * btnH() + (btnRows() - 1) * 10;
+    return gridH + 10 + goH() + 26;   // tool grid + gap + GO bar + bottom margin
   }
 
   function board() {
@@ -735,6 +1311,41 @@
     ctx.fillRect(x + s * 0.12, top + s * 0.32, s * 0.76, s * 0.10);
   }
 
+  // The EXIT at the top: a glowing green doorway with an "out this way" arrow.
+  // It gently pulses so it reads as the live goal the robots are racing for.
+  function drawExit(x, y, s) {
+    const cx = x + s / 2;
+    const pulse = 0.55 + 0.45 * Math.abs(Math.sin(clock * 3));
+    const dw = s * 0.74, dh = s * 0.96, dx = cx - dw / 2, dy = y + s - dh;
+
+    ctx.save();
+    // a soft green halo, so it glows like a way out
+    ctx.shadowColor = 'rgba(143,224,122,0.9)';
+    ctx.shadowBlur = s * (0.2 + 0.3 * pulse);
+    ctx.fillStyle = '#8fe07a';
+    rrect(dx, dy, dw, dh, s * 0.22); ctx.fill();
+    ctx.shadowBlur = 0;
+
+    // the dark opening inside the frame
+    const pad = Math.max(2, s * 0.1);
+    ctx.fillStyle = '#0e1f15';
+    rrect(dx + pad, dy + pad, dw - 2 * pad, dh - pad, s * 0.15); ctx.fill();
+
+    // an up-arrow: this is the way OUT
+    ctx.strokeStyle = 'rgba(190,245,170,' + pulse.toFixed(2) + ')';
+    ctx.lineWidth = Math.max(2, s * 0.1);
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    const midY = y + s * 0.6, head = s * 0.17;
+    ctx.beginPath();
+    ctx.moveTo(cx - head, midY);
+    ctx.lineTo(cx, midY - head * 1.15);
+    ctx.lineTo(cx + head, midY);
+    ctx.moveTo(cx, midY - head);
+    ctx.lineTo(cx, midY + head);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   function drawTower() {
     const b = board();
     const spin = clock * 14;
@@ -792,29 +1403,46 @@
 
         if (kind === DOOR) {
           const col = LOCKS[tint[r][c]].col;
+          // the door panel...
           ctx.fillStyle = rgb(col);
           ctx.fillRect(x + b.s * 0.12, y + 1, b.s * 0.76, b.s - 2);
-          ctx.fillStyle = 'rgba(0,0,0,0.45)';
+          // ...with a darker frame, so it reads as a DOOR, not a coloured
+          // block that happens to match a key.
+          ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(x + b.s * 0.12, y + 1, b.s * 0.76, b.s - 2);
+          // a proper keyhole - a round hole with a slot under it.
+          ctx.fillStyle = 'rgba(0,0,0,0.55)';
           ctx.beginPath();
-          ctx.arc(x + b.s * 0.68, y + b.s * 0.5, b.s * 0.09, 0, Math.PI * 2);
+          ctx.arc(x + b.s * 0.66, y + b.s * 0.44, b.s * 0.1, 0, Math.PI * 2);
           ctx.fill();
+          ctx.fillRect(x + b.s * 0.635, y + b.s * 0.44, b.s * 0.05, b.s * 0.18);
         }
 
         if (kind === KEY) {
-          drawKeyShape(x + b.s / 2, y + b.s / 2, b.s, LOCKS[tint[r][c]].col);
+          const col = LOCKS[tint[r][c]].col;
+          // A soft coloured ring so a hidden key is easy to spot - and its
+          // colour tells you at a glance which door it opens.
+          ctx.strokeStyle = 'rgba(' + col[0] + ',' + col[1] + ',' + col[2] + ',0.55)';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(x + 2.5, y + 2.5, b.s - 5, b.s - 5);
+          drawKeyShape(x + b.s / 2, y + b.s / 2, b.s, col);
         }
       }
     }
 
-    // ---- THE ROUTE ---------------------------------------------------
-    // Drawn WHILE you build, so every block shows you what it was worth
-    // the instant you put it down.
-    const path = state === 'build' ? routeCells() : route;
-    if (path.length > 1) {
-      ctx.strokeStyle = state === 'build' ? 'rgba(255,215,106,0.7)'
-                                          : 'rgba(255,215,106,0.28)';
-      ctx.lineWidth = Math.max(2, b.s * 0.11);
-      ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    // ---- THE ROUTES --------------------------------------------------
+    // One line per spawn, drawn WHILE you build so every block shows what
+    // it was worth the instant you put it down. Where they overlap you can
+    // see the streams converge - which is exactly where a saw earns most.
+    const paths = allRoutes();
+    ctx.lineWidth = Math.max(2, b.s * 0.11);
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    ctx.strokeStyle = state === 'build' ? 'rgba(255,215,106,0.7)'
+                                        : 'rgba(255,215,106,0.28)';
+    for (let p = 0; p < paths.length; p++) {
+      const path = paths[p];
+      if (path.length < 2) continue;
       ctx.beginPath();
       for (let i = 0; i < path.length; i++) {
         const px = b.x + (path[i].c + 0.5) * b.s;
@@ -824,35 +1452,89 @@
       ctx.stroke();
     }
 
-    // ---- START AND FLAG ----------------------------------------------
-    const sx = b.x + START.c * b.s, sy = b.y + START.r * b.s;
+    // ---- STARTS AND FLAG ---------------------------------------------
+    // A marked square at each spawn - that's where a stream comes in.
     ctx.strokeStyle = 'rgba(255,255,255,0.25)';
     ctx.lineWidth = 2;
-    ctx.strokeRect(sx + 3, sy + 3, b.s - 6, b.s - 6);
+    for (let i = 0; i < STARTS.length; i++) {
+      const sx = b.x + STARTS[i].c * b.s, sy = b.y + STARTS[i].r * b.s;
+      ctx.strokeRect(sx + 3, sy + 3, b.s - 6, b.s - 6);
+    }
 
-    const fx = b.x + FLAG.c * b.s, fy = b.y + FLAG.r * b.s;
-    ctx.strokeStyle = '#ffd76a';
-    ctx.lineWidth = Math.max(2, b.s * 0.08);
-    ctx.beginPath();
-    ctx.moveTo(fx + b.s * 0.35, fy + b.s * 0.85);
-    ctx.lineTo(fx + b.s * 0.35, fy + b.s * 0.15);
-    ctx.stroke();
-    ctx.fillStyle = '#ffd76a';
-    ctx.beginPath();
-    ctx.moveTo(fx + b.s * 0.35, fy + b.s * 0.15);
-    ctx.lineTo(fx + b.s * 0.85, fy + b.s * 0.32);
-    ctx.lineTo(fx + b.s * 0.35, fy + b.s * 0.48);
-    ctx.fill();
+    // THE EXIT. The robots aren't trying to plant a flag - they're trying to
+    // ESCAPE out the top. So the goal is a glowing doorway they slip through
+    // and vanish, which is what your traps are there to stop.
+    drawExit(b.x + FLAG.c * b.s, b.y + FLAG.r * b.s, b.s);
+
+    // ---- THE "NO" FLASH ----------------------------------------------
+    // A red square with an X on the spot you just tried to build, so a
+    // refused block tells you exactly WHERE, not just a line of text.
+    if (badCell) {
+      const a = clamp(badCell.t / 0.85, 0, 1);
+      const gx = b.x + badCell.c * b.s, gy = b.y + badCell.r * b.s;
+      ctx.save();
+      ctx.globalAlpha = a;
+      ctx.fillStyle = 'rgba(224,90,74,0.4)';
+      ctx.fillRect(gx, gy, b.s, b.s);
+      ctx.strokeStyle = '#e05a4a';
+      ctx.lineWidth = Math.max(2, b.s * 0.09);
+      ctx.lineCap = 'round';
+      const m = b.s * 0.26;
+      ctx.beginPath();
+      ctx.moveTo(gx + m, gy + m); ctx.lineTo(gx + b.s - m, gy + b.s - m);
+      ctx.moveTo(gx + b.s - m, gy + m); ctx.lineTo(gx + m, gy + b.s - m);
+      ctx.stroke();
+      ctx.restore();
+    }
   }
 
   function drawRobot(b, bd) {
+    // A robot at the exit is LEAVING: it slides up through the doorway and
+    // fades out over its short exit time, so the flag reads as a way out,
+    // not a spot they stack up on.
+    let rise = 0, alpha = 1;
+    if (b.done) {
+      const p = clamp((b.exitT || 0) / EXIT_TIME, 0, 1);  // 1 just arrived -> 0 gone
+      rise = (1 - p) * bd.s * 0.9;
+      alpha = p;
+    }
     const x = bd.x + (b.x + 0.5 + (b.jx || 0)) * bd.s;
-    const y = bd.y + (b.y + 0.5 + (b.jy || 0)) * bd.s;
+    const y = bd.y + (b.y + 0.5 + (b.jy || 0)) * bd.s - rise;
     // Smaller bodies in a big wave, so a crowd is a crowd and not a
     // single blob of overlapping robots.
     const s = bd.s * (bots.length > 60 ? 0.19 : 0.28);
-    const bounce = Math.abs(Math.sin(b.step * Math.PI)) * s * 0.25;
+    const bounce = b.done ? 0 : Math.abs(Math.sin(b.step * Math.PI)) * s * 0.25;
 
+    // Which way is it travelling right now? Its route segment tells us: rows
+    // going UP mean it's boosting (rocket flame under its feet), rows going
+    // DOWN mean it's dropping (parachute overhead). Flat = neither.
+    let climb = 0;
+    if (!b.done && b.route && state === 'run') {
+      const a2 = b.route[b.at] || b.route[0];
+      const nx2 = b.route[Math.min(b.at + 1, b.route.length - 1)] || a2;
+      climb = Math.sign(nx2.r - a2.r);          // -1 up, +1 down
+    }
+
+    // PARACHUTE overhead while drifting down.
+    if (climb > 0) {
+      const cy = y - s * 2.1 - bounce, rC = s * 1.2;
+      ctx.fillStyle = '#ff9f43';
+      ctx.beginPath();
+      ctx.arc(x, cy, rC, Math.PI, 2 * Math.PI); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,0.25)'; ctx.lineWidth = Math.max(1, s * 0.09);
+      ctx.beginPath();
+      ctx.moveTo(x - rC, cy); ctx.lineTo(x, cy - rC * 0.18); ctx.lineTo(x + rC, cy);
+      ctx.moveTo(x, cy); ctx.lineTo(x, cy - rC);
+      ctx.stroke();
+      ctx.strokeStyle = 'rgba(220,228,242,0.8)'; ctx.lineWidth = Math.max(1, s * 0.07);
+      ctx.beginPath();
+      ctx.moveTo(x - rC * 0.9, cy); ctx.lineTo(x - s * 0.7, y - s - bounce);
+      ctx.moveTo(x + rC * 0.9, cy); ctx.lineTo(x + s * 0.7, y - s - bounce);
+      ctx.stroke();
+    }
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
     ctx.fillStyle = b.done ? '#8fe07a' : '#dbe4f2';
     ctx.fillRect(x - s, y - s - bounce, s * 2, s * 1.7);
     ctx.fillStyle = '#10141c';
@@ -860,10 +1542,26 @@
     ctx.fillRect(x + s * 0.17, y - s * 0.55 - bounce, s * 0.38, s * 0.38);
     ctx.fillStyle = '#ffd76a';
     ctx.fillRect(x - s * 0.15, y - s * 1.5 - bounce, s * 0.3, s * 0.45);
+    ctx.restore();
+
+    // ROCKET flame under its feet while boosting up (flickers per robot).
+    if (climb < 0) {
+      const fy = y + s * 0.7 - bounce;
+      const flick = 0.65 + 0.5 * Math.abs(Math.sin(clock * 22 + (b.jx || 0) * 60));
+      ctx.fillStyle = '#ff7a1a';
+      ctx.beginPath();
+      ctx.moveTo(x - s * 0.5, fy); ctx.lineTo(x, fy + s * 0.95 * flick); ctx.lineTo(x + s * 0.5, fy);
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#ffd24a';
+      ctx.beginPath();
+      ctx.moveTo(x - s * 0.26, fy); ctx.lineTo(x, fy + s * 0.52 * flick); ctx.lineTo(x + s * 0.26, fy);
+      ctx.closePath(); ctx.fill();
+    }
 
     // Keys jingling overhead are lovely with ten robots and unreadable
     // clutter with four hundred, so the crowd carries them out of sight.
-    if (bots.length > 60) return;
+    // (A robot on its way out has no more use for them either.)
+    if (b.done || bots.length > 60) return;
     let shown = 0;
     for (let i = 0; i < LOCKS.length; i++) {
       if (!((b.keys >> i) & 1)) continue;
@@ -876,12 +1574,15 @@
   function drawWave() {
     const bd = board();
     if (state === 'build') {
-      // One waiting robot, so the start square never looks empty.
-      drawRobot({ x: START.c, y: START.r, step: 0, keys: 0, done: false }, bd);
+      // A waiting robot on every spawn square, so each one shows where a
+      // stream will come from.
+      for (let i = 0; i < STARTS.length; i++)
+        drawRobot({ x: STARTS[i].c, y: STARTS[i].r, step: 0, keys: 0, done: false }, bd);
     } else {
       for (let i = 0; i < bots.length; i++) {
         const b = bots[i];
         if (!b.alive || b.wait > 0) continue;
+        if (b.done && !(b.exitT > 0)) continue;   // already left through the exit
         drawRobot(b, bd);
       }
     }
@@ -901,55 +1602,207 @@
     }
     return seen;
   }
-  function allKeysFetchable() {
-    const used = usedLocks();
-    for (let i = 0; i < used.length; i++) if (!canFetch(used[i])) return false;
-    return true;
-  }
   function nextLock() {
     const used = usedLocks();
     for (let i = 0; i < LOCKS.length; i++) if (used.indexOf(i) < 0) return i;
     return -1;
   }
 
-  function drawHud() {
-    const line1 = wide() ? 30 : 44, line2 = wide() ? 50 : 68;
+  // ---- LITTLE PICTOGRAM ICONS ---------------------------------------
+  // So the header and the buttons can speak in pictures, not just words: a
+  // gold coin for money, a robot head for the robots, a lightning bolt for
+  // power. Each is drawn around a centre point at whatever size we ask.
+  function drawCoin(cx, cy, r) {
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fillStyle = '#d99f28'; ctx.fill();                  // dark-gold rim
+    ctx.beginPath(); ctx.arc(cx, cy, r * 0.74, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffd76a'; ctx.fill();                  // bright face
+    ctx.beginPath();                                        // a shine streak
+    ctx.moveTo(cx - r * 0.32, cy - r * 0.46);
+    ctx.lineTo(cx + r * 0.02, cy - r * 0.46);
+    ctx.lineTo(cx - r * 0.36, cy + r * 0.12);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(255,255,255,0.6)'; ctx.fill();
+  }
+  function drawRobotHead(cx, cy, s) {
+    ctx.strokeStyle = '#9aa6ba'; ctx.lineWidth = Math.max(1, s * 0.18);
+    ctx.beginPath(); ctx.moveTo(cx, cy - s * 0.9); ctx.lineTo(cx, cy - s * 1.35); ctx.stroke();
+    ctx.fillStyle = '#ffd76a'; ctx.beginPath(); ctx.arc(cx, cy - s * 1.45, s * 0.22, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#dbe4f2'; rrect(cx - s, cy - s * 0.85, s * 2, s * 1.7, s * 0.35); ctx.fill();
+    ctx.fillStyle = '#10141c';
+    ctx.fillRect(cx - s * 0.55, cy - s * 0.3, s * 0.42, s * 0.42);
+    ctx.fillRect(cx + s * 0.13, cy - s * 0.3, s * 0.42, s * 0.42);
+  }
+  function drawBolt(cx, cy, h, color) {
+    const w = h * 0.55;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(cx + w * 0.12, cy - h * 0.5);
+    ctx.lineTo(cx - w * 0.5,  cy + h * 0.08);
+    ctx.lineTo(cx - w * 0.06, cy + h * 0.08);
+    ctx.lineTo(cx - w * 0.12, cy + h * 0.5);
+    ctx.lineTo(cx + w * 0.5,  cy - h * 0.08);
+    ctx.lineTo(cx + w * 0.06, cy - h * 0.08);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // The power meter: a row of little lightning bolts, one per unit of supply.
+  // Bright bolts are power in use, faint ones are power to spare - so "two of
+  // three saws" is a picture, not a sum. They go red when the supply is full,
+  // your cue that a new saw needs a bigger supply first.
+  function drawPowerPips(cell, used, max, hot) {
+    const gap = 3;
+    let pw = 9;
+    const maxW = cell.w - 18;
+    if (max * pw + (max - 1) * gap > maxW) pw = (maxW - (max - 1) * gap) / max;
+    const bh = Math.min(13, pw / 0.55);
+    const cy = cell.y + cell.h * 0.36;
+    let x = cell.x + (cell.w - (max * pw + (max - 1) * gap)) / 2 + pw / 2;
+    for (let i = 0; i < max; i++) {
+      drawBolt(x, cy, bh, i < used ? (hot ? '#e05a4a' : '#ffd76a') : 'rgba(255,255,255,0.16)');
+      x += pw + gap;
+    }
+  }
+
+  // THE STAT BAR - the numbers you act on: coins | power | robots. (Level
+  // lives up in the nav row now.) Coins and robots show as an icon with the
+  // amount beside it; the POWER cell is a meter of bolts and is also a button
+  // (tap it to grow the supply), turning red when the supply is full.
+  function drawStatBar() {
+    const b = statBarRect();
+    rrect(b.x, b.y, b.w, b.h, 10);
+    ctx.fillStyle = 'rgba(20, 26, 38, 0.5)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+    ctx.lineWidth = 1; ctx.stroke();
+
+    // hairline dividers between the cells
+    for (let i = 1; i < STAT_CELLS; i++) {
+      const x = b.x + b.w * i / STAT_CELLS;
+      ctx.beginPath(); ctx.moveTo(x, b.y + 8); ctx.lineTo(x, b.y + b.h - 8); ctx.stroke();
+    }
+
+    const labY = b.y + 15, midY = b.y + b.h / 2;
+    const valFont = 'bold ' + Math.min(W * 0.052, 20) + 'px system-ui, sans-serif';
+
+    // An icon on the LEFT with the amount beside it, the pair centred in the
+    // cell.
+    function iconValue(cell, text, col, iconW, drawIcon) {
+      ctx.font = valFont;
+      const numW = ctx.measureText(text).width, gap = 6;
+      const x0 = cell.x + cell.w / 2 - (iconW + gap + numW) / 2;
+      drawIcon(x0 + iconW / 2, midY);
+      ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = col; ctx.fillText(text, x0 + iconW + gap, midY + 1);
+      ctx.textBaseline = 'alphabetic';
+    }
+
+    // 0 - COINS: a coin left of the count (red when you can't afford a thing)
+    let c = statCell(0);
+    const coinRed = coinFlash > 0 && Math.sin(coinFlash * 30) > 0;
+    iconValue(c, '' + coins, coinRed ? '#e05a4a' : '#ffd76a', 14,
+              function (x, y) { drawCoin(x, y, 7); });
+
+    // 1 - POWER: the whole cell is a BUTTON - tap it to grow the supply. The
+    // meter of bolts up top shows what you've got; the "+ coin N" line below
+    // is the buy: tap to add one more power for N coins. The border invites a
+    // tap (gold when you can afford one, red when the supply is full).
+    c = statCell(1);
+    const used = poweredUsed(), full = used >= powerMax, canUp = coins >= powerUpCost();
+    const pflash = powerFlash > 0 && Math.sin(powerFlash * 30) > 0;
+    const hot = full || pflash;
+    rrect(c.x + 4, c.y + 3, c.w - 8, c.h - 6, 8);
+    ctx.fillStyle = 'rgba(255,255,255,0.07)'; ctx.fill();
+    ctx.lineWidth = hot ? 2 : 1.5;
+    ctx.strokeStyle = hot ? (pflash ? '#e05a4a' : 'rgba(224,90,74,0.7)')
+                    : canUp ? 'rgba(255,215,106,0.6)' : 'rgba(255,255,255,0.22)';
+    ctx.stroke();
+
+    drawPowerPips(c, used, powerMax, hot);
+
+    // the buy line: "+ [coin] N", centred, green when you can afford it.
+    const numTxt = '' + powerUpCost(), buyCol = canUp ? '#8fe07a' : '#7a8698';
+    ctx.font = 'bold ' + Math.min(W * 0.026, 12) + 'px system-ui, sans-serif';
+    ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+    const plusW = ctx.measureText('+ ').width, numW = ctx.measureText(numTxt).width;
+    const grp = plusW + 12 + 3 + numW, gx = c.x + c.w / 2 - grp / 2, gy = c.y + c.h - 7;
+    ctx.fillStyle = buyCol;
+    ctx.fillText('+ ', gx, gy);
+    drawCoin(gx + plusW + 6, gy - 4, 6);
+    ctx.fillText(numTxt, gx + plusW + 12 + 3, gy);
+
+    // 2 - ROBOTS: a robot head left of the count - how many are coming while
+    // you build, how many you've stopped once they're climbing.
+    c = statCell(2);
+    const rtxt = state === 'build' ? '' + waveSize() : stopped() + '/' + bots.length;
+    iconValue(c, rtxt, '#e8834a', 13,
+              function (x, y) { drawRobotHead(x, y + 2, 6); });
 
     ctx.textAlign = 'left';
-    ctx.font = 'bold ' + Math.min(W * 0.042, 34) + 'px system-ui, sans-serif';
-    ctx.fillStyle = '#ffd76a';
-    ctx.fillText(coins + ' coins', 20, line1);
+  }
 
-    ctx.font = Math.min(W * 0.024, 15) + 'px system-ui, sans-serif';
-    ctx.fillStyle = '#6b7a90';
-    ctx.fillText('round ' + round + (best ? '   -   best ' + best + ' stopped' : ''),
-                 22, line2);
+  // While you're holding a door's key, this shouts about it: a pulsing
+  // frame in the key's colour around the whole board, and a banner up top
+  // with the key drawn on it - so "you are placing a KEY now" is
+  // impossible to miss.
+  function drawKeyPrompt() {
+    const col = LOCKS[holdingKey].col;
+    const pulse = 0.4 + 0.6 * Math.abs(Math.sin(clock * 4));
+    const colStr = 'rgba(' + col[0] + ',' + col[1] + ',' + col[2] + ',' + pulse.toFixed(3) + ')';
+    const bd = board();
 
-    // ---- THE TWO NUMBERS THAT MATTER ---------------------------------
-    ctx.textAlign = 'right';
-    ctx.font = 'bold ' + Math.min(W * 0.034, 26) + 'px system-ui, sans-serif';
-    if (state === 'build') {
-      ctx.fillStyle = canGetThrough() ? '#8fe07a' : '#e05a4a';
-      ctx.fillText(canGetThrough() ? bestCost + ' steps' : 'NO WAY UP', W - 20, line1);
-      ctx.font = Math.min(W * 0.022, 14) + 'px system-ui, sans-serif';
-      ctx.fillStyle = '#6b7a90';
-      ctx.fillText(canGetThrough() ? 'a longer climb is more places to put a saw'
-                                   : 'they must be able to reach the flag',
-                   W - 20, line2 - 2);
-    } else {
-      ctx.fillStyle = '#e8834a';
-      ctx.fillText(stopped() + ' stopped', W - 20, line1);
-      ctx.font = Math.min(W * 0.022, 14) + 'px system-ui, sans-serif';
-      ctx.fillStyle = '#6b7a90';
-      ctx.fillText(gotThrough() + ' got through, of ' + bots.length, W - 20, line2 - 2);
-    }
+    // frame round the board
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = colStr;
+    ctx.strokeRect(bd.x - 3, bd.y - 3, bd.s * COLS + 6, bd.s * ROWS + 6);
+
+    // banner in the top-centre band
+    const txt = 'HIDE THE ' + LOCKS[holdingKey].name + ' KEY';
+    ctx.font = 'bold ' + Math.min(W * 0.032, 16) + 'px system-ui, sans-serif';
+    const tw = ctx.measureText(txt).width;
+    const ph = 32, pw = Math.min(W - 20, tw + 78);
+    const cx = (W - panelW()) / 2, px = cx - pw / 2, py = 6, cyy = py + ph / 2;
+    rrect(px, py, pw, ph, ph / 2);
+    ctx.fillStyle = 'rgba(14, 18, 26, 0.92)'; ctx.fill();
+    ctx.lineWidth = 2; ctx.strokeStyle = colStr; ctx.stroke();
+
+    drawKeyShape(px + 24, cyy, 26, col);
+
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = rgb(col);
+    ctx.fillText(txt, px + 42, cyy);
+    ctx.textBaseline = 'alphabetic';
+  }
+
+  // THE LEVEL LABEL - just text in the middle of the top nav row, between the
+  // Arcade and Reset buttons. It's only telling you where you are (not a thing
+  // you tap), so it's plain text, not a pill - pills are for the buttons.
+  function drawLevelPill() {
+    const txt = 'LEVEL ' + level + '  ·  wave ' + round;
+    ctx.font = 'bold ' + Math.min(W * 0.032, 14) + 'px system-ui, sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#c9b689';                 // muted gold - info, not a button
+    ctx.fillText(txt, (W - panelW()) / 2, 24);
+    ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left';
+  }
+
+  function drawHud() {
+    // Two tiers up top: the nav row (Arcade, the LEVEL badge, Reset) and then
+    // the stat bar with the numbers you act on. When you're hiding a door's
+    // key, its prompt takes over the nav band, so the level badge steps aside.
+    if (holdingKey < 0) drawLevelPill();
+    drawStatBar();
+    if (state === 'build' && holdingKey >= 0) drawKeyPrompt();
 
     // ---- TOOLS -------------------------------------------------------
     for (let i = 0; i < TOOLS.length; i++) {
       const t = TOOLS[i], bx = toolBox(i);
       const on = tool === i && holdingKey < 0;
       const lock = nextLock();
-      const can = coins >= t.price && (t.kind !== DOOR || lock >= 0);
+      const powerOK = !isPowered(t.kind) || poweredUsed() < powerMax;
+      const can = coins >= t.price && (t.kind !== DOOR || lock >= 0) && powerOK;
 
       ctx.fillStyle = on ? 'rgba(255,215,106,0.18)' : 'rgba(0,0,0,0.35)';
       ctx.fillRect(bx.x, bx.y, bx.w, bx.h);
@@ -958,71 +1811,105 @@
       ctx.strokeRect(bx.x, bx.y, bx.w, bx.h);
 
       // A little picture of the thing, so you never have to read to know.
-      const ix = bx.x + 8, iy = bx.y + bx.h * 0.5 - 11, is = 22;
+      const is = 26, ix = bx.x + 9, iy = bx.y + bx.h * 0.5 - is / 2;
       if (t.kind === WALL) {
         ctx.fillStyle = '#96a0b4'; ctx.fillRect(ix, iy, is, is);
-        ctx.fillStyle = '#c3ccdd'; ctx.fillRect(ix, iy, is, 4);
+        ctx.fillStyle = '#c3ccdd'; ctx.fillRect(ix, iy, is, 5);
       } else if (t.kind === MUD) {
         ctx.fillStyle = '#6b4a2a'; ctx.fillRect(ix, iy, is, is);
       } else if (t.kind === DOOR) {
         ctx.fillStyle = rgb(lock >= 0 ? LOCKS[lock].col : [90, 100, 118]);
         ctx.fillRect(ix + 2, iy, is - 4, is);
       } else if (t.kind === SAW) {
-        drawBlade(ix - 1, iy - is * 0.4, is * 1.4, clock * 14, 1);
-      } else {
-        drawHammer(ix - 1, iy - is * 0.2, is * 1.3, false);
+        // Centred in the icon box: drawBlade puts the blade at y + 0.2*s, so
+        // start it low enough that the blade sits on the box's middle.
+        drawBlade(ix, iy + is * 0.3, is, clock * 14, 1);
+      } else if (t.kind === SMASH) {
+        drawHammer(ix, iy, is, false);
+      } else if (t.kind === DEMO) {
+        // a bolted block with a red crack splitting it - "break the ledge".
+        ctx.fillStyle = '#7a8494'; ctx.fillRect(ix, iy, is, is);
+        ctx.fillStyle = '#9aa6ba'; ctx.fillRect(ix, iy, is, 4);
+        ctx.strokeStyle = '#e05a4a'; ctx.lineWidth = Math.max(2, is * 0.13);
+        ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+        ctx.beginPath();
+        ctx.moveTo(ix + is * 0.52, iy);
+        ctx.lineTo(ix + is * 0.34, iy + is * 0.44);
+        ctx.lineTo(ix + is * 0.6, iy + is * 0.56);
+        ctx.lineTo(ix + is * 0.44, iy + is);
+        ctx.stroke();
       }
 
-      // Text stays inside its own button, whatever we write in it. Without
-      // this a long blurb spills across the next button and the two of
-      // them read as one sentence of nonsense.
+      // Text stays inside its own button, so a long name can't spill across
+      // the next one. NAME on top, its COSTS on the line below.
       ctx.save();
       ctx.beginPath();
       ctx.rect(bx.x + 2, bx.y + 2, bx.w - 4, bx.h - 4);
       ctx.clip();
 
-      const roomy = bx.w > 165;
+      const tx = bx.x + 42;
       ctx.textAlign = 'left';
-      ctx.font = 'bold ' + Math.min(W * 0.021, 15) + 'px system-ui, sans-serif';
-      ctx.fillStyle = can ? '#e6ecf5' : '#5a6678';
-      ctx.fillText(t.name + '  ' + t.price, bx.x + 38, bx.y + (roomy ? 24 : bx.h * 0.6));
-      if (roomy) {
-        ctx.font = Math.min(W * 0.017, 12) + 'px system-ui, sans-serif';
-        ctx.fillStyle = '#6b7a90';
-        ctx.fillText(t.blurb, bx.x + 38, bx.y + 42);
+      ctx.font = 'bold ' + Math.min(W * 0.025, 17) + 'px system-ui, sans-serif';
+      ctx.fillStyle = can ? '#e6ecf5' : '#8894a8';
+      ctx.fillText(t.name, tx, bx.y + bx.h * 0.40);
+
+      // The costs: a coin + the price, and for a powered trap (saw or hammer)
+      // a lightning bolt + the 1 power it draws. Each cost goes red on its own
+      // if that's the thing you're short of, so you can see WHY it's greyed.
+      const costY = bx.y + bx.h * 0.78;
+      ctx.font = 'bold ' + Math.min(W * 0.023, 15) + 'px system-ui, sans-serif';
+      drawCoin(tx + 6, costY - 5, 6.5);
+      ctx.fillStyle = coins >= t.price ? '#ffd76a' : '#e05a4a';
+      ctx.fillText('' + t.price, tx + 16, costY);
+      if (isPowered(t.kind)) {
+        const px = tx + 16 + ctx.measureText('' + t.price).width + 15;
+        drawBolt(px, costY - 5, 13, powerOK ? '#ffd76a' : '#e05a4a');
+        ctx.fillStyle = powerOK ? '#ffd76a' : '#e05a4a';
+        ctx.fillText('1', px + 7, costY);
       }
       ctx.restore();
     }
 
     // ---- GO -----------------------------------------------------------
+    // Its job changes with the game: SEND THEM to start a wave, RESET to
+    // call the robots back mid-climb (build stays), NEXT WAVE when one ends.
     const g = goBox();
-    const ready = state === 'build' && canGetThrough() && holdingKey < 0;
-    ctx.fillStyle = ready ? 'rgba(143,224,122,0.2)' : 'rgba(0,0,0,0.35)';
+    let goFill, goStroke, goText, goLabel;
+    if (state === 'run') {
+      // A live button now, not a greyed-out label: tap it to stop the rush.
+      goFill = 'rgba(224,90,74,0.18)'; goStroke = '#e05a4a'; goText = '#e05a4a';
+      goLabel = 'RESET';
+    } else if (state === 'done') {
+      goFill = 'rgba(143,224,122,0.2)'; goStroke = '#8fe07a'; goText = '#8fe07a';
+      goLabel = 'NEXT WAVE';
+    } else if (holdingKey < 0 && !canGetThrough()) {
+      // You've sealed the exit off. Placing is still fine - this is just the
+      // gate that stops you launching a wave that has nowhere to go.
+      goFill = 'rgba(224,90,74,0.15)'; goStroke = '#e05a4a'; goText = '#e05a4a';
+      goLabel = 'NO WAY UP';
+    } else {
+      const ready = canGetThrough() && holdingKey < 0;
+      goFill = ready ? 'rgba(143,224,122,0.2)' : 'rgba(0,0,0,0.35)';
+      goStroke = ready ? '#8fe07a' : 'rgba(255,255,255,0.2)';
+      goText = ready ? '#8fe07a' : '#6b7a90';
+      goLabel = 'SEND THEM';
+    }
+    ctx.fillStyle = goFill;
     ctx.fillRect(g.x, g.y, g.w, g.h);
     ctx.lineWidth = 3;
-    ctx.strokeStyle = ready ? '#8fe07a' : 'rgba(255,255,255,0.2)';
+    ctx.strokeStyle = goStroke;
     ctx.strokeRect(g.x, g.y, g.w, g.h);
     ctx.textAlign = 'center';
     ctx.font = 'bold ' + Math.min(W * 0.028, 21) + 'px system-ui, sans-serif';
-    ctx.fillStyle = ready ? '#8fe07a' : '#6b7a90';
-    ctx.fillText(state === 'build' ? 'SEND THEM' : state === 'run' ? 'CLIMBING' : 'NEXT WAVE',
-                 g.x + g.w / 2, g.y + g.h * 0.63);
-
-    // ---- HOLDING A KEY -------------------------------------------------
-    if (holdingKey >= 0) {
-      ctx.textAlign = 'center';
-      ctx.font = 'bold ' + Math.min(W * 0.028, 20) + 'px system-ui, sans-serif';
-      ctx.fillStyle = rgb(LOCKS[holdingKey].col);
-      ctx.fillText('NOW HIDE THE ' + LOCKS[holdingKey].name + ' KEY',
-                   (W - panelW()) / 2, wide() ? topBar() - 14 : 90);
-    }
+    ctx.fillStyle = goText;
+    ctx.fillText(goLabel, g.x + g.w / 2, g.y + g.h * 0.63);
 
     if (wide() && board().s < 26) {
       ctx.textAlign = 'center';
       ctx.font = 'bold 11px system-ui, sans-serif';
       ctx.fillStyle = '#6b7a90';
       ctx.fillText('turn your phone upright for a much bigger tower',
-                   (W - panelW()) / 2, 30);
+                   (W - panelW()) / 2, topBar() + 16);
     }
 
     // ---- GOOD JOB / PERFECT --------------------------------------------
@@ -1109,31 +1996,47 @@
   function place(c, r) {
     if (state !== 'build') return;
     if (!inside(c, r)) return;
-    if (c === START.c && r === START.r) { say('that is where they come in'); return; }
-    if (c === FLAG.c && r === FLAG.r)   { say('that is the flag'); return; }
-    if (grid[r][c] === PLAT) { say('that ledge is bolted down'); return; }
+    if (STARTS.some(function (s) { return s.c === c && s.r === r; })) { say('that is where they come in'); return; }
+    if (c === FLAG.c && r === FLAG.r)   { say('that is the exit'); return; }
+
+    // ---- DEMOLITION: the one tool that WANTS a bolted ledge ------------
+    // BREAK smashes a PLAT ledge (never the ground) for 2 coins, opening a
+    // gap nothing else can. Everything else still treats PLAT as bolted.
+    if (tool >= 0 && TOOLS[tool].kind === DEMO && holdingKey < 0) {
+      if (grid[r][c] !== PLAT || r === FLOOR) { say('aim BREAK at a bolted ledge (not the ground)'); return; }
+      if (coins < 2) { say('smashing costs 2 - you have ' + coins); coinFlash = 1.0; return; }
+      grid[r][c] = EMPTY;
+      coins -= 2;
+      think();
+      say('ledge smashed - a new gap for them to deal with');
+      const hd = document.getElementById('hud'); if (hd) hd.style.opacity = 0;
+      return;
+    }
+
+    if (grid[r][c] === PLAT) { say('that ledge is bolted - use BREAK to smash it'); return; }
 
     // ---- PUTTING DOWN THE KEY YOU ARE HOLDING --------------------------
     if (holdingKey >= 0) {
-      if (grid[r][c] !== EMPTY) { say('the key needs an empty square'); return; }
-      const colour = holdingKey;
-      grid[r][c] = KEY; tint[r][c] = colour;
-      think();
-      // TWO things have to be true. They must still be able to reach the
-      // flag - AND they must be able to get this key. A key they can
-      // never reach turns your door into a wall you paid extra for.
-      if (!canGetThrough() || !canFetch(colour)) {
-        grid[r][c] = EMPTY;
-        removeLock(colour);
+      // CHANGED YOUR MIND? Tap the door you just placed a second time and
+      // the whole door-and-key pair is cancelled, with your coins returned.
+      if (grid[r][c] === DOOR && tint[r][c] === holdingKey) {
+        removeLock(holdingKey);
         coins += priceOf(DOOR);
         holdingKey = -1;
         think();
-        say(canGetThrough() ? 'they could never reach that key'
-                            : 'then they can never get to the flag');
+        say('door taken back - coins returned');
         return;
       }
+      if (grid[r][c] !== EMPTY) { say('the key needs an empty square'); return; }
+      const colour = holdingKey;
+      grid[r][c] = KEY; tint[r][c] = colour;
       holdingKey = -1;
-      say('now they have to go and get it first');
+      think();
+      // As with walls, you can hide the key somewhere they can't reach yet -
+      // maybe you'll open a way to it next. If that leaves no route to the
+      // exit, the SEND THEM button just shows NO WAY UP until you fix it.
+      if (canGetThrough()) say('now they have to go and get it first');
+      else                 say('key hidden - but there\'s no way up right now');
       return;
     }
 
@@ -1151,8 +2054,26 @@
       return;
     }
 
+    // Nothing picked up (you tapped a tool a second time to put it down),
+    // so a tap on the board shouldn't build anything by accident.
+    if (tool < 0) { say('pick a tool first, then tap the tower'); return; }
+
     const t = TOOLS[tool];
-    if (coins < t.price) { say('not enough coins'); return; }
+    if (coins < t.price) {
+      // Say exactly how short you are, and flash the coin counter so it's
+      // obvious WHERE to look and WHAT the problem is.
+      say(t.name + ' costs ' + t.price + ' - you have ' + coins);
+      coinFlash = 1.0;
+      return;
+    }
+
+    // Powered traps need spare power. If the supply is full, you have to
+    // grow it (tap the ⚡ meter up top) before you can build another.
+    if (isPowered(t.kind) && poweredUsed() >= powerMax) {
+      reject(c, r, 'power supply full - tap the ⚡ up top to grow it');
+      powerFlash = 1.0;
+      return;
+    }
 
     if (t.kind === DOOR) {
       const colour = nextLock();
@@ -1161,29 +2082,23 @@
       coins -= t.price;
       holdingKey = colour;
       think();
-      say('now hide the ' + LOCKS[colour].name + ' key');
+      say('now hide the ' + LOCKS[colour].name + ' key - or tap the door to undo');
       const h1 = document.getElementById('hud');
       if (h1) h1.style.opacity = 0;
       return;
     }
 
     grid[r][c] = t.kind;
+    coins -= t.price;
     think();
 
-    // THEY MUST BE ABLE TO REACH THE FLAG, and still reach every key you
-    // have hidden. Refused the moment you try, with the block put
-    // straight back - so you find out by tapping, not by building a
-    // masterpiece and being told at the end.
-    if (!canGetThrough() || !allKeysFetchable()) {
-      const why = canGetThrough() ? 'now they can never reach a key'
-                                  : 'THEY MUST HAVE A WAY UP';
-      grid[r][c] = EMPTY;
-      think();
-      say(why);
-      return;
-    }
+    // You're ALLOWED to block the only way up while you build. It's a plan
+    // in progress: you might be about to open a new route with the next few
+    // walls. The SEND THEM button turns into NO WAY UP whenever there's no
+    // path, so you simply can't launch a wave that has nowhere to go - but
+    // nothing stops you laying the walls that only make sense together.
+    if (!canGetThrough()) say('no way up right now - open a route before you send them');
 
-    coins -= t.price;
     const h2 = document.getElementById('hud');
     if (h2) h2.style.opacity = 0;
   }
@@ -1192,24 +2107,33 @@
     // While you are holding a key, the only thing a tap can do is put it
     // down. No half-finished doors.
     if (holdingKey < 0) {
+      // The power meter up top is a button: tap it to grow the supply.
+      if (state === 'build') {
+        const pb = powerBox();
+        if (mx >= pb.x && mx <= pb.x + pb.w && my >= pb.y && my <= pb.y + pb.h) {
+          upgradePower();
+          return;
+        }
+      }
       for (let i = 0; i < TOOLS.length; i++) {
         const b = toolBox(i);
         if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
-          tool = i;
-          say(TOOLS[i].blurb);            // tapping a tool tells you what it does
+          // Tap a tool to pick it up; tap the SAME tool again to put it
+          // back down, so nothing is selected and a stray tap won't build.
+          if (tool === i) { tool = -1; say('put the ' + TOOLS[i].name + ' away'); }
+          else            { tool = i;  say(TOOLS[i].blurb); }
           return;
         }
       }
       const g = goBox();
       if (mx >= g.x && mx <= g.x + g.w && my >= g.y && my <= g.y + g.h) {
         if (state === 'build') go();
-        else if (state === 'done') {
-          round++;
-          coins += 12 + round * 2;        // more to spend every wave
-          state = 'build';
-          bots = []; route = [];
-          say('wave ' + round + ' - ' + waveSize() + ' of them this time');
-        }
+        // While they're climbing, the button is RESET - call the robots
+        // back so you can change the tower and try the wave again.
+        else if (state === 'run') resetRobots();
+        // In 'done', the summary card is the way on. Tapping the button
+        // just brings it back if you'd closed it for a look at the tower.
+        else if (state === 'done') showWaveComplete();
         return;
       }
     }
@@ -1251,6 +2175,46 @@
 
   newTower();
   requestAnimationFrame(frame);
+
+
+// -------------------------------------------------------------------
+//  THE NAV BUTTONS  (the Arcade link is just an <a>; Reset asks first)
+// -------------------------------------------------------------------
+
+  // The RESET menu: one button up top opens it, and it offers the two ways
+  // to start again - clear just this level, or start a whole new game - plus
+  // a way to back out.
+  const resetModal = document.getElementById('resetModal');
+  function showResetMenu() { resetModal.style.display = 'flex'; }
+  function hideResetMenu() { resetModal.style.display = 'none'; }
+
+  document.getElementById('reset').addEventListener('click', showResetMenu);
+  document.getElementById('optClear').addEventListener('click', function () {
+    hideResetMenu(); resetMap();      // wipe this level's build, keep progress
+  });
+  document.getElementById('optNew').addEventListener('click', function () {
+    hideResetMenu(); resetGame();     // a brand-new game from Level 1
+  });
+  document.getElementById('optCancel').addEventListener('click', hideResetMenu);
+  // Tapping the dark area around the card, or pressing Escape, both mean
+  // "never mind" - the same as Cancel.
+  resetModal.addEventListener('click', function (e) {
+    if (e.target === resetModal) hideResetMenu();
+  });
+
+  // ---- the wave-complete card ----
+  // "Send the next wave" advances; "let me look" closes it so you can study
+  // the tower (the on-canvas NEXT WAVE button brings it back).
+  document.getElementById('waveGo').addEventListener('click', function () {
+    hideWaveComplete();
+    if (lastPerfect) nextLevel();   // clean sweep -> a fresh map
+    else             nextWave();    // otherwise -> another wave, same map
+  });
+  document.getElementById('wavePeek').addEventListener('click', hideWaveComplete);
+
+  window.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') { hideResetMenu(); hideWaveComplete(); }
+  });
 
 </script>
 </body>
