@@ -253,6 +253,14 @@
   let coins = 26;
   let round = 1;
 
+  // THE LEVEL = which map you're on. You stay on a map, sending wave after
+  // wave, until you stop EVERY robot in one wave - a clean sweep. That
+  // beats the map, and you move up to a brand-new one. (Later levels will
+  // also add more robot spawn points.) So a good saw-line can't just be
+  // reused forever: beat a map and you're handed a fresh puzzle.
+  let level = 1;
+  let lastPerfect = false;   // was the wave just finished a clean sweep?
+
   // THE POWER SUPPLY. Saws and hammers are POWERED traps - each one you
   // build draws on this. It starts big enough for three, so you can't just
   // sink every coin into saws; past that you have to spend coins GROWING
@@ -449,7 +457,7 @@
   // beginning, everything you'd placed thrown away. We keep `best` though -
   // your record for most robots stopped is worth hanging on to.
   function resetGame() {
-    coins = 26; round = 1; powerMax = 3;
+    coins = 26; round = 1; powerMax = 3; level = 1; lastPerfect = false;
     holdingKey = -1; tool = 0;
     badCell = null; coinFlash = 0; powerFlash = 0;
     bots = []; route = [];
@@ -469,6 +477,20 @@
     state = 'build';
     bots = []; route = [];
     say('wave ' + round + ' - ' + waveSize() + ' of them this time');
+  }
+
+  // Beat a map (a clean sweep) and move up a level: a fresh random tower to
+  // solve. You keep your coins and a clean-sweep bonus, so you're better
+  // off than you started - but everything you'd built is gone with the old
+  // map, so it's a new puzzle every time.
+  function nextLevel() {
+    level++;
+    coins += 20 + level * 5;        // a clean-sweep bonus, on top of a fresh start
+    round++;                        // waves keep getting bigger across levels
+    state = 'build';
+    bots = []; route = [];
+    newTower();
+    say('LEVEL ' + level + ' - a fresh tower. clean-sweep bonus paid!');
   }
 
   // Count up everything you've built, so the summary can list it back.
@@ -491,19 +513,25 @@
     const total = bots.length;
     const s     = stopped();
     const past  = gotThrough();
-    // nextWave() bumps the round BEFORE paying, so the payout uses round+1.
-    const earned   = 12 + (round + 1) * 2;
+    // A CLEAN SWEEP (every robot stopped) beats the map and moves you up a
+    // level; otherwise it's just the next wave on the same map.
+    const perfect = total > 0 && s === total;
+    lastPerfect = perfect;
+
+    // What the "continue" button will actually pay, so the card can't lie.
+    const earned   = perfect ? 20 + (level + 1) * 5 : 12 + (round + 1) * 2;
     const nextSize = Math.min(WAVE_MAX, WAVE_MIN + round * WAVE_STEP);
 
-    document.getElementById('waveTitle').textContent = 'WAVE ' + round + ' CLEARED';
+    document.getElementById('waveTitle').textContent =
+      perfect ? 'LEVEL ' + level + ' CLEARED!' : 'WAVE ' + round + ' CLEARED';
 
     const bigEl = document.getElementById('waveBig');
     bigEl.textContent = s + ' / ' + total;
-    bigEl.style.color = s === total ? '#8fe07a' : s === 0 ? '#e05a4a' : '#ffd76a';
+    bigEl.style.color = perfect ? '#8fe07a' : s === 0 ? '#e05a4a' : '#ffd76a';
     document.getElementById('waveSub').textContent =
-      s === total ? 'PERFECT - not one got through!' :
-      s === 0      ? 'they all walked straight past' :
-                     'robots stopped';
+      perfect ? 'CLEAN SWEEP - map beaten!' :
+      s === 0 ? 'they all walked straight past' :
+                'robots stopped';
 
     // "what you built" - list the things, skipping any you've none of.
     const b = countBuilt();
@@ -521,8 +549,18 @@
     document.getElementById('waveEarn').textContent =
       '+' + earned + ' coins  (you’ll have ' + (coins + earned) + ')';
 
-    const more = nextSize > total ? '   (' + (nextSize - total) + ' more)' : '';
-    document.getElementById('waveNext').textContent = nextSize + ' robots' + more;
+    // The "next" row and the button change depending on whether you've
+    // beaten the map or you're facing another wave on the same one.
+    const nextRow = document.getElementById('waveNext');
+    const goBtn = document.getElementById('waveGo');
+    if (perfect) {
+      nextRow.textContent = 'a fresh map - LEVEL ' + (level + 1);
+      goBtn.textContent = 'On to level ' + (level + 1) + ' →';
+    } else {
+      const more = nextSize > total ? '   (' + (nextSize - total) + ' more)' : '';
+      nextRow.textContent = nextSize + ' robots' + more;
+      goBtn.textContent = 'Send the next wave →';
+    }
 
     document.getElementById('waveModal').style.display = 'flex';
   }
@@ -1321,7 +1359,8 @@
 
     ctx.font = Math.min(W * 0.024, 15) + 'px system-ui, sans-serif';
     ctx.fillStyle = '#6b7a90';
-    ctx.fillText('round ' + round + (best ? '   -   best ' + best + ' stopped' : ''),
+    ctx.fillText('level ' + level + '  ·  wave ' + round +
+                 (best ? '   -   best ' + best + ' stopped' : ''),
                  22, line2);
 
     // ---- THE TWO NUMBERS THAT MATTER ---------------------------------
@@ -1695,7 +1734,8 @@
   // the tower (the on-canvas NEXT WAVE button brings it back).
   document.getElementById('waveGo').addEventListener('click', function () {
     hideWaveComplete();
-    nextWave();
+    if (lastPerfect) nextLevel();   // clean sweep -> a fresh map
+    else             nextWave();    // otherwise -> another wave, same map
   });
   document.getElementById('wavePeek').addEventListener('click', hideWaveComplete);
 
