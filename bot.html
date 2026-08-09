@@ -269,6 +269,14 @@
   let says = '', saysT = 0;
   function say(w) { says = w; saysT = 3.0; }
 
+  // When a build is refused, we don't just say why - we SHOW it. A red X
+  // flashes on the square you tried (for "no way up" / trapped-key), and
+  // the coin counter flashes red when you can't afford something.
+  let badCell = null;      // { c, r, t } - a red flash on a square
+  let coinFlash = 0;       // seconds left flashing the coins red
+  let powerFlash = 0;      // seconds left flashing the power meter red
+  function reject(c, r, msg) { badCell = { c: c, r: r, t: 0.85 }; say(msg); }
+
   // ---- THE BIG WORDS ------------------------------------------------
   // GOOD JOB for roughly half, PERFECT for every last one of them.
   // "Roughly half" has to be an actual number, so it is a band either
@@ -443,6 +451,7 @@
   function resetGame() {
     coins = 26; round = 1; powerMax = 3;
     holdingKey = -1; tool = 0;
+    badCell = null; coinFlash = 0; powerFlash = 0;
     bots = []; route = [];
     banner = ''; bannerT = 0;
     says = ''; saysT = 0;
@@ -813,6 +822,9 @@
 
   function update(dt) {
     if (saysT > 0) saysT -= dt;
+    if (coinFlash > 0) coinFlash -= dt;
+    if (powerFlash > 0) powerFlash -= dt;
+    if (badCell) { badCell.t -= dt; if (badCell.t <= 0) badCell = null; }
     // Counted down here, above the "are we running?" check, or the words
     // would freeze on screen the moment the wave finished - which is
     // exactly when they appear.
@@ -1122,6 +1134,27 @@
     ctx.lineTo(fx + b.s * 0.85, fy + b.s * 0.32);
     ctx.lineTo(fx + b.s * 0.35, fy + b.s * 0.48);
     ctx.fill();
+
+    // ---- THE "NO" FLASH ----------------------------------------------
+    // A red square with an X on the spot you just tried to build, so a
+    // refused block tells you exactly WHERE, not just a line of text.
+    if (badCell) {
+      const a = clamp(badCell.t / 0.85, 0, 1);
+      const gx = b.x + badCell.c * b.s, gy = b.y + badCell.r * b.s;
+      ctx.save();
+      ctx.globalAlpha = a;
+      ctx.fillStyle = 'rgba(224,90,74,0.4)';
+      ctx.fillRect(gx, gy, b.s, b.s);
+      ctx.strokeStyle = '#e05a4a';
+      ctx.lineWidth = Math.max(2, b.s * 0.09);
+      ctx.lineCap = 'round';
+      const m = b.s * 0.26;
+      ctx.beginPath();
+      ctx.moveTo(gx + m, gy + m); ctx.lineTo(gx + b.s - m, gy + b.s - m);
+      ctx.moveTo(gx + b.s - m, gy + m); ctx.lineTo(gx + m, gy + b.s - m);
+      ctx.stroke();
+      ctx.restore();
+    }
   }
 
   function drawRobot(b, bd) {
@@ -1203,8 +1236,11 @@
     rrect(bx.x, bx.y, bx.w, bx.h, bx.h / 2);
     ctx.fillStyle = 'rgba(20, 26, 38, 0.62)';
     ctx.fill();
-    ctx.lineWidth = 1.5;
-    ctx.strokeStyle = full ? 'rgba(224, 90, 74, 0.75)' : 'rgba(255, 215, 106, 0.4)';
+    // A bright red pulse if you just tried to build past your power.
+    const flashing = powerFlash > 0 && Math.sin(powerFlash * 30) > 0;
+    ctx.lineWidth = flashing ? 3 : 1.5;
+    ctx.strokeStyle = flashing ? '#e05a4a'
+                    : full ? 'rgba(224, 90, 74, 0.75)' : 'rgba(255, 215, 106, 0.4)';
     ctx.stroke();
 
     ctx.textAlign = 'left';
@@ -1276,8 +1312,11 @@
     const line1 = (wide() ? 30 : 44) + NAVH, line2 = (wide() ? 50 : 68) + NAVH;
 
     ctx.textAlign = 'left';
+    // Flash the coins red when you just tried to buy something you can't
+    // afford, so it's obvious the coins are the thing standing in your way.
+    const coinRed = coinFlash > 0 && Math.sin(coinFlash * 30) > 0;
     ctx.font = 'bold ' + Math.min(W * 0.042, 34) + 'px system-ui, sans-serif';
-    ctx.fillStyle = '#ffd76a';
+    ctx.fillStyle = coinRed ? '#e05a4a' : '#ffd76a';
     ctx.fillText(coins + ' coins', 20, line1);
 
     ctx.font = Math.min(W * 0.024, 15) + 'px system-ui, sans-serif';
@@ -1489,8 +1528,8 @@
         coins += priceOf(DOOR);
         holdingKey = -1;
         think();
-        say(canGetThrough() ? 'they could never reach that key'
-                            : 'then they can never get to the flag');
+        reject(c, r, canGetThrough() ? 'they could never reach that key there'
+                                     : 'the key can\'t block the only way up');
         return;
       }
       holdingKey = -1;
@@ -1513,12 +1552,19 @@
     }
 
     const t = TOOLS[tool];
-    if (coins < t.price) { say('not enough coins'); return; }
+    if (coins < t.price) {
+      // Say exactly how short you are, and flash the coin counter so it's
+      // obvious WHERE to look and WHAT the problem is.
+      say(t.name + ' costs ' + t.price + ' - you have ' + coins);
+      coinFlash = 1.0;
+      return;
+    }
 
     // Powered traps need spare power. If the supply is full, you have to
     // grow it (tap the ⚡ meter up top) before you can build another.
     if (isPowered(t.kind) && poweredUsed() >= powerMax) {
-      say('power supply is full - tap the ⚡ at the top to grow it');
+      reject(c, r, 'power supply full - tap the ⚡ up top to grow it');
+      powerFlash = 1.0;
       return;
     }
 
@@ -1543,11 +1589,10 @@
     // straight back - so you find out by tapping, not by building a
     // masterpiece and being told at the end.
     if (!canGetThrough() || !allKeysFetchable()) {
-      const why = canGetThrough() ? 'now they can never reach a key'
-                                  : 'THEY MUST HAVE A WAY UP';
       grid[r][c] = EMPTY;
       think();
-      say(why);
+      reject(c, r, canGetThrough() ? 'that would trap a key they need'
+                                   : 'that blocks the only way up');
       return;
     }
 
