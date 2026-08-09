@@ -36,19 +36,20 @@
 <body>
 
 <canvas id="screen"></canvas>
-<div id="hud">TAP the ground to build &nbsp;&nbsp; then press GO and watch it try</div>
+<div id="hud">TAP to build &nbsp;&nbsp; the flag is at the TOP &nbsp;&nbsp; then press GO</div>
 
 <script>
 // ===================================================================
 //  BEAT THE BOT
 //
-//  You build. Then a little character tries to get past what you built.
+//  You build. Then a little character tries to climb past what you
+//  built, all the way to the flag at the top.
 //
 //  The whole thing lives or dies on ONE promise: the bot is not
-//  pretending. It genuinely works out the cheapest way through
-//  whatever you've made, every time, using the same algorithm a
-//  satnav uses. If it goes round your wall, that's because going round
-//  really was cheaper - not because somebody wrote "go round walls".
+//  pretending. It genuinely works out the cheapest way up through
+//  whatever you have made, every time. If it goes the long way round,
+//  that is because the long way round really was cheaper - not because
+//  somebody wrote "go round walls".
 //
 //  Which is what makes beating it mean anything. A bot that loses on
 //  purpose isn't an opponent, it's a participation trophy.
@@ -59,8 +60,8 @@
 
   let W = 0, H = 0;
   function resize() {
-    W = canvas.width  = window.innerWidth;
-    H = canvas.height = window.innerHeight;
+    W = canvas.width  = canvas.clientWidth  = window.innerWidth;
+    H = canvas.height = canvas.clientHeight = window.innerHeight;
   }
   window.addEventListener('resize', resize);
   resize();
@@ -69,137 +70,314 @@
 
 
 // -------------------------------------------------------------------
-//  THE YARD
+//  THE TOWER
 // -------------------------------------------------------------------
 
-  const COLS = 13, ROWS = 11;
-  const START = { c: 0, r: (ROWS - 1) >> 1 };
-  const FLAG  = { c: COLS - 1, r: (ROWS - 1) >> 1 };
+  const COLS = 13, ROWS = 15;
+  const FLOOR = ROWS - 1;              // the solid ground at the bottom
+  const RISE  = 3;                     // a new ledge every 3 rows going up
 
-  //  EMPTY costs 1 to walk. MUD costs 5 - the bot CAN go through it and
-  //  sometimes will, if going round would cost more. WALL cannot be
-  //  crossed at all.
-  //
-  //  That difference is the whole game: a wall makes the bot go round,
-  //  mud makes it CHOOSE, and choosing is where you can outsmart it.
-  const EMPTY = 0, WALL = 1, MUD = 2;
-  const COST = { 0: 1, 2: 5 };
+  // What the bot's legs can do. Everything the brain works out is built
+  // on these two numbers - change them and the bot's whole idea of what
+  // is possible changes with it.
+  const JUMP_UP = 3, JUMP_OVER = 2;
 
-  const TOOLS = [
-    { kind: WALL, name: 'WALL', price: 3, colour: [126, 138, 162],
-      blurb: 'it cannot go through' },
-    { kind: MUD,  name: 'MUD',  price: 1, colour: [122, 92, 54],
-      blurb: 'slow to cross - five steps' }
+  const START = { c: 1, r: FLOOR - 1 };        // standing on the ground
+  const FLAG  = { c: COLS >> 1, r: 1 };        // right at the top
+
+  // What can be in a square.
+  const EMPTY = 0, WALL = 1, MUD = 2, PLAT = 3, DOOR = 4, KEY = 5;
+
+  // Three colours of door. A door only opens for a key of its colour,
+  // so three doors means the bot may have to fetch three keys.
+  const LOCKS = [
+    { name: 'RED',  col: [226, 96, 78] },
+    { name: 'BLUE', col: [92, 152, 240] },
+    { name: 'GREEN',col: [143, 224, 122] }
   ];
 
-  let grid = [];
+  const TOOLS = [
+    { name: 'WALL', price: 3, kind: WALL,
+      blurb: 'it cannot pass - but it CAN land on top' },
+    { name: 'MUD',  price: 1, kind: MUD,
+      blurb: 'it can wade - but that is five steps' },
+    { name: 'DOOR', price: 5, kind: DOOR,
+      blurb: 'locked. you hide its key too' }
+  ];
+
+  let grid = [];      // what is in each square
+  let tint = [];      // which colour, for doors and keys only
+
   let tool = 0;
-  let coins = 14;
+  let coins = 22;
   let round = 1;
   let best = 0;
 
+  // When you put a door down you are holding its key, and the very next
+  // tap puts the key somewhere. Nothing else can happen until it does -
+  // a door with no key in the world is just a wall you overpaid for.
+  let holdingKey = -1;
+
   let state = 'build';        // 'build', 'run', 'done'
   let says = '', saysT = 0;
-  function say(w) { says = w; saysT = 2.8; }
+  function say(w) { says = w; saysT = 3.0; }
 
-  function at(c, r) {
-    if (c < 0 || r < 0 || c >= COLS || r >= ROWS) return WALL;
-    return grid[r][c];
+  function inside(c, r) { return c >= 0 && r >= 0 && c < COLS && r < ROWS; }
+  function at(c, r) { return inside(c, r) ? grid[r][c] : WALL; }
+
+  // What it costs the bot to step into a square. Mud is the whole point
+  // of mud: cheap for you, expensive for it.
+  function costOf(kind) { return kind === MUD ? 5 : 1; }
+
+  // Solid things block you AND hold you up. That is one idea, not two -
+  // which is why a wall you build is also a ledge you built it.
+  function solid(c, r) { const k = at(c, r); return k === WALL || k === PLAT; }
+
+  // Can the bot be in this square, carrying these keys?
+  function passable(c, r, keys) {
+    if (!inside(c, r)) return false;
+    const k = grid[r][c];
+    if (k === WALL || k === PLAT) return false;
+    if (k === DOOR) return (keys >> tint[r][c]) & 1;   // only with the key
+    return true;
   }
 
-  function clearYard() {
-    grid = [];
+  // Can it STAND here? It needs air to stand in and something under its
+  // feet. No floating.
+  function standable(c, r, keys) {
+    return passable(c, r, keys) && solid(c, r + 1);
+  }
+
+  // Picking a key up is just a bit switching on.
+  function keyBitAt(c, r) {
+    return at(c, r) === KEY ? (1 << tint[r][c]) : 0;
+  }
+
+
+// -------------------------------------------------------------------
+//  BUILDING THE TOWER ITSELF
+// -------------------------------------------------------------------
+
+  function blankGrid() {
+    grid = []; tint = [];
     for (let r = 0; r < ROWS; r++) {
-      const row = [];
-      for (let c = 0; c < COLS; c++) row.push(EMPTY);
-      grid.push(row);
+      const a = [], b = [];
+      for (let c = 0; c < COLS; c++) { a.push(EMPTY); b.push(0); }
+      grid.push(a); tint.push(b);
     }
+  }
+
+  // The ledges. These are bolted down - Max cannot remove them, and
+  // neither can anything else. They are the bones of the tower.
+  function layLedges(fallback) {
+    for (let c = 0; c < COLS; c++) grid[FLOOR][c] = PLAT;   // the ground
+
+    let floorNo = 0;
+    for (let r = FLOOR - RISE; r >= 2; r -= RISE) {
+      if (fallback) {
+        // A guaranteed staircase, used only if random ledges keep coming
+        // out unclimbable. Boring, but it always works.
+        const from = floorNo % 2 === 0 ? 0 : 7;
+        for (let c = from; c < from + 6; c++) grid[r][c] = PLAT;
+      } else {
+        const runs = Math.random() < 0.45 ? 2 : 1;
+        for (let n = 0; n < runs; n++) {
+          const len = 3 + Math.floor(Math.random() * 4);
+          const x0  = Math.floor(Math.random() * (COLS - len + 1));
+          for (let c = x0; c < x0 + len; c++) grid[r][c] = PLAT;
+        }
+      }
+      floorNo++;
+    }
+
+    // The flag must have something to stand on, or the game is a joke.
+    for (let c = FLAG.c - 1; c <= FLAG.c + 1; c++) {
+      if (c >= 0 && c < COLS) grid[FLAG.r + 1][c] = PLAT;
+    }
+  }
+
+  // Random ledges can come out unclimbable - a gap too wide, or a ledge
+  // with no hole beside it to jump up through. So we do the honest
+  // thing: build one, ASK THE BOT if it can climb it, and throw it away
+  // if it cannot. We never ship a tower we have not checked.
+  function newTower() {
+    for (let tries = 0; tries < 200; tries++) {
+      blankGrid();
+      layLedges(false);
+      think();
+      if (canGetThrough()) return tries;
+    }
+    blankGrid();
+    layLedges(true);
+    think();
+    return -1;
   }
 
 
 // -------------------------------------------------------------------
 //  THE BOT'S BRAIN
+//
+//  Before, the bot only had to know WHERE it was. Now it has to know
+//  three things at once: which column, which row, and which keys it is
+//  carrying. Standing in front of a red door with the red key is a
+//  completely different situation from standing there without it - so
+//  they have to count as two different places.
+//
+//  That is the whole trick. Same algorithm as a satnav, just run over
+//  "place AND pockets" instead of "place".
 // -------------------------------------------------------------------
-//
-//  Dijkstra: the same way a satnav finds the quickest route. Start at
-//  the flag and work BACKWARDS, filling in "what does it cost to get
-//  home from this square". Always expand the cheapest square you know
-//  about next, and by the time you reach the start, the number sitting
-//  on every square is the true cheapest cost from there.
-//
-//  Working backwards from the flag rather than forwards from the bot
-//  means one sweep gives the answer for EVERY square at once - so the
-//  route is drawn instantly while you're still building, and you can
-//  see what your wall did before you commit to it.
 
-  let costFrom = [];          // cheapest cost from each square to the flag
+  const KEYSETS = 1 << LOCKS.length;         // 8 possible pocketfuls
+  const NSTATES = COLS * ROWS * KEYSETS;
+  function id(c, r, keys) { return (r * COLS + c) * KEYSETS + keys; }
+
+  let dist = null, prevOf = null, viaOf = null;
+  let bestCost = Infinity, bestEnd = -1;
+
+  // Every single thing the bot could do from where it is standing.
+  // Each move remembers the squares it passes THROUGH, because that is
+  // what it pays for and where it picks keys up.
+  function movesFrom(c, r, keys) {
+    const out = [];
+
+    // ---- WALK, or WALK OFF THE EDGE AND FALL --------------------------
+    for (let d = -1; d <= 1; d += 2) {
+      const nc = c + d;
+      if (!passable(nc, r, keys)) continue;
+
+      let cost = costOf(at(nc, r));
+      let k2 = keys | keyBitAt(nc, r);
+      const via = [{ c: nc, r: r }];
+
+      if (standable(nc, r, keys)) {
+        out.push({ c: nc, r: r, keys: k2, cost: cost, via: via });
+        continue;
+      }
+      // Nothing under its feet, so down it goes until something stops it.
+      let rr = r, ok = true;
+      while (!solid(nc, rr + 1)) {
+        if (!passable(nc, rr + 1, k2)) { ok = false; break; }   // blocked mid-fall
+        rr++;
+        cost += costOf(at(nc, rr));
+        k2 |= keyBitAt(nc, rr);
+        via.push({ c: nc, r: rr });
+      }
+      if (ok) out.push({ c: nc, r: rr, keys: k2, cost: cost, via: via });
+    }
+
+    // ---- JUMP ---------------------------------------------------------
+    // It jumps straight up, then across. Simple to picture, simple to
+    // check, and it means a ledge with no gap beside it cannot be
+    // jumped onto - you have to go up through a hole.
+    for (let dy = 0; dy <= JUMP_UP; dy++) {
+      for (let dx = -JUMP_OVER; dx <= JUMP_OVER; dx++) {
+        if (dx === 0 && dy === 0) continue;
+
+        let cost = 0, k2 = keys, ok = true;
+        const via = [];
+
+        for (let i = 1; i <= dy; i++) {                 // the way up
+          const rr = r - i;
+          if (!passable(c, rr, k2)) { ok = false; break; }
+          cost += costOf(at(c, rr));
+          k2 |= keyBitAt(c, rr);
+          via.push({ c: c, r: rr });
+        }
+        if (!ok) continue;
+
+        const rr = r - dy;
+        const step = dx > 0 ? 1 : -1;
+        for (let i = 1; i <= Math.abs(dx); i++) {       // the way across
+          const cc = c + step * i;
+          if (!passable(cc, rr, k2)) { ok = false; break; }
+          cost += costOf(at(cc, rr));
+          k2 |= keyBitAt(cc, rr);
+          via.push({ c: cc, r: rr });
+        }
+        if (!ok) continue;
+
+        const tc = c + dx;
+        if (!standable(tc, rr, k2)) continue;           // nothing to land on
+        out.push({ c: tc, r: rr, keys: k2, cost: cost, via: via });
+      }
+    }
+
+    return out;
+  }
 
   function think() {
-    costFrom = [];
-    for (let r = 0; r < ROWS; r++) {
-      const row = [];
-      for (let c = 0; c < COLS; c++) row.push(Infinity);
-      costFrom.push(row);
-    }
-    if (at(FLAG.c, FLAG.r) === WALL) return;
+    dist   = new Float64Array(NSTATES).fill(Infinity);
+    prevOf = new Int32Array(NSTATES).fill(-1);
+    viaOf  = new Array(NSTATES).fill(null);
+    const settled = new Uint8Array(NSTATES);
 
-    costFrom[FLAG.r][FLAG.c] = 0;
+    const first = id(START.c, START.r, 0);
+    dist[first] = 0;
 
-    // A simple "cheapest known square next" list. The yard is 143
-    // squares, so scanning it is instant and a proper priority queue
-    // would be more code for no gain you could ever notice.
-    const done = [];
-    for (let r = 0; r < ROWS; r++) done.push(new Array(COLS).fill(false));
-
+    // Always deal with the cheapest place-and-pockets we have not dealt
+    // with yet. Once it is settled, nothing can ever make it cheaper -
+    // that is the guarantee that makes the answer the real answer.
     for (;;) {
-      let bc = -1, br = -1, bv = Infinity;
-      for (let r = 0; r < ROWS; r++) {
-        for (let c = 0; c < COLS; c++) {
-          if (done[r][c]) continue;
-          if (costFrom[r][c] < bv) { bv = costFrom[r][c]; bc = c; br = r; }
+      let bs = -1, bv = Infinity;
+      for (let s = 0; s < NSTATES; s++) {
+        if (!settled[s] && dist[s] < bv) { bv = dist[s]; bs = s; }
+      }
+      if (bs < 0) break;
+      settled[bs] = 1;
+
+      const keys = bs % KEYSETS;
+      const cell = (bs - keys) / KEYSETS;
+      const c = cell % COLS, r = (cell - c) / COLS;
+
+      const moves = movesFrom(c, r, keys);
+      for (let i = 0; i < moves.length; i++) {
+        const m = moves[i];
+        const ns = id(m.c, m.r, m.keys);
+        if (bv + m.cost < dist[ns]) {
+          dist[ns] = bv + m.cost;
+          prevOf[ns] = bs;
+          viaOf[ns] = m.via;
         }
       }
-      if (bc < 0) break;
-      done[br][bc] = true;
+    }
 
-      // Four ways out of a square. No diagonals - a bot that cuts
-      // corners is much harder to build against, because you can never
-      // quite tell what it will squeeze through.
-      const step = [[1,0],[-1,0],[0,1],[0,-1]];
-      for (const s of step) {
-        const nc = bc + s[0], nr = br + s[1];
-        if (nc < 0 || nr < 0 || nc >= COLS || nr >= ROWS) continue;
-        const kind = grid[nr][nc];
-        if (kind === WALL) continue;                 // can't stand there
-        const price = bv + COST[kind];
-        if (price < costFrom[nr][nc]) costFrom[nr][nc] = price;
-      }
+    // Reaching the flag counts however many keys are in its pockets.
+    bestCost = Infinity; bestEnd = -1;
+    for (let k = 0; k < KEYSETS; k++) {
+      const s = id(FLAG.c, FLAG.r, k);
+      if (dist[s] < bestCost) { bestCost = dist[s]; bestEnd = s; }
     }
   }
 
-  // The actual route, read straight off those numbers: from wherever
-  // you are, step to whichever neighbour is cheapest. No searching -
-  // the thinking already happened.
-  function routeFrom(c, r) {
-    const path = [{ c: c, r: r }];
-    let guard = 0;
-    while ((c !== FLAG.c || r !== FLAG.r) && guard++ < COLS * ROWS * 2) {
-      let bc = -1, br = -1, bv = costFrom[r][c];
-      for (const s of [[1,0],[-1,0],[0,1],[0,-1]]) {
-        const nc = c + s[0], nr = r + s[1];
-        if (nc < 0 || nr < 0 || nc >= COLS || nr >= ROWS) continue;
-        if (grid[nr][nc] === WALL) continue;
-        if (costFrom[nr][nc] < bv) { bv = costFrom[nr][nc]; bc = nc; br = nr; }
-      }
-      if (bc < 0) break;
-      c = bc; r = br;
-      path.push({ c: c, r: r });
+  function canGetThrough() { return bestCost < Infinity; }
+
+  // Can the bot ever actually GET this key? Not "can it stand on that
+  // square" - it might swipe the key while flying past in the middle of
+  // a jump. So the real question is whether there is any situation it
+  // can reach where the key is already in its pocket.
+  function canFetch(colour) {
+    const bit = 1 << colour;
+    for (let s = 0; s < NSTATES; s++) {
+      if (dist[s] < Infinity && ((s % KEYSETS) & bit)) return true;
     }
-    return path;
+    return false;
   }
 
-  function canGetThrough() {
-    return costFrom[START.r][START.c] < Infinity;
+  // Walk the trail of breadcrumbs back from the flag, then turn it round.
+  function routeCells() {
+    if (bestEnd < 0) return [];
+    const chunks = [];
+    let s = bestEnd;
+    while (s >= 0 && prevOf[s] >= 0) {
+      chunks.push(viaOf[s]);
+      s = prevOf[s];
+    }
+    chunks.reverse();
+    const out = [{ c: START.c, r: START.r }];
+    for (let i = 0; i < chunks.length; i++) {
+      for (let j = 0; j < chunks[i].length; j++) out.push(chunks[i][j]);
+    }
+    return out;
   }
 
 
@@ -207,56 +385,47 @@
 //  THE BOT ITSELF
 // -------------------------------------------------------------------
 
-  const bot = { c: 0, r: 0, x: 0, y: 0, step: 0, path: [], at: 0, spent: 0 };
-
-  function newRound(keepBuild) {
-    if (!keepBuild) { clearYard(); round = 1; coins = 14; }
-    bot.c = START.c; bot.r = START.r;
-    bot.x = START.c; bot.y = START.r;
-    bot.path = []; bot.at = 0; bot.spent = 0; bot.step = 0;
-    state = 'build';
-    think();
-  }
+  const bot = { c: START.c, r: START.r, x: START.c, y: START.r,
+                path: [], at: 0, step: 0, spent: 0, got: 0, face: 1 };
 
   function go() {
+    if (holdingKey >= 0) { say('put the key down first'); return; }
     think();
-    if (!canGetThrough()) {
-      say('YOU HAVE SEALED IT IN - LEAVE IT A WAY THROUGH');
-      return;
-    }
-    bot.path = routeFrom(START.c, START.r);
-    bot.at = 0;
-    bot.spent = 0;
-    bot.c = START.c; bot.r = START.r;
-    bot.x = START.c; bot.y = START.r;
+    if (!canGetThrough()) { say('it cannot get up there at all'); return; }
+    bot.path = routeCells();
+    bot.at = 0; bot.spent = 0; bot.got = 0; bot.step = 0;
+    bot.c = START.c; bot.r = START.r; bot.x = START.c; bot.y = START.r;
     state = 'run';
+    say('off it goes');
   }
 
   function update(dt) {
     if (saysT > 0) saysT -= dt;
     if (state !== 'run') return;
 
-    // It moves slower through mud, which is the same thing the cost
-    // says - so what you watch matches what you were scored on.
+    // It wades slowly. You can SEE the mud costing it, which is the
+    // point - a number going up is fine, watching it struggle is better.
     const here = at(bot.c, bot.r);
-    const speed = here === MUD ? 0.9 : 3.4;
+    const speed = here === MUD ? 1.0 : 4.2;
     bot.step += dt * speed;
 
     while (bot.step >= 1) {
       bot.step -= 1;
       if (bot.at >= bot.path.length - 1) {
         state = 'done';
-        best = Math.max(best, bot.spent);
-        say('IT GOT THROUGH IN ' + bot.spent);
+        if (bestCost > best) best = bestCost;
+        say('it got there in ' + bot.spent + ' steps');
         return;
       }
       bot.at++;
-      const nxt = bot.path[bot.at];
-      bot.spent += COST[at(nxt.c, nxt.r)];
-      bot.c = nxt.c; bot.r = nxt.r;
+      const n = bot.path[bot.at];
+      if (n.c !== bot.c) bot.face = n.c > bot.c ? 1 : -1;
+      bot.c = n.c; bot.r = n.r;
+      bot.spent += costOf(at(n.c, n.r));
+      if (at(n.c, n.r) === KEY) { bot.got |= keyBitAt(n.c, n.r); }
     }
 
-    // Slide smoothly between squares rather than blinking.
+    // Slide smoothly between squares so it looks alive.
     const a = bot.path[bot.at];
     const b = bot.path[Math.min(bot.at + 1, bot.path.length - 1)];
     bot.x = a.c + (b.c - a.c) * bot.step;
@@ -265,23 +434,22 @@
 
 
 // -------------------------------------------------------------------
-//  DRAWING
+//  WHERE EVERYTHING IS ON SCREEN
 // -------------------------------------------------------------------
 
   // A phone held sideways has loads of width and almost no height. If we
-  // keep the buttons in a row underneath, they eat the room the yard
-  // needs and every square shrinks to a crumb. So when the screen is
-  // wider than it is tall, the buttons move to a column on the right.
+  // keep the buttons in a row underneath, they eat the room the tower
+  // needs. So when the screen is wider than it is tall, the buttons move
+  // to a column on the right.
   function wide()   { return W > H * 1.35; }
   function panelW() { return wide() ? Math.min(W * 0.24, 210) : 0; }
   function topBar() { return wide() ? 62 : 96; }
   function botBar() { return wide() ? 16 : 114; }
 
   function board() {
-    // One square, sized so the whole yard fits whatever shape the screen
-    // is, and centred in whatever room is left over. Everything else in
-    // the game asks THIS function where things are - so changing the
-    // shape here moves the drawing and your finger at the same time.
+    // Everything else in the game asks THIS function where things are -
+    // so changing the shape here moves the drawing and your finger at
+    // the same time, and they can never disagree.
     const s = Math.min((W - panelW() - 40) / COLS,
                        (H - topBar() - botBar()) / ROWS);
     return { s: s,
@@ -293,13 +461,58 @@
     const b = board();
     const c = Math.floor((mx - b.x) / b.s);
     const r = Math.floor((my - b.y) / b.s);
-    if (c < 0 || r < 0 || c >= COLS || r >= ROWS) return null;
+    if (!inside(c, r)) return null;
     return { c: c, r: r };
   }
 
+  // Buttons stay a comfortable size whatever happens - a fingertip is
+  // about 44 across, and a button you cannot reliably hit is not a button.
+  function btnH() {
+    if (!wide()) return 54;
+    return clamp((H - topBar() - 34 - 8 * TOOLS.length) / (TOOLS.length + 1), 40, 54);
+  }
+  function toolBox(i) {
+    const h = btnH();
+    if (wide()) {
+      return { x: W - panelW() + 4, y: topBar() + 6 + i * (h + 8),
+               w: panelW() - 20, h: h };
+    }
+    const goW = Math.min(W * 0.22, 150);
+    const room = W - 40 - goW - 12;
+    const w = (room - 12 * (TOOLS.length - 1)) / TOOLS.length;
+    return { x: 20 + i * (w + 12), y: H - 78, w: w, h: h };
+  }
+  function goBox() {
+    const h = btnH();
+    if (wide()) {
+      return { x: W - panelW() + 4, y: topBar() + 14 + TOOLS.length * (h + 8),
+               w: panelW() - 20, h: h };
+    }
+    const goW = Math.min(W * 0.22, 150);
+    return { x: W - goW - 20, y: H - 78, w: goW, h: h };
+  }
+
+
+// -------------------------------------------------------------------
+//  DRAWING
+// -------------------------------------------------------------------
+
   function rgb(v) { return 'rgb(' + (v[0]|0) + ',' + (v[1]|0) + ',' + (v[2]|0) + ')'; }
 
-  function drawYard() {
+  function drawKeyShape(x, y, s, col) {
+    ctx.fillStyle = rgb(col);
+    ctx.beginPath();
+    ctx.arc(x, y - s * 0.12, s * 0.17, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillRect(x - s * 0.045, y - s * 0.02, s * 0.09, s * 0.30);
+    ctx.fillRect(x - s * 0.045, y + s * 0.16, s * 0.16, s * 0.06);
+    ctx.fillStyle = '#10141c';
+    ctx.beginPath();
+    ctx.arc(x, y - s * 0.12, s * 0.06, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function drawTower() {
     const b = board();
 
     for (let r = 0; r < ROWS; r++) {
@@ -307,41 +520,74 @@
         const x = b.x + c * b.s, y = b.y + r * b.s;
         const kind = grid[r][c];
 
-        let col = (c + r) % 2 === 0 ? [30, 38, 52] : [26, 33, 46];
-        if (kind === WALL) col = [126, 138, 162];
-        if (kind === MUD)  col = [122, 92, 54];
+        // The sky behind everything, faintly striped so the floors read.
+        ctx.fillStyle = (r % RISE === (FLOOR % RISE)) ? '#1a2130' : '#151b27';
+        ctx.fillRect(x, y, b.s, b.s);
+        ctx.strokeStyle = 'rgba(255,255,255,0.03)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x + 0.5, y + 0.5, b.s - 1, b.s - 1);
 
-        ctx.fillStyle = rgb(col);
-        ctx.fillRect(x + 1, y + 1, b.s - 2, b.s - 2);
+        if (kind === PLAT) {
+          // Bolted down. Darker than your walls, with a bright lip on top
+          // so you can see it is something to land on.
+          ctx.fillStyle = '#3c4658';
+          ctx.fillRect(x, y, b.s, b.s);
+          ctx.fillStyle = '#6f7d94';
+          ctx.fillRect(x, y, b.s, Math.max(2, b.s * 0.14));
+        }
 
         if (kind === WALL) {
-          ctx.fillStyle = 'rgba(255,255,255,0.22)';
-          ctx.fillRect(x + 1, y + 1, b.s - 2, 5);
+          ctx.fillStyle = '#96a0b4';
+          ctx.fillRect(x + 1, y + 1, b.s - 2, b.s - 2);
+          ctx.fillStyle = '#c3ccdd';
+          ctx.fillRect(x + 1, y + 1, b.s - 2, Math.max(2, b.s * 0.14));
         }
+
         if (kind === MUD) {
-          // Blobs, so mud reads as sticky rather than as brown floor.
-          ctx.fillStyle = 'rgba(0,0,0,0.28)';
-          for (let i = 0; i < 4; i++) {
+          ctx.fillStyle = '#6b4a2a';
+          ctx.fillRect(x + 1, y + 1, b.s - 2, b.s - 2);
+          ctx.fillStyle = 'rgba(0,0,0,0.35)';
+          for (let i = 0; i < 5; i++) {
             const a = i * 1.9 + c + r;
             ctx.beginPath();
-            ctx.arc(x + b.s * (0.5 + Math.cos(a) * 0.26),
-                    y + b.s * (0.5 + Math.sin(a) * 0.26), b.s * 0.11, 0, Math.PI * 2);
+            ctx.arc(x + b.s * (0.3 + 0.4 * Math.abs(Math.sin(a))),
+                    y + b.s * (0.3 + 0.4 * Math.abs(Math.cos(a * 1.7))),
+                    b.s * 0.07, 0, Math.PI * 2);
             ctx.fill();
           }
+        }
+
+        if (kind === DOOR) {
+          const col = LOCKS[tint[r][c]].col;
+          const open = state !== 'build' && ((bot.got >> tint[r][c]) & 1);
+          ctx.globalAlpha = open ? 0.28 : 1;          // it swings open once used
+          ctx.fillStyle = rgb(col);
+          ctx.fillRect(x + b.s * 0.12, y + 1, b.s * 0.76, b.s - 2);
+          ctx.fillStyle = 'rgba(0,0,0,0.45)';
+          ctx.beginPath();
+          ctx.arc(x + b.s * 0.68, y + b.s * 0.5, b.s * 0.09, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.globalAlpha = 1;
+        }
+
+        if (kind === KEY) {
+          const col = LOCKS[tint[r][c]].col;
+          const taken = state !== 'build' && ((bot.got >> tint[r][c]) & 1);
+          ctx.globalAlpha = taken ? 0.2 : 1;
+          drawKeyShape(x + b.s / 2, y + b.s / 2, b.s, col);
+          ctx.globalAlpha = 1;
         }
       }
     }
 
-    // ---- THE ROUTE IT WOULD TAKE --------------------------------------
-    // Shown WHILE YOU BUILD. You can see what your last wall did before
-    // you spend another coin, which turns the whole thing from guessing
-    // into planning.
-    if (canGetThrough()) {
-      const path = state === 'run' || state === 'done'
-        ? bot.path : routeFrom(START.c, START.r);
-      ctx.strokeStyle = state === 'build' ? 'rgba(255,210,110,0.55)'
-                                          : 'rgba(255,210,110,0.85)';
-      ctx.lineWidth = Math.max(3, b.s * 0.16);
+    // ---- THE ROUTE ---------------------------------------------------
+    // Drawn WHILE you build, so every block shows you what it was worth
+    // the instant you put it down.
+    const path = state === 'build' ? routeCells() : bot.path;
+    if (path.length > 1) {
+      ctx.strokeStyle = state === 'build' ? 'rgba(255,215,106,0.75)'
+                                          : 'rgba(255,215,106,0.35)';
+      ctx.lineWidth = Math.max(2, b.s * 0.12);
       ctx.lineJoin = 'round'; ctx.lineCap = 'round';
       ctx.beginPath();
       for (let i = 0; i < path.length; i++) {
@@ -352,20 +598,24 @@
       ctx.stroke();
     }
 
-    // ---- START AND FLAG ------------------------------------------------
+    // ---- START AND FLAG ----------------------------------------------
     const sx = b.x + START.c * b.s, sy = b.y + START.r * b.s;
-    ctx.fillStyle = '#3d6ea8';
-    ctx.fillRect(sx + b.s * 0.2, sy + b.s * 0.2, b.s * 0.6, b.s * 0.6);
+    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(sx + 3, sy + 3, b.s - 6, b.s - 6);
 
     const fx = b.x + FLAG.c * b.s, fy = b.y + FLAG.r * b.s;
-    ctx.fillStyle = '#6b5a2a';
-    ctx.fillRect(fx + b.s * 0.44, fy + b.s * 0.18, b.s * 0.08, b.s * 0.64);
+    ctx.strokeStyle = '#ffd76a';
+    ctx.lineWidth = Math.max(2, b.s * 0.08);
+    ctx.beginPath();
+    ctx.moveTo(fx + b.s * 0.35, fy + b.s * 0.85);
+    ctx.lineTo(fx + b.s * 0.35, fy + b.s * 0.15);
+    ctx.stroke();
     ctx.fillStyle = '#ffd76a';
     ctx.beginPath();
-    ctx.moveTo(fx + b.s * 0.52, fy + b.s * 0.2);
-    ctx.lineTo(fx + b.s * 0.86, fy + b.s * 0.34);
-    ctx.lineTo(fx + b.s * 0.52, fy + b.s * 0.48);
-    ctx.closePath();
+    ctx.moveTo(fx + b.s * 0.35, fy + b.s * 0.15);
+    ctx.lineTo(fx + b.s * 0.85, fy + b.s * 0.32);
+    ctx.lineTo(fx + b.s * 0.35, fy + b.s * 0.48);
     ctx.fill();
   }
 
@@ -373,55 +623,53 @@
     const b = board();
     const x = b.x + (bot.x + 0.5) * b.s;
     const y = b.y + (bot.y + 0.5) * b.s;
-    const s = b.s * 0.3;
-    const walk = state === 'run' ? Math.sin(bot.step * Math.PI * 2) * s * 0.3 : 0;
+    const s = b.s * 0.30;
+    const bounce = state === 'run' ? Math.abs(Math.sin(bot.step * Math.PI)) * s * 0.25 : 0;
 
-    ctx.fillStyle = '#2e3950';
-    ctx.fillRect(x - s * 0.7, y + s * 0.5 + walk * 0.5, s * 0.5, s * 0.7);
-    ctx.fillRect(x + s * 0.2, y + s * 0.5 - walk * 0.5, s * 0.5, s * 0.7);
+    ctx.fillStyle = '#dbe4f2';
+    ctx.fillRect(x - s, y - s - bounce, s * 2, s * 1.7);
 
-    ctx.fillStyle = '#c8d6e8';
-    ctx.fillRect(x - s, y - s * 0.6, s * 2, s * 1.3);
-    ctx.fillStyle = '#8fa4c0';
-    ctx.fillRect(x - s * 0.8, y - s * 1.5, s * 1.6, s * 1.0);
+    ctx.fillStyle = '#10141c';
+    ctx.fillRect(x - s * 0.55, y - s * 0.55 - bounce, s * 0.38, s * 0.38);
+    ctx.fillRect(x + s * 0.17, y - s * 0.55 - bounce, s * 0.38, s * 0.38);
 
-    // Two eyes, looking the way it's going.
-    const look = bot.path.length && bot.at < bot.path.length - 1
-      ? Math.sign(bot.path[Math.min(bot.at + 1, bot.path.length - 1)].c - bot.c) : 1;
     ctx.fillStyle = '#ffd76a';
-    ctx.fillRect(x - s * 0.4 + look * s * 0.18, y - s * 1.25, s * 0.3, s * 0.3);
-    ctx.fillRect(x + s * 0.1 + look * s * 0.18, y - s * 1.25, s * 0.3, s * 0.3);
+    ctx.fillRect(x - s * 0.15, y - s * 1.5 - bounce, s * 0.3, s * 0.45);
+
+    // Keys it is carrying, jingling above its head.
+    let shown = 0;
+    for (let i = 0; i < LOCKS.length; i++) {
+      if (!((bot.got >> i) & 1)) continue;
+      drawKeyShape(x - s * 0.7 + shown * s * 0.7, y - s * 2.3 - bounce,
+                   b.s * 0.55, LOCKS[i].col);
+      shown++;
+    }
   }
 
-
-// -------------------------------------------------------------------
-//  THE BUTTONS
-// -------------------------------------------------------------------
-
-  // The buttons stay a comfortable 54 tall whatever happens - a fingertip
-  // is about 44 across, and a button you can't reliably hit isn't a button.
-  function toolBox(i) {
-    const h = 54;
-    if (wide()) {
-      return { x: W - panelW() + 4, y: topBar() + 6 + i * (h + 10),
-               w: panelW() - 20, h: h };
+  function usedLocks() {
+    const seen = [];
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        if (grid[r][c] === DOOR && seen.indexOf(tint[r][c]) < 0) seen.push(tint[r][c]);
+      }
     }
-    const w = Math.min(W * 0.26, 190);
-    return { x: 20 + i * (w + 12), y: H - 78, w: w, h: h };
+    return seen;
   }
-  function goBox() {
-    const h = 54;
-    if (wide()) {
-      return { x: W - panelW() + 4, y: topBar() + 16 + TOOLS.length * (h + 10),
-               w: panelW() - 20, h: h };
-    }
-    const w = Math.min(W * 0.22, 150);
-    return { x: W - w - 20, y: H - 78, w: w, h: h };
+  // Every door you have put down must still be a door the bot can open.
+  function allKeysFetchable() {
+    const used = usedLocks();
+    for (let i = 0; i < used.length; i++) if (!canFetch(used[i])) return false;
+    return true;
+  }
+  function nextLock() {
+    const used = usedLocks();
+    for (let i = 0; i < LOCKS.length; i++) if (used.indexOf(i) < 0) return i;
+    return -1;
   }
 
   function drawHud() {
     // Both lines of the top bar sit inside topBar(), so they never end up
-    // written across the yard on a short screen.
+    // written across the tower on a short screen.
     const line1 = wide() ? 30 : 44, line2 = wide() ? 50 : 68;
 
     ctx.textAlign = 'left';
@@ -433,47 +681,51 @@
     ctx.fillStyle = '#6b7a90';
     ctx.fillText('round ' + round + (best ? '   -   best ' + best + ' steps' : ''), 22, line2);
 
-    // WHAT THE BOT WILL COST. The number you are trying to make bigger,
-    // updating as you build - so every wall you place shows its worth
-    // the instant you place it.
+    // THE NUMBER YOU ARE TRYING TO MAKE BIGGER.
     ctx.textAlign = 'right';
-    const price = canGetThrough() ? costFrom[START.r][START.c] : null;
     ctx.font = 'bold ' + Math.min(W * 0.034, 26) + 'px system-ui, sans-serif';
-    ctx.fillStyle = price === null ? '#e05a4a' : '#8fe07a';
-    ctx.fillText(price === null ? 'NO WAY THROUGH' : price + ' steps', W - 20, line1);
+    ctx.fillStyle = canGetThrough() ? '#8fe07a' : '#e05a4a';
+    ctx.fillText(canGetThrough() ? bestCost + ' steps' : 'NO WAY UP', W - 20, line1);
     ctx.font = Math.min(W * 0.022, 14) + 'px system-ui, sans-serif';
     ctx.fillStyle = '#6b7a90';
-    ctx.fillText(price === null ? 'it must have a route'
-                                : 'the cheapest way it can find', W - 20, line2 - 2);
+    ctx.fillText(canGetThrough() ? 'the cheapest climb it can find'
+                                 : 'it must be able to reach the flag', W - 20, line2 - 2);
 
-    // ---- TOOLS ---------------------------------------------------------
+    // ---- TOOLS -------------------------------------------------------
     for (let i = 0; i < TOOLS.length; i++) {
-      const t = TOOLS[i], b = toolBox(i);
-      const on = tool === i;
-      const can = coins >= t.price;
+      const t = TOOLS[i], bx = toolBox(i);
+      const on = tool === i && holdingKey < 0;
+      const lock = nextLock();
+      const can = coins >= t.price && (t.kind !== DOOR || lock >= 0);
+
       ctx.fillStyle = on ? 'rgba(255,215,106,0.18)' : 'rgba(0,0,0,0.35)';
-      ctx.fillRect(b.x, b.y, b.w, b.h);
+      ctx.fillRect(bx.x, bx.y, bx.w, bx.h);
       ctx.lineWidth = on ? 3 : 2;
       ctx.strokeStyle = on ? '#ffd76a' : 'rgba(255,255,255,0.18)';
-      ctx.strokeRect(b.x, b.y, b.w, b.h);
+      ctx.strokeRect(bx.x, bx.y, bx.w, bx.h);
 
-      ctx.fillStyle = rgb(t.colour);
-      ctx.fillRect(b.x + 10, b.y + 14, 26, 26);
+      const swatch = t.kind === WALL ? [150, 160, 180]
+                   : t.kind === MUD  ? [107, 74, 42]
+                   : (lock >= 0 ? LOCKS[lock].col : [90, 100, 118]);
+      ctx.fillStyle = rgb(swatch);
+      ctx.fillRect(bx.x + 9, bx.y + bx.h * 0.26, 22, 22);
 
+      const roomy = bx.w > 150;
       ctx.textAlign = 'left';
       ctx.font = 'bold ' + Math.min(W * 0.022, 15) + 'px system-ui, sans-serif';
       ctx.fillStyle = can ? '#e6ecf5' : '#5a6678';
-      ctx.fillText(t.name + '  ' + t.price, b.x + 46, b.y + 24);
-      ctx.font = Math.min(W * 0.018, 12) + 'px system-ui, sans-serif';
-      ctx.fillStyle = '#6b7a90';
-      ctx.fillText(t.blurb, b.x + 46, b.y + 42);
+      ctx.fillText(t.name + '  ' + t.price, bx.x + 38, bx.y + (roomy ? 24 : bx.h * 0.6));
+      if (roomy) {
+        ctx.font = Math.min(W * 0.018, 12) + 'px system-ui, sans-serif';
+        ctx.fillStyle = '#6b7a90';
+        ctx.fillText(t.blurb, bx.x + 38, bx.y + 42);
+      }
     }
 
-    // ---- GO -------------------------------------------------------------
+    // ---- GO -----------------------------------------------------------
     const g = goBox();
-    const ready = state === 'build' && canGetThrough();
-    ctx.fillStyle = state === 'run' ? 'rgba(0,0,0,0.35)'
-                  : ready ? 'rgba(143,224,122,0.2)' : 'rgba(0,0,0,0.35)';
+    const ready = state === 'build' && canGetThrough() && holdingKey < 0;
+    ctx.fillStyle = ready ? 'rgba(143,224,122,0.2)' : 'rgba(0,0,0,0.35)';
     ctx.fillRect(g.x, g.y, g.w, g.h);
     ctx.lineWidth = 3;
     ctx.strokeStyle = ready ? '#8fe07a' : 'rgba(255,255,255,0.2)';
@@ -481,19 +733,26 @@
     ctx.textAlign = 'center';
     ctx.font = 'bold ' + Math.min(W * 0.03, 22) + 'px system-ui, sans-serif';
     ctx.fillStyle = ready ? '#8fe07a' : '#6b7a90';
-    ctx.fillText(state === 'build' ? 'GO' : state === 'run' ? 'RUNNING' : 'NEXT ROUND',
-                 g.x + g.w / 2, g.y + 34);
+    ctx.fillText(state === 'build' ? 'GO' : state === 'run' ? 'CLIMBING' : 'NEXT ROUND',
+                 g.x + g.w / 2, g.y + g.h * 0.63);
 
-    // If the yard has to squeeze so small that a fingertip covers three
-    // squares, say so instead of letting Max wonder why he keeps building
-    // in the wrong place. Turning the phone upright genuinely fixes it.
-    if (wide() && board().s < 30) {
+    // ---- HOLDING A KEY -------------------------------------------------
+    // Impossible to miss, because nothing else works until you put it down.
+    if (holdingKey >= 0) {
+      ctx.textAlign = 'center';
+      const mx = (W - panelW()) / 2;
+      const y = wide() ? topBar() - 14 : 90;
+      ctx.font = 'bold ' + Math.min(W * 0.028, 20) + 'px system-ui, sans-serif';
+      ctx.fillStyle = rgb(LOCKS[holdingKey].col);
+      ctx.fillText('NOW HIDE THE ' + LOCKS[holdingKey].name + ' KEY', mx, y);
+    }
+
+    if (wide() && board().s < 26) {
       ctx.textAlign = 'center';
       ctx.font = 'bold 11px system-ui, sans-serif';
       ctx.fillStyle = '#6b7a90';
-      const mx = W - panelW() / 2;
-      ctx.fillText('TURN YOUR PHONE', mx, goBox().y + goBox().h + 26);
-      ctx.fillText('UPRIGHT FOR A BIGGER YARD', mx, goBox().y + goBox().h + 40);
+      ctx.fillText('turn your phone upright for a much bigger tower',
+                   (W - panelW()) / 2, wide() ? 30 : 30);
     }
 
     if (saysT > 0) {
@@ -501,8 +760,6 @@
       const size = wide() ? 15 : Math.min(W * 0.028, 20);
       const y = wide() ? H - 12 : H - 100;
       ctx.font = 'bold ' + size + 'px system-ui, sans-serif';
-      // A dark pill behind it, so a message never gets lost against a
-      // yard full of walls.
       const wid = ctx.measureText(says).width;
       ctx.fillStyle = 'rgba(16,20,28,' + clamp(saysT, 0, 1) * 0.85 + ')';
       ctx.fillRect((W - panelW()) / 2 - wid / 2 - 12, y - size, wid + 24, size + 12);
@@ -516,64 +773,123 @@
 //  BUILDING
 // -------------------------------------------------------------------
 
+  // Take a door and its key away together. One without the other is
+  // either a wall you cannot open or a key to nothing.
+  function removeLock(colour) {
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        const k = grid[r][c];
+        if ((k === DOOR || k === KEY) && tint[r][c] === colour) grid[r][c] = EMPTY;
+      }
+    }
+  }
+
   function place(c, r) {
     if (state !== 'build') return;
+    if (!inside(c, r)) return;
     if (c === START.c && r === START.r) { say('that is where it starts'); return; }
     if (c === FLAG.c && r === FLAG.r)   { say('that is the flag'); return; }
+    if (grid[r][c] === PLAT) { say('that ledge is bolted down'); return; }
 
-    const t = TOOLS[tool];
+    // ---- PUTTING DOWN THE KEY YOU ARE HOLDING --------------------------
+    if (holdingKey >= 0) {
+      if (grid[r][c] !== EMPTY) { say('the key needs an empty square'); return; }
+      const colour = holdingKey;
+      grid[r][c] = KEY; tint[r][c] = colour;
+      think();
+      // TWO things have to be true, not one. It must still be able to
+      // reach the flag - AND it must be able to get this key. A key it
+      // can never reach turns your door into a wall you paid extra for,
+      // which is a rotten trick to play on someone.
+      if (!canGetThrough() || !canFetch(colour)) {
+        grid[r][c] = EMPTY;
+        removeLock(colour);
+        coins += TOOLS[2].price;
+        holdingKey = -1;
+        think();
+        say(canGetThrough() ? 'it could never reach that key'
+                            : 'then it can never get to the flag');
+        return;
+      }
+      holdingKey = -1;
+      say('now it has to go and get it first');
+      return;
+    }
 
-    // Tapping something you already built takes it back and refunds it,
-    // so a mistake costs nothing but a moment.
+    // ---- TAKING SOMETHING BACK ------------------------------------------
     if (grid[r][c] !== EMPTY) {
-      const was = TOOLS.find(function (x) { return x.kind === grid[r][c]; });
-      grid[r][c] = EMPTY;
-      coins += was.price;
+      const k = grid[r][c];
+      if (k === DOOR || k === KEY) {
+        removeLock(tint[r][c]);
+        coins += TOOLS[2].price;
+      } else {
+        grid[r][c] = EMPTY;
+        coins += (k === WALL ? TOOLS[0].price : TOOLS[1].price);
+      }
       think();
       return;
     }
 
+    const t = TOOLS[tool];
     if (coins < t.price) { say('not enough coins'); return; }
+
+    if (t.kind === DOOR) {
+      const colour = nextLock();
+      if (colour < 0) { say('three doors is all you get'); return; }
+      grid[r][c] = DOOR; tint[r][c] = colour;
+      coins -= t.price;
+      holdingKey = colour;                 // the key comes next, always
+      think();
+      say('now hide the ' + LOCKS[colour].name + ' key');
+      const hint = document.getElementById('hud');
+      if (hint) hint.style.opacity = 0;
+      return;
+    }
 
     grid[r][c] = t.kind;
     think();
 
-    // YOU MAY NOT SEAL IT IN. Refused at the moment you try, with the
-    // block put straight back - so you find out by tapping rather than
-    // by building a masterpiece and being told at the end.
-    if (!canGetThrough()) {
+    // IT MUST BE ABLE TO REACH THE FLAG, and it must still be able to
+    // reach every key you have hidden. Refused the moment you try, with
+    // the block put straight back - so you find out by tapping, not by
+    // building a masterpiece and being told at the end.
+    if (!canGetThrough() || !allKeysFetchable()) {
+      const why = canGetThrough() ? 'now it can never reach a key'
+                                  : 'IT MUST HAVE A WAY UP';
       grid[r][c] = EMPTY;
       think();
-      say('IT MUST HAVE A WAY THROUGH');
+      say(why);
       return;
     }
 
     coins -= t.price;
-
-    // You have clearly worked out how to build. The instructions can go.
     const hint = document.getElementById('hud');
     if (hint) hint.style.opacity = 0;
   }
 
   function tap(mx, my) {
-    for (let i = 0; i < TOOLS.length; i++) {
-      const b = toolBox(i);
-      if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
-        tool = i; return;
+    // While you are holding a key, the only thing a tap can do is put it
+    // down. No half-finished doors.
+    if (holdingKey < 0) {
+      for (let i = 0; i < TOOLS.length; i++) {
+        const b = toolBox(i);
+        if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
+          tool = i; return;
+        }
       }
-    }
-    const g = goBox();
-    if (mx >= g.x && mx <= g.x + g.w && my >= g.y && my <= g.y + g.h) {
-      if (state === 'build') go();
-      else if (state === 'done') {
-        round++;
-        coins += 8 + round;         // more to spend every round
-        state = 'build';
-        bot.c = START.c; bot.r = START.r; bot.x = START.c; bot.y = START.r;
-        bot.path = []; bot.at = 0; bot.spent = 0;
-        say('round ' + round + ' - here it comes again');
+      const g = goBox();
+      if (mx >= g.x && mx <= g.x + g.w && my >= g.y && my <= g.y + g.h) {
+        if (state === 'build') go();
+        else if (state === 'done') {
+          round++;
+          coins += 10 + round;           // more to spend every round
+          state = 'build';
+          bot.c = START.c; bot.r = START.r; bot.x = START.c; bot.y = START.r;
+          bot.path = []; bot.at = 0; bot.spent = 0; bot.got = 0;
+          say('round ' + round + ' - make it worse');
+        }
+        return;
       }
-      return;
     }
     const cell = cellAt(mx, my);
     if (cell) place(cell.c, cell.r);
@@ -600,15 +916,14 @@
     ctx.fillStyle = '#10141c';
     ctx.fillRect(0, 0, W, H);
 
-    drawYard();
+    drawTower();
     drawBot();
     drawHud();
 
     requestAnimationFrame(frame);
   }
 
-  clearYard();
-  newRound(false);
+  newTower();
   requestAnimationFrame(frame);
 
 </script>
