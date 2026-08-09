@@ -809,16 +809,6 @@
     return brains.length > 0 && brains.every(function (b) { return b.bestCost < Infinity; });
   }
 
-  // Can a robot from ANY spawn ever actually GET this key? (It might swipe
-  // it mid-jump, so we ask about reachable pockets, not squares.)
-  function canFetch(colour) {
-    const bit = 1 << colour;
-    for (const b of brains)
-      for (let s = 0; s < NSTATES; s++)
-        if (b.dist[s] < Infinity && ((s % KEYSETS) & bit)) return true;
-    return false;
-  }
-
   // Reconstruct the cheapest route for one spawn (by its index in STARTS).
   function routeCellsFor(i) {
     const b = brains[i];
@@ -909,7 +899,7 @@
   function go() {
     if (holdingKey >= 0) { say('put the key down first'); return; }
     think();
-    if (!canGetThrough()) { say('they cannot get up there at all'); return; }
+    if (!canGetThrough()) { say('no way up yet - open a route before you send them'); return; }
 
     // One route per spawn. Every robot carries its OWN route, so each stream
     // takes its own cheapest way up - and you get to make them cross.
@@ -1442,11 +1432,6 @@
     }
     return seen;
   }
-  function allKeysFetchable() {
-    const used = usedLocks();
-    for (let i = 0; i < used.length; i++) if (!canFetch(used[i])) return false;
-    return true;
-  }
   function nextLock() {
     const used = usedLocks();
     for (let i = 0; i < LOCKS.length; i++) if (used.indexOf(i) < 0) return i;
@@ -1534,9 +1519,8 @@
     // it flips to how many you've STOPPED out of the whole wave.
     c = statCell(3);
     if (state === 'build') {
-      const ok = canGetThrough();
       label(c.x + c.w / 2, 'ROBOTS');
-      value(c.x + c.w / 2, ok ? '' + waveSize() : 'NO WAY', ok ? '#e8834a' : '#e05a4a');
+      value(c.x + c.w / 2, '' + waveSize(), '#e8834a');
     } else {
       label(c.x + c.w / 2, 'STOPPED');
       value(c.x + c.w / 2, stopped() + '/' + bots.length, '#e8834a');
@@ -1648,6 +1632,11 @@
     } else if (state === 'done') {
       goFill = 'rgba(143,224,122,0.2)'; goStroke = '#8fe07a'; goText = '#8fe07a';
       goLabel = 'NEXT WAVE';
+    } else if (holdingKey < 0 && !canGetThrough()) {
+      // You've sealed the exit off. Placing is still fine - this is just the
+      // gate that stops you launching a wave that has nowhere to go.
+      goFill = 'rgba(224,90,74,0.15)'; goStroke = '#e05a4a'; goText = '#e05a4a';
+      goLabel = 'NO WAY UP';
     } else {
       const ready = canGetThrough() && holdingKey < 0;
       goFill = ready ? 'rgba(143,224,122,0.2)' : 'rgba(0,0,0,0.35)';
@@ -1776,25 +1765,13 @@
       if (grid[r][c] !== EMPTY) { say('the key needs an empty square'); return; }
       const colour = holdingKey;
       grid[r][c] = KEY; tint[r][c] = colour;
-      think();
-      // TWO things have to be true. They must still be able to reach the
-      // flag - AND they must be able to get this key. A key they can
-      // never reach turns your door into a wall you paid extra for.
-      // (Same as above: decide the reason before putting anything back.)
-      const throughOK = canGetThrough();
-      const fetchOK   = canFetch(colour);
-      if (!throughOK || !fetchOK) {
-        grid[r][c] = EMPTY;
-        removeLock(colour);
-        coins += priceOf(DOOR);
-        holdingKey = -1;
-        think();
-        reject(c, r, throughOK ? 'they could never reach that key there'
-                               : 'the key can\'t block the only way up');
-        return;
-      }
       holdingKey = -1;
-      say('now they have to go and get it first');
+      think();
+      // As with walls, you can hide the key somewhere they can't reach yet -
+      // maybe you'll open a way to it next. If that leaves no route to the
+      // exit, the SEND THEM button just shows NO WAY UP until you fix it.
+      if (canGetThrough()) say('now they have to go and get it first');
+      else                 say('key hidden - but there\'s no way up right now');
       return;
     }
 
@@ -1847,29 +1824,16 @@
     }
 
     grid[r][c] = t.kind;
+    coins -= t.price;
     think();
 
-    // THEY MUST BE ABLE TO REACH THE FLAG, and still reach every key you
-    // have hidden. Refused the moment you try, with the block put
-    // straight back - so you find out by tapping, not by building a
-    // masterpiece and being told at the end.
-    //
-    // Work out WHY *while the block is still there*. If we asked
-    // canGetThrough() again AFTER putting it back, the answer would always
-    // be "yes" (the block is gone), so the message would always blame a
-    // key - even when the real problem was the path and there are no keys
-    // on the board at all.
-    const throughOK = canGetThrough();
-    const keysOK    = allKeysFetchable();
-    if (!throughOK || !keysOK) {
-      grid[r][c] = EMPTY;
-      think();
-      reject(c, r, throughOK ? 'that would trap a key they need'
-                             : 'that blocks the only way up');
-      return;
-    }
+    // You're ALLOWED to block the only way up while you build. It's a plan
+    // in progress: you might be about to open a new route with the next few
+    // walls. The SEND THEM button turns into NO WAY UP whenever there's no
+    // path, so you simply can't launch a wave that has nowhere to go - but
+    // nothing stops you laying the walls that only make sense together.
+    if (!canGetThrough()) say('no way up right now - open a route before you send them');
 
-    coins -= t.price;
     const h2 = document.getElementById('hud');
     if (h2) h2.style.opacity = 0;
   }
