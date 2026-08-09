@@ -4,13 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport"
       content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>BEAT THE BOT</title>
+<title>BOT RUSH</title>
 
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" content="#10141c">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Beat the Bot">
+<meta name="apple-mobile-web-app-title" content="Bot Rush">
 <link rel="apple-touch-icon" href="icon-192.png">
 <link rel="icon" href="icon-192.png">
 
@@ -188,7 +188,7 @@
 
 <script>
 // ===================================================================
-//  BEAT THE BOT
+//  BOT RUSH
 //
 //  A line of robots is coming. They all want the flag at the top.
 //  You have coins. Stop them.
@@ -310,6 +310,9 @@
   // What can be in a square.
   const EMPTY = 0, WALL = 1, MUD = 2, PLAT = 3, DOOR = 4, KEY = 5,
         SAW = 6, SMASH = 7;
+  // DEMO isn't a thing that sits in a square - it's a TOOL that smashes the
+  // bolted ledges (PLAT), which nothing else can touch. Handled specially.
+  const DEMO = 8;
 
   // Three colours of door. A door only opens for a key of its colour.
   const LOCKS = [
@@ -328,7 +331,9 @@
     { name: 'SAW',   price: 6, kind: SAW,
       blurb: 'pops up, then drops. slices them. ⚡powered' },
     { name: 'HAMMER',price: 4, kind: SMASH,
-      blurb: 'slams down. flattens them. ⚡powered' }
+      blurb: 'slams down. flattens them. ⚡powered' },
+    { name: 'BREAK', price: 2, kind: DEMO,
+      blurb: 'smash a bolted ledge to open a new gap' }
   ];
 
   let grid = [];      // what is in each square
@@ -536,14 +541,20 @@
       layLedges(false);
       placeStarts(n);
       think();
-      if (canGetThrough()) return tries;    // every spawn can reach the exit
+      if (canGetThrough()) { snapshotBase(); return tries; }  // every spawn reaches the exit
     }
     blankGrid();
     layLedges(true);                        // the guaranteed staircase works for all
     placeStarts(n);
     think();
+    snapshotBase();
     return -1;
   }
+
+  // Remember the tower's original ledges the moment it's built, so Clear can
+  // put back anything you smashed with BREAK (and wipe anything you placed).
+  let baseGrid = [];
+  function snapshotBase() { baseGrid = grid.map(function (row) { return row.slice(); }); }
 
   // START THE WHOLE GAME OVER. Fresh tower, coins and round back to the
   // beginning, everything you'd placed thrown away. We keep `best` though -
@@ -561,21 +572,26 @@
   }
 
   // CLEAR THE CURRENT MAP. A do-over of just what you've built on THIS
-  // tower: every trap you placed is taken away and its coins handed back,
-  // but the map itself (its bolted-down ledges), your level, wave, coins
-  // and power supply all stay exactly as they are. So it's "let me try my
-  // defence again", not "throw my whole game away".
+  // tower: every trap you placed is handed back as coins, and the map is put
+  // back exactly as it was born - including any bolted ledges you smashed
+  // with BREAK. Your level, wave, coins and power supply all stay. So it's
+  // "let me try my defence again", not "throw my whole game away".
   function resetMap() {
+    // Hand back the coins for everything you placed (BREAK isn't refunded -
+    // the ledge just comes back below).
     for (let r = 0; r < ROWS; r++) {
       for (let c = 0; c < COLS; c++) {
         const k = grid[r][c];
-        if (k === EMPTY || k === PLAT) continue;   // keep the ledges
+        if (k === EMPTY || k === PLAT) continue;
         if      (k === DOOR) coins += priceOf(DOOR);   // key comes with the door
         else if (k === KEY)  coins += 0;               // ...so the key itself is free
         else                 coins += priceOf(k);
-        grid[r][c] = EMPTY;
       }
     }
+    // Restore the map to how it was built: original ledges back, all your
+    // placements gone.
+    grid = baseGrid.map(function (row) { return row.slice(); });
+    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) tint[r][c] = 0;
     holdingKey = -1;
     badCell = null; coinFlash = 0; powerFlash = 0;
     bots = []; route = []; scrap = [];
@@ -1122,16 +1138,17 @@
   const STAT_H = 42;     // the stat dashboard row
   function topBar() { return NAV_H + STAT_H + 6; }
 
-  // Five tools and a GO button will not fit in one row on a phone, so
-  // they wrap onto as many rows as they need - and the tower is told
-  // how much room that took, instead of us guessing a number.
+  // The tool buttons wrap onto as many rows as they need, and the big SEND
+  // THEM button is its own full-width bar BELOW the grid - so the tower is
+  // told how much room the whole lot took, instead of us guessing.
   function btnCols()  { return wide() ? 2 : 3; }
-  function btnRows()  { return Math.ceil((TOOLS.length + 1) / btnCols()); }
+  function btnRows()  { return Math.ceil(TOOLS.length / btnCols()); }
+  function goH()      { return wide() ? 42 : 46; }   // the SEND THEM bar height
   function btnH() {
     if (!wide()) return 52;
-    return clamp((H - topBar() - 30 - 8 * (btnRows() - 1)) / btnRows(), 40, 56);
+    return clamp((H - topBar() - 30 - goH() - 8 * btnRows()) / btnRows(), 38, 54);
   }
-  function boxOf(i) {
+  function boxOf(i) {                       // a TOOL's box (GO bar is goBox())
     const cols = btnCols(), h = btnH();
     const cx = i % cols, cy = Math.floor(i / cols);
     if (wide()) {
@@ -1140,11 +1157,20 @@
                y: topBar() + 8 + cy * (h + 8), w: w, h: h };
     }
     const w = (W - 40 - 10 * (cols - 1)) / cols;
-    const y0 = H - 26 - btnRows() * h - (btnRows() - 1) * 10;
+    const gridH = btnRows() * h + (btnRows() - 1) * 10;
+    const y0 = H - 26 - goH() - 10 - gridH;         // grid sits above the GO bar
     return { x: 20 + cx * (w + 10), y: y0 + cy * (h + 10), w: w, h: h };
   }
   function toolBox(i) { return boxOf(i); }
-  function goBox()    { return boxOf(TOOLS.length); }
+  // THE GO BAR - a full-width button just below the tool grid (in landscape,
+  // under the tools in the side panel).
+  function goBox() {
+    const h = btnH(), rows = btnRows();
+    if (wide()) {
+      return { x: W - panelW() + 8, y: topBar() + 8 + rows * (h + 8), w: panelW() - 16, h: goH() };
+    }
+    return { x: 20, y: H - 26 - goH(), w: W - 40, h: goH() };
+  }
 
   // The stat bar spans the width (minus the side panel in landscape) and is
   // split into three equal cells: coins | power | steps.
@@ -1172,7 +1198,9 @@
   }
 
   function botBar() {
-    return wide() ? 16 : (btnRows() * btnH() + (btnRows() - 1) * 10 + 44);
+    if (wide()) return 16;
+    const gridH = btnRows() * btnH() + (btnRows() - 1) * 10;
+    return gridH + 10 + goH() + 26;   // tool grid + gap + GO bar + bottom margin
   }
 
   function board() {
@@ -1722,23 +1750,15 @@
     ctx.textBaseline = 'alphabetic';
   }
 
-  // THE LEVEL BADGE - a little pill in the middle of the top nav row, between
-  // the Arcade and Reset buttons, so which level and wave you're on sits up
-  // top away from the numbers you act on.
+  // THE LEVEL LABEL - just text in the middle of the top nav row, between the
+  // Arcade and Reset buttons. It's only telling you where you are (not a thing
+  // you tap), so it's plain text, not a pill - pills are for the buttons.
   function drawLevelPill() {
-    // Sized and centred to sit level with the Arcade / Reset buttons either
-    // side of it: same 13px text, same pill height, same middle line.
     const txt = 'LEVEL ' + level + '  ·  wave ' + round;
-    ctx.font = 'bold ' + Math.min(W * 0.03, 13) + 'px system-ui, sans-serif';
+    ctx.font = 'bold ' + Math.min(W * 0.032, 14) + 'px system-ui, sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    const ph = 31, py = 8;
-    const pw = ctx.measureText(txt).width + 28;
-    const cx = (W - panelW()) / 2, px = cx - pw / 2;
-    rrect(px, py, pw, ph, ph / 2);
-    ctx.fillStyle = 'rgba(20, 26, 38, 0.62)'; ctx.fill();
-    ctx.strokeStyle = 'rgba(255, 215, 106, 0.30)'; ctx.lineWidth = 1; ctx.stroke();
-    ctx.fillStyle = '#ffe9c4';
-    ctx.fillText(txt, cx, py + ph / 2 + 1);
+    ctx.fillStyle = '#c9b689';                 // muted gold - info, not a button
+    ctx.fillText(txt, (W - panelW()) / 2, 24);
     ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left';
   }
 
@@ -1778,8 +1798,20 @@
         // Centred in the icon box: drawBlade puts the blade at y + 0.2*s, so
         // start it low enough that the blade sits on the box's middle.
         drawBlade(ix, iy + is * 0.3, is, clock * 14, 1);
-      } else {
+      } else if (t.kind === SMASH) {
         drawHammer(ix, iy, is, false);
+      } else if (t.kind === DEMO) {
+        // a bolted block with a red crack splitting it - "break the ledge".
+        ctx.fillStyle = '#7a8494'; ctx.fillRect(ix, iy, is, is);
+        ctx.fillStyle = '#9aa6ba'; ctx.fillRect(ix, iy, is, 4);
+        ctx.strokeStyle = '#e05a4a'; ctx.lineWidth = Math.max(2, is * 0.13);
+        ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+        ctx.beginPath();
+        ctx.moveTo(ix + is * 0.52, iy);
+        ctx.lineTo(ix + is * 0.34, iy + is * 0.44);
+        ctx.lineTo(ix + is * 0.6, iy + is * 0.56);
+        ctx.lineTo(ix + is * 0.44, iy + is);
+        ctx.stroke();
       }
 
       // Text stays inside its own button, so a long name can't spill across
@@ -1940,7 +1972,22 @@
     if (!inside(c, r)) return;
     if (STARTS.some(function (s) { return s.c === c && s.r === r; })) { say('that is where they come in'); return; }
     if (c === FLAG.c && r === FLAG.r)   { say('that is the exit'); return; }
-    if (grid[r][c] === PLAT) { say('that ledge is bolted down'); return; }
+
+    // ---- DEMOLITION: the one tool that WANTS a bolted ledge ------------
+    // BREAK smashes a PLAT ledge (never the ground) for 2 coins, opening a
+    // gap nothing else can. Everything else still treats PLAT as bolted.
+    if (tool >= 0 && TOOLS[tool].kind === DEMO && holdingKey < 0) {
+      if (grid[r][c] !== PLAT || r === FLOOR) { say('aim BREAK at a bolted ledge (not the ground)'); return; }
+      if (coins < 2) { say('smashing costs 2 - you have ' + coins); coinFlash = 1.0; return; }
+      grid[r][c] = EMPTY;
+      coins -= 2;
+      think();
+      say('ledge smashed - a new gap for them to deal with');
+      const hd = document.getElementById('hud'); if (hd) hd.style.opacity = 0;
+      return;
+    }
+
+    if (grid[r][c] === PLAT) { say('that ledge is bolted - use BREAK to smash it'); return; }
 
     // ---- PUTTING DOWN THE KEY YOU ARE HOLDING --------------------------
     if (holdingKey >= 0) {
