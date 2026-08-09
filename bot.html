@@ -439,22 +439,30 @@
 //  THE LINE OF ROBOTS
 // -------------------------------------------------------------------
 
-  // Seconds between one robot setting off and the next. NOT a round
-  // number, and not by accident: it has to divide badly into BOTH hazard
-  // cycles or robots meet the blade at the same moment and die in
-  // identical groups. At 0.7 the hammer's 2.1s cycle is exactly three
-  // gaps and they drop in threes. 0.8 was the best of six tried - all
-  // fifteen robots land in a different tenth of both cycles.
-  const WAVE_GAP = 0.8;
+  // Four hundred robots leaving one at a time would be five minutes of
+  // watching a queue. So the QUEUE always takes the same time to get out
+  // of the door - there are just more of them in it, packed tighter.
+  //
+  // The window is not a round number, and not by accident: divided by
+  // the wave size it must land on a gap that divides BADLY into both
+  // hazard cycles. If it divides neatly, robots meet the blade at the
+  // same point in its spin and die in identical repeating groups.
+  const LAUNCH_WINDOW = 13.3;
+  function waveGap() {
+    return Math.max(0.03, LAUNCH_WINDOW / waveSize());
+  }
   let bots = [];
   let route = [];
   let scrap = [];                    // bolts and sparks flying about
 
-  // Ten in the first wave, one more each time, and it stops growing at
-  // fifteen. Fifteen robots a second apart is already a queue fourteen
-  // seconds long - any more and you spend the round watching.
-  const WAVE_MIN = 10, WAVE_MAX = 15;
-  function waveSize() { return Math.min(WAVE_MAX, WAVE_MIN + round - 1); }
+  // A hundred in the first wave, fifty more each time, stopping at four
+  // hundred. Whether you stop 8 of 10 or 300 of 400 is the same skill -
+  // what changes is that a crowd this big makes the SHAPE of your
+  // defence visible. You can see the stream thin out at each saw.
+  const WAVE_MIN = 100, WAVE_MAX = 400, WAVE_STEP = 50;
+  function waveSize() {
+    return Math.min(WAVE_MAX, WAVE_MIN + (round - 1) * WAVE_STEP);
+  }
   function gotThrough() {
     let n = 0;
     for (let i = 0; i < bots.length; i++) if (bots[i].done) n++;
@@ -473,10 +481,20 @@
 
     route = routeCells();
     bots = [];
+    const gap = waveGap();
     for (let i = 0; i < waveSize(); i++) {
+      // In a big wave a dozen robots share one square, and drawn dead
+      // centre they would stack into what looks like a single robot -
+      // which throws away the whole point of there being four hundred.
+      // A small fixed shove each, worked out from its place in the
+      // queue, turns that stack into a visible crowd. Not random: the
+      // same robot must sit in the same spot every frame or the swarm
+      // shimmers.
       bots.push({ at: 0, step: 0, c: START.c, r: START.r,
                   x: START.c, y: START.r, keys: 0,
-                  alive: true, done: false, wait: i * WAVE_GAP, face: 1 });
+                  jx: (((i * 7) % 9) - 4) * 0.075,
+                  jy: (((i * 5) % 7) - 3) * 0.055,
+                  alive: true, done: false, wait: i * gap, face: 1 });
     }
     scrap = [];
     clock = 0;
@@ -485,8 +503,11 @@
   }
 
   function burst(x, y) {
-    // Bolts, springs and one surprised eyeball.
-    for (let i = 0; i < 14; i++) {
+    // Bolts, springs and one surprised eyeball. A big wave gets fewer
+    // bolts each, or four hundred deaths would bury the screen in
+    // confetti and hide the very thing you are trying to watch.
+    const bits = bots.length > 60 ? 5 : 14;
+    for (let i = 0; i < bits; i++) {
       const a = Math.random() * Math.PI * 2;
       const sp = 2 + Math.random() * 6;
       scrap.push({ x: x, y: y,
@@ -796,9 +817,11 @@
   }
 
   function drawRobot(b, bd) {
-    const x = bd.x + (b.x + 0.5) * bd.s;
-    const y = bd.y + (b.y + 0.5) * bd.s;
-    const s = bd.s * 0.28;
+    const x = bd.x + (b.x + 0.5 + (b.jx || 0)) * bd.s;
+    const y = bd.y + (b.y + 0.5 + (b.jy || 0)) * bd.s;
+    // Smaller bodies in a big wave, so a crowd is a crowd and not a
+    // single blob of overlapping robots.
+    const s = bd.s * (bots.length > 60 ? 0.19 : 0.28);
     const bounce = Math.abs(Math.sin(b.step * Math.PI)) * s * 0.25;
 
     ctx.fillStyle = b.done ? '#8fe07a' : '#dbe4f2';
@@ -809,6 +832,9 @@
     ctx.fillStyle = '#ffd76a';
     ctx.fillRect(x - s * 0.15, y - s * 1.5 - bounce, s * 0.3, s * 0.45);
 
+    // Keys jingling overhead are lovely with ten robots and unreadable
+    // clutter with four hundred, so the crowd carries them out of sight.
+    if (bots.length > 60) return;
     let shown = 0;
     for (let i = 0; i < LOCKS.length; i++) {
       if (!((b.keys >> i) & 1)) continue;
