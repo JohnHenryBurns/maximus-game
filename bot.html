@@ -770,8 +770,13 @@
     // Straight up, then across. Going up through a clear column and then
     // over is simple to picture and check. If nothing's under its feet where
     // it lands, out comes the parachute and it drifts on down the far side.
+    //
+    // A CLIMB (going up at all) may step over only ONE column at the top, so
+    // a robot always rockets up right beside the ledge it's reaching, never
+    // two tiles away. A flat leap (no climb) can still clear a two-wide gap.
     for (let dy = 0; dy <= JUMP_UP; dy++) {
-      for (let dx = -JUMP_OVER; dx <= JUMP_OVER; dx++) {
+      const over = dy === 0 ? JUMP_OVER : 1;
+      for (let dx = -over; dx <= over; dx++) {
         if (dx === 0 && dy === 0) continue;
 
         let cost = 0, k2 = keys, ok = true;
