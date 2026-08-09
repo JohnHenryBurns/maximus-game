@@ -235,21 +235,41 @@
 
   const FLAG  = { c: COLS >> 1, r: 1 };        // right at the top
 
-  // SPAWN POINTS. Every level adds another (up to a cap), all of them on
-  // the ground and all of them making for the same flag - so higher levels
-  // are about routing several streams so they CONVERGE onto your traps.
-  // STARTS is rebuilt for the current level whenever a new tower is made.
+  // SPAWN POINTS. Every level adds another (up to a cap), all of them making
+  // for the same exit - so higher levels are about routing several streams so
+  // they CONVERGE onto your traps.
+  //
+  // The FIRST spawner is always down on the ground. From the SECOND one on,
+  // they can appear up on the random ledges instead - so higher levels aren't
+  // just streams walking in from the floor; some drop in partway up and take
+  // a shorter, different route you have to catch on its own. STARTS is rebuilt
+  // for the current tower whenever a new one is made (see placeStarts, which
+  // runs AFTER the ledges are laid so it can pick real standable spots).
   const MAX_SPAWNS = 4;
   function spawnCount() { return Math.min(MAX_SPAWNS, level); }
-  function makeStarts(n) {
-    const r = FLOOR - 1, out = [];
-    if (n <= 1) return [{ c: 1, r: r }];
-    // spread them evenly across the ground, from near the left wall to
-    // near the right, so their paths have to cross the whole tower.
-    for (let i = 0; i < n; i++) {
-      out.push({ c: Math.round(1 + i * (COLS - 3) / (n - 1)), r: r });
+  function placeStarts(n) {
+    const out = [{ c: 1, r: FLOOR - 1 }];        // spawner #1: always the ground
+    if (n > 1) {
+      // Every spot a robot could STAND on above the ground - the top of a
+      // ledge - but never the exit row. These are where higher spawners go.
+      const high = [];
+      for (let r = 2; r <= FLOOR - 2; r++)
+        for (let c = 0; c < COLS; c++)
+          if (grid[r][c] === EMPTY && solid(c, r + 1)) high.push({ c: c, r: r });
+
+      for (let i = 1; i < n; i++) {
+        let pick = null;
+        // pull a random high spot that no other spawner is already using
+        while (high.length) {
+          const cand = high.splice(Math.floor(Math.random() * high.length), 1)[0];
+          if (!out.some(function (s) { return s.c === cand.c && s.r === cand.r; })) { pick = cand; break; }
+        }
+        // if the ledges ran out of room, fall back to a spread-out ground spot
+        if (!pick) pick = { c: Math.round(1 + i * (COLS - 3) / (n - 1)), r: FLOOR - 1 };
+        out.push(pick);
+      }
     }
-    return out;
+    STARTS = out;
   }
   let STARTS = [{ c: 1, r: FLOOR - 1 }];
 
@@ -472,18 +492,21 @@
   // build one, ASK A ROBOT if it can climb it, and throw it away if it
   // cannot. We never ship a tower we have not checked.
   function newTower() {
-    // The spawn points are set from the level here, so every fresh tower
-    // gets the right number of streams and every path check below is asked
-    // about ALL of them.
-    STARTS = makeStarts(spawnCount());
+    // Lay the ledges, THEN drop the spawners onto them (placeStarts needs the
+    // ledges to exist so it can pick real standable spots), then check every
+    // stream can reach the exit - throwing the whole thing away if not, so we
+    // never ship a tower where a higher spawner is stranded.
+    const n = spawnCount();
     for (let tries = 0; tries < 200; tries++) {
       blankGrid();
       layLedges(false);
+      placeStarts(n);
       think();
-      if (canGetThrough()) return tries;    // every spawn can reach the flag
+      if (canGetThrough()) return tries;    // every spawn can reach the exit
     }
     blankGrid();
     layLedges(true);                        // the guaranteed staircase works for all
+    placeStarts(n);
     think();
     return -1;
   }
