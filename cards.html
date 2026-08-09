@@ -220,6 +220,7 @@
   function say(w) { says = w; saysT = 2.6; }
 
   let screen = 'collection';       // 'collection', 'pack', 'duel'
+  let savedT = 0;                  // how long the SAVED tick stays up
   let bits = [], floats = [];
 
   function newMonster(i) {
@@ -285,25 +286,91 @@
     }
   }
 
-  function attackWith(side, foe, mine) {
+  // ---- THE CUT SCENE -------------------------------------------------
+  //
+  // An attack used to happen in a single frame: numbers changed and you
+  // had to work out what had hit what. Now each pair gets its moment -
+  // the two of them charge at each other, clash, and one of them may
+  // not walk away.
+  //
+  // The plan is worked out FIRST and then acted out, so what you watch
+  // is exactly what the rules already decided. The show cannot change
+  // the outcome.
+  const CHARGE = 0.34, IMPACT = 0.16, REST = 0.34;
+  const STEP_TIME = CHARGE + IMPACT + REST;
+
+  let cut = null;        // { steps, i, t, hit, after }
+  let shake = 0;
+
+  function planAttacks(side, foe, mine) {
+    const steps = [];
     for (let s = 0; s < SLOTS; s++) {
       const m = side.board[s];
       if (!m) continue;
-      m.wobble = 0.35;
-      const target = foe.board[s];
-      const p = slotSpot(!mine, s);
-      if (target) {
-        target.life -= m.hit;
-        target.justHit = 0.4;
-        floats.push({ x: p.x + p.w / 2, y: p.y + p.h / 2, text: '-' + m.hit,
-                      life: 1.0, col: [255, 200, 120] });
-        if (target.life <= 0) {
-          smash(p.x + p.w / 2, p.y + p.h / 2, target.col);
-          foe.board[s] = null;
-        }
-      } else {
-        hurt(foe, m.hit, p.x + p.w / 2, p.y + p.h / 2);
+      // Each space fights the space opposite, and nothing else - so all
+      // three of these are worked out at once without treading on each
+      // other.
+      steps.push({ mine: mine, slot: s, attacker: m,
+                   target: foe.board[s], foe: foe });
+    }
+    return steps;
+  }
+
+  function doStep(st) {
+    const m = st.attacker;
+    m.wobble = 0.35;
+    if (st.target) {
+      st.target.life -= m.hit;
+      st.target.justHit = 0.5;
+      if (st.target.life <= 0) {
+        st.foe.board[st.slot] = null;
+        st.died = true;
       }
+    } else {
+      st.foe.hearts -= m.hit;
+    }
+    shake = 0.32;
+  }
+
+  function startCut(steps, after) {
+    if (!steps.length) { finishCut(after); return; }
+    cut = { steps: steps, i: 0, t: 0, hit: false, after: after };
+  }
+
+  function finishCut(after) {
+    cut = null;
+    if (checkOver()) return;
+    if (after === 'them') {
+      turn = 'them';
+      say('their go...');
+      setTimeout(function () { if (turn === 'them') theirTurn(); }, 450);
+    } else {
+      turn = 'you';
+      drawFrom(you);
+    }
+  }
+
+  // Impatient? Tapping runs the rest of the fight instantly.
+  function skipCut() {
+    if (!cut) return;
+    if (!cut.hit) doStep(cut.steps[cut.i]);
+    for (let i = cut.i + 1; i < cut.steps.length; i++) doStep(cut.steps[i]);
+    const after = cut.after;
+    cut = null;
+    finishCut(after);
+  }
+
+  function stepCut(dt) {
+    if (!cut) return;
+    cut.t += dt;
+    if (!cut.hit && cut.t >= CHARGE) {
+      cut.hit = true;
+      doStep(cut.steps[cut.i]);
+    }
+    if (cut.t >= STEP_TIME) {
+      cut.i++;
+      cut.t = 0; cut.hit = false;
+      if (cut.i >= cut.steps.length) finishCut(cut.after);
     }
   }
 
@@ -365,10 +432,7 @@
       them.board[bestSlot] = them.hand[bestCard];
       them.hand.splice(bestCard, 1);
     }
-    attackWith(them, you, false);
-    if (checkOver()) return;
-    turn = 'you';
-    drawFrom(you);
+    startCut(planAttacks(them, you, false), 'you');
   }
 
 
@@ -450,6 +514,7 @@
     return { x: g.x0 + cx * (g.w + 8), y: g.y0 + cy * g.step, w: g.w, h: g.h };
   }
   function backBox() { return { x: W - 96, y: 8, w: 88, h: 34 }; }
+  function saveBox() { return { x: W - 104, y: 12, w: 92, h: 44 }; }
 
 
 // -------------------------------------------------------------------
@@ -549,7 +614,9 @@
     ctx.fillText(m.hit, x + w * 0.10, y + h * 0.93);
     ctx.textAlign = 'right';
     ctx.fillStyle = m.life < m.max ? '#7a1520' : '#2a1a10';
-    ctx.fillText(m.life, x + w * 0.90, y + h * 0.93);
+    // Never show a minus. Hit something for more than it had left and
+    // it is on nought, not on minus two.
+    ctx.fillText(Math.max(0, m.life), x + w * 0.90, y + h * 0.93);
 
     ctx.restore();
   }
@@ -639,6 +706,12 @@
     }
 
     drawButton(playBox(), 'FIGHT SOMEBODY', totalOwned() > 0);
+
+    // The game already writes everything down the moment it happens, so
+    // this button never has work to do. It is here to SHOW you that -
+    // "trust me" is not as good as a tick.
+    drawButton(saveBox(), savedT > 0 ? 'SAVED ✓' : 'SAVE', true,
+               savedT > 0 ? '#8fe07a' : '#8a7ea8');
   }
 
   function drawPackReveal() {
@@ -730,9 +803,106 @@
     drawButton(backBox(), 'CARDS', true, '#8a7ea8');
   }
 
-  function draw() {
-    ctx.fillStyle = '#151020';
+  function drawCutScene() {
+    const st = cut.steps[cut.i];
+    const t = cut.t;
+
+    // How far along the charge we are: 0 at the start, 1 at the clash,
+    // then easing back out again.
+    let closeness;
+    if (t < CHARGE) closeness = t / CHARGE;
+    else if (t < CHARGE + IMPACT) closeness = 1;
+    else closeness = 1 - (t - CHARGE - IMPACT) / REST;
+    closeness = clamp(closeness, 0, 1);
+
+    ctx.fillStyle = 'rgba(10,7,18,0.86)';
     ctx.fillRect(0, 0, W, H);
+
+    const cw = Math.min(W * 0.34, 190), ch = cw * 1.35;
+    const cy = H * 0.44 - ch / 2;
+    const restX = W * 0.06, meetGap = cw * 0.16;
+    const leftX  = restX + closeness * (W / 2 - cw - meetGap / 2 - restX);
+    const rightX = W - restX - cw - closeness * (W / 2 - cw - meetGap / 2 - restX);
+
+    ctx.textAlign = 'center';
+    ctx.font = 'bold ' + Math.min(W * 0.045, 24) + 'px system-ui, sans-serif';
+    ctx.fillStyle = st.mine ? '#9bffb0' : '#ff9ba6';
+    ctx.fillText(st.mine ? 'YOUR ATTACK' : 'THEIR ATTACK', W / 2, H * 0.16);
+
+    // The attacker, always coming from the left.
+    drawCard(leftX, cy, cw, ch, st.attacker);
+
+    if (st.target) {
+      drawCard(rightX, cy, cw, ch, st.target);
+    } else {
+      // Nobody was standing there, so it is running straight at the
+      // player. Draw what it is about to hit.
+      ctx.font = 'bold ' + Math.min(W * 0.16, 90) + 'px system-ui, sans-serif';
+      ctx.fillStyle = st.mine ? '#ff9ba6' : '#9bffb0';
+      ctx.fillText('♥', rightX + cw / 2, cy + ch * 0.66);
+      ctx.font = 'bold ' + Math.min(W * 0.05, 26) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#f0e9ff';
+      ctx.fillText(Math.max(0, st.mine ? them.hearts : you.hearts),
+                   rightX + cw / 2, cy + ch * 0.92);
+    }
+
+    // The clash: a white starburst right where they meet.
+    if (t >= CHARGE && t < CHARGE + IMPACT + 0.12) {
+      const age = clamp((t - CHARGE) / (IMPACT + 0.12), 0, 1);
+      const mx = W / 2, my = cy + ch * 0.5;
+      ctx.save();
+      ctx.globalAlpha = 1 - age;
+      ctx.fillStyle = '#fff6d5';
+      for (let i = 0; i < 12; i++) {
+        const a = (i / 12) * Math.PI * 2;
+        const len = cw * (0.25 + age * 0.75);
+        ctx.beginPath();
+        ctx.moveTo(mx + Math.cos(a) * cw * 0.1, my + Math.sin(a) * cw * 0.1);
+        ctx.lineTo(mx + Math.cos(a + 0.16) * len, my + Math.sin(a + 0.16) * len);
+        ctx.lineTo(mx + Math.cos(a - 0.16) * len, my + Math.sin(a - 0.16) * len);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    // How hard it hit, and whether that was the end of somebody.
+    if (t >= CHARGE) {
+      const age = t - CHARGE;
+      ctx.globalAlpha = clamp(1 - age / (IMPACT + REST), 0, 1);
+      ctx.textAlign = 'center';
+      ctx.font = 'bold ' + Math.min(W * 0.11, 62) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#ffd76a';
+      ctx.fillText('-' + st.attacker.hit, W / 2, cy - 14 - age * 30);
+      if (st.died) {
+        ctx.font = 'bold ' + Math.min(W * 0.06, 32) + 'px system-ui, sans-serif';
+        ctx.fillStyle = '#ff8a7a';
+        ctx.fillText('SMASHED!', W / 2, cy + ch + 44);
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    // On its own pill, because wherever it lands it might be sitting on
+    // a brightly coloured monster.
+    ctx.textAlign = 'center';
+    const fs = Math.min(W * 0.03, 15);
+    ctx.font = fs + 'px system-ui, sans-serif';
+    const sy = Math.min(cy + ch + 100, H - 96);
+    const sw = ctx.measureText('tap to skip').width;
+    ctx.fillStyle = 'rgba(10,7,18,0.8)';
+    roundRect(W / 2 - sw / 2 - 12, sy - fs - 2, sw + 24, fs + 12, 9);
+    ctx.fill();
+    ctx.fillStyle = '#9a8fc0';
+    ctx.fillText('tap to skip', W / 2, sy);
+  }
+
+  function draw() {
+    ctx.save();
+    if (shake > 0) {
+      ctx.translate((Math.random() - 0.5) * shake * 26,
+                    (Math.random() - 0.5) * shake * 26);
+    }
+    ctx.fillStyle = '#151020';
+    ctx.fillRect(-40, -40, W + 80, H + 80);
 
     if (screen === 'collection') drawCollection();
     else if (screen === 'pack')  drawPackReveal();
@@ -753,7 +923,7 @@
       ctx.fillText(f.text, f.x, f.y);
     }
 
-    if (saysT > 0 && screen === 'duel') {
+    if (saysT > 0 && screen === 'duel' && !cut) {
       ctx.textAlign = 'center';
       ctx.font = 'bold ' + Math.min(W * 0.04, 21) + 'px system-ui, sans-serif';
       const wid = ctx.measureText(says).width;
@@ -763,6 +933,12 @@
       ctx.fillStyle = 'rgba(240,233,255,' + clamp(saysT, 0, 1) + ')';
       ctx.fillText(says, W / 2, y);
     }
+
+    // Drawn last and over everything, because it is the thing you are
+    // meant to be looking at.
+    if (cut && screen === 'duel') drawCutScene();
+
+    ctx.restore();
   }
 
 
@@ -775,12 +951,16 @@
   }
 
   function tap(mx, my) {
+    // While two monsters are going at it, a tap means "get on with it".
+    if (cut && screen === 'duel') { skipCut(); return; }
+
     if (screen === 'pack') {
       if (revealT > 0.4) screen = 'collection';    // let the reveal land first
       return;
     }
 
     if (screen === 'collection') {
+      if (inBox(mx, my, saveBox())) { save(); savedT = 1.8; return; }
       if (inBox(mx, my, packBox()) && packReady()) { openPack(); return; }
       if (inBox(mx, my, playBox()) && totalOwned() > 0) { startDuel(); return; }
       return;
@@ -813,11 +993,7 @@
     }
     if (inBox(mx, my, endBox())) {
       picked = -1;
-      attackWith(you, them, true);
-      if (checkOver()) return;
-      turn = 'them';
-      say('their go...');
-      setTimeout(function () { if (turn === 'them') theirTurn(); }, 700);
+      startCut(planAttacks(you, them, true), 'them');
     }
   }
 
@@ -838,7 +1014,10 @@
     last = now;
 
     if (saysT > 0) saysT -= dt;
+    if (savedT > 0) savedT -= dt;
+    if (shake > 0) shake -= dt * 1.6;
     if (screen === 'pack') revealT += dt;
+    if (screen === 'duel') stepCut(dt);
 
     for (const side of [you, them]) {
       for (const m of side.board) {
