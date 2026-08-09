@@ -82,14 +82,28 @@
     { name: 'PANTS DRAGON', hit: 6, life: 2, find:  1, col: [220, 110,  90] }
   ];
 
+  // ---- HOW A CARD IS FINISHED ---------------------------------------
+  //
+  // Every monster can turn up plain, GOLD or DIAMOND. A gold PANTS
+  // DRAGON is exactly the same dragon with exactly the same numbers -
+  // it just looks incredible. Nothing you can only get from a gold pack
+  // is allowed to make you stronger, or the packs stop being a treat
+  // and start being an advantage.
+  const PLAIN = 0, GOLD = 1, DIAMOND = 2;
+  const FINISHES = [
+    { name: 'plain',   shine: null,      col: null },
+    { name: 'GOLD',    shine: 'gold',    col: [255, 214,  92] },
+    { name: 'DIAMOND', shine: 'diamond', col: [190, 238, 255] }
+  ];
+
   // How rare something is, worked out FROM the find numbers rather than
   // typed in twice - so changing a find number can never leave a wrong
   // label behind.
   function rarityOf(i) {
     const f = CARDS[i].find;
-    return f >= 8 ? { name: 'common', stars: 1, col: [150, 145, 175] }
+    return f >= 8 ? { name: 'common',   stars: 1, col: [150, 145, 175] }
          : f >= 4 ? { name: 'uncommon', stars: 2, col: [120, 200, 255] }
-                  : { name: 'RARE', stars: 3, col: [255, 200,  90] };
+                  : { name: 'RARE',     stars: 3, col: [255, 200,  90] };
   }
 
   const SLOTS = 3;
@@ -105,9 +119,19 @@
 
   const SAVE_KEY = 'maxMonsterDuel';
 
-  let own = [];              // own[i] = how many of card i you have
-  let lastPack = 0;          // when you last opened one
+  let own = [];              // own[finish][i] = how many you have
+  let lastPack = 0;          // when you last opened the daily one
   let wins = 0, losses = 0;
+  let goldPacks = 0;         // gold packs waiting to be opened
+  let winStreak = 0;         // wins counted towards the next one
+
+  // Win three duels and a gold pack is yours. Deliberately NOT another
+  // timer - one thing you have to wait a day for is enough, and this
+  // way there is always something you can go and earn right now.
+  const WINS_PER_GOLD = 3;
+
+  // What a gold pack is made of. Mostly gold, with the odd diamond.
+  const DIAMOND_CHANCE = 0.14;
 
   // Eight monsters to start with, so the game is playable the second you
   // open it. The daily pack makes your collection BETTER - it is not the
@@ -116,13 +140,28 @@
 
   function blankCollection() {
     own = [];
-    for (let i = 0; i < CARDS.length; i++) own.push(0);
+    for (let f = 0; f < FINISHES.length; f++) {
+      const row = [];
+      for (let i = 0; i < CARDS.length; i++) row.push(0);
+      own.push(row);
+    }
+  }
+  function countOf(i) {
+    let n = 0;
+    for (let f = 0; f < FINISHES.length; f++) n += own[f][i];
+    return n;
+  }
+  // The best finish you have of this monster, for showing it off.
+  function bestFinish(i) {
+    for (let f = FINISHES.length - 1; f >= 0; f--) if (own[f][i] > 0) return f;
+    return -1;
   }
 
   function save() {
     try {
       localStorage.setItem(SAVE_KEY, JSON.stringify({
-        own: own, lastPack: lastPack, wins: wins, losses: losses
+        v: 2, own: own, lastPack: lastPack, wins: wins, losses: losses,
+        goldPacks: goldPacks, winStreak: winStreak
       }));
     } catch (e) { /* private browsing, or storage full. Play on anyway. */ }
   }
@@ -133,14 +172,26 @@
     try { data = JSON.parse(localStorage.getItem(SAVE_KEY)); } catch (e) { data = null; }
 
     if (!data || !data.own) {
-      for (const i of STARTER) own[i]++;
+      for (const i of STARTER) own[PLAIN][i]++;
       lastPack = 0;                       // a pack is waiting for you now
       save();
       return 'new';
     }
-    for (let i = 0; i < CARDS.length; i++) own[i] = data.own[i] | 0;
+    // An older save kept a flat list, from before gold cards existed.
+    // Those cards are all plain ones - never throw somebody's
+    // collection away because the shape of the file changed.
+    if (typeof data.own[0] === 'number') {
+      for (let i = 0; i < CARDS.length; i++) own[PLAIN][i] = data.own[i] | 0;
+    } else {
+      for (let f = 0; f < FINISHES.length; f++) {
+        for (let i = 0; i < CARDS.length; i++) {
+          own[f][i] = (data.own[f] && data.own[f][i]) | 0;
+        }
+      }
+    }
     lastPack = data.lastPack || 0;
     wins = data.wins | 0; losses = data.losses | 0;
+    goldPacks = data.goldPacks | 0; winStreak = data.winStreak | 0;
 
     // If the clock has been wound BACKWARDS the wait could become
     // hundreds of hours. Treat a pack opened "in the future" as opened
@@ -151,12 +202,17 @@
 
   function totalOwned() {
     let n = 0;
-    for (let i = 0; i < own.length; i++) n += own[i];
+    for (let i = 0; i < CARDS.length; i++) n += countOf(i);
     return n;
   }
   function kindsOwned() {
     let n = 0;
-    for (let i = 0; i < own.length; i++) if (own[i] > 0) n++;
+    for (let i = 0; i < CARDS.length; i++) if (countOf(i) > 0) n++;
+    return n;
+  }
+  function shinyOwned() {
+    let n = 0;
+    for (let i = 0; i < CARDS.length; i++) n += own[GOLD][i] + own[DIAMOND][i];
     return n;
   }
 
@@ -189,6 +245,7 @@
   }
 
   let packCards = [];        // what you just pulled, for the reveal
+  let packWasGold = false;
   let revealT = 0;
 
   function openPack() {
@@ -196,10 +253,30 @@
     packCards = [];
     for (let i = 0; i < PACK_SIZE; i++) {
       const idx = randomCardIndex();
-      packCards.push(idx);
-      own[idx]++;
+      packCards.push({ i: idx, f: PLAIN });
+      own[PLAIN][idx]++;
     }
     lastPack = Date.now();
+    packWasGold = false;
+    save();
+    revealT = 0;
+    screen = 'pack';
+    return true;
+  }
+
+  // The same monsters, in gold. Nothing in here is stronger than what
+  // the free pack gives you - it is just the shiny version.
+  function openGoldPack() {
+    if (goldPacks <= 0) return false;
+    goldPacks--;
+    packCards = [];
+    for (let i = 0; i < PACK_SIZE; i++) {
+      const idx = randomCardIndex();
+      const f = Math.random() < DIAMOND_CHANCE ? DIAMOND : GOLD;
+      packCards.push({ i: idx, f: f });
+      own[f][idx]++;
+    }
+    packWasGold = true;
     save();
     revealT = 0;
     screen = 'pack';
@@ -221,12 +298,13 @@
 
   let screen = 'collection';       // 'collection', 'pack', 'duel'
   let savedT = 0;                  // how long the SAVED tick stays up
+  let shineT = 0;                  // ticks along forever, to sweep the shiny cards
   let bits = [], floats = [];
 
-  function newMonster(i) {
+  function newMonster(i, f) {
     const c = CARDS[i];
-    return { i: i, name: c.name, hit: c.hit, life: c.life, max: c.life,
-             col: c.col, wobble: 0, justHit: 0 };
+    return { i: i, f: f || PLAIN, name: c.name, hit: c.hit, life: c.life,
+             max: c.life, col: c.col, wobble: 0, justHit: 0 };
   }
 
   function shuffle(a) {
@@ -242,23 +320,26 @@
   // next fight.
   function yourDeck() {
     const d = [];
-    for (let i = 0; i < own.length; i++)
-      for (let n = 0; n < own[i]; n++) d.push(i);
+    for (let f = 0; f < FINISHES.length; f++)
+      for (let i = 0; i < CARDS.length; i++)
+        for (let n = 0; n < own[f][i]; n++) d.push({ i: i, f: f });
     return shuffle(d);
   }
 
   // Theirs is the same SIZE as yours, pulled from the same odds. So a
   // bigger collection is not automatically an easier fight - a BETTER
   // one is.
+  // Theirs are always plain. The shiny ones are yours.
   function theirDeck(size) {
     const d = [];
-    for (let i = 0; i < size; i++) d.push(randomCardIndex());
+    for (let i = 0; i < size; i++) d.push({ i: randomCardIndex(), f: PLAIN });
     return d;
   }
 
   function drawFrom(side) {
     while (side.hand.length < HAND_MAX && side.deck.length) {
-      side.hand.push(newMonster(side.deck.pop()));
+      const c = side.deck.pop();
+      side.hand.push(newMonster(c.i, c.f));
     }
   }
 
@@ -388,7 +469,15 @@
   function checkOver() {
     if (you.hearts <= 0 || them.hearts <= 0) {
       turn = 'over';
-      if (them.hearts <= 0 && you.hearts > 0) { wins++; say('YOU WIN!'); }
+      if (them.hearts <= 0 && you.hearts > 0) {
+        wins++; winStreak++;
+        if (winStreak >= WINS_PER_GOLD) {
+          winStreak = 0; goldPacks++;
+          say('YOU WIN - AND THAT IS A GOLD PACK!');
+        } else {
+          say('YOU WIN!  ' + winStreak + '/' + WINS_PER_GOLD + ' towards a gold pack');
+        }
+      }
       else if (you.hearts <= 0 && them.hearts > 0) { losses++; say('you lost this one'); }
       else say('BOTH OF YOU. wow.');
       save();
@@ -535,11 +624,15 @@
   // underneath the buttons.
   function packBox() {
     const w = Math.min(W - 40, 320);
-    return { x: (W - w) / 2, y: H - 124, w: w, h: 56 };
+    return { x: (W - w) / 2, y: H - 178, w: w, h: 50 };
+  }
+  function goldBox() {
+    const w = Math.min(W - 40, 320);
+    return { x: (W - w) / 2, y: H - 122, w: w, h: 50 };
   }
   function playBox() {
     const w = Math.min(W - 40, 320);
-    return { x: (W - w) / 2, y: H - 58, w: w, h: 50 };
+    return { x: (W - w) / 2, y: H - 60, w: w, h: 50 };
   }
 
   function gridCols() { return W < 420 ? 3 : W < 700 ? 4 : 6; }
@@ -578,6 +671,19 @@
 // -------------------------------------------------------------------
 
   function rgb(v) { return 'rgb(' + (v[0]|0) + ',' + (v[1]|0) + ',' + (v[2]|0) + ')'; }
+
+  // A gold card really is GOLD, not just gold round the edge. Most of
+  // the monster's own colour is swapped for the finish, with a quarter
+  // of it left in so a gold slug and a gold dragon are not identical
+  // rectangles.
+  function bodyColour(m) {
+    const f = FINISHES[m.f || PLAIN];
+    if (!f.col) return m.col;
+    const mix = 0.74;
+    return [ m.col[0] * (1 - mix) + f.col[0] * mix,
+             m.col[1] * (1 - mix) + f.col[1] * mix,
+             m.col[2] * (1 - mix) + f.col[2] * mix ];
+  }
 
   function roundRect(x, y, w, h, r) {
     ctx.beginPath();
@@ -624,6 +730,54 @@
     ctx.stroke();
   }
 
+
+  // A band of light sweeping across a gold or diamond card. Clipped to
+  // the card, so it never leaks over the one next to it. The seed means
+  // two cards side by side do not shimmer in lockstep, which would look
+  // like one big flashing rectangle instead of two special cards.
+  function drawShine(x, y, w, h, kind, seed) {
+    const p = ((shineT * 0.4 + seed) % 1.7) - 0.35;
+    ctx.save();
+    roundRect(x, y, w, h, w * 0.09);
+    ctx.clip();
+
+    // A soft light down the card first, so it looks like polished metal
+    // rather than flat paint, then the moving band on top.
+    const base = ctx.createLinearGradient(x, y, x + w * 0.3, y + h);
+    base.addColorStop(0, kind === 'diamond' ? 'rgba(255,255,255,0.30)'
+                                            : 'rgba(255,240,170,0.34)');
+    base.addColorStop(0.5, 'rgba(0,0,0,0.10)');
+    base.addColorStop(1, kind === 'diamond' ? 'rgba(190,235,255,0.30)'
+                                            : 'rgba(190,140,40,0.30)');
+    ctx.fillStyle = base;
+    ctx.fillRect(x, y, w, h);
+
+    const bx = x + p * w * 1.5;
+    const g = ctx.createLinearGradient(bx, y, bx + w * 0.5, y + h);
+    g.addColorStop(0, 'rgba(255,255,255,0)');
+    g.addColorStop(0.5, kind === 'diamond' ? 'rgba(240,252,255,0.92)'
+                                           : 'rgba(255,252,224,0.85)');
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(x, y, w, h);
+
+    if (kind === 'diamond') {
+      // Four little sparkles that twinkle at different speeds.
+      for (let i = 0; i < 4; i++) {
+        const tw = Math.abs(Math.sin(shineT * (1.6 + i * 0.5) + seed * 6 + i));
+        const sx = x + w * (0.18 + 0.22 * i);
+        const sy = y + h * (0.22 + 0.5 * Math.abs(Math.sin(seed * 9 + i * 2.1)));
+        const r = w * 0.06 * tw;
+        ctx.fillStyle = 'rgba(255,255,255,' + (0.35 + 0.65 * tw) + ')';
+        ctx.beginPath();
+        ctx.moveTo(sx, sy - r * 2); ctx.lineTo(sx + r, sy);
+        ctx.lineTo(sx, sy + r * 2); ctx.lineTo(sx - r, sy);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+  }
+
   function drawCard(x, y, w, h, m, opts) {
     opts = opts || {};
     ctx.save();
@@ -636,7 +790,7 @@
 
     ctx.fillStyle = 'rgba(0,0,0,0.35)';
     roundRect(x + 3, y + 4, w, h, w * 0.09); ctx.fill();
-    ctx.fillStyle = rgb(m.col);
+    ctx.fillStyle = rgb(bodyColour(m));
     roundRect(x, y, w, h, w * 0.09); ctx.fill();
 
     if (m.justHit > 0) {
@@ -644,9 +798,13 @@
       roundRect(x, y, w, h, w * 0.09); ctx.fill();
     }
 
+    const fin = FINISHES[m.f || PLAIN];
+    if (fin.shine && !opts.faded) drawShine(x, y, w, h, fin.shine, m.i * 0.37);
+
     const rare = rarityOf(m.i);
-    ctx.lineWidth = opts.picked ? 4 : (rare.stars === 3 ? 3 : 2);
+    ctx.lineWidth = opts.picked ? 4 : (fin.shine ? 4 : rare.stars === 3 ? 3 : 2);
     ctx.strokeStyle = opts.picked ? '#ffd76a'
+                    : fin.shine ? rgb(fin.col)
                     : rare.stars === 3 ? rgb(rare.col) : 'rgba(0,0,0,0.35)';
     roundRect(x, y, w, h, w * 0.09); ctx.stroke();
 
@@ -714,6 +872,12 @@
     ctx.fillStyle = '#8a7ea8';
     ctx.fillText(totalOwned() + ' cards  -  ' + kindsOwned() + ' of ' + CARDS.length +
                  ' kinds found', 16, 70);
+    if (shinyOwned() > 0) {
+      ctx.fillStyle = rgb(FINISHES[GOLD].col);
+      ctx.textAlign = 'right';
+      ctx.fillText(shinyOwned() + ' shiny', W - 116, 70);
+      ctx.textAlign = 'left';
+    }
     if (wins || losses) {
       ctx.fillStyle = '#6b6288';
       ctx.fillText('won ' + wins + ', lost ' + losses, 16, 92);
@@ -721,8 +885,11 @@
 
     for (let i = 0; i < CARDS.length; i++) {
       const p = gridSpot(i);
-      const m = newMonster(i);
-      const have = own[i];
+      const have = countOf(i);
+      const best = bestFinish(i);
+      // Shown in the best finish you own, so a gold one announces itself
+      // from across the collection.
+      const m = newMonster(i, best < 0 ? PLAIN : best);
       drawCard(p.x, p.y, p.w, p.h, m, { faded: have === 0 });
 
       if (have === 0) {
@@ -737,20 +904,29 @@
       // The count used to be a badge in the top corner, which sat right
       // on top of the monster's name.
       const rare = rarityOf(i);
-      const stars = '★'.repeat(rare.stars);
-      const tail = have > 1 ? '  x' + have : '';
       const fs = p.w * 0.15;
       ctx.font = 'bold ' + fs + 'px system-ui, sans-serif';
-      ctx.textAlign = 'left';
-      const sw = ctx.measureText(stars).width;
-      const tw = tail ? ctx.measureText(tail).width : 0;
-      const x0 = p.x + p.w / 2 - (sw + tw) / 2;
+
+      // Stars for how rare it is, then one number per finish you own -
+      // white for plain, gold for gold, pale blue for diamond. Zeroes
+      // are left out so a card you have one of does not read as "1 0 0".
+      const parts = [{ text: '★'.repeat(rare.stars), col: rgb(rare.col) }];
+      if (own[PLAIN][i] > 0)
+        parts.push({ text: ' ' + own[PLAIN][i], col: '#f0e9ff' });
+      if (own[GOLD][i] > 0)
+        parts.push({ text: ' ' + own[GOLD][i], col: rgb(FINISHES[GOLD].col) });
+      if (own[DIAMOND][i] > 0)
+        parts.push({ text: ' ' + own[DIAMOND][i], col: rgb(FINISHES[DIAMOND].col) });
+
+      let lineW = 0;
+      for (const q of parts) lineW += ctx.measureText(q.text).width;
+      let lx = p.x + p.w / 2 - lineW / 2;
       const ly = p.y + p.h + p.w * 0.16;
-      ctx.fillStyle = rgb(rare.col);
-      ctx.fillText(stars, x0, ly);
-      if (tail) {
-        ctx.fillStyle = '#f0e9ff';
-        ctx.fillText(tail, x0 + sw, ly);
+      ctx.textAlign = 'left';
+      for (const q of parts) {
+        ctx.fillStyle = q.col;
+        ctx.fillText(q.text, lx, ly);
+        lx += ctx.measureText(q.text).width;
       }
     }
 
@@ -759,6 +935,18 @@
       drawButton(pb, 'OPEN TODAY\'S PACK', true, '#8fe07a');
     } else {
       drawButton(pb, 'NEXT PACK IN ' + countdownText(), false);
+    }
+
+    // The gold pack. If you have not earned one yet it shows how close
+    // you are, so it never just sits there looking locked.
+    const gb = goldBox();
+    if (goldPacks > 0) {
+      drawButton(gb, goldPacks > 1 ? 'OPEN GOLD PACK  (' + goldPacks + ')' : 'OPEN GOLD PACK',
+                 true, rgb(FINISHES[GOLD].col));
+      drawShine(gb.x, gb.y, gb.w, gb.h, 'gold', 0);
+    } else {
+      drawButton(gb, 'GOLD PACK: WIN ' + (WINS_PER_GOLD - winStreak) +
+                     ' MORE  (' + winStreak + '/' + WINS_PER_GOLD + ')', false);
     }
 
     drawButton(playBox(), 'FIGHT SOMEBODY', totalOwned() > 0);
@@ -773,8 +961,8 @@
   function drawPackReveal() {
     ctx.textAlign = 'center';
     ctx.font = 'bold ' + Math.min(W * 0.07, 40) + 'px system-ui, sans-serif';
-    ctx.fillStyle = '#ffd76a';
-    ctx.fillText('YOU GOT', W / 2, 60);
+    ctx.fillStyle = packWasGold ? rgb(FINISHES[GOLD].col) : '#ffd76a';
+    ctx.fillText(packWasGold ? 'GOLD PACK!' : 'YOU GOT', W / 2, 60);
 
     const n = packCards.length;
     const w = Math.min((W - 30 - (n - 1) * 6) / n, 120);
@@ -789,14 +977,23 @@
       const x = (W - total) / 2 + i * (w + 6);
       const y = H * 0.34;
       const sw = w * (0.6 + 0.4 * pop), sh = h * (0.6 + 0.4 * pop);
-      drawCard(x + (w - sw) / 2, y + (h - sh) / 2, sw, sh, newMonster(packCards[i]));
+      const pc = packCards[i];
+      drawCard(x + (w - sw) / 2, y + (h - sh) / 2, sw, sh, newMonster(pc.i, pc.f));
 
-      const rare = rarityOf(packCards[i]);
-      if (rare.stars === 3 && pop >= 1) {
-        ctx.textAlign = 'center';
-        ctx.font = 'bold ' + w * 0.16 + 'px system-ui, sans-serif';
-        ctx.fillStyle = rgb(rare.col);
-        ctx.fillText('RARE!', x + w / 2, y + h + w * 0.22);
+      if (pop >= 1) {
+        // Shout about the finish if it has one, otherwise about how rare
+        // the monster is. A plain common gets no shouting at all.
+        const fin = FINISHES[pc.f];
+        const rare = rarityOf(pc.i);
+        let label = null, col = null, big = false;
+        if (fin.shine) { label = fin.name + '!'; col = rgb(fin.col); big = true; }
+        else if (rare.stars === 3) { label = rare.name + '!'; col = rgb(rare.col); }
+        if (label) {
+          ctx.textAlign = 'center';
+          ctx.font = 'bold ' + w * (big ? 0.19 : 0.16) + 'px system-ui, sans-serif';
+          ctx.fillStyle = col;
+          ctx.fillText(label, x + w / 2, y + h + w * 0.22);
+        }
       }
     }
 
@@ -1023,6 +1220,7 @@
     if (screen === 'collection') {
       if (inBox(mx, my, saveBox())) { save(); savedT = 1.8; return; }
       if (inBox(mx, my, packBox()) && packReady()) { openPack(); return; }
+      if (inBox(mx, my, goldBox()) && goldPacks > 0) { openGoldPack(); return; }
       if (inBox(mx, my, playBox()) && totalOwned() > 0) { startDuel(); return; }
       return;
     }
@@ -1076,6 +1274,7 @@
 
     if (saysT > 0) saysT -= dt;
     if (savedT > 0) savedT -= dt;
+    shineT += dt;
     if (shake > 0) shake -= dt * 1.6;
     if (screen === 'pack') revealT += dt;
     if (screen === 'duel') stepCut(dt);
