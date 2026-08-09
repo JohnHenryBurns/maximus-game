@@ -24,10 +24,10 @@
   }
   canvas { display: block; cursor: pointer; }
   #hud {
-    position: fixed; left: 0; right: 0; bottom: 6px;
-    text-align: center; font-size: 14px; color: #6b7a90;
+    position: fixed; left: 0; right: 0; bottom: 4px;
+    text-align: center; font-size: 13px; color: #6b7a90;
     pointer-events: none;
-    /* It fades away the moment you build your first block - once you know
+    /* It fades away the moment you build your first thing - once you know
        how, being told again is just something in the way. */
     transition: opacity 0.6s;
   }
@@ -36,23 +36,27 @@
 <body>
 
 <canvas id="screen"></canvas>
-<div id="hud">TAP to build &nbsp;&nbsp; the flag is at the TOP &nbsp;&nbsp; then press GO</div>
+<div id="hud">TAP to build &nbsp;&nbsp; stop the robots reaching the flag at the TOP</div>
 
 <script>
 // ===================================================================
 //  BEAT THE BOT
 //
-//  You build. Then a little character tries to climb past what you
-//  built, all the way to the flag at the top.
+//  A line of robots is coming. They all want the flag at the top.
+//  You have coins. Stop them.
 //
-//  The whole thing lives or dies on ONE promise: the bot is not
-//  pretending. It genuinely works out the cheapest way up through
-//  whatever you have made, every time. If it goes the long way round,
-//  that is because the long way round really was cheaper - not because
-//  somebody wrote "go round walls".
+//  The whole thing lives or dies on ONE promise: the robots are not
+//  pretending. Each one genuinely works out the cheapest way up
+//  through whatever you have built. If it goes the long way round,
+//  that is because the long way round really was cheaper.
 //
-//  Which is what makes beating it mean anything. A bot that loses on
-//  purpose isn't an opponent, it's a participation trophy.
+//  What they CANNOT do is see the future. A saw pops up and drops
+//  back down; a hammer falls when it falls. The robots creep past
+//  them and take their chances - and creeping is exactly what gets
+//  them caught.
+//
+//  Which is why the two halves of this game multiply each other. A
+//  longer climb is more seconds spent next to your saws.
 // ===================================================================
 
   const canvas = document.getElementById('screen');
@@ -77,19 +81,18 @@
   const FLOOR = ROWS - 1;              // the solid ground at the bottom
   const RISE  = 3;                     // a new ledge every 3 rows going up
 
-  // What the bot's legs can do. Everything the brain works out is built
-  // on these two numbers - change them and the bot's whole idea of what
-  // is possible changes with it.
+  // What a robot's legs can do. Everything the brain works out is built
+  // on these two numbers.
   const JUMP_UP = 3, JUMP_OVER = 2;
 
   const START = { c: 1, r: FLOOR - 1 };        // standing on the ground
   const FLAG  = { c: COLS >> 1, r: 1 };        // right at the top
 
   // What can be in a square.
-  const EMPTY = 0, WALL = 1, MUD = 2, PLAT = 3, DOOR = 4, KEY = 5;
+  const EMPTY = 0, WALL = 1, MUD = 2, PLAT = 3, DOOR = 4, KEY = 5,
+        SAW = 6, SMASH = 7;
 
-  // Three colours of door. A door only opens for a key of its colour,
-  // so three doors means the bot may have to fetch three keys.
+  // Three colours of door. A door only opens for a key of its colour.
   const LOCKS = [
     { name: 'RED',  col: [226, 96, 78] },
     { name: 'BLUE', col: [92, 152, 240] },
@@ -97,25 +100,28 @@
   ];
 
   const TOOLS = [
-    { name: 'WALL', price: 3, kind: WALL,
-      blurb: 'it cannot pass - but it CAN land on top' },
-    { name: 'MUD',  price: 1, kind: MUD,
-      blurb: 'it can wade - but that is five steps' },
-    { name: 'DOOR', price: 5, kind: DOOR,
-      blurb: 'locked. you hide its key too' }
+    { name: 'WALL',  price: 3, kind: WALL,
+      blurb: 'blocks them - but they can land on top' },
+    { name: 'MUD',   price: 1, kind: MUD,
+      blurb: 'they wade through it - five slow steps' },
+    { name: 'DOOR',  price: 5, kind: DOOR,
+      blurb: 'locked. you hide its key too' },
+    { name: 'SAW',   price: 6, kind: SAW,
+      blurb: 'pops up, then drops. slices them' },
+    { name: 'HAMMER',price: 4, kind: SMASH,
+      blurb: 'slams down. flattens them' }
   ];
 
   let grid = [];      // what is in each square
   let tint = [];      // which colour, for doors and keys only
 
   let tool = 0;
-  let coins = 22;
+  let coins = 26;
   let round = 1;
-  let best = 0;
+  let best = 0;       // the most robots you have ever stopped in one wave
 
   // When you put a door down you are holding its key, and the very next
-  // tap puts the key somewhere. Nothing else can happen until it does -
-  // a door with no key in the world is just a wall you overpaid for.
+  // tap puts the key somewhere.
   let holdingKey = -1;
 
   let state = 'build';        // 'build', 'run', 'done'
@@ -125,15 +131,29 @@
   function inside(c, r) { return c >= 0 && r >= 0 && c < COLS && r < ROWS; }
   function at(c, r) { return inside(c, r) ? grid[r][c] : WALL; }
 
-  // What it costs the bot to step into a square. Mud is the whole point
-  // of mud: cheap for you, expensive for it.
-  function costOf(kind) { return kind === MUD ? 5 : 1; }
+  // What it costs a robot to step into a square.
+  //
+  // THIS IS THE MOST IMPORTANT LINE IN THE GAME. A saw is not a wall -
+  // if it were, they would simply walk round it and nothing would ever
+  // get cut. It is a square they creep across. The cost IS the danger:
+  // the longer it takes to cross, the likelier the blade is up when
+  // they are standing on it.
+  // These have to stay SMALL enough that a robot can cross in one safe
+  // gap. Crossing time is this number divided by their walking speed -
+  // make it bigger than the quiet part of the cycle and the hazard stops
+  // being a gamble and becomes certain death.
+  function costOf(kind) {
+    if (kind === MUD)   return 5;
+    if (kind === SAW)   return 3;
+    if (kind === SMASH) return 2;
+    return 1;
+  }
 
   // Solid things block you AND hold you up. That is one idea, not two -
-  // which is why a wall you build is also a ledge you built it.
+  // which is why a wall you build is also a ledge you built them.
   function solid(c, r) { const k = at(c, r); return k === WALL || k === PLAT; }
 
-  // Can the bot be in this square, carrying these keys?
+  // Can a robot be in this square, carrying these keys?
   function passable(c, r, keys) {
     if (!inside(c, r)) return false;
     const k = grid[r][c];
@@ -148,9 +168,50 @@
     return passable(c, r, keys) && solid(c, r + 1);
   }
 
-  // Picking a key up is just a bit switching on.
   function keyBitAt(c, r) {
     return at(c, r) === KEY ? (1 << tint[r][c]) : 0;
+  }
+
+
+// -------------------------------------------------------------------
+//  THE HAZARDS
+//
+//  Both of them run on a clock, not on where the robots are. They do
+//  not aim and they do not wait. That is the whole reason some robots
+//  in a line get through and some do not: they set off at different
+//  moments, so they meet the blade at different points in its spin.
+// -------------------------------------------------------------------
+
+  // These four numbers ARE the difficulty, and they were carefully wrong
+  // the first time: crossing a saw took 1.43s while the blade was only
+  // down for 1.1s, so no robot could ever fit through the gap and every
+  // single one died. A hazard nobody can survive is not a gamble, it is
+  // a wall. There has to be a way through for the well-timed.
+  //
+  // The cycles are deliberately not neat fractions of WAVE_GAP either.
+  // At 3 seconds and one robot per second, only three of them would ever
+  // meet a different part of the spin - and they would die in pairs.
+  const SAW_CYCLE = 2.9, SAW_UP    = 0.34;   // a long, obvious threat
+  const HAM_CYCLE = 2.1, HAM_DOWN  = 0.16;   // brief, but comes round often
+
+  let clock = 0;
+
+  // Every hazard starts at a different point in its cycle, worked out
+  // from where it is. Not random - random would flicker differently
+  // every frame. This way the same square always keeps the same rhythm.
+  function phaseOf(c, r) { return (((c * 7 + r * 13) % 11) / 11); }
+
+  function sawUp(c, r) {
+    return ((clock / SAW_CYCLE + phaseOf(c, r)) % 1) < SAW_UP;
+  }
+  function hammerDown(c, r) {
+    return ((clock / HAM_CYCLE + phaseOf(c, r)) % 1) < HAM_DOWN;
+  }
+  function deadlyNow(c, r) {
+    const k = at(c, r);
+    if (k === SAW)   return sawUp(c, r);
+    if (k === SMASH) return hammerDown(c, r);
+    return false;
   }
 
 
@@ -167,8 +228,8 @@
     }
   }
 
-  // The ledges. These are bolted down - Max cannot remove them, and
-  // neither can anything else. They are the bones of the tower.
+  // The ledges. These are bolted down - nobody can remove them. They
+  // are the bones of the tower.
   function layLedges(fallback) {
     for (let c = 0; c < COLS; c++) grid[FLOOR][c] = PLAT;   // the ground
 
@@ -190,16 +251,14 @@
       floorNo++;
     }
 
-    // The flag must have something to stand on, or the game is a joke.
     for (let c = FLAG.c - 1; c <= FLAG.c + 1; c++) {
       if (c >= 0 && c < COLS) grid[FLAG.r + 1][c] = PLAT;
     }
   }
 
-  // Random ledges can come out unclimbable - a gap too wide, or a ledge
-  // with no hole beside it to jump up through. So we do the honest
-  // thing: build one, ASK THE BOT if it can climb it, and throw it away
-  // if it cannot. We never ship a tower we have not checked.
+  // Random ledges can come out unclimbable. So we do the honest thing:
+  // build one, ASK A ROBOT if it can climb it, and throw it away if it
+  // cannot. We never ship a tower we have not checked.
   function newTower() {
     for (let tries = 0; tries < 200; tries++) {
       blankGrid();
@@ -215,16 +274,14 @@
 
 
 // -------------------------------------------------------------------
-//  THE BOT'S BRAIN
+//  THE ROBOTS' BRAIN
 //
-//  Before, the bot only had to know WHERE it was. Now it has to know
-//  three things at once: which column, which row, and which keys it is
-//  carrying. Standing in front of a red door with the red key is a
-//  completely different situation from standing there without it - so
-//  they have to count as two different places.
+//  A robot has to know three things at once: which column, which row,
+//  and which keys it is carrying. Standing in front of a red door with
+//  the red key is a completely different situation from standing there
+//  without it - so they have to count as two different places.
 //
-//  That is the whole trick. Same algorithm as a satnav, just run over
-//  "place AND pockets" instead of "place".
+//  Same algorithm as a satnav, run over "place AND pockets".
 // -------------------------------------------------------------------
 
   const KEYSETS = 1 << LOCKS.length;         // 8 possible pocketfuls
@@ -234,9 +291,9 @@
   let dist = null, prevOf = null, viaOf = null;
   let bestCost = Infinity, bestEnd = -1;
 
-  // Every single thing the bot could do from where it is standing.
-  // Each move remembers the squares it passes THROUGH, because that is
-  // what it pays for and where it picks keys up.
+  // Everything a robot could do from where it is standing. Each move
+  // remembers the squares it passes THROUGH, because that is what it
+  // pays for, where it picks keys up, and where it can get sliced.
   function movesFrom(c, r, keys) {
     const out = [];
 
@@ -256,7 +313,7 @@
       // Nothing under its feet, so down it goes until something stops it.
       let rr = r, ok = true;
       while (!solid(nc, rr + 1)) {
-        if (!passable(nc, rr + 1, k2)) { ok = false; break; }   // blocked mid-fall
+        if (!passable(nc, rr + 1, k2)) { ok = false; break; }
         rr++;
         cost += costOf(at(nc, rr));
         k2 |= keyBitAt(nc, rr);
@@ -266,9 +323,9 @@
     }
 
     // ---- JUMP ---------------------------------------------------------
-    // It jumps straight up, then across. Simple to picture, simple to
-    // check, and it means a ledge with no gap beside it cannot be
-    // jumped onto - you have to go up through a hole.
+    // Straight up, then across. Simple to picture, simple to check, and
+    // it means a ledge with no gap beside it cannot be jumped onto - you
+    // have to go up through a hole.
     for (let dy = 0; dy <= JUMP_UP; dy++) {
       for (let dx = -JUMP_OVER; dx <= JUMP_OVER; dx++) {
         if (dx === 0 && dy === 0) continue;
@@ -311,8 +368,7 @@
     viaOf  = new Array(NSTATES).fill(null);
     const settled = new Uint8Array(NSTATES);
 
-    const first = id(START.c, START.r, 0);
-    dist[first] = 0;
+    dist[id(START.c, START.r, 0)] = 0;
 
     // Always deal with the cheapest place-and-pockets we have not dealt
     // with yet. Once it is settled, nothing can ever make it cheaper -
@@ -341,7 +397,6 @@
       }
     }
 
-    // Reaching the flag counts however many keys are in its pockets.
     bestCost = Infinity; bestEnd = -1;
     for (let k = 0; k < KEYSETS; k++) {
       const s = id(FLAG.c, FLAG.r, k);
@@ -351,10 +406,10 @@
 
   function canGetThrough() { return bestCost < Infinity; }
 
-  // Can the bot ever actually GET this key? Not "can it stand on that
-  // square" - it might swipe the key while flying past in the middle of
-  // a jump. So the real question is whether there is any situation it
-  // can reach where the key is already in its pocket.
+  // Can a robot ever actually GET this key? Not "can it stand on that
+  // square" - it might swipe the key while flying past mid-jump. So the
+  // real question is whether there is any situation it can reach where
+  // the key is already in its pocket.
   function canFetch(colour) {
     const bit = 1 << colour;
     for (let s = 0; s < NSTATES; s++) {
@@ -363,7 +418,6 @@
     return false;
   }
 
-  // Walk the trail of breadcrumbs back from the flag, then turn it round.
   function routeCells() {
     if (bestEnd < 0) return [];
     const chunks = [];
@@ -382,54 +436,123 @@
 
 
 // -------------------------------------------------------------------
-//  THE BOT ITSELF
+//  THE LINE OF ROBOTS
 // -------------------------------------------------------------------
 
-  const bot = { c: START.c, r: START.r, x: START.c, y: START.r,
-                path: [], at: 0, step: 0, spent: 0, got: 0, face: 1 };
+  const WAVE_GAP = 1.0;              // seconds between one setting off
+                                     // and the next
+  let bots = [];
+  let route = [];
+  let scrap = [];                    // bolts and sparks flying about
+
+  function waveSize() { return 6 + Math.floor((round - 1) / 2); }
+  function gotThrough() {
+    let n = 0;
+    for (let i = 0; i < bots.length; i++) if (bots[i].done) n++;
+    return n;
+  }
+  function stopped() {
+    let n = 0;
+    for (let i = 0; i < bots.length; i++) if (!bots[i].alive) n++;
+    return n;
+  }
 
   function go() {
     if (holdingKey >= 0) { say('put the key down first'); return; }
     think();
-    if (!canGetThrough()) { say('it cannot get up there at all'); return; }
-    bot.path = routeCells();
-    bot.at = 0; bot.spent = 0; bot.got = 0; bot.step = 0;
-    bot.c = START.c; bot.r = START.r; bot.x = START.c; bot.y = START.r;
+    if (!canGetThrough()) { say('they cannot get up there at all'); return; }
+
+    route = routeCells();
+    bots = [];
+    for (let i = 0; i < waveSize(); i++) {
+      bots.push({ at: 0, step: 0, c: START.c, r: START.r,
+                  x: START.c, y: START.r, keys: 0,
+                  alive: true, done: false, wait: i * WAVE_GAP, face: 1 });
+    }
+    scrap = [];
+    clock = 0;
     state = 'run';
-    say('off it goes');
+    say('here they come - ' + waveSize() + ' of them');
+  }
+
+  function burst(x, y) {
+    // Bolts, springs and one surprised eyeball.
+    for (let i = 0; i < 14; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const sp = 2 + Math.random() * 6;
+      scrap.push({ x: x, y: y,
+                   vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 3,
+                   life: 0.9 + Math.random() * 0.5,
+                   size: 2 + Math.random() * 3 });
+    }
+    if (scrap.length > 260) scrap.splice(0, scrap.length - 260);
+  }
+
+  function stepRobot(b, dt) {
+    if (!b.alive || b.done) return;
+    if (b.wait > 0) { b.wait -= dt; return; }
+
+    // It creeps across the nasty squares. Which is the whole problem.
+    const here = at(b.c, b.r);
+    const slow = costOf(here);
+    b.step += dt * (4.2 / slow);
+
+    while (b.step >= 1) {
+      b.step -= 1;
+      if (b.at >= route.length - 1) { b.done = true; return; }
+      b.at++;
+      const n = route[b.at];
+      if (n.c !== b.c) b.face = n.c > b.c ? 1 : -1;
+      b.c = n.c; b.r = n.r;
+      b.keys |= keyBitAt(n.c, n.r);
+    }
+
+    const a = route[b.at];
+    const nx = route[Math.min(b.at + 1, route.length - 1)];
+    b.x = a.c + (nx.c - a.c) * b.step;
+    b.y = a.r + (nx.r - a.r) * b.step;
   }
 
   function update(dt) {
     if (saysT > 0) saysT -= dt;
-    if (state !== 'run') return;
 
-    // It wades slowly. You can SEE the mud costing it, which is the
-    // point - a number going up is fine, watching it struggle is better.
-    const here = at(bot.c, bot.r);
-    const speed = here === MUD ? 1.0 : 4.2;
-    bot.step += dt * speed;
-
-    while (bot.step >= 1) {
-      bot.step -= 1;
-      if (bot.at >= bot.path.length - 1) {
-        state = 'done';
-        if (bestCost > best) best = bestCost;
-        say('it got there in ' + bot.spent + ' steps');
-        return;
-      }
-      bot.at++;
-      const n = bot.path[bot.at];
-      if (n.c !== bot.c) bot.face = n.c > bot.c ? 1 : -1;
-      bot.c = n.c; bot.r = n.r;
-      bot.spent += costOf(at(n.c, n.r));
-      if (at(n.c, n.r) === KEY) { bot.got |= keyBitAt(n.c, n.r); }
+    // Scrap keeps flying even after the round is over.
+    for (let i = scrap.length - 1; i >= 0; i--) {
+      const p = scrap[i];
+      p.life -= dt;
+      if (p.life <= 0) { scrap.splice(i, 1); continue; }
+      p.x += p.vx * dt * 30; p.y += p.vy * dt * 30;
+      p.vy += dt * 34;
     }
 
-    // Slide smoothly between squares so it looks alive.
-    const a = bot.path[bot.at];
-    const b = bot.path[Math.min(bot.at + 1, bot.path.length - 1)];
-    bot.x = a.c + (b.c - a.c) * bot.step;
-    bot.y = a.r + (b.r - a.r) * bot.step;
+    if (state !== 'run') return;
+    clock += dt;
+
+    for (let i = 0; i < bots.length; i++) {
+      const b = bots[i];
+      stepRobot(b, dt);
+
+      // Was it standing there when the blade came up?
+      if (b.alive && !b.done && b.wait <= 0) {
+        const cc = Math.round(b.x), rr = Math.round(b.y);
+        if (deadlyNow(cc, rr)) {
+          b.alive = false;
+          const bd = board();
+          burst(bd.x + (b.x + 0.5) * bd.s, bd.y + (b.y + 0.5) * bd.s);
+        }
+      }
+    }
+
+    let busy = false;
+    for (let i = 0; i < bots.length; i++) if (bots[i].alive && !bots[i].done) busy = true;
+    if (!busy) {
+      state = 'done';
+      const s = stopped();
+      if (s > best) best = s;
+      say(s === bots.length ? 'NOT ONE OF THEM GOT THROUGH'
+        : s === 0           ? 'all ' + bots.length + ' walked straight past'
+        : 'you stopped ' + s + ' of ' + bots.length);
+    }
   }
 
 
@@ -437,19 +560,44 @@
 //  WHERE EVERYTHING IS ON SCREEN
 // -------------------------------------------------------------------
 
-  // A phone held sideways has loads of width and almost no height. If we
-  // keep the buttons in a row underneath, they eat the room the tower
-  // needs. So when the screen is wider than it is tall, the buttons move
-  // to a column on the right.
+  // A phone held sideways has loads of width and almost no height, so
+  // the buttons move to a block on the right instead of a row below.
   function wide()   { return W > H * 1.35; }
-  function panelW() { return wide() ? Math.min(W * 0.24, 210) : 0; }
+  function panelW() { return wide() ? Math.min(W * 0.36, 320) : 0; }
   function topBar() { return wide() ? 62 : 96; }
-  function botBar() { return wide() ? 16 : 114; }
+
+  // Five tools and a GO button will not fit in one row on a phone, so
+  // they wrap onto as many rows as they need - and the tower is told
+  // how much room that took, instead of us guessing a number.
+  function btnCols()  { return wide() ? 2 : 3; }
+  function btnRows()  { return Math.ceil((TOOLS.length + 1) / btnCols()); }
+  function btnH() {
+    if (!wide()) return 52;
+    return clamp((H - topBar() - 30 - 8 * (btnRows() - 1)) / btnRows(), 40, 56);
+  }
+  function boxOf(i) {
+    const cols = btnCols(), h = btnH();
+    const cx = i % cols, cy = Math.floor(i / cols);
+    if (wide()) {
+      const w = (panelW() - 24 - 8 * (cols - 1)) / cols;
+      return { x: W - panelW() + 8 + cx * (w + 8),
+               y: topBar() + 8 + cy * (h + 8), w: w, h: h };
+    }
+    const w = (W - 40 - 10 * (cols - 1)) / cols;
+    const y0 = H - 26 - btnRows() * h - (btnRows() - 1) * 10;
+    return { x: 20 + cx * (w + 10), y: y0 + cy * (h + 10), w: w, h: h };
+  }
+  function toolBox(i) { return boxOf(i); }
+  function goBox()    { return boxOf(TOOLS.length); }
+
+  function botBar() {
+    return wide() ? 16 : (btnRows() * btnH() + (btnRows() - 1) * 10 + 44);
+  }
 
   function board() {
-    // Everything else in the game asks THIS function where things are -
-    // so changing the shape here moves the drawing and your finger at
-    // the same time, and they can never disagree.
+    // Everything else asks THIS function where things are - so changing
+    // the shape here moves the drawing and your finger at the same time,
+    // and they can never disagree.
     const s = Math.min((W - panelW() - 40) / COLS,
                        (H - topBar() - botBar()) / ROWS);
     return { s: s,
@@ -463,33 +611,6 @@
     const r = Math.floor((my - b.y) / b.s);
     if (!inside(c, r)) return null;
     return { c: c, r: r };
-  }
-
-  // Buttons stay a comfortable size whatever happens - a fingertip is
-  // about 44 across, and a button you cannot reliably hit is not a button.
-  function btnH() {
-    if (!wide()) return 54;
-    return clamp((H - topBar() - 34 - 8 * TOOLS.length) / (TOOLS.length + 1), 40, 54);
-  }
-  function toolBox(i) {
-    const h = btnH();
-    if (wide()) {
-      return { x: W - panelW() + 4, y: topBar() + 6 + i * (h + 8),
-               w: panelW() - 20, h: h };
-    }
-    const goW = Math.min(W * 0.22, 150);
-    const room = W - 40 - goW - 12;
-    const w = (room - 12 * (TOOLS.length - 1)) / TOOLS.length;
-    return { x: 20 + i * (w + 12), y: H - 78, w: w, h: h };
-  }
-  function goBox() {
-    const h = btnH();
-    if (wide()) {
-      return { x: W - panelW() + 4, y: topBar() + 14 + TOOLS.length * (h + 8),
-               w: panelW() - 20, h: h };
-    }
-    const goW = Math.min(W * 0.22, 150);
-    return { x: W - goW - 20, y: H - 78, w: goW, h: h };
   }
 
 
@@ -512,15 +633,58 @@
     ctx.fill();
   }
 
+  function drawBlade(x, y, s, spin, out) {
+    // A circular blade with teeth. When it is down you only see the
+    // slot it lives in, so you know where it will come from.
+    ctx.fillStyle = '#0d1017';
+    ctx.fillRect(x + s * 0.1, y + s * 0.72, s * 0.8, s * 0.2);
+    if (out <= 0) return;
+
+    const cy = y + s * (0.82 - 0.62 * out);
+    const rad = s * 0.34 * out;
+    ctx.save();
+    ctx.translate(x + s / 2, cy);
+    ctx.rotate(spin);
+    ctx.fillStyle = '#c9d4e6';
+    for (let i = 0; i < 8; i++) {
+      ctx.rotate(Math.PI / 4);
+      ctx.beginPath();
+      ctx.moveTo(-rad * 0.35, -rad * 0.85);
+      ctx.lineTo(0, -rad * 1.35);
+      ctx.lineTo(rad * 0.35, -rad * 0.85);
+      ctx.fill();
+    }
+    ctx.beginPath();
+    ctx.arc(0, 0, rad, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#5d6a80';
+    ctx.beginPath();
+    ctx.arc(0, 0, rad * 0.3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawHammer(x, y, s, down) {
+    // Rail it hangs from.
+    ctx.fillStyle = '#2b3242';
+    ctx.fillRect(x + s * 0.42, y, s * 0.16, s);
+
+    const top = y + s * (down ? 0.42 : 0.02);
+    ctx.fillStyle = down ? '#e8834a' : '#8a94a8';
+    ctx.fillRect(x + s * 0.12, top, s * 0.76, s * 0.42);
+    ctx.fillStyle = 'rgba(0,0,0,0.3)';
+    ctx.fillRect(x + s * 0.12, top + s * 0.32, s * 0.76, s * 0.10);
+  }
+
   function drawTower() {
     const b = board();
+    const spin = clock * 14;
 
     for (let r = 0; r < ROWS; r++) {
       for (let c = 0; c < COLS; c++) {
         const x = b.x + c * b.s, y = b.y + r * b.s;
         const kind = grid[r][c];
 
-        // The sky behind everything, faintly striped so the floors read.
         ctx.fillStyle = (r % RISE === (FLOOR % RISE)) ? '#1a2130' : '#151b27';
         ctx.fillRect(x, y, b.s, b.s);
         ctx.strokeStyle = 'rgba(255,255,255,0.03)';
@@ -528,8 +692,6 @@
         ctx.strokeRect(x + 0.5, y + 0.5, b.s - 1, b.s - 1);
 
         if (kind === PLAT) {
-          // Bolted down. Darker than your walls, with a bright lip on top
-          // so you can see it is something to land on.
           ctx.fillStyle = '#3c4658';
           ctx.fillRect(x, y, b.s, b.s);
           ctx.fillStyle = '#6f7d94';
@@ -557,25 +719,30 @@
           }
         }
 
+        if (kind === SAW) {
+          // While you are building it sits half out, so you can see it
+          // is there. Once they are running it does its real cycle.
+          const out = state === 'build' ? 0.55 : (sawUp(c, r) ? 1 : 0);
+          drawBlade(x, y, b.s, spin, out);
+        }
+
+        if (kind === SMASH) {
+          const down = state === 'build' ? false : hammerDown(c, r);
+          drawHammer(x, y, b.s, down);
+        }
+
         if (kind === DOOR) {
           const col = LOCKS[tint[r][c]].col;
-          const open = state !== 'build' && ((bot.got >> tint[r][c]) & 1);
-          ctx.globalAlpha = open ? 0.28 : 1;          // it swings open once used
           ctx.fillStyle = rgb(col);
           ctx.fillRect(x + b.s * 0.12, y + 1, b.s * 0.76, b.s - 2);
           ctx.fillStyle = 'rgba(0,0,0,0.45)';
           ctx.beginPath();
           ctx.arc(x + b.s * 0.68, y + b.s * 0.5, b.s * 0.09, 0, Math.PI * 2);
           ctx.fill();
-          ctx.globalAlpha = 1;
         }
 
         if (kind === KEY) {
-          const col = LOCKS[tint[r][c]].col;
-          const taken = state !== 'build' && ((bot.got >> tint[r][c]) & 1);
-          ctx.globalAlpha = taken ? 0.2 : 1;
-          drawKeyShape(x + b.s / 2, y + b.s / 2, b.s, col);
-          ctx.globalAlpha = 1;
+          drawKeyShape(x + b.s / 2, y + b.s / 2, b.s, LOCKS[tint[r][c]].col);
         }
       }
     }
@@ -583,11 +750,11 @@
     // ---- THE ROUTE ---------------------------------------------------
     // Drawn WHILE you build, so every block shows you what it was worth
     // the instant you put it down.
-    const path = state === 'build' ? routeCells() : bot.path;
+    const path = state === 'build' ? routeCells() : route;
     if (path.length > 1) {
-      ctx.strokeStyle = state === 'build' ? 'rgba(255,215,106,0.75)'
-                                          : 'rgba(255,215,106,0.35)';
-      ctx.lineWidth = Math.max(2, b.s * 0.12);
+      ctx.strokeStyle = state === 'build' ? 'rgba(255,215,106,0.7)'
+                                          : 'rgba(255,215,106,0.28)';
+      ctx.lineWidth = Math.max(2, b.s * 0.11);
       ctx.lineJoin = 'round'; ctx.lineCap = 'round';
       ctx.beginPath();
       for (let i = 0; i < path.length; i++) {
@@ -619,30 +786,45 @@
     ctx.fill();
   }
 
-  function drawBot() {
-    const b = board();
-    const x = b.x + (bot.x + 0.5) * b.s;
-    const y = b.y + (bot.y + 0.5) * b.s;
-    const s = b.s * 0.30;
-    const bounce = state === 'run' ? Math.abs(Math.sin(bot.step * Math.PI)) * s * 0.25 : 0;
+  function drawRobot(b, bd) {
+    const x = bd.x + (b.x + 0.5) * bd.s;
+    const y = bd.y + (b.y + 0.5) * bd.s;
+    const s = bd.s * 0.28;
+    const bounce = Math.abs(Math.sin(b.step * Math.PI)) * s * 0.25;
 
-    ctx.fillStyle = '#dbe4f2';
+    ctx.fillStyle = b.done ? '#8fe07a' : '#dbe4f2';
     ctx.fillRect(x - s, y - s - bounce, s * 2, s * 1.7);
-
     ctx.fillStyle = '#10141c';
     ctx.fillRect(x - s * 0.55, y - s * 0.55 - bounce, s * 0.38, s * 0.38);
     ctx.fillRect(x + s * 0.17, y - s * 0.55 - bounce, s * 0.38, s * 0.38);
-
     ctx.fillStyle = '#ffd76a';
     ctx.fillRect(x - s * 0.15, y - s * 1.5 - bounce, s * 0.3, s * 0.45);
 
-    // Keys it is carrying, jingling above its head.
     let shown = 0;
     for (let i = 0; i < LOCKS.length; i++) {
-      if (!((bot.got >> i) & 1)) continue;
+      if (!((b.keys >> i) & 1)) continue;
       drawKeyShape(x - s * 0.7 + shown * s * 0.7, y - s * 2.3 - bounce,
-                   b.s * 0.55, LOCKS[i].col);
+                   bd.s * 0.5, LOCKS[i].col);
       shown++;
+    }
+  }
+
+  function drawWave() {
+    const bd = board();
+    if (state === 'build') {
+      // One waiting robot, so the start square never looks empty.
+      drawRobot({ x: START.c, y: START.r, step: 0, keys: 0, done: false }, bd);
+    } else {
+      for (let i = 0; i < bots.length; i++) {
+        const b = bots[i];
+        if (!b.alive || b.wait > 0) continue;
+        drawRobot(b, bd);
+      }
+    }
+    for (let i = 0; i < scrap.length; i++) {
+      const p = scrap[i];
+      ctx.fillStyle = 'rgba(200,212,230,' + clamp(p.life, 0, 1) + ')';
+      ctx.fillRect(p.x, p.y, p.size, p.size);
     }
   }
 
@@ -655,7 +837,6 @@
     }
     return seen;
   }
-  // Every door you have put down must still be a door the bot can open.
   function allKeysFetchable() {
     const used = usedLocks();
     for (let i = 0; i < used.length; i++) if (!canFetch(used[i])) return false;
@@ -668,8 +849,6 @@
   }
 
   function drawHud() {
-    // Both lines of the top bar sit inside topBar(), so they never end up
-    // written across the tower on a short screen.
     const line1 = wide() ? 30 : 44, line2 = wide() ? 50 : 68;
 
     ctx.textAlign = 'left';
@@ -679,17 +858,27 @@
 
     ctx.font = Math.min(W * 0.024, 15) + 'px system-ui, sans-serif';
     ctx.fillStyle = '#6b7a90';
-    ctx.fillText('round ' + round + (best ? '   -   best ' + best + ' steps' : ''), 22, line2);
+    ctx.fillText('round ' + round + (best ? '   -   best ' + best + ' stopped' : ''),
+                 22, line2);
 
-    // THE NUMBER YOU ARE TRYING TO MAKE BIGGER.
+    // ---- THE TWO NUMBERS THAT MATTER ---------------------------------
     ctx.textAlign = 'right';
     ctx.font = 'bold ' + Math.min(W * 0.034, 26) + 'px system-ui, sans-serif';
-    ctx.fillStyle = canGetThrough() ? '#8fe07a' : '#e05a4a';
-    ctx.fillText(canGetThrough() ? bestCost + ' steps' : 'NO WAY UP', W - 20, line1);
-    ctx.font = Math.min(W * 0.022, 14) + 'px system-ui, sans-serif';
-    ctx.fillStyle = '#6b7a90';
-    ctx.fillText(canGetThrough() ? 'the cheapest climb it can find'
-                                 : 'it must be able to reach the flag', W - 20, line2 - 2);
+    if (state === 'build') {
+      ctx.fillStyle = canGetThrough() ? '#8fe07a' : '#e05a4a';
+      ctx.fillText(canGetThrough() ? bestCost + ' steps' : 'NO WAY UP', W - 20, line1);
+      ctx.font = Math.min(W * 0.022, 14) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#6b7a90';
+      ctx.fillText(canGetThrough() ? 'a longer climb is more places to put a saw'
+                                   : 'they must be able to reach the flag',
+                   W - 20, line2 - 2);
+    } else {
+      ctx.fillStyle = '#e8834a';
+      ctx.fillText(stopped() + ' stopped', W - 20, line1);
+      ctx.font = Math.min(W * 0.022, 14) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#6b7a90';
+      ctx.fillText(gotThrough() + ' got through, of ' + bots.length, W - 20, line2 - 2);
+    }
 
     // ---- TOOLS -------------------------------------------------------
     for (let i = 0; i < TOOLS.length; i++) {
@@ -704,22 +893,41 @@
       ctx.strokeStyle = on ? '#ffd76a' : 'rgba(255,255,255,0.18)';
       ctx.strokeRect(bx.x, bx.y, bx.w, bx.h);
 
-      const swatch = t.kind === WALL ? [150, 160, 180]
-                   : t.kind === MUD  ? [107, 74, 42]
-                   : (lock >= 0 ? LOCKS[lock].col : [90, 100, 118]);
-      ctx.fillStyle = rgb(swatch);
-      ctx.fillRect(bx.x + 9, bx.y + bx.h * 0.26, 22, 22);
+      // A little picture of the thing, so you never have to read to know.
+      const ix = bx.x + 8, iy = bx.y + bx.h * 0.5 - 11, is = 22;
+      if (t.kind === WALL) {
+        ctx.fillStyle = '#96a0b4'; ctx.fillRect(ix, iy, is, is);
+        ctx.fillStyle = '#c3ccdd'; ctx.fillRect(ix, iy, is, 4);
+      } else if (t.kind === MUD) {
+        ctx.fillStyle = '#6b4a2a'; ctx.fillRect(ix, iy, is, is);
+      } else if (t.kind === DOOR) {
+        ctx.fillStyle = rgb(lock >= 0 ? LOCKS[lock].col : [90, 100, 118]);
+        ctx.fillRect(ix + 2, iy, is - 4, is);
+      } else if (t.kind === SAW) {
+        drawBlade(ix - 1, iy - is * 0.4, is * 1.4, clock * 14, 1);
+      } else {
+        drawHammer(ix - 1, iy - is * 0.2, is * 1.3, false);
+      }
 
-      const roomy = bx.w > 150;
+      // Text stays inside its own button, whatever we write in it. Without
+      // this a long blurb spills across the next button and the two of
+      // them read as one sentence of nonsense.
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(bx.x + 2, bx.y + 2, bx.w - 4, bx.h - 4);
+      ctx.clip();
+
+      const roomy = bx.w > 165;
       ctx.textAlign = 'left';
-      ctx.font = 'bold ' + Math.min(W * 0.022, 15) + 'px system-ui, sans-serif';
+      ctx.font = 'bold ' + Math.min(W * 0.021, 15) + 'px system-ui, sans-serif';
       ctx.fillStyle = can ? '#e6ecf5' : '#5a6678';
       ctx.fillText(t.name + '  ' + t.price, bx.x + 38, bx.y + (roomy ? 24 : bx.h * 0.6));
       if (roomy) {
-        ctx.font = Math.min(W * 0.018, 12) + 'px system-ui, sans-serif';
+        ctx.font = Math.min(W * 0.017, 12) + 'px system-ui, sans-serif';
         ctx.fillStyle = '#6b7a90';
         ctx.fillText(t.blurb, bx.x + 38, bx.y + 42);
       }
+      ctx.restore();
     }
 
     // ---- GO -----------------------------------------------------------
@@ -731,20 +939,18 @@
     ctx.strokeStyle = ready ? '#8fe07a' : 'rgba(255,255,255,0.2)';
     ctx.strokeRect(g.x, g.y, g.w, g.h);
     ctx.textAlign = 'center';
-    ctx.font = 'bold ' + Math.min(W * 0.03, 22) + 'px system-ui, sans-serif';
+    ctx.font = 'bold ' + Math.min(W * 0.028, 21) + 'px system-ui, sans-serif';
     ctx.fillStyle = ready ? '#8fe07a' : '#6b7a90';
-    ctx.fillText(state === 'build' ? 'GO' : state === 'run' ? 'CLIMBING' : 'NEXT ROUND',
+    ctx.fillText(state === 'build' ? 'SEND THEM' : state === 'run' ? 'CLIMBING' : 'NEXT WAVE',
                  g.x + g.w / 2, g.y + g.h * 0.63);
 
     // ---- HOLDING A KEY -------------------------------------------------
-    // Impossible to miss, because nothing else works until you put it down.
     if (holdingKey >= 0) {
       ctx.textAlign = 'center';
-      const mx = (W - panelW()) / 2;
-      const y = wide() ? topBar() - 14 : 90;
       ctx.font = 'bold ' + Math.min(W * 0.028, 20) + 'px system-ui, sans-serif';
       ctx.fillStyle = rgb(LOCKS[holdingKey].col);
-      ctx.fillText('NOW HIDE THE ' + LOCKS[holdingKey].name + ' KEY', mx, y);
+      ctx.fillText('NOW HIDE THE ' + LOCKS[holdingKey].name + ' KEY',
+                   (W - panelW()) / 2, wide() ? topBar() - 14 : 90);
     }
 
     if (wide() && board().s < 26) {
@@ -752,13 +958,17 @@
       ctx.font = 'bold 11px system-ui, sans-serif';
       ctx.fillStyle = '#6b7a90';
       ctx.fillText('turn your phone upright for a much bigger tower',
-                   (W - panelW()) / 2, wide() ? 30 : 30);
+                   (W - panelW()) / 2, 30);
     }
 
     if (saysT > 0) {
       ctx.textAlign = 'center';
-      const size = wide() ? 15 : Math.min(W * 0.028, 20);
-      const y = wide() ? H - 12 : H - 100;
+      const size = wide() ? 15 : Math.min(W * 0.027, 20);
+      // Sit it just above the buttons - worked out FROM where the buttons
+      // are, not guessed, so it cannot land on top of them when the
+      // number of tools changes.
+      const y = wide() ? H - 12
+                       : boxOf(0).y - 14;
       ctx.font = 'bold ' + size + 'px system-ui, sans-serif';
       const wid = ctx.measureText(says).width;
       ctx.fillStyle = 'rgba(16,20,28,' + clamp(saysT, 0, 1) * 0.85 + ')';
@@ -773,8 +983,6 @@
 //  BUILDING
 // -------------------------------------------------------------------
 
-  // Take a door and its key away together. One without the other is
-  // either a wall you cannot open or a key to nothing.
   function removeLock(colour) {
     for (let r = 0; r < ROWS; r++) {
       for (let c = 0; c < COLS; c++) {
@@ -784,10 +992,15 @@
     }
   }
 
+  function priceOf(kind) {
+    for (let i = 0; i < TOOLS.length; i++) if (TOOLS[i].kind === kind) return TOOLS[i].price;
+    return 0;
+  }
+
   function place(c, r) {
     if (state !== 'build') return;
     if (!inside(c, r)) return;
-    if (c === START.c && r === START.r) { say('that is where it starts'); return; }
+    if (c === START.c && r === START.r) { say('that is where they come in'); return; }
     if (c === FLAG.c && r === FLAG.r)   { say('that is the flag'); return; }
     if (grid[r][c] === PLAT) { say('that ledge is bolted down'); return; }
 
@@ -797,22 +1010,21 @@
       const colour = holdingKey;
       grid[r][c] = KEY; tint[r][c] = colour;
       think();
-      // TWO things have to be true, not one. It must still be able to
-      // reach the flag - AND it must be able to get this key. A key it
-      // can never reach turns your door into a wall you paid extra for,
-      // which is a rotten trick to play on someone.
+      // TWO things have to be true. They must still be able to reach the
+      // flag - AND they must be able to get this key. A key they can
+      // never reach turns your door into a wall you paid extra for.
       if (!canGetThrough() || !canFetch(colour)) {
         grid[r][c] = EMPTY;
         removeLock(colour);
-        coins += TOOLS[2].price;
+        coins += priceOf(DOOR);
         holdingKey = -1;
         think();
-        say(canGetThrough() ? 'it could never reach that key'
-                            : 'then it can never get to the flag');
+        say(canGetThrough() ? 'they could never reach that key'
+                            : 'then they can never get to the flag');
         return;
       }
       holdingKey = -1;
-      say('now it has to go and get it first');
+      say('now they have to go and get it first');
       return;
     }
 
@@ -821,10 +1033,10 @@
       const k = grid[r][c];
       if (k === DOOR || k === KEY) {
         removeLock(tint[r][c]);
-        coins += TOOLS[2].price;
+        coins += priceOf(DOOR);
       } else {
         grid[r][c] = EMPTY;
-        coins += (k === WALL ? TOOLS[0].price : TOOLS[1].price);
+        coins += priceOf(k);
       }
       think();
       return;
@@ -838,24 +1050,24 @@
       if (colour < 0) { say('three doors is all you get'); return; }
       grid[r][c] = DOOR; tint[r][c] = colour;
       coins -= t.price;
-      holdingKey = colour;                 // the key comes next, always
+      holdingKey = colour;
       think();
       say('now hide the ' + LOCKS[colour].name + ' key');
-      const hint = document.getElementById('hud');
-      if (hint) hint.style.opacity = 0;
+      const h1 = document.getElementById('hud');
+      if (h1) h1.style.opacity = 0;
       return;
     }
 
     grid[r][c] = t.kind;
     think();
 
-    // IT MUST BE ABLE TO REACH THE FLAG, and it must still be able to
-    // reach every key you have hidden. Refused the moment you try, with
-    // the block put straight back - so you find out by tapping, not by
-    // building a masterpiece and being told at the end.
+    // THEY MUST BE ABLE TO REACH THE FLAG, and still reach every key you
+    // have hidden. Refused the moment you try, with the block put
+    // straight back - so you find out by tapping, not by building a
+    // masterpiece and being told at the end.
     if (!canGetThrough() || !allKeysFetchable()) {
-      const why = canGetThrough() ? 'now it can never reach a key'
-                                  : 'IT MUST HAVE A WAY UP';
+      const why = canGetThrough() ? 'now they can never reach a key'
+                                  : 'THEY MUST HAVE A WAY UP';
       grid[r][c] = EMPTY;
       think();
       say(why);
@@ -863,8 +1075,8 @@
     }
 
     coins -= t.price;
-    const hint = document.getElementById('hud');
-    if (hint) hint.style.opacity = 0;
+    const h2 = document.getElementById('hud');
+    if (h2) h2.style.opacity = 0;
   }
 
   function tap(mx, my) {
@@ -874,7 +1086,9 @@
       for (let i = 0; i < TOOLS.length; i++) {
         const b = toolBox(i);
         if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
-          tool = i; return;
+          tool = i;
+          say(TOOLS[i].blurb);            // tapping a tool tells you what it does
+          return;
         }
       }
       const g = goBox();
@@ -882,11 +1096,10 @@
         if (state === 'build') go();
         else if (state === 'done') {
           round++;
-          coins += 10 + round;           // more to spend every round
+          coins += 12 + round * 2;        // more to spend every wave
           state = 'build';
-          bot.c = START.c; bot.r = START.r; bot.x = START.c; bot.y = START.r;
-          bot.path = []; bot.at = 0; bot.spent = 0; bot.got = 0;
-          say('round ' + round + ' - make it worse');
+          bots = []; route = [];
+          say('wave ' + round + ' - ' + waveSize() + ' of them this time');
         }
         return;
       }
@@ -911,13 +1124,17 @@
     const dt = Math.min(0.05, Math.max(0.0005, (now - last) / 1000));
     last = now;
 
+    // The blades keep spinning while you build, so you can watch their
+    // rhythm before you decide where the next one goes.
+    if (state !== 'run') clock += dt;
+
     update(dt);
 
     ctx.fillStyle = '#10141c';
     ctx.fillRect(0, 0, W, H);
 
     drawTower();
-    drawBot();
+    drawWave();
     drawHud();
 
     requestAnimationFrame(frame);
