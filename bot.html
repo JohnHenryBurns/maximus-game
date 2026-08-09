@@ -219,8 +219,25 @@
   // on these two numbers.
   const JUMP_UP = 3, JUMP_OVER = 2;
 
-  const START = { c: 1, r: FLOOR - 1 };        // standing on the ground
   const FLAG  = { c: COLS >> 1, r: 1 };        // right at the top
+
+  // SPAWN POINTS. Every level adds another (up to a cap), all of them on
+  // the ground and all of them making for the same flag - so higher levels
+  // are about routing several streams so they CONVERGE onto your traps.
+  // STARTS is rebuilt for the current level whenever a new tower is made.
+  const MAX_SPAWNS = 4;
+  function spawnCount() { return Math.min(MAX_SPAWNS, level); }
+  function makeStarts(n) {
+    const r = FLOOR - 1, out = [];
+    if (n <= 1) return [{ c: 1, r: r }];
+    // spread them evenly across the ground, from near the left wall to
+    // near the right, so their paths have to cross the whole tower.
+    for (let i = 0; i < n; i++) {
+      out.push({ c: Math.round(1 + i * (COLS - 3) / (n - 1)), r: r });
+    }
+    return out;
+  }
+  let STARTS = [{ c: 1, r: FLOOR - 1 }];
 
   // What can be in a square.
   const EMPTY = 0, WALL = 1, MUD = 2, PLAT = 3, DOOR = 4, KEY = 5,
@@ -441,14 +458,18 @@
   // build one, ASK A ROBOT if it can climb it, and throw it away if it
   // cannot. We never ship a tower we have not checked.
   function newTower() {
+    // The spawn points are set from the level here, so every fresh tower
+    // gets the right number of streams and every path check below is asked
+    // about ALL of them.
+    STARTS = makeStarts(spawnCount());
     for (let tries = 0; tries < 200; tries++) {
       blankGrid();
       layLedges(false);
       think();
-      if (canGetThrough()) return tries;
+      if (canGetThrough()) return tries;    // every spawn can reach the flag
     }
     blankGrid();
-    layLedges(true);
+    layLedges(true);                        // the guaranteed staircase works for all
     think();
     return -1;
   }
@@ -582,8 +603,11 @@
   const NSTATES = COLS * ROWS * KEYSETS;
   function id(c, r, keys) { return (r * COLS + c) * KEYSETS + keys; }
 
-  let dist = null, prevOf = null, viaOf = null;
-  let bestCost = Infinity, bestEnd = -1;
+  // One "brain" per spawn point - the full satnav result from THAT spawn:
+  // the cheapest cost to every place-and-pockets, and the cheapest way to
+  // the flag. All the questions below (can they get through? which route?
+  // is a key reachable?) are just asked of each brain in turn.
+  let brains = [];
 
   // Everything a robot could do from where it is standing. Each move
   // remembers the squares it passes THROUGH, because that is what it
@@ -656,24 +680,48 @@
     return out;
   }
 
-  function think() {
-    dist   = new Float64Array(NSTATES).fill(Infinity);
-    prevOf = new Int32Array(NSTATES).fill(-1);
-    viaOf  = new Array(NSTATES).fill(null);
-    const settled = new Uint8Array(NSTATES);
+  // The satnav, run from ONE spawn. Returns that spawn's whole result as
+  // its own object, so several spawns never tread on each other's answers.
+  //
+  // Uses a binary min-heap (a "priority queue") so that with several spawns
+  // re-planned on every tap it still stays instant. A heap always hands
+  // back the smallest thing in it in one quick step, instead of scanning
+  // every state to find the cheapest each time.
+  function thinkFrom(start) {
+    const dist   = new Float64Array(NSTATES).fill(Infinity);
+    const prevOf = new Int32Array(NSTATES).fill(-1);
+    const viaOf  = new Array(NSTATES).fill(null);
+    const done   = new Uint8Array(NSTATES);
 
-    dist[id(START.c, START.r, 0)] = 0;
-
-    // Always deal with the cheapest place-and-pockets we have not dealt
-    // with yet. Once it is settled, nothing can ever make it cheaper -
-    // that is the guarantee that makes the answer the real answer.
-    for (;;) {
-      let bs = -1, bv = Infinity;
-      for (let s = 0; s < NSTATES; s++) {
-        if (!settled[s] && dist[s] < bv) { bv = dist[s]; bs = s; }
+    const heap = [];   // state ids, kept ordered by dist[] via the sifts
+    function up(i) {
+      while (i > 0) {
+        const p = (i - 1) >> 1;
+        if (dist[heap[i]] < dist[heap[p]]) { const t = heap[i]; heap[i] = heap[p]; heap[p] = t; i = p; }
+        else break;
       }
-      if (bs < 0) break;
-      settled[bs] = 1;
+    }
+    function down(i) {
+      const n = heap.length;
+      for (;;) {
+        let m = i; const l = 2 * i + 1, r = l + 1;
+        if (l < n && dist[heap[l]] < dist[heap[m]]) m = l;
+        if (r < n && dist[heap[r]] < dist[heap[m]]) m = r;
+        if (m === i) break;
+        const t = heap[i]; heap[i] = heap[m]; heap[m] = t; i = m;
+      }
+    }
+
+    const s0 = id(start.c, start.r, 0);
+    dist[s0] = 0; heap.push(s0);
+
+    while (heap.length) {
+      const bs = heap[0];
+      const last = heap.pop();
+      if (heap.length) { heap[0] = last; down(0); }
+      if (done[bs]) continue;              // an old, stale copy - skip it
+      done[bs] = 1;
+      const bv = dist[bs];
 
       const keys = bs % KEYSETS;
       const cell = (bs - keys) / KEYSETS;
@@ -683,48 +731,63 @@
       for (let i = 0; i < moves.length; i++) {
         const m = moves[i];
         const ns = id(m.c, m.r, m.keys);
-        if (bv + m.cost < dist[ns]) {
-          dist[ns] = bv + m.cost;
-          prevOf[ns] = bs;
-          viaOf[ns] = m.via;
+        const nd = bv + m.cost;
+        if (nd < dist[ns]) {
+          dist[ns] = nd; prevOf[ns] = bs; viaOf[ns] = m.via;
+          heap.push(ns); up(heap.length - 1);
         }
       }
     }
 
-    bestCost = Infinity; bestEnd = -1;
+    let bestCost = Infinity, bestEnd = -1;
     for (let k = 0; k < KEYSETS; k++) {
       const s = id(FLAG.c, FLAG.r, k);
       if (dist[s] < bestCost) { bestCost = dist[s]; bestEnd = s; }
     }
+    return { start: start, dist: dist, prevOf: prevOf, viaOf: viaOf,
+             bestCost: bestCost, bestEnd: bestEnd };
   }
 
-  function canGetThrough() { return bestCost < Infinity; }
+  // Re-plan every spawn. Called whenever the tower changes.
+  function think() { brains = STARTS.map(thinkFrom); }
 
-  // Can a robot ever actually GET this key? Not "can it stand on that
-  // square" - it might swipe the key while flying past mid-jump. So the
-  // real question is whether there is any situation it can reach where
-  // the key is already in its pocket.
+  // Every stream must be able to reach the flag, or the tower's a dead end.
+  function canGetThrough() {
+    return brains.length > 0 && brains.every(function (b) { return b.bestCost < Infinity; });
+  }
+  // The longest of the streams' climbs - the number shown as "steps".
+  function longestSteps() {
+    let m = 0;
+    for (const b of brains) if (b.bestCost < Infinity && b.bestCost > m) m = b.bestCost;
+    return m;
+  }
+
+  // Can a robot from ANY spawn ever actually GET this key? (It might swipe
+  // it mid-jump, so we ask about reachable pockets, not squares.)
   function canFetch(colour) {
     const bit = 1 << colour;
-    for (let s = 0; s < NSTATES; s++) {
-      if (dist[s] < Infinity && ((s % KEYSETS) & bit)) return true;
-    }
+    for (const b of brains)
+      for (let s = 0; s < NSTATES; s++)
+        if (b.dist[s] < Infinity && ((s % KEYSETS) & bit)) return true;
     return false;
   }
 
-  function routeCells() {
-    if (bestEnd < 0) return [];
+  // Reconstruct the cheapest route for one spawn (by its index in STARTS).
+  function routeCellsFor(i) {
+    const b = brains[i];
+    if (!b || b.bestEnd < 0) return [];
     const chunks = [];
-    let s = bestEnd;
-    while (s >= 0 && prevOf[s] >= 0) {
-      chunks.push(viaOf[s]);
-      s = prevOf[s];
-    }
+    let s = b.bestEnd;
+    while (s >= 0 && b.prevOf[s] >= 0) { chunks.push(b.viaOf[s]); s = b.prevOf[s]; }
     chunks.reverse();
-    const out = [{ c: START.c, r: START.r }];
-    for (let i = 0; i < chunks.length; i++) {
-      for (let j = 0; j < chunks[i].length; j++) out.push(chunks[i][j]);
-    }
+    const out = [{ c: b.start.c, r: b.start.r }];
+    for (let x = 0; x < chunks.length; x++)
+      for (let j = 0; j < chunks[x].length; j++) out.push(chunks[x][j]);
+    return out;
+  }
+  function allRoutes() {
+    const out = [];
+    for (let i = 0; i < brains.length; i++) out.push(routeCellsFor(i));
     return out;
   }
 
@@ -794,27 +857,30 @@
     think();
     if (!canGetThrough()) { say('they cannot get up there at all'); return; }
 
-    route = routeCells();
+    // One route per spawn. Every robot carries its OWN route, so each stream
+    // takes its own cheapest way up - and you get to make them cross.
+    const routes = allRoutes();
     bots = [];
+    const total = waveSize();
+    const n = STARTS.length;
     const gap = waveGap();
-    for (let i = 0; i < waveSize(); i++) {
-      // In a big wave a dozen robots share one square, and drawn dead
-      // centre they would stack into what looks like a single robot -
-      // which throws away the whole point of there being four hundred.
-      // A small fixed shove each, worked out from its place in the
-      // queue, turns that stack into a visible crowd. Not random: the
-      // same robot must sit in the same spot every frame or the swarm
-      // shimmers.
-      bots.push({ at: 0, step: 0, c: START.c, r: START.r,
-                  x: START.c, y: START.r, keys: 0,
+    for (let i = 0; i < total; i++) {
+      const sp = i % n;                     // deal them out across the spawns
+      const st = STARTS[sp];
+      bots.push({ spawn: sp, route: routes[sp],
+                  at: 0, step: 0, c: st.c, r: st.r,
+                  x: st.c, y: st.r, keys: 0,
+                  // a small fixed shove each, so a shared square reads as a
+                  // crowd instead of one fat robot.
                   jx: (((i * 7) % 9) - 4) * 0.075,
                   jy: (((i * 5) % 7) - 3) * 0.055,
-                  alive: true, done: false, wait: i * gap, face: 1 });
+                  alive: true, done: false, wait: Math.floor(i / n) * gap, face: 1 });
     }
     scrap = [];
     clock = 0;
     state = 'run';
-    say('here they come - ' + waveSize() + ' of them');
+    say(n > 1 ? 'here they come - ' + total + ' from ' + n + ' ways in'
+              : 'here they come - ' + total + ' of them');
   }
 
   function burst(x, y) {
@@ -842,18 +908,19 @@
     const slow = costOf(here);
     b.step += dt * (4.2 / slow);
 
+    const rt = b.route;
     while (b.step >= 1) {
       b.step -= 1;
-      if (b.at >= route.length - 1) { b.done = true; return; }
+      if (b.at >= rt.length - 1) { b.done = true; return; }
       b.at++;
-      const n = route[b.at];
+      const n = rt[b.at];
       if (n.c !== b.c) b.face = n.c > b.c ? 1 : -1;
       b.c = n.c; b.r = n.r;
       b.keys |= keyBitAt(n.c, n.r);
     }
 
-    const a = route[b.at];
-    const nx = route[Math.min(b.at + 1, route.length - 1)];
+    const a = rt[b.at];
+    const nx = rt[Math.min(b.at + 1, rt.length - 1)];
     b.x = a.c + (nx.c - a.c) * b.step;
     b.y = a.r + (nx.r - a.r) * b.step;
   }
@@ -1135,15 +1202,18 @@
       }
     }
 
-    // ---- THE ROUTE ---------------------------------------------------
-    // Drawn WHILE you build, so every block shows you what it was worth
-    // the instant you put it down.
-    const path = state === 'build' ? routeCells() : route;
-    if (path.length > 1) {
-      ctx.strokeStyle = state === 'build' ? 'rgba(255,215,106,0.7)'
-                                          : 'rgba(255,215,106,0.28)';
-      ctx.lineWidth = Math.max(2, b.s * 0.11);
-      ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    // ---- THE ROUTES --------------------------------------------------
+    // One line per spawn, drawn WHILE you build so every block shows what
+    // it was worth the instant you put it down. Where they overlap you can
+    // see the streams converge - which is exactly where a saw earns most.
+    const paths = allRoutes();
+    ctx.lineWidth = Math.max(2, b.s * 0.11);
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    ctx.strokeStyle = state === 'build' ? 'rgba(255,215,106,0.7)'
+                                        : 'rgba(255,215,106,0.28)';
+    for (let p = 0; p < paths.length; p++) {
+      const path = paths[p];
+      if (path.length < 2) continue;
       ctx.beginPath();
       for (let i = 0; i < path.length; i++) {
         const px = b.x + (path[i].c + 0.5) * b.s;
@@ -1153,11 +1223,14 @@
       ctx.stroke();
     }
 
-    // ---- START AND FLAG ----------------------------------------------
-    const sx = b.x + START.c * b.s, sy = b.y + START.r * b.s;
+    // ---- STARTS AND FLAG ---------------------------------------------
+    // A marked square at each spawn - that's where a stream comes in.
     ctx.strokeStyle = 'rgba(255,255,255,0.25)';
     ctx.lineWidth = 2;
-    ctx.strokeRect(sx + 3, sy + 3, b.s - 6, b.s - 6);
+    for (let i = 0; i < STARTS.length; i++) {
+      const sx = b.x + STARTS[i].c * b.s, sy = b.y + STARTS[i].r * b.s;
+      ctx.strokeRect(sx + 3, sy + 3, b.s - 6, b.s - 6);
+    }
 
     const fx = b.x + FLAG.c * b.s, fy = b.y + FLAG.r * b.s;
     ctx.strokeStyle = '#ffd76a';
@@ -1226,8 +1299,10 @@
   function drawWave() {
     const bd = board();
     if (state === 'build') {
-      // One waiting robot, so the start square never looks empty.
-      drawRobot({ x: START.c, y: START.r, step: 0, keys: 0, done: false }, bd);
+      // A waiting robot on every spawn square, so each one shows where a
+      // stream will come from.
+      for (let i = 0; i < STARTS.length; i++)
+        drawRobot({ x: STARTS[i].c, y: STARTS[i].r, step: 0, keys: 0, done: false }, bd);
     } else {
       for (let i = 0; i < bots.length; i++) {
         const b = bots[i];
@@ -1368,7 +1443,7 @@
     ctx.font = 'bold ' + Math.min(W * 0.034, 26) + 'px system-ui, sans-serif';
     if (state === 'build') {
       ctx.fillStyle = canGetThrough() ? '#8fe07a' : '#e05a4a';
-      ctx.fillText(canGetThrough() ? bestCost + ' steps' : 'NO WAY UP', W - 20, line1);
+      ctx.fillText(canGetThrough() ? longestSteps() + ' steps' : 'NO WAY UP', W - 20, line1);
       ctx.font = Math.min(W * 0.022, 14) + 'px system-ui, sans-serif';
       ctx.fillStyle = '#6b7a90';
       ctx.fillText(canGetThrough() ? 'a longer climb is more places to put a saw'
@@ -1548,7 +1623,7 @@
   function place(c, r) {
     if (state !== 'build') return;
     if (!inside(c, r)) return;
-    if (c === START.c && r === START.r) { say('that is where they come in'); return; }
+    if (STARTS.some(function (s) { return s.c === c && s.r === r; })) { say('that is where they come in'); return; }
     if (c === FLAG.c && r === FLAG.r)   { say('that is the flag'); return; }
     if (grid[r][c] === PLAT) { say('that ledge is bolted down'); return; }
 
