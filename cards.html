@@ -416,24 +416,14 @@
     const m = st.attacker;
     m.wobble = 0.35;
     if (st.target) {
-      // SPARE DAMAGE GOES STRAIGHT THROUGH. Hit a 1-life goblin with a
-      // 6-hit dragon and the other five carry on into the player.
-      //
-      // This exists because of a measurement, not a hunch. With their
-      // line always three deep, every attack of yours always met a
-      // monster, so their hearts could never be touched: 60 games, 60
-      // losses, and their hearts never moved once. Overkill is what
-      // makes a full line beatable - you have to out-hit it.
-      const spare = m.hit - st.target.life;
+      // A monster in the way takes the WHOLE hit, and nothing carries on
+      // past it. Spare damage is simply lost. The king is only ever
+      // touched by something that walked into an empty space.
       st.target.life -= m.hit;
       st.target.justHit = 0.5;
       if (st.target.life <= 0) {
         st.foe.board[st.slot] = null;
         st.died = true;
-        if (spare > 0) {
-          st.foe.hearts -= spare; st.spare = spare;
-          if (st.foe === you) youHurt = 1; else themHurt = 1;
-        }
       }
     } else {
       // Nobody in the way, so it walks past and hits the king himself.
@@ -526,12 +516,9 @@
       // the first version docked points for "might die to the answer"
       // even when there was going to BE no answer.
       if (card.hit >= facing.life) {
+        // Killing is still good, but there is no prize for overkill now
+        // - anything above what it takes to finish the job is wasted.
         score += 8 + facing.hit * 2;
-        // Whatever is left over after the kill goes through to the
-        // hearts, so a big overkill is worth reaching for.
-        const spare = card.hit - facing.life;
-        score += spare * 3;
-        if (spare >= you.hearts) score += 100;
       } else {
         score += card.hit;
         if (facing.hit >= card.life) score -= 4;
@@ -550,10 +537,25 @@
     return seen;
   }
 
-  // Their line is ALWAYS three deep. Any space that empties gets filled
-  // again before they attack - from their hand if they have something
-  // allowed, and otherwise a fresh monster walks on.
-  function refillThem() {
+  // They march on three deep, and top up ONE space per turn - so if you
+  // clear two in a single go, one of the holes is still there when you
+  // attack again, and that is how you reach the king. Kill one and they
+  // patch it straight back.
+  //
+  // Their line and the king rule pull against each other: with their
+  // line NEVER empty, and the king only reachable through an empty
+  // space, their king could not be scratched. Sixty games, sixty
+  // losses, twenty life untouched every time. This is the compromise
+  // Max picked.
+  // TWO, not one, and that is a measured number rather than a guess.
+  // Sixty games each way with the same player:
+  //     they patch 3 -> you win 0   (nothing can ever reach their king)
+  //     they patch 1 -> you win 60  (over in under six turns)
+  //     they patch 2 -> you win 36, they win 24, about twenty turns
+  // One is the rule Max picked; two is the amount that makes it a game.
+  const REFILL_PER_TURN = 2;
+
+  function refillThem(limit) {
     // If YOU have since played a copy of something they already had,
     // theirs walks off and a different one takes its place. Otherwise
     // "never the same as yours" would only be true at the moment they
@@ -569,8 +571,10 @@
     const banned = mine.slice();
     for (const m of them.board) if (m) banned.push(m.i);
 
+    let placed = 0;
     for (let s = 0; s < SLOTS; s++) {
       if (them.board[s]) continue;
+      if (limit !== undefined && placed >= limit) break;
 
       let pick = -1, bestScore = -Infinity;
       for (let c = 0; c < them.hand.length; c++) {
@@ -590,12 +594,13 @@
         them.board[s] = newMonster(idx);
       }
       banned.push(them.board[s].i);
+      placed++;
     }
   }
 
   function theirTurn() {
     drawFrom(them);
-    refillThem();
+    refillThem(REFILL_PER_TURN);
     startCut(planAttacks(them, you, false), 'you');
   }
 
@@ -1269,11 +1274,6 @@
         ctx.font = 'bold ' + Math.min(W * 0.06, 32) + 'px system-ui, sans-serif';
         ctx.fillStyle = '#ff8a7a';
         ctx.fillText('SMASHED!', W / 2, cy + ch + 44);
-        if (st.spare > 0) {
-          ctx.font = 'bold ' + Math.min(W * 0.045, 24) + 'px system-ui, sans-serif';
-          ctx.fillStyle = '#ffd76a';
-          ctx.fillText(st.spare + ' STRAIGHT THROUGH!', W / 2, cy + ch + 78);
-        }
       }
       ctx.globalAlpha = 1;
     }
