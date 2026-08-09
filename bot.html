@@ -35,25 +35,35 @@
   /* ---- CORNER NAV PILLS -------------------------------------------------
      The same rounded, blurred treatment the other games use, so tapping
      out to the arcade (or resetting) looks like part of the same machine.
-     They sit in their own band across the very top; the tower's own HUD
-     (coins, steps) is drawn just below them so nothing overlaps. */
-  #back, #reset {
-    position: fixed; top: 8px; z-index: 20;
+     Arcade sits top-left; the two "start again" buttons - Clear (wipe your
+     build, keep your progress) and Start over (a brand-new game) - share a
+     little cluster top-right. The tower's own stat bar is drawn just below
+     them so nothing overlaps. */
+  .navpill {
     color: #ffe9c4;
     background: rgba(20, 26, 38, 0.62);
     border: 1px solid rgba(255, 215, 106, 0.35);
     font-family: inherit; font-size: 13px; font-weight: 600; letter-spacing: 0.3px;
     padding: 7px 13px; border-radius: 999px;
-    text-decoration: none; cursor: pointer;
+    text-decoration: none; cursor: pointer; white-space: nowrap;
     -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px);
     transition: transform 0.12s, border-color 0.12s, background 0.12s;
   }
-  #back  { left: 10px; }
-  #reset { right: 10px; }
-  #back:hover, #back:active, #reset:hover, #reset:active {
+  #back    { position: fixed; top: 8px; left: 10px; z-index: 20; }
+  #navright {
+    position: fixed; top: 8px; right: 10px; z-index: 20;
+    display: flex; gap: 8px;
+  }
+  .navpill:hover, .navpill:active {
     transform: scale(1.05);
     border-color: rgba(255, 215, 106, 0.85);
     background: rgba(30, 38, 54, 0.78);
+  }
+  /* Start over throws the whole game away, so it wears a warning red. */
+  .navpill.danger { color: #ffd2cc; border-color: rgba(224, 90, 74, 0.5); }
+  .navpill.danger:hover, .navpill.danger:active {
+    border-color: rgba(224, 90, 74, 0.95);
+    background: rgba(60, 30, 30, 0.8);
   }
 
   /* ---- THE RESET CONFIRMATION ------------------------------------------
@@ -139,14 +149,19 @@
 <canvas id="screen"></canvas>
 <div id="hud">TAP to build &nbsp;&nbsp; stop the robots reaching the flag at the TOP</div>
 
-<a id="back" href="index.html">&larr; Arcade</a>
-<button id="reset">&#8635; Reset</button>
+<a id="back" class="navpill" href="index.html">&larr; Arcade</a>
+<div id="navright">
+  <button id="reset" class="navpill">&#8635; Clear</button>
+  <button id="startover" class="navpill danger">&#9851; Start over</button>
+</div>
 
-<!-- The reset asks first, because it throws the whole tower away. -->
+<!-- One confirm card, reused for both Clear and Start over. The title,
+     wording and button label are filled in when it's shown, so each one
+     asks its own clear question before anything is thrown away. -->
 <div id="resetModal">
   <div class="card">
-    <h3>CLEAR TOWER?</h3>
-    <p>This takes away everything you've built on this map and hands the coins back, so you can plan your defence again. Your level, wave, coins and power all stay.</p>
+    <h3 id="confirmTitle">CLEAR TOWER?</h3>
+    <p id="confirmBody">This takes away everything you've built on this map and hands the coins back, so you can plan your defence again. Your level, wave, coins and power all stay.</p>
     <div class="row">
       <button id="resetCancel" class="btn cancel">Keep going</button>
       <button id="resetYes" class="btn danger">Clear it</button>
@@ -512,6 +527,17 @@
     state = 'build';
     think();
     say('tower cleared - your level, coins and power are safe');
+  }
+
+  // STOP THE CURRENT ROBOT RUSH. Just the robots are cleared away - the tower
+  // you built stays exactly as it is - and you drop back into build mode.
+  // This is what the big button does while they're climbing ("RESET"), so a
+  // wave going badly is something you can call off, tweak, and send again.
+  function resetRobots() {
+    bots = []; route = []; scrap = [];
+    banner = ''; bannerT = 0;
+    state = 'build';
+    say('robots called back - change your tower, then send them again');
   }
 
   // Move on to the next wave: pay out the coins, bump the round, and drop
@@ -1018,11 +1044,9 @@
   function wide()   { return W > H * 1.35; }
   function panelW() { return wide() ? Math.min(W * 0.36, 320) : 0; }
   // The header is two tidy tiers, the same in portrait and landscape:
-  //   row 1  - the Arcade / Reset nav pills, with the LEVEL badge in the
-  //            middle (and the key prompt when hiding a key)
-  //   row 2  - a stat bar: coins | POWER METER | steps. Level lives up in
-  //            row 1, which leaves the middle cell free for a proper power
-  //            meter you can read at a glance.
+  //   row 1  - the nav buttons: Arcade on the left, Clear + Start over on
+  //            the right (and the key prompt when hiding a key)
+  //   row 2  - a stat bar: coins | POWER METER | level | steps
   // topBar() is where the board begins, just under both. Keeping it this
   // compact also hands the tower back a good chunk of height.
   const NAV_H  = 40;     // the nav pill row
@@ -1055,7 +1079,7 @@
 
   // The stat bar spans the width (minus the side panel in landscape) and is
   // split into three equal cells: coins | power | steps.
-  const STAT_CELLS = 3;
+  const STAT_CELLS = 4;
   function statBarRect() {
     return { x: 8, y: NAV_H, w: (W - panelW()) - 16, h: STAT_H - 4 };
   }
@@ -1384,23 +1408,6 @@
     return -1;
   }
 
-  // THE LEVEL BADGE. A little pill in the middle of the top nav row, in the
-  // same rounded style as the Arcade / Reset buttons - so which level and
-  // wave you're on sits up top, away from the numbers you act on.
-  function drawLevelPill() {
-    const txt = 'LEVEL ' + level + '  ·  wave ' + round;
-    ctx.font = 'bold ' + Math.min(W * 0.032, 14) + 'px system-ui, sans-serif';
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    const pw = ctx.measureText(txt).width + 26, ph = 28;
-    const cx = (W - panelW()) / 2, px = cx - pw / 2, py = 7;
-    rrect(px, py, pw, ph, ph / 2);
-    ctx.fillStyle = 'rgba(20, 26, 38, 0.62)'; ctx.fill();
-    ctx.strokeStyle = 'rgba(255, 215, 106, 0.30)'; ctx.lineWidth = 1; ctx.stroke();
-    ctx.fillStyle = '#ffe9c4';
-    ctx.fillText(txt, cx, py + ph / 2 + 1);
-    ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left';
-  }
-
   // The power meter itself: a row of little cells, one per unit of supply.
   // Filled cells are power in use, empty cells are power to spare - so "two
   // of three saws" is a picture, not a sum. They go red when the supply is
@@ -1419,7 +1426,7 @@
     }
   }
 
-  // THE STAT BAR - the three numbers you act on: coins | power | steps.
+  // THE STAT BAR - the numbers you act on: coins | power | level | steps.
   // Each cell is a small uppercase label with its readout under it. The
   // POWER cell is also a button (tap it to grow the supply) and shows the
   // price of the next unit; it turns red when the supply is full.
@@ -1472,8 +1479,13 @@
     ctx.fillStyle = canUp ? '#8fe07a' : '#6b7a90';
     ctx.fillText('+' + powerUpCost(), c.x + c.w - 7, labY);
 
-    // 2 - STEPS while building / STOPPED while they climb
+    // 2 - LEVEL and wave
     c = statCell(2);
+    label(c.x + c.w / 2, 'LEVEL');
+    value(c.x + c.w / 2, level + ' · w' + round, '#e6ecf5');
+
+    // 3 - STEPS while building / STOPPED while they climb
+    c = statCell(3);
     if (state === 'build') {
       const ok = canGetThrough();
       label(c.x + c.w / 2, 'STEPS');
@@ -1520,10 +1532,9 @@
   }
 
   function drawHud() {
-    // Two tiers up top: the LEVEL badge in the nav row, the stat bar below.
-    // When you're hiding a door's key, its prompt takes over the nav band
-    // (so we skip the level badge then to keep that row clear).
-    if (holdingKey < 0) drawLevelPill();
+    // Two tiers up top: the nav buttons (Arcade / Clear / Start over) in the
+    // top row, then the stat bar with all your numbers. When you're hiding a
+    // door's key, its prompt takes over the nav band.
     drawStatBar();
     if (state === 'build' && holdingKey >= 0) drawKeyPrompt();
 
@@ -1579,18 +1590,33 @@
     }
 
     // ---- GO -----------------------------------------------------------
+    // Its job changes with the game: SEND THEM to start a wave, RESET to
+    // call the robots back mid-climb (build stays), NEXT WAVE when one ends.
     const g = goBox();
-    const ready = state === 'build' && canGetThrough() && holdingKey < 0;
-    ctx.fillStyle = ready ? 'rgba(143,224,122,0.2)' : 'rgba(0,0,0,0.35)';
+    let goFill, goStroke, goText, goLabel;
+    if (state === 'run') {
+      // A live button now, not a greyed-out label: tap it to stop the rush.
+      goFill = 'rgba(224,90,74,0.18)'; goStroke = '#e05a4a'; goText = '#e05a4a';
+      goLabel = 'RESET';
+    } else if (state === 'done') {
+      goFill = 'rgba(143,224,122,0.2)'; goStroke = '#8fe07a'; goText = '#8fe07a';
+      goLabel = 'NEXT WAVE';
+    } else {
+      const ready = canGetThrough() && holdingKey < 0;
+      goFill = ready ? 'rgba(143,224,122,0.2)' : 'rgba(0,0,0,0.35)';
+      goStroke = ready ? '#8fe07a' : 'rgba(255,255,255,0.2)';
+      goText = ready ? '#8fe07a' : '#6b7a90';
+      goLabel = 'SEND THEM';
+    }
+    ctx.fillStyle = goFill;
     ctx.fillRect(g.x, g.y, g.w, g.h);
     ctx.lineWidth = 3;
-    ctx.strokeStyle = ready ? '#8fe07a' : 'rgba(255,255,255,0.2)';
+    ctx.strokeStyle = goStroke;
     ctx.strokeRect(g.x, g.y, g.w, g.h);
     ctx.textAlign = 'center';
     ctx.font = 'bold ' + Math.min(W * 0.028, 21) + 'px system-ui, sans-serif';
-    ctx.fillStyle = ready ? '#8fe07a' : '#6b7a90';
-    ctx.fillText(state === 'build' ? 'SEND THEM' : state === 'run' ? 'CLIMBING' : 'NEXT WAVE',
-                 g.x + g.w / 2, g.y + g.h * 0.63);
+    ctx.fillStyle = goText;
+    ctx.fillText(goLabel, g.x + g.w / 2, g.y + g.h * 0.63);
 
     if (wide() && board().s < 26) {
       ctx.textAlign = 'center';
@@ -1826,6 +1852,9 @@
       const g = goBox();
       if (mx >= g.x && mx <= g.x + g.w && my >= g.y && my <= g.y + g.h) {
         if (state === 'build') go();
+        // While they're climbing, the button is RESET - call the robots
+        // back so you can change the tower and try the wave again.
+        else if (state === 'run') resetRobots();
         // In 'done', the summary card is the way on. Tapping the button
         // just brings it back if you'd closed it for a look at the tower.
         else if (state === 'done') showWaveComplete();
@@ -1876,20 +1905,43 @@
 //  THE NAV BUTTONS  (the Arcade link is just an <a>; Reset asks first)
 // -------------------------------------------------------------------
 
+  // One confirm card, two uses. showConfirm fills in the words and remembers
+  // what to DO if you say yes, so Clear and Start over each get their own
+  // question without needing a second modal.
   const resetModal = document.getElementById('resetModal');
-  function showReset() { resetModal.style.display = 'flex'; }
-  function hideReset() { resetModal.style.display = 'none'; }
+  let pendingYes = null;
+  function showConfirm(title, body, yesLabel, onYes) {
+    document.getElementById('confirmTitle').textContent = title;
+    document.getElementById('confirmBody').textContent = body;
+    document.getElementById('resetYes').textContent = yesLabel;
+    pendingYes = onYes;
+    resetModal.style.display = 'flex';
+  }
+  function hideConfirm() { resetModal.style.display = 'none'; pendingYes = null; }
 
-  document.getElementById('reset').addEventListener('click', showReset);
-  document.getElementById('resetCancel').addEventListener('click', hideReset);
+  // CLEAR wipes just this map's build (and refunds it); START OVER throws the
+  // whole game away and begins again at Level 1.
+  document.getElementById('reset').addEventListener('click', function () {
+    showConfirm('CLEAR TOWER?',
+      'This takes away everything you\'ve built on this map and hands the coins back, so you can plan your defence again. Your level, wave, coins and power all stay.',
+      'Clear it', resetMap);
+  });
+  document.getElementById('startover').addEventListener('click', function () {
+    showConfirm('START OVER?',
+      'This ends this game and begins a brand-new one from Level 1. Your level, coins, wave and power all go right back to the start.',
+      'Start over', resetGame);
+  });
+
+  document.getElementById('resetCancel').addEventListener('click', hideConfirm);
   document.getElementById('resetYes').addEventListener('click', function () {
-    hideReset();
-    resetMap();
+    const go = pendingYes;      // grab it before hideConfirm clears it
+    hideConfirm();
+    if (go) go();
   });
   // Tapping the dark area around the card, or pressing Escape, both mean
   // "no, never mind" - the same as Keep going.
   resetModal.addEventListener('click', function (e) {
-    if (e.target === resetModal) hideReset();
+    if (e.target === resetModal) hideConfirm();
   });
 
   // ---- the wave-complete card ----
@@ -1903,7 +1955,7 @@
   document.getElementById('wavePeek').addEventListener('click', hideWaveComplete);
 
   window.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape') { hideReset(); hideWaveComplete(); }
+    if (e.key === 'Escape') { hideConfirm(); hideWaveComplete(); }
   });
 
 </script>
