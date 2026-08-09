@@ -88,6 +88,50 @@
   #resetModal .btn:active { transform: scale(0.97); }
   #resetModal .cancel { background: #232c3b; color: #e6ecf5; border-color: rgba(255,255,255,0.14); }
   #resetModal .danger { background: #e05a4a; color: #fff; }
+
+  /* ---- THE WAVE-COMPLETE SUMMARY ---------------------------------------
+     Instead of a plain NEXT WAVE button, finishing a wave brings up a card
+     that tells you how you did, what you built, what you earned, and what's
+     coming - then lets you send the next lot straight from it. */
+  #waveModal {
+    position: fixed; inset: 0; z-index: 30;
+    display: none;                 /* flipped to flex when a wave ends */
+    align-items: center; justify-content: center;
+    background: rgba(6, 9, 14, 0.72);
+    -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px);
+  }
+  #waveModal .card {
+    width: min(360px, 88vw);
+    background: #161d29;
+    border: 1px solid rgba(255, 215, 106, 0.32);
+    border-radius: 16px;
+    padding: 22px 22px 20px;
+    box-shadow: 0 12px 44px rgba(0, 0, 0, 0.55);
+  }
+  #waveModal h3 { margin: 0; font-size: 15px; color: #9fb0c6; letter-spacing: 2px; text-align: center; }
+  #waveModal .big { text-align: center; font-size: 34px; font-weight: 800; margin: 8px 0 2px; }
+  #waveModal .sub { text-align: center; font-size: 13px; color: #9fb0c6; margin: 0 0 16px; }
+  #waveModal .rows { display: flex; flex-direction: column; gap: 10px; margin-bottom: 18px; }
+  #waveModal .r { display: flex; align-items: baseline; gap: 10px; font-size: 14px; }
+  #waveModal .r .lab {
+    color: #6b7a90; font-size: 10px; text-transform: uppercase; letter-spacing: 1px;
+    width: 78px; flex: none; text-align: right;
+  }
+  #waveModal .r .val { color: #e6ecf5; }
+  #waveModal .r .val.gold { color: #ffd76a; font-weight: 700; }
+  #waveModal .go {
+    width: 100%; padding: 15px; border-radius: 12px;
+    font-family: inherit; font-size: 16px; font-weight: 800; letter-spacing: 0.5px;
+    cursor: pointer; border: none; background: #8fe07a; color: #10141c;
+    transition: transform 0.1s, background 0.12s;
+  }
+  #waveModal .go:hover  { background: #a6ea94; }
+  #waveModal .go:active { transform: scale(0.98); }
+  #waveModal .peek {
+    display: block; margin: 12px auto 0; background: none; border: none;
+    color: #6b7a90; font-family: inherit; font-size: 12px; cursor: pointer;
+    text-decoration: underline;
+  }
 </style>
 </head>
 <body>
@@ -107,6 +151,24 @@
       <button id="resetCancel" class="btn cancel">Keep going</button>
       <button id="resetYes" class="btn danger">Reset</button>
     </div>
+  </div>
+</div>
+
+<!-- Pops up when a wave finishes: how you did, what you built, what you
+     earned, and what's next - with the button to send the next wave. -->
+<div id="waveModal">
+  <div class="card">
+    <h3 id="waveTitle">WAVE CLEARED</h3>
+    <div class="big" id="waveBig">0 / 0</div>
+    <div class="sub" id="waveSub">robots stopped</div>
+    <div class="rows">
+      <div class="r"><span class="lab">Built</span><span class="val" id="waveBuilt">-</span></div>
+      <div class="r"><span class="lab">Got past</span><span class="val" id="wavePast">-</span></div>
+      <div class="r"><span class="lab">Earned</span><span class="val gold" id="waveEarn">-</span></div>
+      <div class="r"><span class="lab">Next wave</span><span class="val" id="waveNext">-</span></div>
+    </div>
+    <button id="waveGo" class="go">Send the next wave &rarr;</button>
+    <button id="wavePeek" class="peek">let me look at the tower first</button>
   </div>
 </div>
 
@@ -381,6 +443,74 @@
     newTower();
     say('fresh tower - stop them reaching the flag');
   }
+
+  // Move on to the next wave: pay out the coins, bump the round, and drop
+  // back into build mode with the same tower (you keep everything you put
+  // down - each wave you just add more).
+  function nextWave() {
+    round++;
+    coins += 12 + round * 2;        // more to spend every wave
+    state = 'build';
+    bots = []; route = [];
+    say('wave ' + round + ' - ' + waveSize() + ' of them this time');
+  }
+
+  // Count up everything you've built, so the summary can list it back.
+  function countBuilt() {
+    const n = { wall: 0, mud: 0, door: 0, saw: 0, smash: 0 };
+    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+      const g = grid[r][c];
+      if      (g === WALL)  n.wall++;
+      else if (g === MUD)   n.mud++;
+      else if (g === DOOR)  n.door++;
+      else if (g === SAW)   n.saw++;
+      else if (g === SMASH) n.smash++;
+    }
+    return n;
+  }
+
+  // Fill in and show the wave-complete card. Everything shown here matches
+  // exactly what nextWave() will actually do, so there are no surprises.
+  function showWaveComplete() {
+    const total = bots.length;
+    const s     = stopped();
+    const past  = gotThrough();
+    // nextWave() bumps the round BEFORE paying, so the payout uses round+1.
+    const earned   = 12 + (round + 1) * 2;
+    const nextSize = Math.min(WAVE_MAX, WAVE_MIN + round * WAVE_STEP);
+
+    document.getElementById('waveTitle').textContent = 'WAVE ' + round + ' CLEARED';
+
+    const bigEl = document.getElementById('waveBig');
+    bigEl.textContent = s + ' / ' + total;
+    bigEl.style.color = s === total ? '#8fe07a' : s === 0 ? '#e05a4a' : '#ffd76a';
+    document.getElementById('waveSub').textContent =
+      s === total ? 'PERFECT - not one got through!' :
+      s === 0      ? 'they all walked straight past' :
+                     'robots stopped';
+
+    // "what you built" - list the things, skipping any you've none of.
+    const b = countBuilt();
+    const parts = [];
+    if (b.wall)  parts.push(b.wall  + (b.wall  > 1 ? ' walls'   : ' wall'));
+    if (b.mud)   parts.push(b.mud   + ' mud');
+    if (b.door)  parts.push(b.door  + (b.door  > 1 ? ' doors'   : ' door'));
+    if (b.saw)   parts.push(b.saw   + (b.saw   > 1 ? ' saws'    : ' saw'));
+    if (b.smash) parts.push(b.smash + (b.smash > 1 ? ' hammers' : ' hammer'));
+    document.getElementById('waveBuilt').textContent = parts.length ? parts.join('  ·  ') : 'nothing - brave!';
+
+    document.getElementById('wavePast').textContent =
+      past === 0 ? 'none - flawless' : past + ' of ' + total;
+
+    document.getElementById('waveEarn').textContent =
+      '+' + earned + ' coins  (you’ll have ' + (coins + earned) + ')';
+
+    const more = nextSize > total ? '   (' + (nextSize - total) + ' more)' : '';
+    document.getElementById('waveNext').textContent = nextSize + ' robots' + more;
+
+    document.getElementById('waveModal').style.display = 'flex';
+  }
+  function hideWaveComplete() { document.getElementById('waveModal').style.display = 'none'; }
 
 
 // -------------------------------------------------------------------
@@ -694,9 +824,7 @@
       const s = stopped();
       if (s > best) best = s;
       showBanner(s, bots.length);
-      say(s === bots.length ? 'NOT ONE OF THEM GOT THROUGH'
-        : s === 0           ? 'all ' + bots.length + ' walked straight past'
-        : 'you stopped ' + s + ' of ' + bots.length);
+      showWaveComplete();          // the summary card takes over from here
     }
   }
 
@@ -1293,13 +1421,9 @@
       const g = goBox();
       if (mx >= g.x && mx <= g.x + g.w && my >= g.y && my <= g.y + g.h) {
         if (state === 'build') go();
-        else if (state === 'done') {
-          round++;
-          coins += 12 + round * 2;        // more to spend every wave
-          state = 'build';
-          bots = []; route = [];
-          say('wave ' + round + ' - ' + waveSize() + ' of them this time');
-        }
+        // In 'done', the summary card is the way on. Tapping the button
+        // just brings it back if you'd closed it for a look at the tower.
+        else if (state === 'done') showWaveComplete();
         return;
       }
     }
@@ -1362,8 +1486,18 @@
   resetModal.addEventListener('click', function (e) {
     if (e.target === resetModal) hideReset();
   });
+
+  // ---- the wave-complete card ----
+  // "Send the next wave" advances; "let me look" closes it so you can study
+  // the tower (the on-canvas NEXT WAVE button brings it back).
+  document.getElementById('waveGo').addEventListener('click', function () {
+    hideWaveComplete();
+    nextWave();
+  });
+  document.getElementById('wavePeek').addEventListener('click', hideWaveComplete);
+
   window.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape') hideReset();
+    if (e.key === 'Escape') { hideReset(); hideWaveComplete(); }
   });
 
 </script>
