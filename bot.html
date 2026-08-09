@@ -1554,20 +1554,59 @@
     return -1;
   }
 
-  // The power meter itself: a row of little cells, one per unit of supply.
-  // Filled cells are power in use, empty cells are power to spare - so "two
-  // of three saws" is a picture, not a sum. They go red when the supply is
-  // full, which is your cue that a new saw needs a bigger supply first.
+  // ---- LITTLE PICTOGRAM ICONS ---------------------------------------
+  // So the header and the buttons can speak in pictures, not just words: a
+  // gold coin for money, a robot head for the robots, a lightning bolt for
+  // power. Each is drawn around a centre point at whatever size we ask.
+  function drawCoin(cx, cy, r) {
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fillStyle = '#d99f28'; ctx.fill();                  // dark-gold rim
+    ctx.beginPath(); ctx.arc(cx, cy, r * 0.74, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffd76a'; ctx.fill();                  // bright face
+    ctx.beginPath();                                        // a shine streak
+    ctx.moveTo(cx - r * 0.32, cy - r * 0.46);
+    ctx.lineTo(cx + r * 0.02, cy - r * 0.46);
+    ctx.lineTo(cx - r * 0.36, cy + r * 0.12);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(255,255,255,0.6)'; ctx.fill();
+  }
+  function drawRobotHead(cx, cy, s) {
+    ctx.strokeStyle = '#9aa6ba'; ctx.lineWidth = Math.max(1, s * 0.18);
+    ctx.beginPath(); ctx.moveTo(cx, cy - s * 0.9); ctx.lineTo(cx, cy - s * 1.35); ctx.stroke();
+    ctx.fillStyle = '#ffd76a'; ctx.beginPath(); ctx.arc(cx, cy - s * 1.45, s * 0.22, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#dbe4f2'; rrect(cx - s, cy - s * 0.85, s * 2, s * 1.7, s * 0.35); ctx.fill();
+    ctx.fillStyle = '#10141c';
+    ctx.fillRect(cx - s * 0.55, cy - s * 0.3, s * 0.42, s * 0.42);
+    ctx.fillRect(cx + s * 0.13, cy - s * 0.3, s * 0.42, s * 0.42);
+  }
+  function drawBolt(cx, cy, h, color) {
+    const w = h * 0.55;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(cx + w * 0.12, cy - h * 0.5);
+    ctx.lineTo(cx - w * 0.5,  cy + h * 0.08);
+    ctx.lineTo(cx - w * 0.06, cy + h * 0.08);
+    ctx.lineTo(cx - w * 0.12, cy + h * 0.5);
+    ctx.lineTo(cx + w * 0.5,  cy - h * 0.08);
+    ctx.lineTo(cx + w * 0.06, cy - h * 0.08);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // The power meter: a row of little lightning bolts, one per unit of supply.
+  // Bright bolts are power in use, faint ones are power to spare - so "two of
+  // three saws" is a picture, not a sum. They go red when the supply is full,
+  // your cue that a new saw needs a bigger supply first.
   function drawPowerPips(cell, used, max, hot) {
-    const y = cell.y + cell.h - 16, ph = 10, gap = 3;
-    let pw = 12;
+    const gap = 3;
+    let pw = 9;
     const maxW = cell.w - 18;
     if (max * pw + (max - 1) * gap > maxW) pw = (maxW - (max - 1) * gap) / max;
-    let x = cell.x + (cell.w - (max * pw + (max - 1) * gap)) / 2;
+    const bh = Math.min(13, pw / 0.55);
+    const cy = cell.y + cell.h - 11;
+    let x = cell.x + (cell.w - (max * pw + (max - 1) * gap)) / 2 + pw / 2;
     for (let i = 0; i < max; i++) {
-      rrect(x, y, pw, ph, 2);
-      ctx.fillStyle = i < used ? (hot ? '#e05a4a' : '#ffd76a') : 'rgba(255,255,255,0.12)';
-      ctx.fill();
+      drawBolt(x, cy, bh, i < used ? (hot ? '#e05a4a' : '#ffd76a') : 'rgba(255,255,255,0.16)');
       x += pw + gap;
     }
   }
@@ -1590,7 +1629,7 @@
       ctx.beginPath(); ctx.moveTo(x, b.y + 8); ctx.lineTo(x, b.y + b.h - 8); ctx.stroke();
     }
 
-    const labY = b.y + 15, valY = b.y + b.h - 9;
+    const labY = b.y + 15, valY = b.y + b.h - 9, icoY = b.y + 9;
     const valFont = 'bold ' + Math.min(W * 0.05, 19) + 'px system-ui, sans-serif';
     function label(cx, s) {
       ctx.textAlign = 'center'; ctx.font = '9px system-ui, sans-serif';
@@ -1601,10 +1640,10 @@
       ctx.fillStyle = col; ctx.fillText(s, cx, valY);
     }
 
-    // 0 - COINS (flashes red when you can't afford a thing)
+    // 0 - COINS: a coin icon over the count (flashes red if you can't afford)
     let c = statCell(0);
     const coinRed = coinFlash > 0 && Math.sin(coinFlash * 30) > 0;
-    label(c.x + c.w / 2, 'COINS');
+    drawCoin(c.x + c.w / 2, icoY, 6.5);
     value(c.x + c.w / 2, '' + coins, coinRed ? '#e05a4a' : '#ffd76a');
 
     // 1 - POWER: the meter, tappable, with the price of the next unit.
@@ -1619,11 +1658,14 @@
       ctx.strokeStyle = pflash ? '#e05a4a' : 'rgba(224,90,74,0.6)';
       ctx.stroke();
     }
-    label(c.x + c.w / 2, 'POWER');
+    drawBolt(c.x + c.w / 2, icoY, 15, hot ? '#e05a4a' : '#ffd76a');
     drawPowerPips(c, used, powerMax, hot);
+    // the price of the next unit, with a little bolt so it reads as "power".
+    const costTxt = '+' + powerUpCost(), costCol = canUp ? '#8fe07a' : '#6b7a90';
     ctx.textAlign = 'right'; ctx.font = 'bold 9px system-ui, sans-serif';
-    ctx.fillStyle = canUp ? '#8fe07a' : '#6b7a90';
-    ctx.fillText('+' + powerUpCost(), c.x + c.w - 7, labY);
+    ctx.fillStyle = costCol;
+    ctx.fillText(costTxt, c.x + c.w - 7, labY);
+    drawBolt(c.x + c.w - 7 - ctx.measureText(costTxt).width - 5, labY - 4, 9, costCol);
 
     // 2 - LEVEL and wave
     c = statCell(2);
@@ -1635,7 +1677,7 @@
     // it flips to how many you've STOPPED out of the whole wave.
     c = statCell(3);
     if (state === 'build') {
-      label(c.x + c.w / 2, 'ROBOTS');
+      drawRobotHead(c.x + c.w / 2, icoY + 2, 5.5);
       value(c.x + c.w / 2, '' + waveSize(), '#e8834a');
     } else {
       label(c.x + c.w / 2, 'STOPPED');
@@ -1727,7 +1769,13 @@
       ctx.textAlign = 'left';
       ctx.font = 'bold ' + Math.min(W * 0.021, 15) + 'px system-ui, sans-serif';
       ctx.fillStyle = can ? '#e6ecf5' : '#5a6678';
-      ctx.fillText(t.name + '  ' + t.price, bx.x + 38, bx.y + (roomy ? 24 : bx.h * 0.6));
+      const nameY = bx.y + (roomy ? 24 : bx.h * 0.6);
+      ctx.fillText(t.name, bx.x + 38, nameY);
+      // its price, shown with a coin icon so the number reads as money.
+      const coinX = bx.x + 38 + ctx.measureText(t.name).width + 13;
+      drawCoin(coinX, nameY - 5, 6);
+      ctx.fillStyle = can ? '#e6ecf5' : '#5a6678';
+      ctx.fillText('' + t.price, coinX + 9, nameY);
       if (roomy) {
         ctx.font = Math.min(W * 0.017, 12) + 'px system-ui, sans-serif';
         ctx.fillStyle = '#6b7a90';
