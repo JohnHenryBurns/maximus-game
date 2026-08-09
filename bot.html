@@ -35,10 +35,9 @@
   /* ---- CORNER NAV PILLS -------------------------------------------------
      The same rounded, blurred treatment the other games use, so tapping
      out to the arcade (or resetting) looks like part of the same machine.
-     Arcade sits top-left; the two "start again" buttons - Clear (wipe your
-     build, keep your progress) and Start over (a brand-new game) - share a
-     little cluster top-right. The tower's own stat bar is drawn just below
-     them so nothing overlaps. */
+     Arcade sits top-left, Reset top-right; the tower's own stat bar is drawn
+     just below them so nothing overlaps. Reset opens a little menu, so one
+     button covers both "clear this level" and "start a new game". */
   .navpill {
     color: #ffe9c4;
     background: rgba(20, 26, 38, 0.62);
@@ -49,21 +48,12 @@
     -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px);
     transition: transform 0.12s, border-color 0.12s, background 0.12s;
   }
-  #back    { position: fixed; top: 8px; left: 10px; z-index: 20; }
-  #navright {
-    position: fixed; top: 8px; right: 10px; z-index: 20;
-    display: flex; gap: 8px;
-  }
+  #back  { position: fixed; top: 8px; left: 10px;  z-index: 20; }
+  #reset { position: fixed; top: 8px; right: 10px; z-index: 20; }
   .navpill:hover, .navpill:active {
     transform: scale(1.05);
     border-color: rgba(255, 215, 106, 0.85);
     background: rgba(30, 38, 54, 0.78);
-  }
-  /* Start over throws the whole game away, so it wears a warning red. */
-  .navpill.danger { color: #ffd2cc; border-color: rgba(224, 90, 74, 0.5); }
-  .navpill.danger:hover, .navpill.danger:active {
-    border-color: rgba(224, 90, 74, 0.95);
-    background: rgba(60, 30, 30, 0.8);
   }
 
   /* ---- THE RESET CONFIRMATION ------------------------------------------
@@ -86,18 +76,30 @@
     text-align: center;
     box-shadow: 0 12px 44px rgba(0, 0, 0, 0.55);
   }
-  #resetModal h3 { margin: 0 0 10px; font-size: 21px; color: #ffe9c4; letter-spacing: 1px; }
-  #resetModal p  { margin: 0 0 20px; font-size: 14px; line-height: 1.5; color: #9fb0c6; }
-  #resetModal .row { display: flex; gap: 10px; }
+  #resetModal h3 { margin: 0 0 6px; font-size: 21px; color: #ffe9c4; letter-spacing: 1px; text-align: center; }
+  #resetModal p  { margin: 0 0 18px; font-size: 14px; line-height: 1.5; color: #9fb0c6; text-align: center; }
   #resetModal .btn {
-    flex: 1; padding: 13px 10px; border-radius: 11px;
+    padding: 13px 12px; border-radius: 11px;
     font-family: inherit; font-size: 15px; font-weight: 700; cursor: pointer;
     border: 1px solid transparent;
-    transition: transform 0.1s;
+    transition: transform 0.1s, background 0.12s;
   }
   #resetModal .btn:active { transform: scale(0.97); }
-  #resetModal .cancel { background: #232c3b; color: #e6ecf5; border-color: rgba(255,255,255,0.14); }
-  #resetModal .danger { background: #e05a4a; color: #fff; }
+  /* Each choice is its own full-width row with a small line explaining it. */
+  #resetModal .opt {
+    display: block; width: 100%; text-align: left; margin-bottom: 10px;
+    background: #232c3b; color: #e6ecf5; border-color: rgba(255,255,255,0.14);
+  }
+  #resetModal .opt small {
+    display: block; margin-top: 3px; font-weight: 400; font-size: 11px;
+    letter-spacing: 0; color: #9fb0c6;
+  }
+  #resetModal .opt.danger { background: #3a2020; border-color: rgba(224,90,74,0.5); }
+  #resetModal .opt.danger small { color: #e0a59c; }
+  #resetModal .cancel {
+    display: block; width: 100%;
+    background: #232c3b; color: #e6ecf5; border-color: rgba(255,255,255,0.14);
+  }
 
   /* ---- THE WAVE-COMPLETE SUMMARY ---------------------------------------
      Instead of a plain NEXT WAVE button, finishing a wave brings up a card
@@ -147,25 +149,22 @@
 <body>
 
 <canvas id="screen"></canvas>
-<div id="hud">TAP to build &nbsp;&nbsp; stop the robots reaching the flag at the TOP</div>
+<div id="hud">TAP to build &nbsp;&nbsp; stop the robots escaping through the EXIT at the TOP</div>
 
 <a id="back" class="navpill" href="index.html">&larr; Arcade</a>
-<div id="navright">
-  <button id="reset" class="navpill">&#8635; Clear</button>
-  <button id="startover" class="navpill danger">&#9851; Start over</button>
-</div>
+<button id="reset" class="navpill">&#8635; Reset</button>
 
-<!-- One confirm card, reused for both Clear and Start over. The title,
-     wording and button label are filled in when it's shown, so each one
-     asks its own clear question before anything is thrown away. -->
+<!-- One Reset button, one little menu of choices - so the top isn't crowded
+     with two buttons and it's always clear which "start again" you mean. -->
 <div id="resetModal">
   <div class="card">
-    <h3 id="confirmTitle">CLEAR TOWER?</h3>
-    <p id="confirmBody">This takes away everything you've built on this map and hands the coins back, so you can plan your defence again. Your level, wave, coins and power all stay.</p>
-    <div class="row">
-      <button id="resetCancel" class="btn cancel">Keep going</button>
-      <button id="resetYes" class="btn danger">Clear it</button>
-    </div>
+    <h3>RESET</h3>
+    <p>What would you like to do?</p>
+    <button id="optClear" class="btn opt">Clear this level
+      <small>Wipe what you built here &middot; keep your coins, level &amp; power</small></button>
+    <button id="optNew" class="btn opt danger">Start a new game
+      <small>Everything back to Level 1 from scratch</small></button>
+    <button id="optCancel" class="btn cancel">Cancel</button>
   </div>
 </div>
 
@@ -501,7 +500,7 @@
     says = ''; saysT = 0;
     state = 'build';
     newTower();
-    say('fresh tower - stop them reaching the flag');
+    say('fresh tower - stop them reaching the exit');
   }
 
   // CLEAR THE CURRENT MAP. A do-over of just what you've built on THIS
@@ -960,6 +959,10 @@
     if (scrap.length > 260) scrap.splice(0, scrap.length - 260);
   }
 
+  // How long a robot takes to slip up through the exit and vanish, once it
+  // reaches it. Just long enough to SEE it leave instead of blinking out.
+  const EXIT_TIME = 0.5;
+
   function stepRobot(b, dt) {
     if (!b.alive || b.done) return;
     if (b.wait > 0) { b.wait -= dt; return; }
@@ -972,7 +975,7 @@
     const rt = b.route;
     while (b.step >= 1) {
       b.step -= 1;
-      if (b.at >= rt.length - 1) { b.done = true; return; }
+      if (b.at >= rt.length - 1) { b.done = true; b.exitT = EXIT_TIME; return; }
       b.at++;
       const n = rt[b.at];
       if (n.c !== b.c) b.face = n.c > b.c ? 1 : -1;
@@ -1003,6 +1006,14 @@
       if (p.life <= 0) { scrap.splice(i, 1); continue; }
       p.x += p.vx * dt * 30; p.y += p.vy * dt * 30;
       p.vy += dt * 34;
+    }
+
+    // Robots sliding up through the exit keep fading even after the wave has
+    // ended (same as the scrap), so the last few to leave never freeze
+    // half-gone by the doorway.
+    for (let i = 0; i < bots.length; i++) {
+      const b = bots[i];
+      if (b.done && b.exitT > 0) b.exitT -= dt;
     }
 
     if (state !== 'run') return;
@@ -1044,8 +1055,8 @@
   function wide()   { return W > H * 1.35; }
   function panelW() { return wide() ? Math.min(W * 0.36, 320) : 0; }
   // The header is two tidy tiers, the same in portrait and landscape:
-  //   row 1  - the nav buttons: Arcade on the left, Clear + Start over on
-  //            the right (and the key prompt when hiding a key)
+  //   row 1  - the nav buttons: Arcade on the left, Reset on the right
+  //            (and the key prompt when hiding a key)
   //   row 2  - a stat bar: coins | POWER METER | level | steps
   // topBar() is where the board begins, just under both. Keeping it this
   // compact also hands the tower back a good chunk of height.
@@ -1188,6 +1199,41 @@
     ctx.fillRect(x + s * 0.12, top + s * 0.32, s * 0.76, s * 0.10);
   }
 
+  // The EXIT at the top: a glowing green doorway with an "out this way" arrow.
+  // It gently pulses so it reads as the live goal the robots are racing for.
+  function drawExit(x, y, s) {
+    const cx = x + s / 2;
+    const pulse = 0.55 + 0.45 * Math.abs(Math.sin(clock * 3));
+    const dw = s * 0.74, dh = s * 0.96, dx = cx - dw / 2, dy = y + s - dh;
+
+    ctx.save();
+    // a soft green halo, so it glows like a way out
+    ctx.shadowColor = 'rgba(143,224,122,0.9)';
+    ctx.shadowBlur = s * (0.2 + 0.3 * pulse);
+    ctx.fillStyle = '#8fe07a';
+    rrect(dx, dy, dw, dh, s * 0.22); ctx.fill();
+    ctx.shadowBlur = 0;
+
+    // the dark opening inside the frame
+    const pad = Math.max(2, s * 0.1);
+    ctx.fillStyle = '#0e1f15';
+    rrect(dx + pad, dy + pad, dw - 2 * pad, dh - pad, s * 0.15); ctx.fill();
+
+    // an up-arrow: this is the way OUT
+    ctx.strokeStyle = 'rgba(190,245,170,' + pulse.toFixed(2) + ')';
+    ctx.lineWidth = Math.max(2, s * 0.1);
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    const midY = y + s * 0.6, head = s * 0.17;
+    ctx.beginPath();
+    ctx.moveTo(cx - head, midY);
+    ctx.lineTo(cx, midY - head * 1.15);
+    ctx.lineTo(cx + head, midY);
+    ctx.moveTo(cx, midY - head);
+    ctx.lineTo(cx, midY + head);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   function drawTower() {
     const b = board();
     const spin = clock * 14;
@@ -1303,19 +1349,10 @@
       ctx.strokeRect(sx + 3, sy + 3, b.s - 6, b.s - 6);
     }
 
-    const fx = b.x + FLAG.c * b.s, fy = b.y + FLAG.r * b.s;
-    ctx.strokeStyle = '#ffd76a';
-    ctx.lineWidth = Math.max(2, b.s * 0.08);
-    ctx.beginPath();
-    ctx.moveTo(fx + b.s * 0.35, fy + b.s * 0.85);
-    ctx.lineTo(fx + b.s * 0.35, fy + b.s * 0.15);
-    ctx.stroke();
-    ctx.fillStyle = '#ffd76a';
-    ctx.beginPath();
-    ctx.moveTo(fx + b.s * 0.35, fy + b.s * 0.15);
-    ctx.lineTo(fx + b.s * 0.85, fy + b.s * 0.32);
-    ctx.lineTo(fx + b.s * 0.35, fy + b.s * 0.48);
-    ctx.fill();
+    // THE EXIT. The robots aren't trying to plant a flag - they're trying to
+    // ESCAPE out the top. So the goal is a glowing doorway they slip through
+    // and vanish, which is what your traps are there to stop.
+    drawExit(b.x + FLAG.c * b.s, b.y + FLAG.r * b.s, b.s);
 
     // ---- THE "NO" FLASH ----------------------------------------------
     // A red square with an X on the spot you just tried to build, so a
@@ -1340,13 +1377,24 @@
   }
 
   function drawRobot(b, bd) {
+    // A robot at the exit is LEAVING: it slides up through the doorway and
+    // fades out over its short exit time, so the flag reads as a way out,
+    // not a spot they stack up on.
+    let rise = 0, alpha = 1;
+    if (b.done) {
+      const p = clamp((b.exitT || 0) / EXIT_TIME, 0, 1);  // 1 just arrived -> 0 gone
+      rise = (1 - p) * bd.s * 0.9;
+      alpha = p;
+    }
     const x = bd.x + (b.x + 0.5 + (b.jx || 0)) * bd.s;
-    const y = bd.y + (b.y + 0.5 + (b.jy || 0)) * bd.s;
+    const y = bd.y + (b.y + 0.5 + (b.jy || 0)) * bd.s - rise;
     // Smaller bodies in a big wave, so a crowd is a crowd and not a
     // single blob of overlapping robots.
     const s = bd.s * (bots.length > 60 ? 0.19 : 0.28);
-    const bounce = Math.abs(Math.sin(b.step * Math.PI)) * s * 0.25;
+    const bounce = b.done ? 0 : Math.abs(Math.sin(b.step * Math.PI)) * s * 0.25;
 
+    ctx.save();
+    ctx.globalAlpha = alpha;
     ctx.fillStyle = b.done ? '#8fe07a' : '#dbe4f2';
     ctx.fillRect(x - s, y - s - bounce, s * 2, s * 1.7);
     ctx.fillStyle = '#10141c';
@@ -1354,10 +1402,12 @@
     ctx.fillRect(x + s * 0.17, y - s * 0.55 - bounce, s * 0.38, s * 0.38);
     ctx.fillStyle = '#ffd76a';
     ctx.fillRect(x - s * 0.15, y - s * 1.5 - bounce, s * 0.3, s * 0.45);
+    ctx.restore();
 
     // Keys jingling overhead are lovely with ten robots and unreadable
     // clutter with four hundred, so the crowd carries them out of sight.
-    if (bots.length > 60) return;
+    // (A robot on its way out has no more use for them either.)
+    if (b.done || bots.length > 60) return;
     let shown = 0;
     for (let i = 0; i < LOCKS.length; i++) {
       if (!((b.keys >> i) & 1)) continue;
@@ -1378,6 +1428,7 @@
       for (let i = 0; i < bots.length; i++) {
         const b = bots[i];
         if (!b.alive || b.wait > 0) continue;
+        if (b.done && !(b.exitT > 0)) continue;   // already left through the exit
         drawRobot(b, bd);
       }
     }
@@ -1711,7 +1762,7 @@
     if (state !== 'build') return;
     if (!inside(c, r)) return;
     if (STARTS.some(function (s) { return s.c === c && s.r === r; })) { say('that is where they come in'); return; }
-    if (c === FLAG.c && r === FLAG.r)   { say('that is the flag'); return; }
+    if (c === FLAG.c && r === FLAG.r)   { say('that is the exit'); return; }
     if (grid[r][c] === PLAT) { say('that ledge is bolted down'); return; }
 
     // ---- PUTTING DOWN THE KEY YOU ARE HOLDING --------------------------
@@ -1905,43 +1956,25 @@
 //  THE NAV BUTTONS  (the Arcade link is just an <a>; Reset asks first)
 // -------------------------------------------------------------------
 
-  // One confirm card, two uses. showConfirm fills in the words and remembers
-  // what to DO if you say yes, so Clear and Start over each get their own
-  // question without needing a second modal.
+  // The RESET menu: one button up top opens it, and it offers the two ways
+  // to start again - clear just this level, or start a whole new game - plus
+  // a way to back out.
   const resetModal = document.getElementById('resetModal');
-  let pendingYes = null;
-  function showConfirm(title, body, yesLabel, onYes) {
-    document.getElementById('confirmTitle').textContent = title;
-    document.getElementById('confirmBody').textContent = body;
-    document.getElementById('resetYes').textContent = yesLabel;
-    pendingYes = onYes;
-    resetModal.style.display = 'flex';
-  }
-  function hideConfirm() { resetModal.style.display = 'none'; pendingYes = null; }
+  function showResetMenu() { resetModal.style.display = 'flex'; }
+  function hideResetMenu() { resetModal.style.display = 'none'; }
 
-  // CLEAR wipes just this map's build (and refunds it); START OVER throws the
-  // whole game away and begins again at Level 1.
-  document.getElementById('reset').addEventListener('click', function () {
-    showConfirm('CLEAR TOWER?',
-      'This takes away everything you\'ve built on this map and hands the coins back, so you can plan your defence again. Your level, wave, coins and power all stay.',
-      'Clear it', resetMap);
+  document.getElementById('reset').addEventListener('click', showResetMenu);
+  document.getElementById('optClear').addEventListener('click', function () {
+    hideResetMenu(); resetMap();      // wipe this level's build, keep progress
   });
-  document.getElementById('startover').addEventListener('click', function () {
-    showConfirm('START OVER?',
-      'This ends this game and begins a brand-new one from Level 1. Your level, coins, wave and power all go right back to the start.',
-      'Start over', resetGame);
+  document.getElementById('optNew').addEventListener('click', function () {
+    hideResetMenu(); resetGame();     // a brand-new game from Level 1
   });
-
-  document.getElementById('resetCancel').addEventListener('click', hideConfirm);
-  document.getElementById('resetYes').addEventListener('click', function () {
-    const go = pendingYes;      // grab it before hideConfirm clears it
-    hideConfirm();
-    if (go) go();
-  });
+  document.getElementById('optCancel').addEventListener('click', hideResetMenu);
   // Tapping the dark area around the card, or pressing Escape, both mean
-  // "no, never mind" - the same as Keep going.
+  // "never mind" - the same as Cancel.
   resetModal.addEventListener('click', function (e) {
-    if (e.target === resetModal) hideConfirm();
+    if (e.target === resetModal) hideResetMenu();
   });
 
   // ---- the wave-complete card ----
@@ -1955,7 +1988,7 @@
   document.getElementById('wavePeek').addEventListener('click', hideWaveComplete);
 
   window.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape') { hideConfirm(); hideWaveComplete(); }
+    if (e.key === 'Escape') { hideResetMenu(); hideWaveComplete(); }
   });
 
 </script>
