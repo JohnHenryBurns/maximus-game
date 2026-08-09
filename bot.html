@@ -982,10 +982,15 @@
   // the buttons move to a block on the right instead of a row below.
   function wide()   { return W > H * 1.35; }
   function panelW() { return wide() ? Math.min(W * 0.36, 320) : 0; }
-  // A slim band across the very top is now reserved for the Arcade / Reset
-  // nav pills, so the game's own HUD is pushed down clear of them.
-  const NAVH = 40;
-  function topBar() { return (wide() ? 62 : 96) + NAVH; }
+  // The header is two tidy tiers, the same in portrait and landscape:
+  //   row 1  - the Arcade / Reset nav pills (and the key prompt when hiding
+  //            a key)
+  //   row 2  - ONE stat bar: coins | power | level | steps
+  // topBar() is where the board begins, just under both. Keeping it this
+  // compact also hands the tower back a good chunk of height.
+  const NAV_H  = 40;     // the nav pill row
+  const STAT_H = 42;     // the stat dashboard row
+  function topBar() { return NAV_H + STAT_H + 6; }
 
   // Five tools and a GO button will not fit in one row on a phone, so
   // they wrap onto as many rows as they need - and the tower is told
@@ -1011,13 +1016,18 @@
   function toolBox(i) { return boxOf(i); }
   function goBox()    { return boxOf(TOOLS.length); }
 
-  // The power meter / upgrade button lives centred in the top nav band,
-  // between the Arcade and Reset pills - the same spot the STAGE pill sits
-  // in the other game.
-  function powerBox() {
-    const w = Math.min(210, W * 0.56), h = 30;
-    return { x: (W - panelW()) / 2 - w / 2, y: 7, w: w, h: h };
+  // The stat bar spans the width (minus the side panel in landscape) and is
+  // split into four equal cells. Everything up top reads off these, so
+  // there's one row of numbers instead of three scattered ones.
+  function statBarRect() {
+    return { x: 8, y: NAV_H, w: (W - panelW()) - 16, h: STAT_H - 4 };
   }
+  function statCell(i) {                  // i = 0..3
+    const b = statBarRect(), cw = b.w / 4;
+    return { x: b.x + i * cw, y: b.y, w: cw, h: b.h };
+  }
+  // The POWER cell is the tappable one - tap it to grow the supply.
+  function powerBox() { return statCell(1); }
 
   // A rounded rectangle path, so the pills and the meter aren't hard boxes.
   function rrect(x, y, w, h, r) {
@@ -1340,50 +1350,74 @@
   // The power supply meter, in the top-centre nav band. The whole pill is
   // a button: tap it to spend coins growing the supply. It glows red when
   // it's full, so you can see at a glance why a saw won't go down.
-  function drawPowerWidget() {
-    const bx = powerBox();
-    const used = poweredUsed(), cost = powerUpCost(), canUp = coins >= cost;
-    const full = used >= powerMax;
-    const cy = bx.y + bx.h / 2;
-
-    rrect(bx.x, bx.y, bx.w, bx.h, bx.h / 2);
-    ctx.fillStyle = 'rgba(20, 26, 38, 0.62)';
+  // THE STAT BAR - one cohesive dashboard: coins | power | level | steps.
+  // Each cell is a small uppercase label with a big value under it. The
+  // POWER cell is also a button (tap to grow the supply) and shows its
+  // price; it turns red when it's full or when you just hit the ceiling.
+  function drawStatBar() {
+    const b = statBarRect();
+    rrect(b.x, b.y, b.w, b.h, 10);
+    ctx.fillStyle = 'rgba(20, 26, 38, 0.5)';
     ctx.fill();
-    // A bright red pulse if you just tried to build past your power.
-    const flashing = powerFlash > 0 && Math.sin(powerFlash * 30) > 0;
-    ctx.lineWidth = flashing ? 3 : 1.5;
-    ctx.strokeStyle = flashing ? '#e05a4a'
-                    : full ? 'rgba(224, 90, 74, 0.75)' : 'rgba(255, 215, 106, 0.4)';
-    ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+    ctx.lineWidth = 1; ctx.stroke();
 
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'middle';
-    ctx.font = 'bold 14px system-ui, sans-serif';
-    ctx.fillStyle = full ? '#e05a4a' : '#ffd76a';
-    ctx.fillText('⚡', bx.x + 11, cy);        // lightning bolt
-
-    // a little battery: a track, a fill for how much is used, and ticks.
-    const barX = bx.x + 32, barW = bx.w * 0.36, barH = 12, barY = cy - barH / 2;
-    ctx.fillStyle = 'rgba(255,255,255,0.13)';
-    ctx.fillRect(barX, barY, barW, barH);
-    ctx.fillStyle = full ? '#e05a4a' : '#ffd76a';
-    ctx.fillRect(barX, barY, barW * (powerMax ? used / powerMax : 0), barH);
-    ctx.strokeStyle = 'rgba(16,20,28,0.7)'; ctx.lineWidth = 1;
-    for (let i = 1; i < powerMax && i < 12; i++) {
-      const gx = barX + barW * i / powerMax;
-      ctx.beginPath(); ctx.moveTo(gx, barY); ctx.lineTo(gx, barY + barH); ctx.stroke();
+    // hairline dividers between the four cells
+    for (let i = 1; i < 4; i++) {
+      const x = b.x + b.w * i / 4;
+      ctx.beginPath(); ctx.moveTo(x, b.y + 8); ctx.lineTo(x, b.y + b.h - 8); ctx.stroke();
     }
 
-    ctx.font = '12px system-ui, sans-serif';
-    ctx.fillStyle = '#cdd6e4';
-    ctx.fillText(used + '/' + powerMax, barX + barW + 7, cy);
+    const labY = b.y + 15, valY = b.y + b.h - 9;
+    const valFont = 'bold ' + Math.min(W * 0.045, 18) + 'px system-ui, sans-serif';
+    function label(cx, s) {
+      ctx.textAlign = 'center'; ctx.font = '9px system-ui, sans-serif';
+      ctx.fillStyle = 'rgba(159,176,198,0.85)'; ctx.fillText(s, cx, labY);
+    }
+    function value(cx, s, col) {
+      ctx.textAlign = 'center'; ctx.font = valFont;
+      ctx.fillStyle = col; ctx.fillText(s, cx, valY);
+    }
 
-    // the "grow it" price, on the right - green when you can afford it.
-    ctx.textAlign = 'right';
-    ctx.font = 'bold 12px system-ui, sans-serif';
-    ctx.fillStyle = canUp ? '#8fe07a' : '#5a6678';
-    ctx.fillText('+1  ' + cost + '⚡', bx.x + bx.w - 11, cy);
-    ctx.textBaseline = 'alphabetic';
+    // 0 - COINS (flashes red when you can't afford a thing)
+    let c = statCell(0);
+    const coinRed = coinFlash > 0 && Math.sin(coinFlash * 30) > 0;
+    label(c.x + c.w / 2, 'COINS');
+    value(c.x + c.w / 2, '' + coins, coinRed ? '#e05a4a' : '#ffd76a');
+
+    // 1 - POWER (the tappable one, with its grow-it price)
+    c = statCell(1);
+    const used = poweredUsed(), full = used >= powerMax, canUp = coins >= powerUpCost();
+    const pflash = powerFlash > 0 && Math.sin(powerFlash * 30) > 0;
+    rrect(c.x + 3, c.y + 3, c.w - 6, c.h - 6, 7);
+    ctx.fillStyle = 'rgba(255,255,255,0.05)'; ctx.fill();
+    if (full || pflash) {
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = pflash ? '#e05a4a' : 'rgba(224,90,74,0.6)';
+      ctx.stroke();
+    }
+    label(c.x + c.w / 2, 'POWER');
+    value(c.x + c.w / 2, '⚡' + used + '/' + powerMax, full ? '#e05a4a' : '#ffd76a');
+    ctx.textAlign = 'right'; ctx.font = 'bold 9px system-ui, sans-serif';
+    ctx.fillStyle = canUp ? '#8fe07a' : '#6b7a90';
+    ctx.fillText('+' + powerUpCost(), c.x + c.w - 6, labY);
+
+    // 2 - LEVEL and wave
+    c = statCell(2);
+    label(c.x + c.w / 2, 'LEVEL');
+    value(c.x + c.w / 2, level + ' · w' + round, '#e6ecf5');
+
+    // 3 - STEPS while building / STOPPED while they climb
+    c = statCell(3);
+    if (state === 'build') {
+      const ok = canGetThrough();
+      label(c.x + c.w / 2, 'STEPS');
+      value(c.x + c.w / 2, ok ? '' + longestSteps() : 'NO WAY', ok ? '#8fe07a' : '#e05a4a');
+    } else {
+      label(c.x + c.w / 2, 'STOPPED');
+      value(c.x + c.w / 2, stopped() + '/' + bots.length, '#e8834a');
+    }
+    ctx.textAlign = 'left';
   }
 
   // While you're holding a door's key, this shouts about it: a pulsing
@@ -1421,41 +1455,10 @@
   }
 
   function drawHud() {
-    // The +NAVH drops the coins/steps read-out below the nav pill band.
-    const line1 = (wide() ? 30 : 44) + NAVH, line2 = (wide() ? 50 : 68) + NAVH;
-
-    ctx.textAlign = 'left';
-    // Flash the coins red when you just tried to buy something you can't
-    // afford, so it's obvious the coins are the thing standing in your way.
-    const coinRed = coinFlash > 0 && Math.sin(coinFlash * 30) > 0;
-    ctx.font = 'bold ' + Math.min(W * 0.042, 34) + 'px system-ui, sans-serif';
-    ctx.fillStyle = coinRed ? '#e05a4a' : '#ffd76a';
-    ctx.fillText(coins + ' coins', 20, line1);
-
-    ctx.font = Math.min(W * 0.024, 15) + 'px system-ui, sans-serif';
-    ctx.fillStyle = '#6b7a90';
-    ctx.fillText('level ' + level + '  ·  wave ' + round +
-                 (best ? '   -   best ' + best + ' stopped' : ''),
-                 22, line2);
-
-    // ---- THE TWO NUMBERS THAT MATTER ---------------------------------
-    ctx.textAlign = 'right';
-    ctx.font = 'bold ' + Math.min(W * 0.034, 26) + 'px system-ui, sans-serif';
-    if (state === 'build') {
-      ctx.fillStyle = canGetThrough() ? '#8fe07a' : '#e05a4a';
-      ctx.fillText(canGetThrough() ? longestSteps() + ' steps' : 'NO WAY UP', W - 20, line1);
-      ctx.font = Math.min(W * 0.022, 14) + 'px system-ui, sans-serif';
-      ctx.fillStyle = '#6b7a90';
-      ctx.fillText(canGetThrough() ? 'a longer climb is more places to put a saw'
-                                   : 'they must be able to reach the flag',
-                   W - 20, line2 - 2);
-    } else {
-      ctx.fillStyle = '#e8834a';
-      ctx.fillText(stopped() + ' stopped', W - 20, line1);
-      ctx.font = Math.min(W * 0.022, 14) + 'px system-ui, sans-serif';
-      ctx.fillStyle = '#6b7a90';
-      ctx.fillText(gotThrough() + ' got through, of ' + bots.length, W - 20, line2 - 2);
-    }
+    // The whole top of the screen is now ONE stat bar. When you're hiding a
+    // door's key, a prompt takes over the nav band above it.
+    drawStatBar();
+    if (state === 'build' && holdingKey >= 0) drawKeyPrompt();
 
     // ---- TOOLS -------------------------------------------------------
     for (let i = 0; i < TOOLS.length; i++) {
@@ -1522,21 +1525,12 @@
     ctx.fillText(state === 'build' ? 'SEND THEM' : state === 'run' ? 'CLIMBING' : 'NEXT WAVE',
                  g.x + g.w / 2, g.y + g.h * 0.63);
 
-    // ---- POWER METER / KEY PROMPT (top centre) -------------------------
-    // In build, the top-centre shows your power supply - unless you're
-    // mid-way through placing a door's key, when it shows a big, hard-to-
-    // miss prompt to hide that key instead.
-    if (state === 'build') {
-      if (holdingKey >= 0) drawKeyPrompt();
-      else                 drawPowerWidget();
-    }
-
     if (wide() && board().s < 26) {
       ctx.textAlign = 'center';
       ctx.font = 'bold 11px system-ui, sans-serif';
       ctx.fillStyle = '#6b7a90';
       ctx.fillText('turn your phone upright for a much bigger tower',
-                   (W - panelW()) / 2, 30 + NAVH);
+                   (W - panelW()) / 2, topBar() + 16);
     }
 
     // ---- GOOD JOB / PERFECT --------------------------------------------
