@@ -804,15 +804,9 @@
   // Re-plan every spawn. Called whenever the tower changes.
   function think() { brains = STARTS.map(thinkFrom); }
 
-  // Every stream must be able to reach the flag, or the tower's a dead end.
+  // Every stream must be able to reach the exit, or the tower's a dead end.
   function canGetThrough() {
     return brains.length > 0 && brains.every(function (b) { return b.bestCost < Infinity; });
-  }
-  // The longest of the streams' climbs - the number shown as "steps".
-  function longestSteps() {
-    let m = 0;
-    for (const b of brains) if (b.bestCost < Infinity && b.bestCost > m) m = b.bestCost;
-    return m;
   }
 
   // Can a robot from ANY spawn ever actually GET this key? (It might swipe
@@ -1535,12 +1529,14 @@
     label(c.x + c.w / 2, 'LEVEL');
     value(c.x + c.w / 2, level + ' · w' + round, '#e6ecf5');
 
-    // 3 - STEPS while building / STOPPED while they climb
+    // 3 - THE ROBOT COUNTER. While you build it shows how many are coming
+    // this wave (or NO WAY if you've sealed them out); once they're climbing
+    // it flips to how many you've STOPPED out of the whole wave.
     c = statCell(3);
     if (state === 'build') {
       const ok = canGetThrough();
-      label(c.x + c.w / 2, 'STEPS');
-      value(c.x + c.w / 2, ok ? '' + longestSteps() : 'NO WAY', ok ? '#8fe07a' : '#e05a4a');
+      label(c.x + c.w / 2, 'ROBOTS');
+      value(c.x + c.w / 2, ok ? '' + waveSize() : 'NO WAY', ok ? '#e8834a' : '#e05a4a');
     } else {
       label(c.x + c.w / 2, 'STOPPED');
       value(c.x + c.w / 2, stopped() + '/' + bots.length, '#e8834a');
