@@ -1603,7 +1603,7 @@
     const maxW = cell.w - 18;
     if (max * pw + (max - 1) * gap > maxW) pw = (maxW - (max - 1) * gap) / max;
     const bh = Math.min(13, pw / 0.55);
-    const cy = cell.y + cell.h * 0.62;
+    const cy = cell.y + cell.h * 0.36;
     let x = cell.x + (cell.w - (max * pw + (max - 1) * gap)) / 2 + pw / 2;
     for (let i = 0; i < max; i++) {
       drawBolt(x, cy, bh, i < used ? (hot ? '#e05a4a' : '#ffd76a') : 'rgba(255,255,255,0.16)');
@@ -1650,25 +1650,33 @@
     iconValue(c, '' + coins, coinRed ? '#e05a4a' : '#ffd76a', 14,
               function (x, y) { drawCoin(x, y, 7); });
 
-    // 1 - POWER: a meter of bolts, tappable, with the price of the next unit.
+    // 1 - POWER: the whole cell is a BUTTON - tap it to grow the supply. The
+    // meter of bolts up top shows what you've got; the "+ coin N" line below
+    // is the buy: tap to add one more power for N coins. The border invites a
+    // tap (gold when you can afford one, red when the supply is full).
     c = statCell(1);
     const used = poweredUsed(), full = used >= powerMax, canUp = coins >= powerUpCost();
     const pflash = powerFlash > 0 && Math.sin(powerFlash * 30) > 0;
     const hot = full || pflash;
-    rrect(c.x + 3, c.y + 3, c.w - 6, c.h - 6, 7);
-    ctx.fillStyle = 'rgba(255,255,255,0.05)'; ctx.fill();
-    if (hot) {
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = pflash ? '#e05a4a' : 'rgba(224,90,74,0.6)';
-      ctx.stroke();
-    }
+    rrect(c.x + 4, c.y + 3, c.w - 8, c.h - 6, 8);
+    ctx.fillStyle = 'rgba(255,255,255,0.07)'; ctx.fill();
+    ctx.lineWidth = hot ? 2 : 1.5;
+    ctx.strokeStyle = hot ? (pflash ? '#e05a4a' : 'rgba(224,90,74,0.7)')
+                    : canUp ? 'rgba(255,215,106,0.6)' : 'rgba(255,255,255,0.22)';
+    ctx.stroke();
+
     drawPowerPips(c, used, powerMax, hot);
-    // the price of the next unit, with a little bolt so it reads as "power".
-    const costTxt = '+' + powerUpCost(), costCol = canUp ? '#8fe07a' : '#6b7a90';
-    ctx.textAlign = 'right'; ctx.font = 'bold 9px system-ui, sans-serif';
-    ctx.fillStyle = costCol;
-    ctx.fillText(costTxt, c.x + c.w - 7, labY);
-    drawBolt(c.x + c.w - 7 - ctx.measureText(costTxt).width - 5, labY - 4, 9, costCol);
+
+    // the buy line: "+ [coin] N", centred, green when you can afford it.
+    const numTxt = '' + powerUpCost(), buyCol = canUp ? '#8fe07a' : '#7a8698';
+    ctx.font = 'bold ' + Math.min(W * 0.026, 12) + 'px system-ui, sans-serif';
+    ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+    const plusW = ctx.measureText('+ ').width, numW = ctx.measureText(numTxt).width;
+    const grp = plusW + 12 + 3 + numW, gx = c.x + c.w / 2 - grp / 2, gy = c.y + c.h - 7;
+    ctx.fillStyle = buyCol;
+    ctx.fillText('+ ', gx, gy);
+    drawCoin(gx + plusW + 6, gy - 4, 6);
+    ctx.fillText(numTxt, gx + plusW + 12 + 3, gy);
 
     // 2 - ROBOTS: a robot head left of the count - how many are coming while
     // you build, how many you've stopped once they're climbing.
@@ -1718,11 +1726,14 @@
   // the Arcade and Reset buttons, so which level and wave you're on sits up
   // top away from the numbers you act on.
   function drawLevelPill() {
+    // Sized and centred to sit level with the Arcade / Reset buttons either
+    // side of it: same 13px text, same pill height, same middle line.
     const txt = 'LEVEL ' + level + '  ·  wave ' + round;
-    ctx.font = 'bold ' + Math.min(W * 0.032, 14) + 'px system-ui, sans-serif';
+    ctx.font = 'bold ' + Math.min(W * 0.03, 13) + 'px system-ui, sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    const pw = ctx.measureText(txt).width + 26, ph = 28;
-    const cx = (W - panelW()) / 2, px = cx - pw / 2, py = 7;
+    const ph = 31, py = 8;
+    const pw = ctx.measureText(txt).width + 28;
+    const cx = (W - panelW()) / 2, px = cx - pw / 2;
     rrect(px, py, pw, ph, ph / 2);
     ctx.fillStyle = 'rgba(20, 26, 38, 0.62)'; ctx.fill();
     ctx.strokeStyle = 'rgba(255, 215, 106, 0.30)'; ctx.lineWidth = 1; ctx.stroke();
@@ -1754,22 +1765,21 @@
       ctx.strokeRect(bx.x, bx.y, bx.w, bx.h);
 
       // A little picture of the thing, so you never have to read to know.
-      const ix = bx.x + 8, iy = bx.y + bx.h * 0.5 - 11, is = 22;
+      const is = 26, ix = bx.x + 9, iy = bx.y + bx.h * 0.5 - is / 2;
       if (t.kind === WALL) {
         ctx.fillStyle = '#96a0b4'; ctx.fillRect(ix, iy, is, is);
-        ctx.fillStyle = '#c3ccdd'; ctx.fillRect(ix, iy, is, 4);
+        ctx.fillStyle = '#c3ccdd'; ctx.fillRect(ix, iy, is, 5);
       } else if (t.kind === MUD) {
         ctx.fillStyle = '#6b4a2a'; ctx.fillRect(ix, iy, is, is);
       } else if (t.kind === DOOR) {
         ctx.fillStyle = rgb(lock >= 0 ? LOCKS[lock].col : [90, 100, 118]);
         ctx.fillRect(ix + 2, iy, is - 4, is);
       } else if (t.kind === SAW) {
-        // Centred in the icon box like the others: drawBlade puts the blade
-        // at y + 0.2*s, so start it high enough that the blade sits on the
-        // box's middle (ix+11, iy+11) instead of poking out the top.
-        drawBlade(ix, iy + 11 - is * 0.2, is, clock * 14, 1);
+        // Centred in the icon box: drawBlade puts the blade at y + 0.2*s, so
+        // start it low enough that the blade sits on the box's middle.
+        drawBlade(ix, iy + is * 0.3, is, clock * 14, 1);
       } else {
-        drawHammer(ix, iy - 1, is, false);
+        drawHammer(ix, iy, is, false);
       }
 
       // Text stays inside its own button, so a long name can't spill across
@@ -1779,25 +1789,25 @@
       ctx.rect(bx.x + 2, bx.y + 2, bx.w - 4, bx.h - 4);
       ctx.clip();
 
-      const tx = bx.x + 38;
+      const tx = bx.x + 42;
       ctx.textAlign = 'left';
-      ctx.font = 'bold ' + Math.min(W * 0.021, 15) + 'px system-ui, sans-serif';
+      ctx.font = 'bold ' + Math.min(W * 0.025, 17) + 'px system-ui, sans-serif';
       ctx.fillStyle = can ? '#e6ecf5' : '#8894a8';
       ctx.fillText(t.name, tx, bx.y + bx.h * 0.40);
 
       // The costs: a coin + the price, and for a powered trap (saw or hammer)
       // a lightning bolt + the 1 power it draws. Each cost goes red on its own
       // if that's the thing you're short of, so you can see WHY it's greyed.
-      const costY = bx.y + bx.h * 0.76;
-      ctx.font = 'bold ' + Math.min(W * 0.019, 13) + 'px system-ui, sans-serif';
-      drawCoin(tx + 5, costY - 4, 5.5);
+      const costY = bx.y + bx.h * 0.78;
+      ctx.font = 'bold ' + Math.min(W * 0.023, 15) + 'px system-ui, sans-serif';
+      drawCoin(tx + 6, costY - 5, 6.5);
       ctx.fillStyle = coins >= t.price ? '#ffd76a' : '#e05a4a';
-      ctx.fillText('' + t.price, tx + 13, costY);
+      ctx.fillText('' + t.price, tx + 16, costY);
       if (isPowered(t.kind)) {
-        const px = tx + 13 + ctx.measureText('' + t.price).width + 13;
-        drawBolt(px, costY - 4, 11, powerOK ? '#ffd76a' : '#e05a4a');
+        const px = tx + 16 + ctx.measureText('' + t.price).width + 15;
+        drawBolt(px, costY - 5, 13, powerOK ? '#ffd76a' : '#e05a4a');
         ctx.fillStyle = powerOK ? '#ffd76a' : '#e05a4a';
-        ctx.fillText('1', px + 6, costY);
+        ctx.fillText('1', px + 7, costY);
       }
       ctx.restore();
     }
