@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>BEAT THE BOT</title>
+
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#10141c">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Beat the Bot">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="icon" href="icon-192.png">
+
+<style>
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: #10141c; color: #e6ecf5;
+    font-family: system-ui, sans-serif;
+    -webkit-user-select: none; user-select: none;
+    overscroll-behavior: none; touch-action: none;
+  }
+  canvas { display: block; cursor: pointer; }
+  #hud {
+    position: fixed; left: 0; right: 0; bottom: 6px;
+    text-align: center; font-size: 14px; color: #6b7a90;
+    pointer-events: none;
+    /* It fades away the moment you build your first block - once you know
+       how, being told again is just something in the way. */
+    transition: opacity 0.6s;
+  }
+</style>
+</head>
+<body>
+
+<canvas id="screen"></canvas>
+<div id="hud">TAP the ground to build &nbsp;&nbsp; then press GO and watch it try</div>
+
+<script>
+// ===================================================================
+//  BEAT THE BOT
+//
+//  You build. Then a little character tries to get past what you built.
+//
+//  The whole thing lives or dies on ONE promise: the bot is not
+//  pretending. It genuinely works out the cheapest way through
+//  whatever you've made, every time, using the same algorithm a
+//  satnav uses. If it goes round your wall, that's because going round
+//  really was cheaper - not because somebody wrote "go round walls".
+//
+//  Which is what makes beating it mean anything. A bot that loses on
+//  purpose isn't an opponent, it's a participation trophy.
+// ===================================================================
+
+  const canvas = document.getElementById('screen');
+  const ctx = canvas.getContext('2d');
+
+  let W = 0, H = 0;
+  function resize() {
+    W = canvas.width  = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+
+// -------------------------------------------------------------------
+//  THE YARD
+// -------------------------------------------------------------------
+
+  const COLS = 13, ROWS = 11;
+  const START = { c: 0, r: (ROWS - 1) >> 1 };
+  const FLAG  = { c: COLS - 1, r: (ROWS - 1) >> 1 };
+
+  //  EMPTY costs 1 to walk. MUD costs 5 - the bot CAN go through it and
+  //  sometimes will, if going round would cost more. WALL cannot be
+  //  crossed at all.
+  //
+  //  That difference is the whole game: a wall makes the bot go round,
+  //  mud makes it CHOOSE, and choosing is where you can outsmart it.
+  const EMPTY = 0, WALL = 1, MUD = 2;
+  const COST = { 0: 1, 2: 5 };
+
+  const TOOLS = [
+    { kind: WALL, name: 'WALL', price: 3, colour: [126, 138, 162],
+      blurb: 'it cannot go through' },
+    { kind: MUD,  name: 'MUD',  price: 1, colour: [122, 92, 54],
+      blurb: 'slow to cross - five steps' }
+  ];
+
+  let grid = [];
+  let tool = 0;
+  let coins = 14;
+  let round = 1;
+  let best = 0;
+
+  let state = 'build';        // 'build', 'run', 'done'
+  let says = '', saysT = 0;
+  function say(w) { says = w; saysT = 2.8; }
+
+  function at(c, r) {
+    if (c < 0 || r < 0 || c >= COLS || r >= ROWS) return WALL;
+    return grid[r][c];
+  }
+
+  function clearYard() {
+    grid = [];
+    for (let r = 0; r < ROWS; r++) {
+      const row = [];
+      for (let c = 0; c < COLS; c++) row.push(EMPTY);
+      grid.push(row);
+    }
+  }
+
+
+// -------------------------------------------------------------------
+//  THE BOT'S BRAIN
+// -------------------------------------------------------------------
+//
+//  Dijkstra: the same way a satnav finds the quickest route. Start at
+//  the flag and work BACKWARDS, filling in "what does it cost to get
+//  home from this square". Always expand the cheapest square you know
+//  about next, and by the time you reach the start, the number sitting
+//  on every square is the true cheapest cost from there.
+//
+//  Working backwards from the flag rather than forwards from the bot
+//  means one sweep gives the answer for EVERY square at once - so the
+//  route is drawn instantly while you're still building, and you can
+//  see what your wall did before you commit to it.
+
+  let costFrom = [];          // cheapest cost from each square to the flag
+
+  function think() {
+    costFrom = [];
+    for (let r = 0; r < ROWS; r++) {
+      const row = [];
+      for (let c = 0; c < COLS; c++) row.push(Infinity);
+      costFrom.push(row);
+    }
+    if (at(FLAG.c, FLAG.r) === WALL) return;
+
+    costFrom[FLAG.r][FLAG.c] = 0;
+
+    // A simple "cheapest known square next" list. The yard is 143
+    // squares, so scanning it is instant and a proper priority queue
+    // would be more code for no gain you could ever notice.
+    const done = [];
+    for (let r = 0; r < ROWS; r++) done.push(new Array(COLS).fill(false));
+
+    for (;;) {
+      let bc = -1, br = -1, bv = Infinity;
+      for (let r = 0; r < ROWS; r++) {
+        for (let c = 0; c < COLS; c++) {
+          if (done[r][c]) continue;
+          if (costFrom[r][c] < bv) { bv = costFrom[r][c]; bc = c; br = r; }
+        }
+      }
+      if (bc < 0) break;
+      done[br][bc] = true;
+
+      // Four ways out of a square. No diagonals - a bot that cuts
+      // corners is much harder to build against, because you can never
+      // quite tell what it will squeeze through.
+      const step = [[1,0],[-1,0],[0,1],[0,-1]];
+      for (const s of step) {
+        const nc = bc + s[0], nr = br + s[1];
+        if (nc < 0 || nr < 0 || nc >= COLS || nr >= ROWS) continue;
+        const kind = grid[nr][nc];
+        if (kind === WALL) continue;                 // can't stand there
+        const price = bv + COST[kind];
+        if (price < costFrom[nr][nc]) costFrom[nr][nc] = price;
+      }
+    }
+  }
+
+  // The actual route, read straight off those numbers: from wherever
+  // you are, step to whichever neighbour is cheapest. No searching -
+  // the thinking already happened.
+  function routeFrom(c, r) {
+    const path = [{ c: c, r: r }];
+    let guard = 0;
+    while ((c !== FLAG.c || r !== FLAG.r) && guard++ < COLS * ROWS * 2) {
+      let bc = -1, br = -1, bv = costFrom[r][c];
+      for (const s of [[1,0],[-1,0],[0,1],[0,-1]]) {
+        const nc = c + s[0], nr = r + s[1];
+        if (nc < 0 || nr < 0 || nc >= COLS || nr >= ROWS) continue;
+        if (grid[nr][nc] === WALL) continue;
+        if (costFrom[nr][nc] < bv) { bv = costFrom[nr][nc]; bc = nc; br = nr; }
+      }
+      if (bc < 0) break;
+      c = bc; r = br;
+      path.push({ c: c, r: r });
+    }
+    return path;
+  }
+
+  function canGetThrough() {
+    return costFrom[START.r][START.c] < Infinity;
+  }
+
+
+// -------------------------------------------------------------------
+//  THE BOT ITSELF
+// -------------------------------------------------------------------
+
+  const bot = { c: 0, r: 0, x: 0, y: 0, step: 0, path: [], at: 0, spent: 0 };
+
+  function newRound(keepBuild) {
+    if (!keepBuild) { clearYard(); round = 1; coins = 14; }
+    bot.c = START.c; bot.r = START.r;
+    bot.x = START.c; bot.y = START.r;
+    bot.path = []; bot.at = 0; bot.spent = 0; bot.step = 0;
+    state = 'build';
+    think();
+  }
+
+  function go() {
+    think();
+    if (!canGetThrough()) {
+      say('YOU HAVE SEALED IT IN - LEAVE IT A WAY THROUGH');
+      return;
+    }
+    bot.path = routeFrom(START.c, START.r);
+    bot.at = 0;
+    bot.spent = 0;
+    bot.c = START.c; bot.r = START.r;
+    bot.x = START.c; bot.y = START.r;
+    state = 'run';
+  }
+
+  function update(dt) {
+    if (saysT > 0) saysT -= dt;
+    if (state !== 'run') return;
+
+    // It moves slower through mud, which is the same thing the cost
+    // says - so what you watch matches what you were scored on.
+    const here = at(bot.c, bot.r);
+    const speed = here === MUD ? 0.9 : 3.4;
+    bot.step += dt * speed;
+
+    while (bot.step >= 1) {
+      bot.step -= 1;
+      if (bot.at >= bot.path.length - 1) {
+        state = 'done';
+        best = Math.max(best, bot.spent);
+        say('IT GOT THROUGH IN ' + bot.spent);
+        return;
+      }
+      bot.at++;
+      const nxt = bot.path[bot.at];
+      bot.spent += COST[at(nxt.c, nxt.r)];
+      bot.c = nxt.c; bot.r = nxt.r;
+    }
+
+    // Slide smoothly between squares rather than blinking.
+    const a = bot.path[bot.at];
+    const b = bot.path[Math.min(bot.at + 1, bot.path.length - 1)];
+    bot.x = a.c + (b.c - a.c) * bot.step;
+    bot.y = a.r + (b.r - a.r) * bot.step;
+  }
+
+
+// -------------------------------------------------------------------
+//  DRAWING
+// -------------------------------------------------------------------
+
+  // A phone held sideways has loads of width and almost no height. If we
+  // keep the buttons in a row underneath, they eat the room the yard
+  // needs and every square shrinks to a crumb. So when the screen is
+  // wider than it is tall, the buttons move to a column on the right.
+  function wide()   { return W > H * 1.35; }
+  function panelW() { return wide() ? Math.min(W * 0.24, 210) : 0; }
+  function topBar() { return wide() ? 62 : 96; }
+  function botBar() { return wide() ? 16 : 114; }
+
+  function board() {
+    // One square, sized so the whole yard fits whatever shape the screen
+    // is, and centred in whatever room is left over. Everything else in
+    // the game asks THIS function where things are - so changing the
+    // shape here moves the drawing and your finger at the same time.
+    const s = Math.min((W - panelW() - 40) / COLS,
+                       (H - topBar() - botBar()) / ROWS);
+    return { s: s,
+             x: (W - panelW() - s * COLS) / 2,
+             y: topBar() + (H - topBar() - botBar() - s * ROWS) / 2 };
+  }
+
+  function cellAt(mx, my) {
+    const b = board();
+    const c = Math.floor((mx - b.x) / b.s);
+    const r = Math.floor((my - b.y) / b.s);
+    if (c < 0 || r < 0 || c >= COLS || r >= ROWS) return null;
+    return { c: c, r: r };
+  }
+
+  function rgb(v) { return 'rgb(' + (v[0]|0) + ',' + (v[1]|0) + ',' + (v[2]|0) + ')'; }
+
+  function drawYard() {
+    const b = board();
+
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        const x = b.x + c * b.s, y = b.y + r * b.s;
+        const kind = grid[r][c];
+
+        let col = (c + r) % 2 === 0 ? [30, 38, 52] : [26, 33, 46];
+        if (kind === WALL) col = [126, 138, 162];
+        if (kind === MUD)  col = [122, 92, 54];
+
+        ctx.fillStyle = rgb(col);
+        ctx.fillRect(x + 1, y + 1, b.s - 2, b.s - 2);
+
+        if (kind === WALL) {
+          ctx.fillStyle = 'rgba(255,255,255,0.22)';
+          ctx.fillRect(x + 1, y + 1, b.s - 2, 5);
+        }
+        if (kind === MUD) {
+          // Blobs, so mud reads as sticky rather than as brown floor.
+          ctx.fillStyle = 'rgba(0,0,0,0.28)';
+          for (let i = 0; i < 4; i++) {
+            const a = i * 1.9 + c + r;
+            ctx.beginPath();
+            ctx.arc(x + b.s * (0.5 + Math.cos(a) * 0.26),
+                    y + b.s * (0.5 + Math.sin(a) * 0.26), b.s * 0.11, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+      }
+    }
+
+    // ---- THE ROUTE IT WOULD TAKE --------------------------------------
+    // Shown WHILE YOU BUILD. You can see what your last wall did before
+    // you spend another coin, which turns the whole thing from guessing
+    // into planning.
+    if (canGetThrough()) {
+      const path = state === 'run' || state === 'done'
+        ? bot.path : routeFrom(START.c, START.r);
+      ctx.strokeStyle = state === 'build' ? 'rgba(255,210,110,0.55)'
+                                          : 'rgba(255,210,110,0.85)';
+      ctx.lineWidth = Math.max(3, b.s * 0.16);
+      ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      ctx.beginPath();
+      for (let i = 0; i < path.length; i++) {
+        const px = b.x + (path[i].c + 0.5) * b.s;
+        const py = b.y + (path[i].r + 0.5) * b.s;
+        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+    }
+
+    // ---- START AND FLAG ------------------------------------------------
+    const sx = b.x + START.c * b.s, sy = b.y + START.r * b.s;
+    ctx.fillStyle = '#3d6ea8';
+    ctx.fillRect(sx + b.s * 0.2, sy + b.s * 0.2, b.s * 0.6, b.s * 0.6);
+
+    const fx = b.x + FLAG.c * b.s, fy = b.y + FLAG.r * b.s;
+    ctx.fillStyle = '#6b5a2a';
+    ctx.fillRect(fx + b.s * 0.44, fy + b.s * 0.18, b.s * 0.08, b.s * 0.64);
+    ctx.fillStyle = '#ffd76a';
+    ctx.beginPath();
+    ctx.moveTo(fx + b.s * 0.52, fy + b.s * 0.2);
+    ctx.lineTo(fx + b.s * 0.86, fy + b.s * 0.34);
+    ctx.lineTo(fx + b.s * 0.52, fy + b.s * 0.48);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function drawBot() {
+    const b = board();
+    const x = b.x + (bot.x + 0.5) * b.s;
+    const y = b.y + (bot.y + 0.5) * b.s;
+    const s = b.s * 0.3;
+    const walk = state === 'run' ? Math.sin(bot.step * Math.PI * 2) * s * 0.3 : 0;
+
+    ctx.fillStyle = '#2e3950';
+    ctx.fillRect(x - s * 0.7, y + s * 0.5 + walk * 0.5, s * 0.5, s * 0.7);
+    ctx.fillRect(x + s * 0.2, y + s * 0.5 - walk * 0.5, s * 0.5, s * 0.7);
+
+    ctx.fillStyle = '#c8d6e8';
+    ctx.fillRect(x - s, y - s * 0.6, s * 2, s * 1.3);
+    ctx.fillStyle = '#8fa4c0';
+    ctx.fillRect(x - s * 0.8, y - s * 1.5, s * 1.6, s * 1.0);
+
+    // Two eyes, looking the way it's going.
+    const look = bot.path.length && bot.at < bot.path.length - 1
+      ? Math.sign(bot.path[Math.min(bot.at + 1, bot.path.length - 1)].c - bot.c) : 1;
+    ctx.fillStyle = '#ffd76a';
+    ctx.fillRect(x - s * 0.4 + look * s * 0.18, y - s * 1.25, s * 0.3, s * 0.3);
+    ctx.fillRect(x + s * 0.1 + look * s * 0.18, y - s * 1.25, s * 0.3, s * 0.3);
+  }
+
+
+// -------------------------------------------------------------------
+//  THE BUTTONS
+// -------------------------------------------------------------------
+
+  // The buttons stay a comfortable 54 tall whatever happens - a fingertip
+  // is about 44 across, and a button you can't reliably hit isn't a button.
+  function toolBox(i) {
+    const h = 54;
+    if (wide()) {
+      return { x: W - panelW() + 4, y: topBar() + 6 + i * (h + 10),
+               w: panelW() - 20, h: h };
+    }
+    const w = Math.min(W * 0.26, 190);
+    return { x: 20 + i * (w + 12), y: H - 78, w: w, h: h };
+  }
+  function goBox() {
+    const h = 54;
+    if (wide()) {
+      return { x: W - panelW() + 4, y: topBar() + 16 + TOOLS.length * (h + 10),
+               w: panelW() - 20, h: h };
+    }
+    const w = Math.min(W * 0.22, 150);
+    return { x: W - w - 20, y: H - 78, w: w, h: h };
+  }
+
+  function drawHud() {
+    // Both lines of the top bar sit inside topBar(), so they never end up
+    // written across the yard on a short screen.
+    const line1 = wide() ? 30 : 44, line2 = wide() ? 50 : 68;
+
+    ctx.textAlign = 'left';
+    ctx.font = 'bold ' + Math.min(W * 0.042, 34) + 'px system-ui, sans-serif';
+    ctx.fillStyle = '#ffd76a';
+    ctx.fillText(coins + ' coins', 20, line1);
+
+    ctx.font = Math.min(W * 0.024, 15) + 'px system-ui, sans-serif';
+    ctx.fillStyle = '#6b7a90';
+    ctx.fillText('round ' + round + (best ? '   -   best ' + best + ' steps' : ''), 22, line2);
+
+    // WHAT THE BOT WILL COST. The number you are trying to make bigger,
+    // updating as you build - so every wall you place shows its worth
+    // the instant you place it.
+    ctx.textAlign = 'right';
+    const price = canGetThrough() ? costFrom[START.r][START.c] : null;
+    ctx.font = 'bold ' + Math.min(W * 0.034, 26) + 'px system-ui, sans-serif';
+    ctx.fillStyle = price === null ? '#e05a4a' : '#8fe07a';
+    ctx.fillText(price === null ? 'NO WAY THROUGH' : price + ' steps', W - 20, line1);
+    ctx.font = Math.min(W * 0.022, 14) + 'px system-ui, sans-serif';
+    ctx.fillStyle = '#6b7a90';
+    ctx.fillText(price === null ? 'it must have a route'
+                                : 'the cheapest way it can find', W - 20, line2 - 2);
+
+    // ---- TOOLS ---------------------------------------------------------
+    for (let i = 0; i < TOOLS.length; i++) {
+      const t = TOOLS[i], b = toolBox(i);
+      const on = tool === i;
+      const can = coins >= t.price;
+      ctx.fillStyle = on ? 'rgba(255,215,106,0.18)' : 'rgba(0,0,0,0.35)';
+      ctx.fillRect(b.x, b.y, b.w, b.h);
+      ctx.lineWidth = on ? 3 : 2;
+      ctx.strokeStyle = on ? '#ffd76a' : 'rgba(255,255,255,0.18)';
+      ctx.strokeRect(b.x, b.y, b.w, b.h);
+
+      ctx.fillStyle = rgb(t.colour);
+      ctx.fillRect(b.x + 10, b.y + 14, 26, 26);
+
+      ctx.textAlign = 'left';
+      ctx.font = 'bold ' + Math.min(W * 0.022, 15) + 'px system-ui, sans-serif';
+      ctx.fillStyle = can ? '#e6ecf5' : '#5a6678';
+      ctx.fillText(t.name + '  ' + t.price, b.x + 46, b.y + 24);
+      ctx.font = Math.min(W * 0.018, 12) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#6b7a90';
+      ctx.fillText(t.blurb, b.x + 46, b.y + 42);
+    }
+
+    // ---- GO -------------------------------------------------------------
+    const g = goBox();
+    const ready = state === 'build' && canGetThrough();
+    ctx.fillStyle = state === 'run' ? 'rgba(0,0,0,0.35)'
+                  : ready ? 'rgba(143,224,122,0.2)' : 'rgba(0,0,0,0.35)';
+    ctx.fillRect(g.x, g.y, g.w, g.h);
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = ready ? '#8fe07a' : 'rgba(255,255,255,0.2)';
+    ctx.strokeRect(g.x, g.y, g.w, g.h);
+    ctx.textAlign = 'center';
+    ctx.font = 'bold ' + Math.min(W * 0.03, 22) + 'px system-ui, sans-serif';
+    ctx.fillStyle = ready ? '#8fe07a' : '#6b7a90';
+    ctx.fillText(state === 'build' ? 'GO' : state === 'run' ? 'RUNNING' : 'NEXT ROUND',
+                 g.x + g.w / 2, g.y + 34);
+
+    // If the yard has to squeeze so small that a fingertip covers three
+    // squares, say so instead of letting Max wonder why he keeps building
+    // in the wrong place. Turning the phone upright genuinely fixes it.
+    if (wide() && board().s < 30) {
+      ctx.textAlign = 'center';
+      ctx.font = 'bold 11px system-ui, sans-serif';
+      ctx.fillStyle = '#6b7a90';
+      const mx = W - panelW() / 2;
+      ctx.fillText('TURN YOUR PHONE', mx, goBox().y + goBox().h + 26);
+      ctx.fillText('UPRIGHT FOR A BIGGER YARD', mx, goBox().y + goBox().h + 40);
+    }
+
+    if (saysT > 0) {
+      ctx.textAlign = 'center';
+      const size = wide() ? 15 : Math.min(W * 0.028, 20);
+      const y = wide() ? H - 12 : H - 100;
+      ctx.font = 'bold ' + size + 'px system-ui, sans-serif';
+      // A dark pill behind it, so a message never gets lost against a
+      // yard full of walls.
+      const wid = ctx.measureText(says).width;
+      ctx.fillStyle = 'rgba(16,20,28,' + clamp(saysT, 0, 1) * 0.85 + ')';
+      ctx.fillRect((W - panelW()) / 2 - wid / 2 - 12, y - size, wid + 24, size + 12);
+      ctx.fillStyle = 'rgba(230,236,245,' + clamp(saysT, 0, 1) + ')';
+      ctx.fillText(says, (W - panelW()) / 2, y);
+    }
+  }
+
+
+// -------------------------------------------------------------------
+//  BUILDING
+// -------------------------------------------------------------------
+
+  function place(c, r) {
+    if (state !== 'build') return;
+    if (c === START.c && r === START.r) { say('that is where it starts'); return; }
+    if (c === FLAG.c && r === FLAG.r)   { say('that is the flag'); return; }
+
+    const t = TOOLS[tool];
+
+    // Tapping something you already built takes it back and refunds it,
+    // so a mistake costs nothing but a moment.
+    if (grid[r][c] !== EMPTY) {
+      const was = TOOLS.find(function (x) { return x.kind === grid[r][c]; });
+      grid[r][c] = EMPTY;
+      coins += was.price;
+      think();
+      return;
+    }
+
+    if (coins < t.price) { say('not enough coins'); return; }
+
+    grid[r][c] = t.kind;
+    think();
+
+    // YOU MAY NOT SEAL IT IN. Refused at the moment you try, with the
+    // block put straight back - so you find out by tapping rather than
+    // by building a masterpiece and being told at the end.
+    if (!canGetThrough()) {
+      grid[r][c] = EMPTY;
+      think();
+      say('IT MUST HAVE A WAY THROUGH');
+      return;
+    }
+
+    coins -= t.price;
+
+    // You have clearly worked out how to build. The instructions can go.
+    const hint = document.getElementById('hud');
+    if (hint) hint.style.opacity = 0;
+  }
+
+  function tap(mx, my) {
+    for (let i = 0; i < TOOLS.length; i++) {
+      const b = toolBox(i);
+      if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
+        tool = i; return;
+      }
+    }
+    const g = goBox();
+    if (mx >= g.x && mx <= g.x + g.w && my >= g.y && my <= g.y + g.h) {
+      if (state === 'build') go();
+      else if (state === 'done') {
+        round++;
+        coins += 8 + round;         // more to spend every round
+        state = 'build';
+        bot.c = START.c; bot.r = START.r; bot.x = START.c; bot.y = START.r;
+        bot.path = []; bot.at = 0; bot.spent = 0;
+        say('round ' + round + ' - here it comes again');
+      }
+      return;
+    }
+    const cell = cellAt(mx, my);
+    if (cell) place(cell.c, cell.r);
+  }
+
+  canvas.addEventListener('mousedown', function (e) { tap(e.clientX, e.clientY); });
+  canvas.addEventListener('touchstart', function (e) {
+    e.preventDefault();
+    for (const t of e.changedTouches) tap(t.clientX, t.clientY);
+  }, { passive: false });
+
+
+// -------------------------------------------------------------------
+//  THE LOOP
+// -------------------------------------------------------------------
+
+  let last = 0;
+  function frame(now) {
+    const dt = Math.min(0.05, Math.max(0.0005, (now - last) / 1000));
+    last = now;
+
+    update(dt);
+
+    ctx.fillStyle = '#10141c';
+    ctx.fillRect(0, 0, W, H);
+
+    drawYard();
+    drawBot();
+    drawHud();
+
+    requestAnimationFrame(frame);
+  }
+
+  clearYard();
+  newRound(false);
+  requestAnimationFrame(frame);
+
+</script>
+</body>
+</html>
