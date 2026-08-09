@@ -239,11 +239,11 @@
     { name: 'MUD',   price: 1, kind: MUD,
       blurb: 'they wade through it - five slow steps' },
     { name: 'DOOR',  price: 5, kind: DOOR,
-      blurb: 'locked. you hide its key too' },
+      blurb: 'place a door, then hide its key' },
     { name: 'SAW',   price: 6, kind: SAW,
-      blurb: 'pops up, then drops. slices them' },
+      blurb: 'pops up, then drops. slices them. ⚡powered' },
     { name: 'HAMMER',price: 4, kind: SMASH,
-      blurb: 'slams down. flattens them' }
+      blurb: 'slams down. flattens them. ⚡powered' }
   ];
 
   let grid = [];      // what is in each square
@@ -252,6 +252,13 @@
   let tool = 0;
   let coins = 26;
   let round = 1;
+
+  // THE POWER SUPPLY. Saws and hammers are POWERED traps - each one you
+  // build draws on this. It starts big enough for three, so you can't just
+  // sink every coin into saws; past that you have to spend coins GROWING
+  // the supply, which competes with buying more traps. Walls, mud and
+  // doors need no power at all.
+  let powerMax = 3;
   let best = 0;       // the most robots you have ever stopped in one wave
 
   // When you put a door down you are holding its key, and the very next
@@ -434,7 +441,7 @@
   // beginning, everything you'd placed thrown away. We keep `best` though -
   // your record for most robots stopped is worth hanging on to.
   function resetGame() {
-    coins = 26; round = 1;
+    coins = 26; round = 1; powerMax = 3;
     holdingKey = -1; tool = 0;
     bots = []; route = [];
     banner = ''; bannerT = 0;
@@ -714,6 +721,27 @@
     return n;
   }
 
+  // ---- THE POWER SUPPLY ---------------------------------------------
+  // Only saws and hammers are powered.
+  function isPowered(kind) { return kind === SAW || kind === SMASH; }
+  // How much power you're using right now = how many powered traps are up.
+  function poweredUsed() {
+    let n = 0;
+    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++)
+      if (isPowered(grid[r][c])) n++;
+    return n;
+  }
+  // Each extra unit costs more than the last, so power stays a real choice
+  // and you can't buy your way to a wall of saws.
+  function powerUpCost() { return 8 + (powerMax - 3) * 6; }
+  function upgradePower() {
+    const cost = powerUpCost();
+    if (coins < cost) { say('need ' + cost + ' coins to grow the power supply'); return; }
+    coins -= cost;
+    powerMax++;
+    say('power supply grown - room for ' + powerMax + ' powered traps now');
+  }
+
   function go() {
     if (holdingKey >= 0) { say('put the key down first'); return; }
     think();
@@ -866,6 +894,26 @@
   function toolBox(i) { return boxOf(i); }
   function goBox()    { return boxOf(TOOLS.length); }
 
+  // The power meter / upgrade button lives centred in the top nav band,
+  // between the Arcade and Reset pills - the same spot the STAGE pill sits
+  // in the other game.
+  function powerBox() {
+    const w = Math.min(210, W * 0.56), h = 30;
+    return { x: (W - panelW()) / 2 - w / 2, y: 7, w: w, h: h };
+  }
+
+  // A rounded rectangle path, so the pills and the meter aren't hard boxes.
+  function rrect(x, y, w, h, r) {
+    r = Math.min(r, w / 2, h / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y,     x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x,     y + h, r);
+    ctx.arcTo(x,     y + h, x,     y,     r);
+    ctx.arcTo(x,     y,     x + w, y,     r);
+    ctx.closePath();
+  }
+
   function botBar() {
     return wide() ? 16 : (btnRows() * btnH() + (btnRows() - 1) * 10 + 44);
   }
@@ -1009,16 +1057,30 @@
 
         if (kind === DOOR) {
           const col = LOCKS[tint[r][c]].col;
+          // the door panel...
           ctx.fillStyle = rgb(col);
           ctx.fillRect(x + b.s * 0.12, y + 1, b.s * 0.76, b.s - 2);
-          ctx.fillStyle = 'rgba(0,0,0,0.45)';
+          // ...with a darker frame, so it reads as a DOOR, not a coloured
+          // block that happens to match a key.
+          ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(x + b.s * 0.12, y + 1, b.s * 0.76, b.s - 2);
+          // a proper keyhole - a round hole with a slot under it.
+          ctx.fillStyle = 'rgba(0,0,0,0.55)';
           ctx.beginPath();
-          ctx.arc(x + b.s * 0.68, y + b.s * 0.5, b.s * 0.09, 0, Math.PI * 2);
+          ctx.arc(x + b.s * 0.66, y + b.s * 0.44, b.s * 0.1, 0, Math.PI * 2);
           ctx.fill();
+          ctx.fillRect(x + b.s * 0.635, y + b.s * 0.44, b.s * 0.05, b.s * 0.18);
         }
 
         if (kind === KEY) {
-          drawKeyShape(x + b.s / 2, y + b.s / 2, b.s, LOCKS[tint[r][c]].col);
+          const col = LOCKS[tint[r][c]].col;
+          // A soft coloured ring so a hidden key is easy to spot - and its
+          // colour tells you at a glance which door it opens.
+          ctx.strokeStyle = 'rgba(' + col[0] + ',' + col[1] + ',' + col[2] + ',0.55)';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(x + 2.5, y + 2.5, b.s - 5, b.s - 5);
+          drawKeyShape(x + b.s / 2, y + b.s / 2, b.s, col);
         }
       }
     }
@@ -1129,6 +1191,86 @@
     return -1;
   }
 
+  // The power supply meter, in the top-centre nav band. The whole pill is
+  // a button: tap it to spend coins growing the supply. It glows red when
+  // it's full, so you can see at a glance why a saw won't go down.
+  function drawPowerWidget() {
+    const bx = powerBox();
+    const used = poweredUsed(), cost = powerUpCost(), canUp = coins >= cost;
+    const full = used >= powerMax;
+    const cy = bx.y + bx.h / 2;
+
+    rrect(bx.x, bx.y, bx.w, bx.h, bx.h / 2);
+    ctx.fillStyle = 'rgba(20, 26, 38, 0.62)';
+    ctx.fill();
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = full ? 'rgba(224, 90, 74, 0.75)' : 'rgba(255, 215, 106, 0.4)';
+    ctx.stroke();
+
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.font = 'bold 14px system-ui, sans-serif';
+    ctx.fillStyle = full ? '#e05a4a' : '#ffd76a';
+    ctx.fillText('⚡', bx.x + 11, cy);        // lightning bolt
+
+    // a little battery: a track, a fill for how much is used, and ticks.
+    const barX = bx.x + 32, barW = bx.w * 0.36, barH = 12, barY = cy - barH / 2;
+    ctx.fillStyle = 'rgba(255,255,255,0.13)';
+    ctx.fillRect(barX, barY, barW, barH);
+    ctx.fillStyle = full ? '#e05a4a' : '#ffd76a';
+    ctx.fillRect(barX, barY, barW * (powerMax ? used / powerMax : 0), barH);
+    ctx.strokeStyle = 'rgba(16,20,28,0.7)'; ctx.lineWidth = 1;
+    for (let i = 1; i < powerMax && i < 12; i++) {
+      const gx = barX + barW * i / powerMax;
+      ctx.beginPath(); ctx.moveTo(gx, barY); ctx.lineTo(gx, barY + barH); ctx.stroke();
+    }
+
+    ctx.font = '12px system-ui, sans-serif';
+    ctx.fillStyle = '#cdd6e4';
+    ctx.fillText(used + '/' + powerMax, barX + barW + 7, cy);
+
+    // the "grow it" price, on the right - green when you can afford it.
+    ctx.textAlign = 'right';
+    ctx.font = 'bold 12px system-ui, sans-serif';
+    ctx.fillStyle = canUp ? '#8fe07a' : '#5a6678';
+    ctx.fillText('+1  ' + cost + '⚡', bx.x + bx.w - 11, cy);
+    ctx.textBaseline = 'alphabetic';
+  }
+
+  // While you're holding a door's key, this shouts about it: a pulsing
+  // frame in the key's colour around the whole board, and a banner up top
+  // with the key drawn on it - so "you are placing a KEY now" is
+  // impossible to miss.
+  function drawKeyPrompt() {
+    const col = LOCKS[holdingKey].col;
+    const pulse = 0.4 + 0.6 * Math.abs(Math.sin(clock * 4));
+    const colStr = 'rgba(' + col[0] + ',' + col[1] + ',' + col[2] + ',' + pulse.toFixed(3) + ')';
+    const bd = board();
+
+    // frame round the board
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = colStr;
+    ctx.strokeRect(bd.x - 3, bd.y - 3, bd.s * COLS + 6, bd.s * ROWS + 6);
+
+    // banner in the top-centre band
+    const txt = 'HIDE THE ' + LOCKS[holdingKey].name + ' KEY';
+    ctx.font = 'bold ' + Math.min(W * 0.032, 16) + 'px system-ui, sans-serif';
+    const tw = ctx.measureText(txt).width;
+    const ph = 32, pw = Math.min(W - 20, tw + 78);
+    const cx = (W - panelW()) / 2, px = cx - pw / 2, py = 6, cyy = py + ph / 2;
+    rrect(px, py, pw, ph, ph / 2);
+    ctx.fillStyle = 'rgba(14, 18, 26, 0.92)'; ctx.fill();
+    ctx.lineWidth = 2; ctx.strokeStyle = colStr; ctx.stroke();
+
+    drawKeyShape(px + 24, cyy, 26, col);
+
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = rgb(col);
+    ctx.fillText(txt, px + 42, cyy);
+    ctx.textBaseline = 'alphabetic';
+  }
+
   function drawHud() {
     // The +NAVH drops the coins/steps read-out below the nav pill band.
     const line1 = (wide() ? 30 : 44) + NAVH, line2 = (wide() ? 50 : 68) + NAVH;
@@ -1167,7 +1309,8 @@
       const t = TOOLS[i], bx = toolBox(i);
       const on = tool === i && holdingKey < 0;
       const lock = nextLock();
-      const can = coins >= t.price && (t.kind !== DOOR || lock >= 0);
+      const powerOK = !isPowered(t.kind) || poweredUsed() < powerMax;
+      const can = coins >= t.price && (t.kind !== DOOR || lock >= 0) && powerOK;
 
       ctx.fillStyle = on ? 'rgba(255,215,106,0.18)' : 'rgba(0,0,0,0.35)';
       ctx.fillRect(bx.x, bx.y, bx.w, bx.h);
@@ -1226,13 +1369,13 @@
     ctx.fillText(state === 'build' ? 'SEND THEM' : state === 'run' ? 'CLIMBING' : 'NEXT WAVE',
                  g.x + g.w / 2, g.y + g.h * 0.63);
 
-    // ---- HOLDING A KEY -------------------------------------------------
-    if (holdingKey >= 0) {
-      ctx.textAlign = 'center';
-      ctx.font = 'bold ' + Math.min(W * 0.028, 20) + 'px system-ui, sans-serif';
-      ctx.fillStyle = rgb(LOCKS[holdingKey].col);
-      ctx.fillText('NOW HIDE THE ' + LOCKS[holdingKey].name + ' KEY',
-                   (W - panelW()) / 2, wide() ? topBar() - 14 : 90);
+    // ---- POWER METER / KEY PROMPT (top centre) -------------------------
+    // In build, the top-centre shows your power supply - unless you're
+    // mid-way through placing a door's key, when it shows a big, hard-to-
+    // miss prompt to hide that key instead.
+    if (state === 'build') {
+      if (holdingKey >= 0) drawKeyPrompt();
+      else                 drawPowerWidget();
     }
 
     if (wide() && board().s < 26) {
@@ -1372,6 +1515,13 @@
     const t = TOOLS[tool];
     if (coins < t.price) { say('not enough coins'); return; }
 
+    // Powered traps need spare power. If the supply is full, you have to
+    // grow it (tap the ⚡ meter up top) before you can build another.
+    if (isPowered(t.kind) && poweredUsed() >= powerMax) {
+      say('power supply is full - tap the ⚡ at the top to grow it');
+      return;
+    }
+
     if (t.kind === DOOR) {
       const colour = nextLock();
       if (colour < 0) { say('three doors is all you get'); return; }
@@ -1410,6 +1560,14 @@
     // While you are holding a key, the only thing a tap can do is put it
     // down. No half-finished doors.
     if (holdingKey < 0) {
+      // The power meter up top is a button: tap it to grow the supply.
+      if (state === 'build') {
+        const pb = powerBox();
+        if (mx >= pb.x && mx <= pb.x + pb.w && my >= pb.y && my <= pb.y + pb.h) {
+          upgradePower();
+          return;
+        }
+      }
       for (let i = 0; i < TOOLS.length; i++) {
         const b = toolBox(i);
         if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
