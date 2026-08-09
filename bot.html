@@ -1148,7 +1148,7 @@
 
   // The stat bar spans the width (minus the side panel in landscape) and is
   // split into three equal cells: coins | power | steps.
-  const STAT_CELLS = 4;
+  const STAT_CELLS = 3;
   function statBarRect() {
     return { x: 8, y: NAV_H, w: (W - panelW()) - 16, h: STAT_H - 4 };
   }
@@ -1603,7 +1603,7 @@
     const maxW = cell.w - 18;
     if (max * pw + (max - 1) * gap > maxW) pw = (maxW - (max - 1) * gap) / max;
     const bh = Math.min(13, pw / 0.55);
-    const cy = cell.y + cell.h - 11;
+    const cy = cell.y + cell.h * 0.62;
     let x = cell.x + (cell.w - (max * pw + (max - 1) * gap)) / 2 + pw / 2;
     for (let i = 0; i < max; i++) {
       drawBolt(x, cy, bh, i < used ? (hot ? '#e05a4a' : '#ffd76a') : 'rgba(255,255,255,0.16)');
@@ -1611,10 +1611,10 @@
     }
   }
 
-  // THE STAT BAR - the numbers you act on: coins | power | level | steps.
-  // Each cell is a small uppercase label with its readout under it. The
-  // POWER cell is also a button (tap it to grow the supply) and shows the
-  // price of the next unit; it turns red when the supply is full.
+  // THE STAT BAR - the numbers you act on: coins | power | robots. (Level
+  // lives up in the nav row now.) Coins and robots show as an icon with the
+  // amount beside it; the POWER cell is a meter of bolts and is also a button
+  // (tap it to grow the supply), turning red when the supply is full.
   function drawStatBar() {
     const b = statBarRect();
     rrect(b.x, b.y, b.w, b.h, 10);
@@ -1629,24 +1629,28 @@
       ctx.beginPath(); ctx.moveTo(x, b.y + 8); ctx.lineTo(x, b.y + b.h - 8); ctx.stroke();
     }
 
-    const labY = b.y + 15, valY = b.y + b.h - 9, icoY = b.y + 9;
-    const valFont = 'bold ' + Math.min(W * 0.05, 19) + 'px system-ui, sans-serif';
-    function label(cx, s) {
-      ctx.textAlign = 'center'; ctx.font = '9px system-ui, sans-serif';
-      ctx.fillStyle = 'rgba(159,176,198,0.85)'; ctx.fillText(s, cx, labY);
-    }
-    function value(cx, s, col) {
-      ctx.textAlign = 'center'; ctx.font = valFont;
-      ctx.fillStyle = col; ctx.fillText(s, cx, valY);
+    const labY = b.y + 15, midY = b.y + b.h / 2;
+    const valFont = 'bold ' + Math.min(W * 0.052, 20) + 'px system-ui, sans-serif';
+
+    // An icon on the LEFT with the amount beside it, the pair centred in the
+    // cell.
+    function iconValue(cell, text, col, iconW, drawIcon) {
+      ctx.font = valFont;
+      const numW = ctx.measureText(text).width, gap = 6;
+      const x0 = cell.x + cell.w / 2 - (iconW + gap + numW) / 2;
+      drawIcon(x0 + iconW / 2, midY);
+      ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = col; ctx.fillText(text, x0 + iconW + gap, midY + 1);
+      ctx.textBaseline = 'alphabetic';
     }
 
-    // 0 - COINS: a coin icon over the count (flashes red if you can't afford)
+    // 0 - COINS: a coin left of the count (red when you can't afford a thing)
     let c = statCell(0);
     const coinRed = coinFlash > 0 && Math.sin(coinFlash * 30) > 0;
-    drawCoin(c.x + c.w / 2, icoY, 6.5);
-    value(c.x + c.w / 2, '' + coins, coinRed ? '#e05a4a' : '#ffd76a');
+    iconValue(c, '' + coins, coinRed ? '#e05a4a' : '#ffd76a', 14,
+              function (x, y) { drawCoin(x, y, 7); });
 
-    // 1 - POWER: the meter, tappable, with the price of the next unit.
+    // 1 - POWER: a meter of bolts, tappable, with the price of the next unit.
     c = statCell(1);
     const used = poweredUsed(), full = used >= powerMax, canUp = coins >= powerUpCost();
     const pflash = powerFlash > 0 && Math.sin(powerFlash * 30) > 0;
@@ -1658,7 +1662,6 @@
       ctx.strokeStyle = pflash ? '#e05a4a' : 'rgba(224,90,74,0.6)';
       ctx.stroke();
     }
-    drawBolt(c.x + c.w / 2, icoY, 15, hot ? '#e05a4a' : '#ffd76a');
     drawPowerPips(c, used, powerMax, hot);
     // the price of the next unit, with a little bolt so it reads as "power".
     const costTxt = '+' + powerUpCost(), costCol = canUp ? '#8fe07a' : '#6b7a90';
@@ -1667,22 +1670,13 @@
     ctx.fillText(costTxt, c.x + c.w - 7, labY);
     drawBolt(c.x + c.w - 7 - ctx.measureText(costTxt).width - 5, labY - 4, 9, costCol);
 
-    // 2 - LEVEL and wave
+    // 2 - ROBOTS: a robot head left of the count - how many are coming while
+    // you build, how many you've stopped once they're climbing.
     c = statCell(2);
-    label(c.x + c.w / 2, 'LEVEL');
-    value(c.x + c.w / 2, level + ' · w' + round, '#e6ecf5');
+    const rtxt = state === 'build' ? '' + waveSize() : stopped() + '/' + bots.length;
+    iconValue(c, rtxt, '#e8834a', 13,
+              function (x, y) { drawRobotHead(x, y + 2, 6); });
 
-    // 3 - THE ROBOT COUNTER. While you build it shows how many are coming
-    // this wave (or NO WAY if you've sealed them out); once they're climbing
-    // it flips to how many you've STOPPED out of the whole wave.
-    c = statCell(3);
-    if (state === 'build') {
-      drawRobotHead(c.x + c.w / 2, icoY + 2, 5.5);
-      value(c.x + c.w / 2, '' + waveSize(), '#e8834a');
-    } else {
-      label(c.x + c.w / 2, 'STOPPED');
-      value(c.x + c.w / 2, stopped() + '/' + bots.length, '#e8834a');
-    }
     ctx.textAlign = 'left';
   }
 
@@ -1720,10 +1714,28 @@
     ctx.textBaseline = 'alphabetic';
   }
 
+  // THE LEVEL BADGE - a little pill in the middle of the top nav row, between
+  // the Arcade and Reset buttons, so which level and wave you're on sits up
+  // top away from the numbers you act on.
+  function drawLevelPill() {
+    const txt = 'LEVEL ' + level + '  ·  wave ' + round;
+    ctx.font = 'bold ' + Math.min(W * 0.032, 14) + 'px system-ui, sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const pw = ctx.measureText(txt).width + 26, ph = 28;
+    const cx = (W - panelW()) / 2, px = cx - pw / 2, py = 7;
+    rrect(px, py, pw, ph, ph / 2);
+    ctx.fillStyle = 'rgba(20, 26, 38, 0.62)'; ctx.fill();
+    ctx.strokeStyle = 'rgba(255, 215, 106, 0.30)'; ctx.lineWidth = 1; ctx.stroke();
+    ctx.fillStyle = '#ffe9c4';
+    ctx.fillText(txt, cx, py + ph / 2 + 1);
+    ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left';
+  }
+
   function drawHud() {
-    // Two tiers up top: the nav buttons (Arcade / Clear / Start over) in the
-    // top row, then the stat bar with all your numbers. When you're hiding a
-    // door's key, its prompt takes over the nav band.
+    // Two tiers up top: the nav row (Arcade, the LEVEL badge, Reset) and then
+    // the stat bar with the numbers you act on. When you're hiding a door's
+    // key, its prompt takes over the nav band, so the level badge steps aside.
+    if (holdingKey < 0) drawLevelPill();
     drawStatBar();
     if (state === 'build' && holdingKey >= 0) drawKeyPrompt();
 
