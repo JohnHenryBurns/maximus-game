@@ -268,6 +268,7 @@
     them = { hearts: START_HEARTS, board: [null, null, null], hand: [],
              deck: theirDeck(Math.max(8, mine.length)) };
     for (let i = 0; i < 4; i++) { drawFrom(you); drawFrom(them); }
+    refillThem();                    // they are three deep from the off
     picked = -1; turn = 'you'; bits = []; floats = [];
     screen = 'duel';
     say('tap a monster, then tap a space');
@@ -320,11 +321,21 @@
     const m = st.attacker;
     m.wobble = 0.35;
     if (st.target) {
+      // SPARE DAMAGE GOES STRAIGHT THROUGH. Hit a 1-life goblin with a
+      // 6-hit dragon and the other five carry on into the player.
+      //
+      // This exists because of a measurement, not a hunch. With their
+      // line always three deep, every attack of yours always met a
+      // monster, so their hearts could never be touched: 60 games, 60
+      // losses, and their hearts never moved once. Overkill is what
+      // makes a full line beatable - you have to out-hit it.
+      const spare = m.hit - st.target.life;
       st.target.life -= m.hit;
       st.target.justHit = 0.5;
       if (st.target.life <= 0) {
         st.foe.board[st.slot] = null;
         st.died = true;
+        if (spare > 0) { st.foe.hearts -= spare; st.spare = spare; }
       }
     } else {
       st.foe.hearts -= m.hit;
@@ -408,6 +419,11 @@
       // even when there was going to BE no answer.
       if (card.hit >= facing.life) {
         score += 8 + facing.hit * 2;
+        // Whatever is left over after the kill goes through to the
+        // hearts, so a big overkill is worth reaching for.
+        const spare = card.hit - facing.life;
+        score += spare * 3;
+        if (spare >= you.hearts) score += 100;
       } else {
         score += card.hit;
         if (facing.hit >= card.life) score -= 4;
@@ -418,20 +434,60 @@
     return score;
   }
 
+  // Which kinds are standing on YOUR line right now. The opponent will
+  // not put down a copy of any of them, so you never fight yourself.
+  function yourKinds() {
+    const seen = [];
+    for (const m of you.board) if (m) seen.push(m.i);
+    return seen;
+  }
+
+  // Their line is ALWAYS three deep. Any space that empties gets filled
+  // again before they attack - from their hand if they have something
+  // allowed, and otherwise a fresh monster walks on.
+  function refillThem() {
+    // If YOU have since played a copy of something they already had,
+    // theirs walks off and a different one takes its place. Otherwise
+    // "never the same as yours" would only be true at the moment they
+    // put it down, not while you look at it.
+    const mine = yourKinds();
+    for (let s = 0; s < SLOTS; s++) {
+      if (them.board[s] && mine.indexOf(them.board[s].i) >= 0) them.board[s] = null;
+    }
+
+    // Everything left on the table is counted up BEFORE any gap is
+    // filled. Doing it as we went along missed anything standing in a
+    // later space - so space 0 happily copied space 2.
+    const banned = mine.slice();
+    for (const m of them.board) if (m) banned.push(m.i);
+
+    for (let s = 0; s < SLOTS; s++) {
+      if (them.board[s]) continue;
+
+      let pick = -1, bestScore = -Infinity;
+      for (let c = 0; c < them.hand.length; c++) {
+        if (banned.indexOf(them.hand[c].i) >= 0) continue;   // no copying you
+        const sc = scoreMove(c, s);
+        if (sc > bestScore) { bestScore = sc; pick = c; }
+      }
+
+      if (pick >= 0) {
+        them.board[s] = them.hand[pick];
+        them.hand.splice(pick, 1);
+      } else {
+        // Nothing allowed in hand. They are promised three, so one is
+        // found - still never a copy of anything already on the table.
+        let idx = randomCardIndex(), guard = 0;
+        while (banned.indexOf(idx) >= 0 && guard < 300) { idx = randomCardIndex(); guard++; }
+        them.board[s] = newMonster(idx);
+      }
+      banned.push(them.board[s].i);
+    }
+  }
+
   function theirTurn() {
     drawFrom(them);
-    let bestScore = -Infinity, bestCard = -1, bestSlot = -1;
-    for (let c = 0; c < them.hand.length; c++) {
-      for (let s = 0; s < SLOTS; s++) {
-        if (them.board[s]) continue;
-        const sc = scoreMove(c, s);
-        if (sc > bestScore) { bestScore = sc; bestCard = c; bestSlot = s; }
-      }
-    }
-    if (bestCard >= 0) {
-      them.board[bestSlot] = them.hand[bestCard];
-      them.hand.splice(bestCard, 1);
-    }
+    refillThem();
     startCut(planAttacks(them, you, false), 'you');
   }
 
@@ -877,6 +933,11 @@
         ctx.font = 'bold ' + Math.min(W * 0.06, 32) + 'px system-ui, sans-serif';
         ctx.fillStyle = '#ff8a7a';
         ctx.fillText('SMASHED!', W / 2, cy + ch + 44);
+        if (st.spare > 0) {
+          ctx.font = 'bold ' + Math.min(W * 0.045, 24) + 'px system-ui, sans-serif';
+          ctx.fillStyle = '#ffd76a';
+          ctx.fillText(st.spare + ' STRAIGHT THROUGH!', W / 2, cy + ch + 78);
+        }
       }
       ctx.globalAlpha = 1;
     }
