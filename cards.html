@@ -33,17 +33,16 @@
 // ===================================================================
 //  MONSTER DUEL
 //
-//  You and an opponent take turns putting monsters down. Then they
-//  fight. Knock the other one's hearts to zero.
+//  You can only fight with monsters you actually OWN. New ones come
+//  from a card pack, and there is one pack a day.
 //
-//  There is ONE rule that everything else hangs off:
+//  The duel itself hangs off ONE rule:
 //
 //      A MONSTER ATTACKS THE MONSTER DIRECTLY OPPOSITE IT.
 //      If that space is empty, it hits the PLAYER instead.
 //
-//  That is why WHERE you put a card matters as much as WHICH card you
-//  put down. Line your big hitter up against their empty space and it
-//  goes straight for their hearts.
+//  Your collection lives in this browser, on this device. Nothing is
+//  sent anywhere. Clear your browser data and it goes with it.
 // ===================================================================
 
   const canvas = document.getElementById('screen');
@@ -63,38 +62,164 @@
 // -------------------------------------------------------------------
 //  THE MONSTERS
 //
-//  hit  = how much damage it does when it attacks
-//  life = how much damage it can take before it is scrap
+//  hit  = damage it deals      life = damage it survives
+//  find = how often it turns up in a pack. A big number means common,
+//         a small number means you will be very pleased to see it.
 // -------------------------------------------------------------------
 
   const CARDS = [
-    { name: 'FART OGRE',   hit: 4, life: 3, col: [110, 170,  80] },
-    { name: 'BOOGER BAT',  hit: 2, life: 5, col: [140, 190,  90] },
-    { name: 'SNOT SLUG',   hit: 3, life: 2, col: [ 90, 200, 150] },
-    { name: 'ROBO DOG',    hit: 5, life: 1, col: [140, 160, 200] },
-    { name: 'BURP TOAD',   hit: 2, life: 4, col: [ 90, 180, 120] },
-    { name: 'PANTS DRAGON',hit: 6, life: 2, col: [220, 110,  90] },
-    { name: 'EARWAX OWL',  hit: 3, life: 3, col: [210, 170,  90] },
-    { name: 'SOCK GOLEM',  hit: 1, life: 7, col: [160, 140, 180] },
-    { name: 'TOENAIL TROLL',hit:4, life: 4, col: [180, 150, 110] },
-    { name: 'BELCH BEAST', hit: 5, life: 3, col: [200, 120, 160] },
-    { name: 'NOSE GOBLIN', hit: 3, life: 1, col: [130, 200, 190] },
-    { name: 'BUM BADGER',  hit: 2, life: 6, col: [170, 170, 200] }
+    { name: 'SNOT SLUG',    hit: 3, life: 2, find: 10, col: [ 90, 200, 150] },
+    { name: 'NOSE GOBLIN',  hit: 3, life: 1, find: 10, col: [130, 200, 190] },
+    { name: 'BURP TOAD',    hit: 2, life: 4, find: 10, col: [ 90, 180, 120] },
+    { name: 'BOOGER BAT',   hit: 2, life: 5, find:  9, col: [140, 190,  90] },
+    { name: 'BUM BADGER',   hit: 2, life: 6, find:  8, col: [170, 170, 200] },
+    { name: 'FART OGRE',    hit: 4, life: 3, find:  5, col: [110, 170,  80] },
+    { name: 'EARWAX OWL',   hit: 3, life: 3, find:  5, col: [210, 170,  90] },
+    { name: 'ROBO DOG',     hit: 5, life: 1, find:  4, col: [140, 160, 200] },
+    { name: 'SOCK GOLEM',   hit: 1, life: 7, find:  4, col: [160, 140, 180] },
+    { name: 'TOENAIL TROLL',hit: 4, life: 4, find:  2, col: [180, 150, 110] },
+    { name: 'BELCH BEAST',  hit: 5, life: 3, find:  2, col: [200, 120, 160] },
+    { name: 'PANTS DRAGON', hit: 6, life: 2, find:  1, col: [220, 110,  90] }
   ];
 
-  const SLOTS = 3;            // three spaces each, facing each other
+  // How rare something is, worked out FROM the find numbers rather than
+  // typed in twice - so changing a find number can never leave a wrong
+  // label behind.
+  function rarityOf(i) {
+    const f = CARDS[i].find;
+    return f >= 8 ? { name: 'common', stars: 1, col: [150, 145, 175] }
+         : f >= 4 ? { name: 'uncommon', stars: 2, col: [120, 200, 255] }
+                  : { name: 'RARE', stars: 3, col: [255, 200,  90] };
+  }
+
+  const SLOTS = 3;
   const START_HEARTS = 20;
   const HAND_MAX = 5;
+  const PACK_SIZE = 5;
+  const DAY = 24 * 60 * 60 * 1000;      // how long a day is, in milliseconds
 
-  let you   = { hearts: START_HEARTS, board: [null, null, null], hand: [] };
-  let them  = { hearts: START_HEARTS, board: [null, null, null], hand: [] };
 
-  let picked = -1;            // which card in your hand you have tapped
-  let turn = 'you';           // 'you', 'them', 'over'
+// -------------------------------------------------------------------
+//  YOUR COLLECTION - THE BIT THAT SURVIVES CLOSING THE PAGE
+// -------------------------------------------------------------------
+
+  const SAVE_KEY = 'maxMonsterDuel';
+
+  let own = [];              // own[i] = how many of card i you have
+  let lastPack = 0;          // when you last opened one
+  let wins = 0, losses = 0;
+
+  // Eight monsters to start with, so the game is playable the second you
+  // open it. The daily pack makes your collection BETTER - it is not the
+  // only way to have one. Waiting a day to play at all would be rubbish.
+  const STARTER = [0, 0, 1, 2, 3, 3, 5, 7];
+
+  function blankCollection() {
+    own = [];
+    for (let i = 0; i < CARDS.length; i++) own.push(0);
+  }
+
+  function save() {
+    try {
+      localStorage.setItem(SAVE_KEY, JSON.stringify({
+        own: own, lastPack: lastPack, wins: wins, losses: losses
+      }));
+    } catch (e) { /* private browsing, or storage full. Play on anyway. */ }
+  }
+
+  function load() {
+    blankCollection();
+    let data = null;
+    try { data = JSON.parse(localStorage.getItem(SAVE_KEY)); } catch (e) { data = null; }
+
+    if (!data || !data.own) {
+      for (const i of STARTER) own[i]++;
+      lastPack = 0;                       // a pack is waiting for you now
+      save();
+      return 'new';
+    }
+    for (let i = 0; i < CARDS.length; i++) own[i] = data.own[i] | 0;
+    lastPack = data.lastPack || 0;
+    wins = data.wins | 0; losses = data.losses | 0;
+
+    // If the clock has been wound BACKWARDS the wait could become
+    // hundreds of hours. Treat a pack opened "in the future" as opened
+    // right now instead of arguing with it.
+    if (lastPack > Date.now()) lastPack = Date.now();
+    return 'old';
+  }
+
+  function totalOwned() {
+    let n = 0;
+    for (let i = 0; i < own.length; i++) n += own[i];
+    return n;
+  }
+  function kindsOwned() {
+    let n = 0;
+    for (let i = 0; i < own.length; i++) if (own[i] > 0) n++;
+    return n;
+  }
+
+  function msUntilPack() {
+    return Math.max(0, lastPack + DAY - Date.now());
+  }
+  function packReady() { return msUntilPack() <= 0; }
+
+  function countdownText() {
+    const ms = msUntilPack();
+    const hours = Math.floor(ms / 3600000);
+    const mins = Math.floor((ms % 3600000) / 60000);
+    const secs = Math.floor((ms % 60000) / 1000);
+    if (hours > 0) return hours + 'h ' + mins + 'm';
+    if (mins > 0)  return mins + 'm ' + secs + 's';
+    return secs + 's';
+  }
+
+  // Pick a card, with the rare ones genuinely rare. Add up all the find
+  // numbers, roll once, and walk along until the roll runs out.
+  function randomCardIndex() {
+    let total = 0;
+    for (let i = 0; i < CARDS.length; i++) total += CARDS[i].find;
+    let roll = Math.random() * total;
+    for (let i = 0; i < CARDS.length; i++) {
+      roll -= CARDS[i].find;
+      if (roll <= 0) return i;
+    }
+    return CARDS.length - 1;
+  }
+
+  let packCards = [];        // what you just pulled, for the reveal
+  let revealT = 0;
+
+  function openPack() {
+    if (!packReady()) return false;
+    packCards = [];
+    for (let i = 0; i < PACK_SIZE; i++) {
+      const idx = randomCardIndex();
+      packCards.push(idx);
+      own[idx]++;
+    }
+    lastPack = Date.now();
+    save();
+    revealT = 0;
+    screen = 'pack';
+    return true;
+  }
+
+
+// -------------------------------------------------------------------
+//  A DUEL
+// -------------------------------------------------------------------
+
+  let you   = { hearts: START_HEARTS, board: [null, null, null], hand: [], deck: [] };
+  let them  = { hearts: START_HEARTS, board: [null, null, null], hand: [], deck: [] };
+
+  let picked = -1;
+  let turn = 'you';
   let says = '', saysT = 0;
   function say(w) { says = w; saysT = 2.6; }
 
-  // Little bursts when something dies, and floating damage numbers.
+  let screen = 'collection';       // 'collection', 'pack', 'duel'
   let bits = [], floats = [];
 
   function newMonster(i) {
@@ -102,20 +227,50 @@
     return { i: i, name: c.name, hit: c.hit, life: c.life, max: c.life,
              col: c.col, wobble: 0, justHit: 0 };
   }
-  function dealCard() { return newMonster(Math.floor(Math.random() * CARDS.length)); }
 
-  function reset() {
-    you  = { hearts: START_HEARTS, board: [null, null, null], hand: [] };
-    them = { hearts: START_HEARTS, board: [null, null, null], hand: [] };
-    for (let i = 0; i < 4; i++) { you.hand.push(dealCard()); them.hand.push(dealCard()); }
-    picked = -1; turn = 'you'; bits = []; floats = [];
-    say('tap a monster, then tap a space');
+  function shuffle(a) {
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      const t = a[i]; a[i] = a[j]; a[j] = t;
+    }
+    return a;
   }
 
+  // YOUR deck is YOUR collection. Every card in it is one you own - so a
+  // pack that gives you a PANTS DRAGON really does put a dragon in your
+  // next fight.
+  function yourDeck() {
+    const d = [];
+    for (let i = 0; i < own.length; i++)
+      for (let n = 0; n < own[i]; n++) d.push(i);
+    return shuffle(d);
+  }
 
-// -------------------------------------------------------------------
-//  FIGHTING
-// -------------------------------------------------------------------
+  // Theirs is the same SIZE as yours, pulled from the same odds. So a
+  // bigger collection is not automatically an easier fight - a BETTER
+  // one is.
+  function theirDeck(size) {
+    const d = [];
+    for (let i = 0; i < size; i++) d.push(randomCardIndex());
+    return d;
+  }
+
+  function drawFrom(side) {
+    while (side.hand.length < HAND_MAX && side.deck.length) {
+      side.hand.push(newMonster(side.deck.pop()));
+    }
+  }
+
+  function startDuel() {
+    const mine = yourDeck();
+    you  = { hearts: START_HEARTS, board: [null, null, null], hand: [], deck: mine };
+    them = { hearts: START_HEARTS, board: [null, null, null], hand: [],
+             deck: theirDeck(Math.max(8, mine.length)) };
+    for (let i = 0; i < 4; i++) { drawFrom(you); drawFrom(them); }
+    picked = -1; turn = 'you'; bits = []; floats = [];
+    screen = 'duel';
+    say('tap a monster, then tap a space');
+  }
 
   function hurt(who, amount, x, y) {
     who.hearts -= amount;
@@ -130,17 +285,13 @@
     }
   }
 
-  // Everything on ONE side attacks. Each monster looks straight ahead:
-  // if somebody is there, it hits them; if not, it hits the player.
   function attackWith(side, foe, mine) {
     for (let s = 0; s < SLOTS; s++) {
       const m = side.board[s];
       if (!m) continue;
       m.wobble = 0.35;
-
       const target = foe.board[s];
       const p = slotSpot(!mine, s);
-
       if (target) {
         target.life -= m.hit;
         target.justHit = 0.4;
@@ -159,63 +310,49 @@
   function checkOver() {
     if (you.hearts <= 0 || them.hearts <= 0) {
       turn = 'over';
-      say(them.hearts <= 0 && you.hearts <= 0 ? 'BOTH OF YOU. wow.'
-        : them.hearts <= 0 ? 'YOU WIN!' : 'you lost - tap to go again');
+      if (them.hearts <= 0 && you.hearts > 0) { wins++; say('YOU WIN!'); }
+      else if (you.hearts <= 0 && them.hearts > 0) { losses++; say('you lost this one'); }
+      else say('BOTH OF YOU. wow.');
+      save();
       return true;
     }
     return false;
-  }
-
-  function drawUpTo(side) {
-    while (side.hand.length < HAND_MAX) side.hand.push(dealCard());
   }
 
 
 // -------------------------------------------------------------------
 //  THE OPPONENT'S BRAIN
 //
-//  It is not pretending either. It looks at EVERY card it could play
-//  in EVERY empty space, works out what the board would be worth
-//  afterwards, and plays the best one. If it goes for your throat it
-//  is because that really was the best move it could find.
+//  Not pretending. It looks at every card it holds in every empty
+//  space, scores the board that would result, and plays the best one.
 // -------------------------------------------------------------------
 
   function scoreMove(cardIdx, slot) {
     const card = them.hand[cardIdx];
     let score = 0;
-
     const facing = you.board[slot];
 
     if (!facing) {
-      // Nobody in the way - this thing hits YOU in the hearts. Worth a
-      // lot, and worth more if it finishes the job.
-      score += card.hit * 3;
-      if (card.hit >= you.hearts) score += 100;
+      score += card.hit * 3;                      // straight at the hearts
+      if (card.hit >= you.hearts) score += 100;   // and that would finish it
     } else {
-      // Somebody is there. Killing it outright is much better than
-      // scratching it - and a dead monster cannot hit back, which is
-      // worth saying out loud because the first version of this docked
-      // points for "might die to the answer" even when there was going
-      // to BE no answer.
+      // A dead monster cannot hit back - worth saying out loud, because
+      // the first version docked points for "might die to the answer"
+      // even when there was going to BE no answer.
       if (card.hit >= facing.life) {
         score += 8 + facing.hit * 2;
       } else {
         score += card.hit;
-        // It survives, so it gets its go. Will mine still be standing?
         if (facing.hit >= card.life) score -= 4;
         else score += 3;
       }
     }
-
-    // A big tough monster is worth having on the table at all.
     score += card.life * 0.5;
     return score;
   }
 
   function theirTurn() {
-    drawUpTo(them);
-
-    // Every card, every empty space. Pick the best. No guessing.
+    drawFrom(them);
     let bestScore = -Infinity, bestCard = -1, bestSlot = -1;
     for (let c = 0; c < them.hand.length; c++) {
       for (let s = 0; s < SLOTS; s++) {
@@ -224,63 +361,95 @@
         if (sc > bestScore) { bestScore = sc; bestCard = c; bestSlot = s; }
       }
     }
-
     if (bestCard >= 0) {
       them.board[bestSlot] = them.hand[bestCard];
       them.hand.splice(bestCard, 1);
     }
-
     attackWith(them, you, false);
     if (checkOver()) return;
-
     turn = 'you';
-    drawUpTo(you);
+    drawFrom(you);
   }
 
 
 // -------------------------------------------------------------------
 //  WHERE EVERYTHING IS
-//
-//  All the positions come out of these few functions, so the drawing
-//  and your finger can never disagree about where a card is.
 // -------------------------------------------------------------------
 
   function cardW() { return Math.min((W - 50) / SLOTS, 150); }
   function cardH() { return cardW() * 1.35; }
 
   function slotSpot(mine, s) {
-    const w = cardW(), h = cardH();
-    const gap = 10;
+    const w = cardW(), h = cardH(), gap = 10;
     const totalW = SLOTS * w + (SLOTS - 1) * gap;
     const x = (W - totalW) / 2 + s * (w + gap);
     const midY = H * 0.46;
-    const y = mine ? midY + 18 : midY - h - 18;
-    return { x: x, y: y, w: w, h: h };
+    return { x: x, y: mine ? midY + 18 : midY - h - 18, w: w, h: h };
   }
 
   function handSpot(i, n) {
     const w = Math.min(cardW() * 0.82, (W - 30) / Math.max(1, n) - 6);
-    const h = w * 1.35;
-    const gap = 6;
+    const h = w * 1.35, gap = 6;
     const totalW = n * w + (n - 1) * gap;
-    const x = (W - totalW) / 2 + i * (w + gap);
-    return { x: x, y: H - h - 54, w: w, h: h };
+    return { x: (W - totalW) / 2 + i * (w + gap), y: H - h - 54, w: w, h: h };
   }
 
-  // Their hand, face down along the top. You cannot see WHAT they hold,
-  // but you can see HOW MUCH - which is most of what you need to know.
   function theirHandSpot(i, n) {
     const w = Math.min(cardW() * 0.5, (W - 30) / Math.max(1, n) - 6);
-    const h = w * 1.35;
-    const gap = 6;
-    const total = n * w + (n - 1) * gap;
-    return { x: (W - total) / 2 + i * (w + gap), y: 46, w: w, h: h };
+    const h = w * 1.35, gap = 6;
+    const totalW = n * w + (n - 1) * gap;
+    return { x: (W - totalW) / 2 + i * (w + gap), y: 46, w: w, h: h };
   }
 
   function endBox() {
     const w = Math.min(W * 0.4, 190);
     return { x: (W - w) / 2, y: H - 46, w: w, h: 38 };
   }
+
+  // ---- the collection screen ----
+  //
+  // The two buttons are pinned to the bottom of the screen, and the grid
+  // gets whatever is left. The first version worked the card size out
+  // from the screen WIDTH alone and never asked how tall the grid would
+  // end up - so on every single screen size the cards ran down
+  // underneath the buttons.
+  function packBox() {
+    const w = Math.min(W - 40, 320);
+    return { x: (W - w) / 2, y: H - 124, w: w, h: 56 };
+  }
+  function playBox() {
+    const w = Math.min(W - 40, 320);
+    return { x: (W - w) / 2, y: H - 58, w: w, h: 50 };
+  }
+
+  function gridCols() { return W < 420 ? 3 : W < 700 ? 4 : 6; }
+  function gridTop()  { return H < 520 ? 84 : 118; }
+
+  function gridGeom() {
+    const cols = gridCols();
+    const rows = Math.ceil(CARDS.length / cols);
+    const top = gridTop();
+    const room = (packBox().y - 10) - top;
+    // A row is the card (1.35 tall) plus a line of stars underneath.
+    const byHeight = (room - (rows - 1) * 10) / rows / 1.56;
+    const byWidth  = (W - 30 - (cols - 1) * 8) / cols;
+    const w = Math.max(28, Math.min(byWidth, byHeight));
+    const h = w * 1.35;
+    const gridW = cols * w + (cols - 1) * 8;
+    const step = h + w * 0.21 + 6;
+    // Sit the grid in the middle of the room it has, rather than jammed
+    // against the top with a hole underneath it.
+    const spare = Math.max(0, room - (rows * step - 6));
+    return { cols: cols, rows: rows, w: w, h: h,
+             x0: (W - gridW) / 2, y0: top + spare / 2, step: step };
+  }
+
+  function gridSpot(i) {
+    const g = gridGeom();
+    const cx = i % g.cols, cy = Math.floor(i / g.cols);
+    return { x: g.x0 + cx * (g.w + 8), y: g.y0 + cy * g.step, w: g.w, h: g.h };
+  }
+  function backBox() { return { x: W - 96, y: 8, w: 88, h: 34 }; }
 
 
 // -------------------------------------------------------------------
@@ -299,36 +468,32 @@
     ctx.closePath();
   }
 
-  // Every monster gets a face built from its own number, so all twelve
-  // look different without anybody having to draw twelve pictures.
   function monsterFace(x, y, w, h, m) {
     const cx = x + w / 2, cy = y + h * 0.46;
     const eyes = 2 + (m.i % 2);
     const r = w * 0.075;
     ctx.fillStyle = '#1b1428';
     for (let e = 0; e < eyes; e++) {
-      const ex = cx + (e - (eyes - 1) / 2) * w * 0.22;
       ctx.beginPath();
-      ctx.arc(ex, cy - h * 0.05, r, 0, Math.PI * 2);
+      ctx.arc(cx + (e - (eyes - 1) / 2) * w * 0.22, cy - h * 0.05, r, 0, Math.PI * 2);
       ctx.fill();
     }
     ctx.fillStyle = '#fff';
     for (let e = 0; e < eyes; e++) {
-      const ex = cx + (e - (eyes - 1) / 2) * w * 0.22;
       ctx.beginPath();
-      ctx.arc(ex - r * 0.3, cy - h * 0.05 - r * 0.3, r * 0.35, 0, Math.PI * 2);
+      ctx.arc(cx + (e - (eyes - 1) / 2) * w * 0.22 - r * 0.3, cy - h * 0.05 - r * 0.3,
+              r * 0.35, 0, Math.PI * 2);
       ctx.fill();
     }
-    // A mouth whose shape comes from the card number too.
     ctx.strokeStyle = '#1b1428';
     ctx.lineWidth = Math.max(2, w * 0.035);
     ctx.beginPath();
     const my = cy + h * 0.12;
-    if (m.i % 3 === 0) {            // grin
+    if (m.i % 3 === 0) {
       ctx.arc(cx, my - w * 0.06, w * 0.18, 0.15 * Math.PI, 0.85 * Math.PI);
-    } else if (m.i % 3 === 1) {     // straight line
+    } else if (m.i % 3 === 1) {
       ctx.moveTo(cx - w * 0.16, my); ctx.lineTo(cx + w * 0.16, my);
-    } else {                        // toothy zigzag
+    } else {
       ctx.moveTo(cx - w * 0.18, my);
       for (let t = 0; t < 4; t++) {
         ctx.lineTo(cx - w * 0.18 + (t + 0.5) * w * 0.09, my + (t % 2 ? -1 : 1) * w * 0.05);
@@ -346,10 +511,10 @@
       ctx.rotate(Math.sin(m.wobble * 40) * 0.06);
       ctx.translate(-(x + w / 2), -(y + h / 2));
     }
+    if (opts.faded) ctx.globalAlpha = 0.22;
 
     ctx.fillStyle = 'rgba(0,0,0,0.35)';
     roundRect(x + 3, y + 4, w, h, w * 0.09); ctx.fill();
-
     ctx.fillStyle = rgb(m.col);
     roundRect(x, y, w, h, w * 0.09); ctx.fill();
 
@@ -358,18 +523,18 @@
       roundRect(x, y, w, h, w * 0.09); ctx.fill();
     }
 
-    ctx.lineWidth = opts.picked ? 4 : 2;
-    ctx.strokeStyle = opts.picked ? '#ffd76a' : 'rgba(0,0,0,0.35)';
+    const rare = rarityOf(m.i);
+    ctx.lineWidth = opts.picked ? 4 : (rare.stars === 3 ? 3 : 2);
+    ctx.strokeStyle = opts.picked ? '#ffd76a'
+                    : rare.stars === 3 ? rgb(rare.col) : 'rgba(0,0,0,0.35)';
     roundRect(x, y, w, h, w * 0.09); ctx.stroke();
 
     monsterFace(x, y, w, h, m);
 
-    // Name across the top, shrunk to fit rather than spilling off.
     ctx.textAlign = 'center';
     let fs = w * 0.135;
     ctx.font = 'bold ' + fs + 'px system-ui, sans-serif';
-    const room = w - 8;
-    const natural = ctx.measureText(m.name).width;
+    const room = w - 8, natural = ctx.measureText(m.name).width;
     if (natural > room) {
       fs *= room / natural;
       ctx.font = 'bold ' + fs + 'px system-ui, sans-serif';
@@ -377,7 +542,6 @@
     ctx.fillStyle = 'rgba(0,0,0,0.75)';
     ctx.fillText(m.name, x + w / 2, y + h * 0.145);
 
-    // The two numbers that decide everything.
     const nf = w * 0.24;
     ctx.font = 'bold ' + nf + 'px system-ui, sans-serif';
     ctx.textAlign = 'left';
@@ -405,11 +569,115 @@
     ctx.fillText('♥ ' + Math.max(0, n), x, y);
   }
 
-  function draw() {
-    ctx.fillStyle = '#151020';
-    ctx.fillRect(0, 0, W, H);
+  function drawButton(b, label, on, colOn) {
+    ctx.fillStyle = on ? 'rgba(255,215,106,0.16)' : 'rgba(255,255,255,0.05)';
+    roundRect(b.x, b.y, b.w, b.h, 10); ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = on ? (colOn || '#ffd76a') : 'rgba(255,255,255,0.16)';
+    roundRect(b.x, b.y, b.w, b.h, 10); ctx.stroke();
+    ctx.textAlign = 'center';
+    ctx.font = 'bold ' + Math.min(W * 0.036, 18) + 'px system-ui, sans-serif';
+    ctx.fillStyle = on ? (colOn || '#ffd76a') : '#6b6288';
+    ctx.fillText(label, b.x + b.w / 2, b.y + b.h * 0.63);
+  }
 
-    // The line where the two sides meet.
+  function drawCollection() {
+    ctx.textAlign = 'left';
+    ctx.font = 'bold ' + Math.min(W * 0.06, 32) + 'px system-ui, sans-serif';
+    ctx.fillStyle = '#f0e9ff';
+    ctx.fillText('YOUR MONSTERS', 16, 44);
+
+    ctx.font = Math.min(W * 0.032, 16) + 'px system-ui, sans-serif';
+    ctx.fillStyle = '#8a7ea8';
+    ctx.fillText(totalOwned() + ' cards  -  ' + kindsOwned() + ' of ' + CARDS.length +
+                 ' kinds found', 16, 70);
+    if (wins || losses) {
+      ctx.fillStyle = '#6b6288';
+      ctx.fillText('won ' + wins + ', lost ' + losses, 16, 92);
+    }
+
+    for (let i = 0; i < CARDS.length; i++) {
+      const p = gridSpot(i);
+      const m = newMonster(i);
+      const have = own[i];
+      drawCard(p.x, p.y, p.w, p.h, m, { faded: have === 0 });
+
+      if (have === 0) {
+        // Not found yet - a question mark instead of a monster.
+        ctx.textAlign = 'center';
+        ctx.font = 'bold ' + p.w * 0.4 + 'px system-ui, sans-serif';
+        ctx.fillStyle = 'rgba(240,233,255,0.5)';
+        ctx.fillText('?', p.x + p.w / 2, p.y + p.h * 0.62);
+      }
+
+      // Rarity stars, and how many you have, on the line UNDER the card.
+      // The count used to be a badge in the top corner, which sat right
+      // on top of the monster's name.
+      const rare = rarityOf(i);
+      const stars = '★'.repeat(rare.stars);
+      const tail = have > 1 ? '  x' + have : '';
+      const fs = p.w * 0.15;
+      ctx.font = 'bold ' + fs + 'px system-ui, sans-serif';
+      ctx.textAlign = 'left';
+      const sw = ctx.measureText(stars).width;
+      const tw = tail ? ctx.measureText(tail).width : 0;
+      const x0 = p.x + p.w / 2 - (sw + tw) / 2;
+      const ly = p.y + p.h + p.w * 0.16;
+      ctx.fillStyle = rgb(rare.col);
+      ctx.fillText(stars, x0, ly);
+      if (tail) {
+        ctx.fillStyle = '#f0e9ff';
+        ctx.fillText(tail, x0 + sw, ly);
+      }
+    }
+
+    const pb = packBox();
+    if (packReady()) {
+      drawButton(pb, 'OPEN TODAY\'S PACK', true, '#8fe07a');
+    } else {
+      drawButton(pb, 'NEXT PACK IN ' + countdownText(), false);
+    }
+
+    drawButton(playBox(), 'FIGHT SOMEBODY', totalOwned() > 0);
+  }
+
+  function drawPackReveal() {
+    ctx.textAlign = 'center';
+    ctx.font = 'bold ' + Math.min(W * 0.07, 40) + 'px system-ui, sans-serif';
+    ctx.fillStyle = '#ffd76a';
+    ctx.fillText('YOU GOT', W / 2, 60);
+
+    const n = packCards.length;
+    const w = Math.min((W - 30 - (n - 1) * 6) / n, 120);
+    const h = w * 1.35;
+    const total = n * w + (n - 1) * 6;
+    for (let i = 0; i < n; i++) {
+      // One at a time, a fifth of a second apart, so it feels like
+      // opening something instead of being handed a list.
+      if (revealT < i * 0.22) continue;
+      const age = revealT - i * 0.22;
+      const pop = clamp(age / 0.18, 0, 1);
+      const x = (W - total) / 2 + i * (w + 6);
+      const y = H * 0.34;
+      const sw = w * (0.6 + 0.4 * pop), sh = h * (0.6 + 0.4 * pop);
+      drawCard(x + (w - sw) / 2, y + (h - sh) / 2, sw, sh, newMonster(packCards[i]));
+
+      const rare = rarityOf(packCards[i]);
+      if (rare.stars === 3 && pop >= 1) {
+        ctx.textAlign = 'center';
+        ctx.font = 'bold ' + w * 0.16 + 'px system-ui, sans-serif';
+        ctx.fillStyle = rgb(rare.col);
+        ctx.fillText('RARE!', x + w / 2, y + h + w * 0.22);
+      }
+    }
+
+    ctx.textAlign = 'center';
+    ctx.font = Math.min(W * 0.034, 17) + 'px system-ui, sans-serif';
+    ctx.fillStyle = '#8a7ea8';
+    ctx.fillText('they are in your collection now - tap to carry on', W / 2, H - 60);
+  }
+
+  function drawDuel() {
     ctx.strokeStyle = 'rgba(255,255,255,0.10)';
     ctx.lineWidth = 2;
     ctx.beginPath();
@@ -424,11 +692,8 @@
       roundRect(p.x + 2, p.y + 3, p.w, p.h, p.w * 0.09); ctx.fill();
       ctx.fillStyle = '#2e2444';
       roundRect(p.x, p.y, p.w, p.h, p.w * 0.09); ctx.fill();
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = '#463769';
+      ctx.lineWidth = 2; ctx.strokeStyle = '#463769';
       roundRect(p.x, p.y, p.w, p.h, p.w * 0.09); ctx.stroke();
-      // A pair of eyes peering out of the back, because a blank
-      // rectangle is boring and these are monsters.
       ctx.fillStyle = '#5b4a86';
       for (let e = 0; e < 2; e++) {
         ctx.beginPath();
@@ -448,27 +713,30 @@
       else drawEmptySlot(p.x, p.y, p.w, p.h, picked >= 0 && turn === 'you');
     }
 
-    // Your hearts, just above your hand.
     drawHearts(you.hearts, 18, H - cardH() * 0.82 - 74, Math.min(W * 0.055, 30), '#9bffb0');
+    ctx.textAlign = 'right';
+    ctx.font = Math.min(W * 0.028, 14) + 'px system-ui, sans-serif';
+    ctx.fillStyle = '#6b6288';
+    ctx.fillText('deck: ' + you.deck.length, W - 18, H - cardH() * 0.82 - 74);
 
     for (let i = 0; i < you.hand.length; i++) {
       const p = handSpot(i, you.hand.length);
-      const lift = picked === i ? -12 : 0;
-      drawCard(p.x, p.y + lift, p.w, p.h, you.hand[i], { picked: picked === i });
+      drawCard(p.x, p.y + (picked === i ? -12 : 0), p.w, p.h, you.hand[i],
+               { picked: picked === i });
     }
 
-    const e = endBox();
-    const canEnd = turn === 'you';
-    ctx.fillStyle = canEnd ? 'rgba(255,215,106,0.16)' : 'rgba(0,0,0,0.3)';
-    roundRect(e.x, e.y, e.w, e.h, 10); ctx.fill();
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = canEnd ? '#ffd76a' : 'rgba(255,255,255,0.18)';
-    roundRect(e.x, e.y, e.w, e.h, 10); ctx.stroke();
-    ctx.textAlign = 'center';
-    ctx.font = 'bold ' + Math.min(W * 0.036, 18) + 'px system-ui, sans-serif';
-    ctx.fillStyle = canEnd ? '#ffd76a' : '#6b6288';
-    ctx.fillText(turn === 'over' ? 'TAP FOR A NEW GAME' : 'FIGHT!',
-                 e.x + e.w / 2, e.y + e.h * 0.68);
+    drawButton(endBox(), turn === 'over' ? 'BACK TO YOUR CARDS' : 'FIGHT!',
+               turn === 'you' || turn === 'over');
+    drawButton(backBox(), 'CARDS', true, '#8a7ea8');
+  }
+
+  function draw() {
+    ctx.fillStyle = '#151020';
+    ctx.fillRect(0, 0, W, H);
+
+    if (screen === 'collection') drawCollection();
+    else if (screen === 'pack')  drawPackReveal();
+    else                          drawDuel();
 
     for (let i = 0; i < bits.length; i++) {
       const b = bits[i];
@@ -485,13 +753,10 @@
       ctx.fillText(f.text, f.x, f.y);
     }
 
-    if (saysT > 0) {
+    if (saysT > 0 && screen === 'duel') {
       ctx.textAlign = 'center';
       ctx.font = 'bold ' + Math.min(W * 0.04, 21) + 'px system-ui, sans-serif';
       const wid = ctx.measureText(says).width;
-      // Dead centre of the gap between the two rows. Sitting it on the
-      // line itself put the box over the bottom of their cards and hid
-      // the numbers that matter.
       const y = H * 0.46 + 8;
       ctx.fillStyle = 'rgba(21,16,32,' + clamp(saysT, 0, 1) * 0.9 + ')';
       ctx.fillRect(W / 2 - wid / 2 - 14, y - 24, wid + 28, 32);
@@ -502,7 +767,7 @@
 
 
 // -------------------------------------------------------------------
-//  YOUR GO
+//  TAPPING
 // -------------------------------------------------------------------
 
   function inBox(mx, my, b) {
@@ -510,18 +775,32 @@
   }
 
   function tap(mx, my) {
-    if (turn === 'over') { reset(); return; }
+    if (screen === 'pack') {
+      if (revealT > 0.4) screen = 'collection';    // let the reveal land first
+      return;
+    }
+
+    if (screen === 'collection') {
+      if (inBox(mx, my, packBox()) && packReady()) { openPack(); return; }
+      if (inBox(mx, my, playBox()) && totalOwned() > 0) { startDuel(); return; }
+      return;
+    }
+
+    // ---- in a duel ----
+    if (inBox(mx, my, backBox())) { screen = 'collection'; return; }
+
+    if (turn === 'over') {
+      if (inBox(mx, my, endBox())) screen = 'collection';
+      return;
+    }
     if (turn !== 'you') return;
 
-    // Tap a card in your hand to pick it up, tap it again to put it back.
     for (let i = 0; i < you.hand.length; i++) {
       if (inBox(mx, my, handSpot(i, you.hand.length))) {
         picked = (picked === i) ? -1 : i;
         return;
       }
     }
-
-    // Tap one of your spaces to put the picked card there.
     for (let s = 0; s < SLOTS; s++) {
       if (!inBox(mx, my, slotSpot(true, s))) continue;
       if (picked < 0) { say('pick a monster first'); return; }
@@ -532,16 +811,13 @@
       say('now tap FIGHT');
       return;
     }
-
     if (inBox(mx, my, endBox())) {
       picked = -1;
       attackWith(you, them, true);
       if (checkOver()) return;
       turn = 'them';
       say('their go...');
-      setTimeout(function () {
-        if (turn === 'them') { theirTurn(); }
-      }, 700);
+      setTimeout(function () { if (turn === 'them') theirTurn(); }, 700);
     }
   }
 
@@ -562,6 +838,7 @@
     last = now;
 
     if (saysT > 0) saysT -= dt;
+    if (screen === 'pack') revealT += dt;
 
     for (const side of [you, them]) {
       for (const m of side.board) {
@@ -587,7 +864,7 @@
     requestAnimationFrame(frame);
   }
 
-  reset();
+  load();
   requestAnimationFrame(frame);
 
 </script>
