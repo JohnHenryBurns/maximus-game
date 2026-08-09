@@ -250,6 +250,21 @@
   function placeStarts(n) {
     const out = [{ c: 1, r: FLOOR - 1 }];        // spawner #1: always the ground
     if (n > 1) {
+      // Spawner #1's cheapest route, so we can steer the OTHERS away from it.
+      // Otherwise higher spawners tend to land right on #1's path and the
+      // streams look like one line; we want them to start apart and only
+      // converge later. (They'll still share the exit in the end.)
+      const route0 = routeOf(thinkFrom(out[0]));
+      function awayFrom(cells, c, r) {
+        if (!cells.length) return 99;
+        let m = 99;
+        for (let k = 0; k < cells.length; k++) {
+          const d = Math.abs(cells[k].c - c) + Math.abs(cells[k].r - r);
+          if (d < m) m = d;
+        }
+        return m;
+      }
+
       // Every spot a robot could STAND on above the ground - the top of a
       // ledge - but never the exit row. These are where higher spawners go.
       const high = [];
@@ -259,10 +274,20 @@
 
       for (let i = 1; i < n; i++) {
         let pick = null;
-        // pull a random high spot that no other spawner is already using
-        while (high.length) {
-          const cand = high.splice(Math.floor(Math.random() * high.length), 1)[0];
-          if (!out.some(function (s) { return s.c === cand.c && s.r === cand.r; })) { pick = cand; break; }
+        if (high.length) {
+          // Score every spot: mostly by how FAR it is from #1's route, and a
+          // little by how far from the spawners already placed - so the
+          // streams start well apart. Then pick at random from the farthest
+          // band, to keep it varied instead of always the single farthest.
+          let bestScore = -1;
+          const scored = high.map(function (cand) {
+            const score = awayFrom(route0, cand.c, cand.r) * 2 + awayFrom(out, cand.c, cand.r);
+            if (score > bestScore) bestScore = score;
+            return { cand: cand, score: score };
+          });
+          const band = scored.filter(function (x) { return x.score >= bestScore * 0.6; });
+          pick = band[Math.floor(Math.random() * band.length)].cand;
+          high.splice(high.indexOf(pick), 1);
         }
         // if the ledges ran out of room, fall back to a spread-out ground spot
         if (!pick) pick = { c: Math.round(1 + i * (COLS - 3) / (n - 1)), r: FLOOR - 1 };
@@ -832,9 +857,9 @@
     return brains.length > 0 && brains.every(function (b) { return b.bestCost < Infinity; });
   }
 
-  // Reconstruct the cheapest route for one spawn (by its index in STARTS).
-  function routeCellsFor(i) {
-    const b = brains[i];
+  // Reconstruct the cheapest route from a single brain (the list of cells it
+  // walks from its spawn to the exit).
+  function routeOf(b) {
     if (!b || b.bestEnd < 0) return [];
     const chunks = [];
     let s = b.bestEnd;
@@ -845,6 +870,8 @@
       for (let j = 0; j < chunks[x].length; j++) out.push(chunks[x][j]);
     return out;
   }
+  // The cheapest route for one spawn (by its index in STARTS).
+  function routeCellsFor(i) { return routeOf(brains[i]); }
   function allRoutes() {
     const out = [];
     for (let i = 0; i < brains.length; i++) out.push(routeCellsFor(i));
