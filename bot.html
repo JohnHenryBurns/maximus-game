@@ -439,13 +439,22 @@
 //  THE LINE OF ROBOTS
 // -------------------------------------------------------------------
 
-  const WAVE_GAP = 1.0;              // seconds between one setting off
-                                     // and the next
+  // Seconds between one robot setting off and the next. NOT a round
+  // number, and not by accident: it has to divide badly into BOTH hazard
+  // cycles or robots meet the blade at the same moment and die in
+  // identical groups. At 0.7 the hammer's 2.1s cycle is exactly three
+  // gaps and they drop in threes. 0.8 was the best of six tried - all
+  // fifteen robots land in a different tenth of both cycles.
+  const WAVE_GAP = 0.8;
   let bots = [];
   let route = [];
   let scrap = [];                    // bolts and sparks flying about
 
-  function waveSize() { return 6 + Math.floor((round - 1) / 2); }
+  // Ten in the first wave, one more each time, and it stops growing at
+  // fifteen. Fifteen robots a second apart is already a queue fourteen
+  // seconds long - any more and you spend the round watching.
+  const WAVE_MIN = 10, WAVE_MAX = 15;
+  function waveSize() { return Math.min(WAVE_MAX, WAVE_MIN + round - 1); }
   function gotThrough() {
     let n = 0;
     for (let i = 0; i < bots.length; i++) if (bots[i].done) n++;
