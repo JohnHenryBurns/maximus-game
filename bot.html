@@ -566,7 +566,10 @@
 
     // What the "continue" button will actually pay, so the card can't lie.
     const earned   = perfect ? 20 + (level + 1) * 5 : 12 + (round + 1) * 2;
-    const nextSize = Math.min(WAVE_MAX, WAVE_MIN + round * WAVE_STEP);
+    // Next wave's size. A retry stays this level's size; a clean sweep moves
+    // to the next level and its (bigger) size. This matches waveSize(), so
+    // the "N more" the card promises is exactly what actually shows up.
+    const nextSize = waveSizeFor(perfect ? level + 1 : level);
 
     document.getElementById('waveTitle').textContent =
       perfect ? 'LEVEL ' + level + ' CLEARED!' : 'WAVE ' + round + ' CLEARED';
@@ -837,14 +840,21 @@
   let route = [];
   let scrap = [];                    // bolts and sparks flying about
 
-  // A hundred in the first wave, fifty more each time, stopping at four
-  // hundred. Whether you stop 8 of 10 or 300 of 400 is the same skill -
-  // what changes is that a crowd this big makes the SHAPE of your
-  // defence visible. You can see the stream thin out at each saw.
+  // A hundred robots on your first map, fifty more each LEVEL, stopping at
+  // four hundred. The count grows only when you BEAT a map and move up -
+  // retrying the same map sends the same size wave every time, so a retry
+  // is a fair second go at the same puzzle, never a harder one.
+  //
+  // Whether you stop 8 of 10 or 300 of 400 is the same skill - what changes
+  // is that a crowd this big makes the SHAPE of your defence visible. You
+  // can see the stream thin out at each saw.
   const WAVE_MIN = 100, WAVE_MAX = 400, WAVE_STEP = 50;
-  function waveSize() {
-    return Math.min(WAVE_MAX, WAVE_MIN + (round - 1) * WAVE_STEP);
+  // Size is tied to the LEVEL, not the round, so retries stay the same size
+  // and only clearing a map (which bumps the level) sends more robots.
+  function waveSizeFor(lvl) {
+    return Math.min(WAVE_MAX, WAVE_MIN + (lvl - 1) * WAVE_STEP);
   }
+  function waveSize() { return waveSizeFor(level); }
   function gotThrough() {
     let n = 0;
     for (let i = 0; i < bots.length; i++) if (bots[i].done) n++;
