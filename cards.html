@@ -306,7 +306,14 @@
 
   let picked = -1;
   let placedThisTurn = 0;
+  let yourTurnNo = 1;             // your first go is the generous one
+  let theirTurnNo = 0;            // counts up so every third is a big one
   let turn = 'you';
+
+  // How many monsters you may send in this turn.
+  function placeAllowance() {
+    return yourTurnNo === 1 ? FIRST_TURN_PLACE : PLACE_PER_TURN;
+  }
   let says = '', saysT = 0;
   function say(w) { says = w; saysT = 2.6; }
 
@@ -402,9 +409,10 @@
              deck: theirDeck(Math.max(8, mine.length)) };
     for (let i = 0; i < 4; i++) { drawFrom(you); drawFrom(them); }
     refillThem();                    // they are three deep from the off
-    picked = -1; placedThisTurn = 0; turn = 'you'; bits = []; floats = [];
+    picked = -1; placedThisTurn = 0; yourTurnNo = 1; theirTurnNo = 0;
+    turn = 'you'; bits = []; floats = [];
     screen = 'duel';
-    say('tap a monster, then tap a space');
+    say('first turn - send in all ' + FIRST_TURN_PLACE + ' of them');
   }
 
   function hurt(who, amount, x, y) {
@@ -486,6 +494,7 @@
     } else {
       turn = 'you';
       placedThisTurn = 0;             // a fresh monster to send in
+      yourTurnNo++;
       drawFrom(you);
     }
   }
@@ -593,8 +602,22 @@
   //     they patch 2, you play 3 -> you win 60 of 60.
   //     they patch 1, you play 1 -> you win 36, they win 24.
   // Fair, and it makes each card you put down an actual decision.
-  const REFILL_PER_TURN = 1;
+  // They patch one hole a turn, and TWO on every third turn.
+  //
+  // A whole number was too blunt. Once you got all three monsters down
+  // on your first turn, one-a-turn meant you won 58 of 60 and two-every-
+  // other-turn meant you lost 40 of 60. Two every THIRD turn sits
+  // between them - about 38 wins to 22 over three runs of sixty.
   const PLACE_PER_TURN = 1;
+  const BIG_REFILL_EVERY = 3;
+  function refillThisTurn() {
+    return (theirTurnNo % BIG_REFILL_EVERY === 0) ? 2 : 1;
+  }
+
+  // THEY start the battle three deep and you start with nothing, which
+  // was the one unfairness left. So your first turn is a full line -
+  // send in all three - and after that it is one a turn like theirs.
+  const FIRST_TURN_PLACE = SLOTS;
 
   function refillThem(limit) {
     // If YOU have since played a copy of something they already had,
@@ -641,7 +664,8 @@
 
   function theirTurn() {
     drawFrom(them);
-    refillThem(REFILL_PER_TURN);
+    theirTurnNo++;
+    refillThem(refillThisTurn());
     startCut(planAttacks(them, you, false), 'you');
   }
 
@@ -1185,7 +1209,7 @@
       const p = slotSpot(true, s);
       if (you.board[s]) drawCard(p.x, p.y, p.w, p.h, you.board[s]);
       else drawEmptySlot(p.x, p.y, p.w, p.h,
-                         picked >= 0 && turn === 'you' && placedThisTurn < PLACE_PER_TURN);
+                         picked >= 0 && turn === 'you' && placedThisTurn < placeAllowance());
     }
 
     drawKing(true, youHurt);
@@ -1427,14 +1451,15 @@
       if (!inBox(mx, my, slotSpot(true, s))) continue;
       if (picked < 0) { say('pick a monster first'); return; }
       if (you.board[s]) { say('something is already standing there'); return; }
-      if (placedThisTurn >= PLACE_PER_TURN) {
+      if (placedThisTurn >= placeAllowance()) {
         say('one monster a turn - tap FIGHT'); return;
       }
       you.board[s] = you.hand[picked];
       you.hand.splice(picked, 1);
       picked = -1;
       placedThisTurn++;
-      say('now tap FIGHT');
+      const left = placeAllowance() - placedThisTurn;
+      say(left > 0 ? 'send in ' + left + ' more, or tap FIGHT' : 'now tap FIGHT');
       return;
     }
     if (inBox(mx, my, endBox())) {
