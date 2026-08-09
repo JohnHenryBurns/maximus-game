@@ -145,11 +145,11 @@
 <!-- The reset asks first, because it throws the whole tower away. -->
 <div id="resetModal">
   <div class="card">
-    <h3>RESET?</h3>
-    <p>This clears the whole tower and everything on it, and starts over from round 1.</p>
+    <h3>CLEAR TOWER?</h3>
+    <p>This takes away everything you've built on this map and hands the coins back, so you can plan your defence again. Your level, wave, coins and power all stay.</p>
     <div class="row">
       <button id="resetCancel" class="btn cancel">Keep going</button>
-      <button id="resetYes" class="btn danger">Reset</button>
+      <button id="resetYes" class="btn danger">Clear it</button>
     </div>
   </div>
 </div>
@@ -487,6 +487,31 @@
     state = 'build';
     newTower();
     say('fresh tower - stop them reaching the flag');
+  }
+
+  // CLEAR THE CURRENT MAP. A do-over of just what you've built on THIS
+  // tower: every trap you placed is taken away and its coins handed back,
+  // but the map itself (its bolted-down ledges), your level, wave, coins
+  // and power supply all stay exactly as they are. So it's "let me try my
+  // defence again", not "throw my whole game away".
+  function resetMap() {
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        const k = grid[r][c];
+        if (k === EMPTY || k === PLAT) continue;   // keep the ledges
+        if      (k === DOOR) coins += priceOf(DOOR);   // key comes with the door
+        else if (k === KEY)  coins += 0;               // ...so the key itself is free
+        else                 coins += priceOf(k);
+        grid[r][c] = EMPTY;
+      }
+    }
+    holdingKey = -1;
+    badCell = null; coinFlash = 0; powerFlash = 0;
+    bots = []; route = []; scrap = [];
+    banner = ''; bannerT = 0;
+    state = 'build';
+    think();
+    say('tower cleared - your level, coins and power are safe');
   }
 
   // Move on to the next wave: pay out the coins, bump the round, and drop
@@ -983,9 +1008,11 @@
   function wide()   { return W > H * 1.35; }
   function panelW() { return wide() ? Math.min(W * 0.36, 320) : 0; }
   // The header is two tidy tiers, the same in portrait and landscape:
-  //   row 1  - the Arcade / Reset nav pills (and the key prompt when hiding
-  //            a key)
-  //   row 2  - ONE stat bar: coins | power | level | steps
+  //   row 1  - the Arcade / Reset nav pills, with the LEVEL badge in the
+  //            middle (and the key prompt when hiding a key)
+  //   row 2  - a stat bar: coins | POWER METER | steps. Level lives up in
+  //            row 1, which leaves the middle cell free for a proper power
+  //            meter you can read at a glance.
   // topBar() is where the board begins, just under both. Keeping it this
   // compact also hands the tower back a good chunk of height.
   const NAV_H  = 40;     // the nav pill row
@@ -1017,16 +1044,16 @@
   function goBox()    { return boxOf(TOOLS.length); }
 
   // The stat bar spans the width (minus the side panel in landscape) and is
-  // split into four equal cells. Everything up top reads off these, so
-  // there's one row of numbers instead of three scattered ones.
+  // split into three equal cells: coins | power | steps.
+  const STAT_CELLS = 3;
   function statBarRect() {
     return { x: 8, y: NAV_H, w: (W - panelW()) - 16, h: STAT_H - 4 };
   }
-  function statCell(i) {                  // i = 0..3
-    const b = statBarRect(), cw = b.w / 4;
+  function statCell(i) {                  // i = 0..2
+    const b = statBarRect(), cw = b.w / STAT_CELLS;
     return { x: b.x + i * cw, y: b.y, w: cw, h: b.h };
   }
-  // The POWER cell is the tappable one - tap it to grow the supply.
+  // The middle POWER cell is the tappable one - tap it to grow the supply.
   function powerBox() { return statCell(1); }
 
   // A rounded rectangle path, so the pills and the meter aren't hard boxes.
@@ -1347,13 +1374,45 @@
     return -1;
   }
 
-  // The power supply meter, in the top-centre nav band. The whole pill is
-  // a button: tap it to spend coins growing the supply. It glows red when
-  // it's full, so you can see at a glance why a saw won't go down.
-  // THE STAT BAR - one cohesive dashboard: coins | power | level | steps.
-  // Each cell is a small uppercase label with a big value under it. The
-  // POWER cell is also a button (tap to grow the supply) and shows its
-  // price; it turns red when it's full or when you just hit the ceiling.
+  // THE LEVEL BADGE. A little pill in the middle of the top nav row, in the
+  // same rounded style as the Arcade / Reset buttons - so which level and
+  // wave you're on sits up top, away from the numbers you act on.
+  function drawLevelPill() {
+    const txt = 'LEVEL ' + level + '  ·  wave ' + round;
+    ctx.font = 'bold ' + Math.min(W * 0.032, 14) + 'px system-ui, sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const pw = ctx.measureText(txt).width + 26, ph = 28;
+    const cx = (W - panelW()) / 2, px = cx - pw / 2, py = 7;
+    rrect(px, py, pw, ph, ph / 2);
+    ctx.fillStyle = 'rgba(20, 26, 38, 0.62)'; ctx.fill();
+    ctx.strokeStyle = 'rgba(255, 215, 106, 0.30)'; ctx.lineWidth = 1; ctx.stroke();
+    ctx.fillStyle = '#ffe9c4';
+    ctx.fillText(txt, cx, py + ph / 2 + 1);
+    ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left';
+  }
+
+  // The power meter itself: a row of little cells, one per unit of supply.
+  // Filled cells are power in use, empty cells are power to spare - so "two
+  // of three saws" is a picture, not a sum. They go red when the supply is
+  // full, which is your cue that a new saw needs a bigger supply first.
+  function drawPowerPips(cell, used, max, hot) {
+    const y = cell.y + cell.h - 16, ph = 10, gap = 3;
+    let pw = 12;
+    const maxW = cell.w - 18;
+    if (max * pw + (max - 1) * gap > maxW) pw = (maxW - (max - 1) * gap) / max;
+    let x = cell.x + (cell.w - (max * pw + (max - 1) * gap)) / 2;
+    for (let i = 0; i < max; i++) {
+      rrect(x, y, pw, ph, 2);
+      ctx.fillStyle = i < used ? (hot ? '#e05a4a' : '#ffd76a') : 'rgba(255,255,255,0.12)';
+      ctx.fill();
+      x += pw + gap;
+    }
+  }
+
+  // THE STAT BAR - the three numbers you act on: coins | power | steps.
+  // Each cell is a small uppercase label with its readout under it. The
+  // POWER cell is also a button (tap it to grow the supply) and shows the
+  // price of the next unit; it turns red when the supply is full.
   function drawStatBar() {
     const b = statBarRect();
     rrect(b.x, b.y, b.w, b.h, 10);
@@ -1362,14 +1421,14 @@
     ctx.strokeStyle = 'rgba(255,255,255,0.08)';
     ctx.lineWidth = 1; ctx.stroke();
 
-    // hairline dividers between the four cells
-    for (let i = 1; i < 4; i++) {
-      const x = b.x + b.w * i / 4;
+    // hairline dividers between the cells
+    for (let i = 1; i < STAT_CELLS; i++) {
+      const x = b.x + b.w * i / STAT_CELLS;
       ctx.beginPath(); ctx.moveTo(x, b.y + 8); ctx.lineTo(x, b.y + b.h - 8); ctx.stroke();
     }
 
     const labY = b.y + 15, valY = b.y + b.h - 9;
-    const valFont = 'bold ' + Math.min(W * 0.045, 18) + 'px system-ui, sans-serif';
+    const valFont = 'bold ' + Math.min(W * 0.05, 19) + 'px system-ui, sans-serif';
     function label(cx, s) {
       ctx.textAlign = 'center'; ctx.font = '9px system-ui, sans-serif';
       ctx.fillStyle = 'rgba(159,176,198,0.85)'; ctx.fillText(s, cx, labY);
@@ -1385,30 +1444,26 @@
     label(c.x + c.w / 2, 'COINS');
     value(c.x + c.w / 2, '' + coins, coinRed ? '#e05a4a' : '#ffd76a');
 
-    // 1 - POWER (the tappable one, with its grow-it price)
+    // 1 - POWER: the meter, tappable, with the price of the next unit.
     c = statCell(1);
     const used = poweredUsed(), full = used >= powerMax, canUp = coins >= powerUpCost();
     const pflash = powerFlash > 0 && Math.sin(powerFlash * 30) > 0;
+    const hot = full || pflash;
     rrect(c.x + 3, c.y + 3, c.w - 6, c.h - 6, 7);
     ctx.fillStyle = 'rgba(255,255,255,0.05)'; ctx.fill();
-    if (full || pflash) {
+    if (hot) {
       ctx.lineWidth = 2;
       ctx.strokeStyle = pflash ? '#e05a4a' : 'rgba(224,90,74,0.6)';
       ctx.stroke();
     }
     label(c.x + c.w / 2, 'POWER');
-    value(c.x + c.w / 2, '⚡' + used + '/' + powerMax, full ? '#e05a4a' : '#ffd76a');
+    drawPowerPips(c, used, powerMax, hot);
     ctx.textAlign = 'right'; ctx.font = 'bold 9px system-ui, sans-serif';
     ctx.fillStyle = canUp ? '#8fe07a' : '#6b7a90';
-    ctx.fillText('+' + powerUpCost(), c.x + c.w - 6, labY);
+    ctx.fillText('+' + powerUpCost(), c.x + c.w - 7, labY);
 
-    // 2 - LEVEL and wave
+    // 2 - STEPS while building / STOPPED while they climb
     c = statCell(2);
-    label(c.x + c.w / 2, 'LEVEL');
-    value(c.x + c.w / 2, level + ' · w' + round, '#e6ecf5');
-
-    // 3 - STEPS while building / STOPPED while they climb
-    c = statCell(3);
     if (state === 'build') {
       const ok = canGetThrough();
       label(c.x + c.w / 2, 'STEPS');
@@ -1455,8 +1510,10 @@
   }
 
   function drawHud() {
-    // The whole top of the screen is now ONE stat bar. When you're hiding a
-    // door's key, a prompt takes over the nav band above it.
+    // Two tiers up top: the LEVEL badge in the nav row, the stat bar below.
+    // When you're hiding a door's key, its prompt takes over the nav band
+    // (so we skip the level badge then to keep that row clear).
+    if (holdingKey < 0) drawLevelPill();
     drawStatBar();
     if (state === 'build' && holdingKey >= 0) drawKeyPrompt();
 
@@ -1623,6 +1680,16 @@
 
     // ---- PUTTING DOWN THE KEY YOU ARE HOLDING --------------------------
     if (holdingKey >= 0) {
+      // CHANGED YOUR MIND? Tap the door you just placed a second time and
+      // the whole door-and-key pair is cancelled, with your coins returned.
+      if (grid[r][c] === DOOR && tint[r][c] === holdingKey) {
+        removeLock(holdingKey);
+        coins += priceOf(DOOR);
+        holdingKey = -1;
+        think();
+        say('door taken back - coins returned');
+        return;
+      }
       if (grid[r][c] !== EMPTY) { say('the key needs an empty square'); return; }
       const colour = holdingKey;
       grid[r][c] = KEY; tint[r][c] = colour;
@@ -1630,14 +1697,17 @@
       // TWO things have to be true. They must still be able to reach the
       // flag - AND they must be able to get this key. A key they can
       // never reach turns your door into a wall you paid extra for.
-      if (!canGetThrough() || !canFetch(colour)) {
+      // (Same as above: decide the reason before putting anything back.)
+      const throughOK = canGetThrough();
+      const fetchOK   = canFetch(colour);
+      if (!throughOK || !fetchOK) {
         grid[r][c] = EMPTY;
         removeLock(colour);
         coins += priceOf(DOOR);
         holdingKey = -1;
         think();
-        reject(c, r, canGetThrough() ? 'they could never reach that key there'
-                                     : 'the key can\'t block the only way up');
+        reject(c, r, throughOK ? 'they could never reach that key there'
+                               : 'the key can\'t block the only way up');
         return;
       }
       holdingKey = -1;
@@ -1658,6 +1728,10 @@
       think();
       return;
     }
+
+    // Nothing picked up (you tapped a tool a second time to put it down),
+    // so a tap on the board shouldn't build anything by accident.
+    if (tool < 0) { say('pick a tool first, then tap the tower'); return; }
 
     const t = TOOLS[tool];
     if (coins < t.price) {
@@ -1683,7 +1757,7 @@
       coins -= t.price;
       holdingKey = colour;
       think();
-      say('now hide the ' + LOCKS[colour].name + ' key');
+      say('now hide the ' + LOCKS[colour].name + ' key - or tap the door to undo');
       const h1 = document.getElementById('hud');
       if (h1) h1.style.opacity = 0;
       return;
@@ -1696,11 +1770,19 @@
     // have hidden. Refused the moment you try, with the block put
     // straight back - so you find out by tapping, not by building a
     // masterpiece and being told at the end.
-    if (!canGetThrough() || !allKeysFetchable()) {
+    //
+    // Work out WHY *while the block is still there*. If we asked
+    // canGetThrough() again AFTER putting it back, the answer would always
+    // be "yes" (the block is gone), so the message would always blame a
+    // key - even when the real problem was the path and there are no keys
+    // on the board at all.
+    const throughOK = canGetThrough();
+    const keysOK    = allKeysFetchable();
+    if (!throughOK || !keysOK) {
       grid[r][c] = EMPTY;
       think();
-      reject(c, r, canGetThrough() ? 'that would trap a key they need'
-                                   : 'that blocks the only way up');
+      reject(c, r, throughOK ? 'that would trap a key they need'
+                             : 'that blocks the only way up');
       return;
     }
 
@@ -1724,8 +1806,10 @@
       for (let i = 0; i < TOOLS.length; i++) {
         const b = toolBox(i);
         if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
-          tool = i;
-          say(TOOLS[i].blurb);            // tapping a tool tells you what it does
+          // Tap a tool to pick it up; tap the SAME tool again to put it
+          // back down, so nothing is selected and a stray tap won't build.
+          if (tool === i) { tool = -1; say('put the ' + TOOLS[i].name + ' away'); }
+          else            { tool = i;  say(TOOLS[i].blurb); }
           return;
         }
       }
@@ -1790,7 +1874,7 @@
   document.getElementById('resetCancel').addEventListener('click', hideReset);
   document.getElementById('resetYes').addEventListener('click', function () {
     hideReset();
-    resetGame();
+    resetMap();
   });
   // Tapping the dark area around the card, or pressing Escape, both mean
   // "no, never mind" - the same as Keep going.
