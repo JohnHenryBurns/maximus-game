@@ -128,6 +128,30 @@
   let says = '', saysT = 0;
   function say(w) { says = w; saysT = 3.0; }
 
+  // ---- THE BIG WORDS ------------------------------------------------
+  // GOOD JOB for roughly half, PERFECT for every last one of them.
+  // "Roughly half" has to be an actual number, so it is a band either
+  // side of half - change these two and the band moves.
+  const HALF_LOW = 0.45, HALF_HIGH = 0.55;
+  const GOOD_TIME = 1.0, PERFECT_TIME = 2.6;
+
+  let banner = '', bannerT = 0, bannerFor = 1, bannerGold = false;
+
+  // Kept as its own little function that just answers a question, so it
+  // can be checked on its own without running a whole wave.
+  function bannerWords(s, n) {
+    if (n <= 0) return null;
+    if (s === n) return { text: 'PERFECT',  time: PERFECT_TIME, gold: true };
+    if (s >= n * HALF_LOW && s <= n * HALF_HIGH)
+      return { text: 'GOOD JOB', time: GOOD_TIME, gold: false };
+    return null;
+  }
+  function showBanner(s, n) {
+    const b = bannerWords(s, n);
+    if (!b) { bannerT = 0; return; }
+    banner = b.text; bannerT = b.time; bannerFor = b.time; bannerGold = b.gold;
+  }
+
   function inside(c, r) { return c >= 0 && r >= 0 && c < COLS && r < ROWS; }
   function at(c, r) { return inside(c, r) ? grid[r][c] : WALL; }
 
@@ -545,6 +569,10 @@
 
   function update(dt) {
     if (saysT > 0) saysT -= dt;
+    // Counted down here, above the "are we running?" check, or the words
+    // would freeze on screen the moment the wave finished - which is
+    // exactly when they appear.
+    if (bannerT > 0) bannerT -= dt;
 
     // Scrap keeps flying even after the round is over.
     for (let i = scrap.length - 1; i >= 0; i--) {
@@ -579,6 +607,7 @@
       state = 'done';
       const s = stopped();
       if (s > best) best = s;
+      showBanner(s, bots.length);
       say(s === bots.length ? 'NOT ONE OF THEM GOT THROUGH'
         : s === 0           ? 'all ' + bots.length + ' walked straight past'
         : 'you stopped ' + s + ' of ' + bots.length);
@@ -994,6 +1023,51 @@
       ctx.fillStyle = '#6b7a90';
       ctx.fillText('turn your phone upright for a much bigger tower',
                    (W - panelW()) / 2, 30);
+    }
+
+    // ---- GOOD JOB / PERFECT --------------------------------------------
+    if (bannerT > 0) {
+      const bd = board();
+      const cx = (W - panelW()) / 2;
+      const cy = bd.y + ROWS * bd.s * 0.42;
+      const age = bannerFor - bannerT;
+
+      // A quick pop as it lands, then it holds, then it fades. All three
+      // come from the same one timer.
+      const grow = age < 0.16 ? 0.55 + 0.45 * (age / 0.16) : 1;
+      const fade = clamp(bannerT / 0.35, 0, 1);
+
+      ctx.save();
+      ctx.textAlign = 'center';
+
+      // Pick a size, then MEASURE it and shrink if it would run off the
+      // edge. On a sideways phone PERFECT came out 27px wider than the
+      // room it had - guessing a size from the screen width is not the
+      // same as checking the word actually fits.
+      let size = Math.min(W * (bannerGold ? 0.155 : 0.115), bannerGold ? 128 : 92);
+      // 52 of that is the dark box drawn behind the words (26 each side),
+      // plus a little air. Reserve what is actually painted, not the
+      // text alone, or it hangs 6px off the edge.
+      const room = (W - panelW()) - 60;
+      ctx.font = 'bold ' + size + 'px system-ui, sans-serif';
+      const natural = ctx.measureText(banner).width;
+      if (natural > room) size *= room / natural;
+
+      size *= grow;
+      ctx.font = 'bold ' + size + 'px system-ui, sans-serif';
+      const wid = ctx.measureText(banner).width;
+
+      ctx.globalAlpha = fade * 0.82;
+      ctx.fillStyle = '#10141c';
+      ctx.fillRect(cx - wid / 2 - 26, cy - size * 0.82, wid + 52, size * 1.18);
+
+      ctx.globalAlpha = fade;
+      ctx.lineWidth = Math.max(3, size * 0.07);
+      ctx.strokeStyle = bannerGold ? '#ffd76a' : '#8fe07a';
+      ctx.strokeText(banner, cx, cy);
+      ctx.fillStyle = bannerGold ? '#fff3cf' : '#dcf6d2';
+      ctx.fillText(banner, cx, cy);
+      ctx.restore();
     }
 
     if (saysT > 0) {
