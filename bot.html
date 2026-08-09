@@ -818,6 +818,27 @@
       }
     }
 
+    // ---- PARACHUTE GLIDE: drift diagonally DOWN and across ------------
+    // A parachute doesn't just drop straight - it drifts. So a robot can
+    // settle onto a mid-height side ledge one-down-one-over at a time,
+    // instead of plummeting to the very bottom and rocketing back up the
+    // same column. (This is what stops the "down then up the same column"
+    // look - now they glide across to the ledge they want.)
+    for (let dir = -1; dir <= 1; dir += 2) {
+      let cc = c, rr = r, cost = 0, k2 = keys;
+      const via = [];
+      for (let step = 0; step < COLS; step++) {
+        const nc = cc + dir, nr = rr + 1;      // one column over, one row down
+        if (!passable(nc, nr, k2)) break;      // a wall/ledge in the way stops the drift
+        cost += costOf(at(nc, nr));
+        k2 |= keyBitAt(nc, nr);
+        via.push({ c: nc, r: nr });
+        cc = nc; rr = nr;
+        if (standable(cc, rr, k2))
+          out.push({ c: cc, r: rr, keys: k2, cost: cost, via: via.slice() });
+      }
+    }
+
     return out;
   }
 
