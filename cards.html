@@ -259,7 +259,70 @@
 
   let packCards = [];        // what you just pulled, for the reveal
   let packWasGold = false;
+  let packTitle = 'YOU GOT';
   let revealT = 0;
+
+  // ---- TRADING SPARES -------------------------------------------------
+  //
+  // Two of the same monster, in the same finish, become one new card in
+  // THAT finish. Two gold ones give you a gold one; two plain ones do
+  // not, or you could quietly launder ordinary cards into shiny ones and
+  // the gold packs would stop meaning anything.
+  const TRADE_COST = 2;
+
+  let tradePick = null;      // { i, f } while you are deciding
+
+  // Which pile we would take them from: your plain spares first, so a
+  // gold card is never swallowed while you still have ordinary copies.
+  function tradeableFinish(i) {
+    for (const f of [PLAIN, GOLD, DIAMOND]) if (own[f][i] >= TRADE_COST) return f;
+    return -1;
+  }
+
+  // What you get back. Something you have never seen if there is one -
+  // that makes spares the way you finish a collection.
+  // `gave` is the monster you handed over - never hand it straight back.
+  // Worked out BEFORE the two copies are taken away, because taking them
+  // first could empty that pile and make the card you just traded look
+  // like one you had never found. It gave itself back 6 times in 60.
+  function tradeReward(f, gave) {
+    const missing = [];
+    for (let i = 0; i < CARDS.length; i++) {
+      if (i !== gave && countOf(i) === 0) missing.push(i);
+    }
+    if (missing.length) return missing[Math.floor(Math.random() * missing.length)];
+
+    // Nothing left to discover, so anything you do not hold in THIS
+    // finish, and failing that just a fresh roll.
+    const notInFinish = [];
+    for (let i = 0; i < CARDS.length; i++) {
+      if (i !== gave && own[f][i] === 0) notInFinish.push(i);
+    }
+    if (notInFinish.length) return notInFinish[Math.floor(Math.random() * notInFinish.length)];
+
+    let roll = randomCardIndex(), guard = 0;
+    while (roll === gave && guard < 60) { roll = randomCardIndex(); guard++; }
+    return roll;
+  }
+
+  function doTrade() {
+    if (!tradePick) return false;
+    const i = tradePick.i, f = tradePick.f;
+    if (own[f][i] < TRADE_COST) { tradePick = null; return false; }
+
+    const got = tradeReward(f, i);      // decided BEFORE the pair is spent
+    own[f][i] -= TRADE_COST;
+    own[f][got]++;
+    save();
+
+    tradePick = null;
+    packCards = [{ i: got, f: f }];
+    packWasGold = (f !== PLAIN);
+    packTitle = 'TRADED FOR';
+    revealT = 0;
+    screen = 'pack';
+    return true;
+  }
 
   function openPack() {
     if (!packReady()) return false;
@@ -271,6 +334,7 @@
     }
     lastPack = Date.now();
     packWasGold = false;
+    packTitle = 'YOU GOT';
     save();
     revealT = 0;
     screen = 'pack';
@@ -290,6 +354,7 @@
       own[f][idx]++;
     }
     packWasGold = true;
+    packTitle = 'GOLD PACK!';
     save();
     revealT = 0;
     screen = 'pack';
@@ -771,6 +836,20 @@
     return { x: g.x0 + cx * (g.w + 8), y: g.y0 + cy * g.step, w: g.w, h: g.h };
   }
   function backBox() { return { x: W - 96, y: 8, w: 88, h: 34 }; }
+
+  // The two buttons on the trade panel.
+  function tradePanel() {
+    const w = Math.min(W - 60, 300), h = Math.min(H - 120, 300);
+    return { x: (W - w) / 2, y: (H - h) / 2, w: w, h: h };
+  }
+  function tradeYesBox() {
+    const p = tradePanel();
+    return { x: p.x + 14, y: p.y + p.h - 60, w: (p.w - 40) / 2, h: 46 };
+  }
+  function tradeNoBox() {
+    const p = tradePanel();
+    return { x: p.x + p.w / 2 + 6, y: p.y + p.h - 60, w: (p.w - 40) / 2, h: 46 };
+  }
   function saveBox() { return { x: W - 104, y: 12, w: 92, h: 44 }; }
 
 
@@ -1308,6 +1387,8 @@
 
     drawButton(playBox(), 'FIGHT SOMEBODY', totalOwned() > 0);
 
+    if (tradePick) drawTradePanel();
+
     // The game already writes everything down the moment it happens, so
     // this button never has work to do. It is here to SHOW you that -
     // "trust me" is not as good as a tick.
@@ -1315,11 +1396,73 @@
                savedT > 0 ? '#8fe07a' : '#8a7ea8');
   }
 
+  function drawTradePanel() {
+    const p = tradePanel();
+    const m = newMonster(tradePick.i, tradePick.f);
+
+    ctx.fillStyle = 'rgba(8,5,14,0.82)';
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.fillStyle = '#221a33';
+    roundRect(p.x, p.y, p.w, p.h, 16); ctx.fill();
+    ctx.lineWidth = 3; ctx.strokeStyle = '#ffd76a';
+    roundRect(p.x, p.y, p.w, p.h, 16); ctx.stroke();
+
+    ctx.textAlign = 'center';
+    ctx.font = 'bold ' + Math.min(W * 0.045, 22) + 'px system-ui, sans-serif';
+    ctx.fillStyle = '#f0e9ff';
+    ctx.fillText('SWAP ' + TRADE_COST + ' FOR 1', p.x + p.w / 2, p.y + 34);
+
+    // The two you would hand over, and what comes back.
+    // Side by side with only a whisker of overlap - stacked any closer
+    // and the front card hid the back one's numbers.
+    const cw = p.w * 0.235, ch = cw * 1.35, my = p.y + 52;
+    drawCard(p.x + p.w * 0.045, my, cw, ch, m);
+    drawCard(p.x + p.w * 0.285, my, cw, ch, m);
+
+    ctx.font = 'bold ' + Math.min(W * 0.07, 34) + 'px system-ui, sans-serif';
+    ctx.fillStyle = '#ffd76a';
+    ctx.fillText('>', p.x + p.w * 0.60, my + ch * 0.6);
+
+    // A face-down card, because you do not know what you are getting.
+    const qx = p.x + p.w * 0.66;
+    ctx.fillStyle = '#2e2444';
+    roundRect(qx, my, cw, ch, cw * 0.09); ctx.fill();
+    ctx.lineWidth = 2; ctx.strokeStyle = '#463769';
+    roundRect(qx, my, cw, ch, cw * 0.09); ctx.stroke();
+    ctx.font = 'bold ' + cw * 0.5 + 'px system-ui, sans-serif';
+    ctx.fillStyle = '#6f5ba0';
+    ctx.fillText('?', qx + cw / 2, my + ch * 0.66);
+
+    // Both lines shrink to fit rather than running off the panel.
+    const fin = FINISHES[tradePick.f];
+    const lines = [
+      'you have ' + own[tradePick.f][tradePick.i] + ' ' +
+        (fin.shine ? fin.name + ' ' : '') + m.name,
+      fin.shine ? 'you get another ' + fin.name + ' card'
+                : 'you get one you have not found yet'
+    ];
+    ctx.fillStyle = '#9a8fc0';
+    for (let li = 0; li < lines.length; li++) {
+      let ts = Math.min(W * 0.032, 15);
+      ctx.font = ts + 'px system-ui, sans-serif';
+      const wide = ctx.measureText(lines[li]).width, fits = p.w - 28;
+      if (wide > fits) {
+        ts *= fits / wide;
+        ctx.font = ts + 'px system-ui, sans-serif';
+      }
+      ctx.fillText(lines[li], p.x + p.w / 2, my + ch + 30 + li * 22);
+    }
+
+    drawButton(tradeYesBox(), 'SWAP', true, '#8fe07a');
+    drawButton(tradeNoBox(), 'NO', true, '#8a7ea8');
+  }
+
   function drawPackReveal() {
     ctx.textAlign = 'center';
     ctx.font = 'bold ' + Math.min(W * 0.07, 40) + 'px system-ui, sans-serif';
     ctx.fillStyle = packWasGold ? rgb(FINISHES[GOLD].col) : '#ffd76a';
-    ctx.fillText(packWasGold ? 'GOLD PACK!' : 'YOU GOT', W / 2, 60);
+    ctx.fillText(packTitle, W / 2, 60);
 
     const n = packCards.length;
     const w = Math.min((W - 30 - (n - 1) * 6) / n, 120);
@@ -1573,7 +1716,7 @@
       ctx.fillText(f.text, f.x, f.y);
     }
 
-    if (saysT > 0 && screen === 'duel' && !cut) {
+    if (saysT > 0 && (screen === 'collection' || (screen === 'duel' && !cut))) {
       ctx.textAlign = 'center';
       ctx.font = 'bold ' + Math.min(W * 0.04, 21) + 'px system-ui, sans-serif';
       const wid = ctx.measureText(says).width;
@@ -1610,10 +1753,29 @@
     }
 
     if (screen === 'collection') {
+      // The trade panel is on top of everything, so it answers first.
+      if (tradePick) {
+        if (inBox(mx, my, tradeYesBox())) { doTrade(); return; }
+        tradePick = null;              // anywhere else means "no"
+        return;
+      }
       if (inBox(mx, my, saveBox())) { save(); savedT = 1.8; return; }
       if (inBox(mx, my, packBox()) && packReady()) { openPack(); return; }
       if (inBox(mx, my, goldBox()) && goldPacks > 0) { openGoldPack(); return; }
       if (inBox(mx, my, playBox()) && totalOwned() > 0) { startDuel(); return; }
+
+      // Tap a monster you have spares of to offer a swap.
+      for (let i = 0; i < CARDS.length; i++) {
+        if (!inBox(mx, my, gridSpot(i))) continue;
+        const f = tradeableFinish(i);
+        if (f < 0) {
+          say(countOf(i) ? 'you need ' + TRADE_COST + ' the same to swap'
+                         : 'you have not found that one yet');
+          return;
+        }
+        tradePick = { i: i, f: f };
+        return;
+      }
       return;
     }
 
