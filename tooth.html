@@ -133,8 +133,11 @@
     // best thing you own against everything else; against this it is the
     // worst, because 14 damage and 4 damage are both worth one hit. Four
     // cheap BRUSHES firing fast beat one expensive FLOSS.
+    // And killing it does not end the problem - it BURSTS into four
+    // ordinary germs, right where it stood. So the fifty hits only buy
+    // you the mega; you still have to deal with what falls out.
     { name: 'MEGA GERM', hp: MEGA_HITS, speed: 0.75, cash: 60,
-      col: [230, 110, 190], r: 0.62, armour: true }
+      col: [230, 110, 190], r: 0.62, armour: true, splits: 4, into: 0 }
   ];
 
 
@@ -201,13 +204,13 @@
     say('wave ' + wave + ' - ' + toSpawn.length + ' of them');
   }
 
-  function spawnGerm(kind) {
+  function spawnGerm(kind, at) {
     const g = GERMS[kind];
     // An armoured one is exactly MEGA_HITS hits, in wave 5 and in wave
     // 25. Scaling that with the wave would have meant 250 hits by the
     // end, which is not a monster, it is a wait.
     const hp = g.armour ? g.hp : g.hp * toughness(wave);
-    germs.push({ kind: kind, at: 0, hp: hp, max: hp, speed: g.speed,
+    germs.push({ kind: kind, at: at || 0, hp: hp, max: hp, speed: g.speed,
                  armour: !!g.armour, wob: Math.random() * 6 });
   }
 
@@ -218,6 +221,19 @@
     const a = road[Math.min(i, road.length - 1)];
     const b = road[Math.min(i + 1, road.length - 1)];
     return { c: a.c + (b.c - a.c) * f, r: a.r + (b.r - a.r) * f };
+  }
+
+  // What falls out of a mega germ when it goes. They come out strung
+  // BACKWARDS along the road from where it died, so they spill out
+  // behind it rather than all landing on the same spot - and never past
+  // the tooth, which would be a free hit.
+  function burst(g) {
+    const spec = GERMS[g.kind];
+    if (!spec.splits) return;
+    for (let i = 0; i < spec.splits; i++) {
+      const at = clamp(g.at - i * 0.5, 0, road.length - 1.02);
+      spawnGerm(spec.into, at);
+    }
   }
 
   function pop(x, y, col) {
@@ -333,6 +349,14 @@
         const b = board();
         pop(b.x + (p.c + 0.5) * b.s, b.y + (p.r + 0.5) * b.s, GERMS[best.kind].col);
         germs.splice(germs.indexOf(best), 1);
+
+        // Take it off the list FIRST, then let it burst - otherwise the
+        // splice would be hunting for it in a list that has changed.
+        if (GERMS[best.kind].splits) {
+          pop(b.x + (p.c + 0.5) * b.s, b.y + (p.r + 0.5) * b.s, GERMS[best.kind].col);
+          burst(best);
+          say('it burst into ' + GERMS[best.kind].splits + '!');
+        }
       }
     }
 
