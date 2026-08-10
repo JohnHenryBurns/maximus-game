@@ -122,7 +122,18 @@
     { name: 'BRUSH', cost: 20, range: 2.2, rate: 2.4, dmg: 4,
       col: [110, 200, 255], blurb: 'quick, short reach' },
     { name: 'FLOSS', cost: 45, range: 4.2, rate: 0.8, dmg: 14,
-      col: [190, 150, 255], blurb: 'slow, hits hard, sees far' }
+      col: [190, 150, 255], blurb: 'slow, hits hard, sees far' },
+
+    // ---- THE PASTE TUBE ------------------------------------------------
+    // It squirts, and toothpaste SPLATTERS. Everything within splash of
+    // where the blob lands gets hit, not just what it was aimed at.
+    //
+    // Which is the answer to the thing the other two are bad at: a mega
+    // germ bursts into four at once, and a brush can only hit one of
+    // them at a time. Against armour every germ splashed counts as its
+    // own hit, so one squirt into a huddle is worth four.
+    { name: 'PASTE', cost: 35, range: 2.9, rate: 1.1, dmg: 6, splash: 1.15,
+      col: [120, 235, 200], blurb: 'squirts - splatters everything nearby' }
   ];
 
   const GERMS = [
@@ -258,6 +269,27 @@
     }
   }
 
+  // Everything that damages a germ goes through here, so a splash and a
+  // single shot cannot drift apart in what they do when one dies.
+  function hurtGerm(g, amount) {
+    g.hp -= g.armour ? 1 : amount;      // armour counts hits, not damage
+    if (g.hp > 0) return;
+
+    const idx = germs.indexOf(g);
+    if (idx < 0) return;                // something already finished it
+    cash += GERMS[g.kind].cash;
+
+    const b = board(), p = germCell(g);
+    pop(b.x + (p.c + 0.5) * b.s, b.y + (p.r + 0.5) * b.s, GERMS[g.kind].col);
+    germs.splice(idx, 1);
+
+    if (GERMS[g.kind].splits) {
+      pop(b.x + (p.c + 0.5) * b.s, b.y + (p.r + 0.5) * b.s, GERMS[g.kind].col);
+      burst(g);
+      say('it burst into ' + GERMS[g.kind].splits + '!');
+    }
+  }
+
   function pop(x, y, col) {
     for (let i = 0; i < 10; i++) {
       const a = Math.random() * Math.PI * 2, sp = 20 + Math.random() * 90;
@@ -374,24 +406,21 @@
       const p = germCell(best);
       t.aim = Math.atan2(p.r - t.r, p.c - t.c);
       shots.push({ fromC: t.c, fromR: t.r, toC: p.c, toR: p.r,
-                   life: 0.09, col: spec.col });
+                   life: spec.splash ? 0.16 : 0.09, col: spec.col,
+                   splash: spec.splash || 0 });
 
-      // Armour ignores how hard the shot was. One hit, one off.
-      best.hp -= best.armour ? 1 : spec.dmg;
-      if (best.hp <= 0) {
-        cash += GERMS[best.kind].cash;
-        const b = board();
-        pop(b.x + (p.c + 0.5) * b.s, b.y + (p.r + 0.5) * b.s, GERMS[best.kind].col);
-        germs.splice(germs.indexOf(best), 1);
-
-        // Take it off the list FIRST, then let it burst - otherwise the
-        // splice would be hunting for it in a list that has changed.
-        if (GERMS[best.kind].splits) {
-          pop(b.x + (p.c + 0.5) * b.s, b.y + (p.r + 0.5) * b.s, GERMS[best.kind].col);
-          burst(best);
-          say('it burst into ' + GERMS[best.kind].splits + '!');
+      // Who catches it. Work the whole list out BEFORE hurting anybody,
+      // because a germ bursting adds new ones and we do not want the
+      // same squirt hitting the bits it just created.
+      let caught = [best];
+      if (spec.splash) {
+        caught = [];
+        for (const g of germs) {
+          const q = germCell(g);
+          if (dist(q.c, q.r, p.c, p.r) <= spec.splash) caught.push(g);
         }
       }
+      for (const g of caught) hurtGerm(g, spec.dmg);
     }
 
     // ---- wave over? -----------------------------------------------------
@@ -541,13 +570,25 @@
       for (let i = 0; i < 3; i++) {
         ctx.fillRect(b.s * (0.18 + i * 0.08), -b.s * 0.07, b.s * 0.04, b.s * 0.14);
       }
-    } else {
+    } else if (t.kind === 1) {
       ctx.lineWidth = Math.max(1.5, b.s * 0.05);              // floss thread
       ctx.strokeStyle = '#0d1520';
       ctx.beginPath();
       ctx.moveTo(0, 0); ctx.lineTo(b.s * 0.46, 0); ctx.stroke();
       ctx.fillStyle = '#0d1520';
       ctx.beginPath(); ctx.arc(b.s * 0.46, 0, b.s * 0.07, 0, Math.PI * 2); ctx.fill();
+    } else {
+      // A squeezed tube with a nozzle.
+      ctx.fillStyle = '#0d1520';
+      ctx.fillRect(-b.s * 0.05, -b.s * 0.11, b.s * 0.38, b.s * 0.22);
+      ctx.beginPath();
+      ctx.moveTo(b.s * 0.33, -b.s * 0.08);
+      ctx.lineTo(b.s * 0.5, -b.s * 0.05);
+      ctx.lineTo(b.s * 0.5, b.s * 0.05);
+      ctx.lineTo(b.s * 0.33, b.s * 0.08);
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#eaf2ff';
+      ctx.fillRect(-b.s * 0.02, -b.s * 0.05, b.s * 0.1, b.s * 0.1);
     }
     ctx.restore();
   }
@@ -649,11 +690,23 @@
 
     for (const s of shots) {
       ctx.strokeStyle = rgb(s.col);
-      ctx.lineWidth = Math.max(2, b.s * 0.09);
+      ctx.lineWidth = Math.max(2, b.s * (s.splash ? 0.14 : 0.09));
       ctx.beginPath();
       ctx.moveTo(b.x + (s.fromC + 0.5) * b.s, b.y + (s.fromR + 0.5) * b.s);
       ctx.lineTo(b.x + (s.toC + 0.5) * b.s, b.y + (s.toR + 0.5) * b.s);
       ctx.stroke();
+
+      // A blob of paste where it landed, showing exactly what got
+      // splattered - so the splash is something you can SEE, not just
+      // something the numbers do.
+      if (s.splash) {
+        ctx.fillStyle = 'rgba(' + (s.col[0]|0) + ',' + (s.col[1]|0) + ',' +
+                        (s.col[2]|0) + ',0.45)';
+        ctx.beginPath();
+        ctx.arc(b.x + (s.toC + 0.5) * b.s, b.y + (s.toR + 0.5) * b.s,
+                s.splash * b.s, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
     for (const p of bits) {
       ctx.fillStyle = 'rgba(' + (p.col[0]|0) + ',' + (p.col[1]|0) + ',' + (p.col[2]|0) +
