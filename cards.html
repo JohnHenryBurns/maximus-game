@@ -803,40 +803,212 @@
     ctx.closePath();
   }
 
-  function monsterFace(x, y, w, h, m) {
-    const cx = x + w / 2, cy = y + h * 0.46;
-    const eyes = 2 + (m.i % 2);
-    const r = w * 0.075;
-    ctx.fillStyle = '#1b1428';
-    for (let e = 0; e < eyes; e++) {
-      ctx.beginPath();
-      ctx.arc(cx + (e - (eyes - 1) / 2) * w * 0.22, cy - h * 0.05, r, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.fillStyle = '#fff';
-    for (let e = 0; e < eyes; e++) {
-      ctx.beginPath();
-      ctx.arc(cx + (e - (eyes - 1) / 2) * w * 0.22 - r * 0.3, cy - h * 0.05 - r * 0.3,
-              r * 0.35, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.strokeStyle = '#1b1428';
-    ctx.lineWidth = Math.max(2, w * 0.035);
-    ctx.beginPath();
-    const my = cy + h * 0.12;
-    if (m.i % 3 === 0) {
-      ctx.arc(cx, my - w * 0.06, w * 0.18, 0.15 * Math.PI, 0.85 * Math.PI);
-    } else if (m.i % 3 === 1) {
-      ctx.moveTo(cx - w * 0.16, my); ctx.lineTo(cx + w * 0.16, my);
-    } else {
-      ctx.moveTo(cx - w * 0.18, my);
-      for (let t = 0; t < 4; t++) {
-        ctx.lineTo(cx - w * 0.18 + (t + 0.5) * w * 0.09, my + (t % 2 ? -1 : 1) * w * 0.05);
-      }
-      ctx.lineTo(cx + w * 0.18, my);
-    }
-    ctx.stroke();
+
+  // -----------------------------------------------------------------
+  //  THE MONSTER PICTURES
+  //
+  //  Twelve little drawings, one per monster, built out of circles and
+  //  boxes. Everything is measured in fractions of the card, so the
+  //  same picture works on a 50px card in the collection and a 150px
+  //  one in a fight.
+  //
+  //  The art keeps the monster's OWN colour even on a gold card - the
+  //  frame goes gold, the monster does not, which is how a real shiny
+  //  card looks.
+  // -----------------------------------------------------------------
+
+  function shade(c, f) { return [c[0] * f, c[1] * f, c[2] * f]; }
+  function lift(c, f) {
+    return [c[0] + (255 - c[0]) * f, c[1] + (255 - c[1]) * f, c[2] + (255 - c[2]) * f];
   }
+
+  function ell(cx, cy, rx, ry, col) {
+    ctx.fillStyle = col;
+    ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2); ctx.fill();
+  }
+  function tri(ax, ay, bx, by, cx, cy, col) {
+    ctx.fillStyle = col;
+    ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.lineTo(cx, cy);
+    ctx.closePath(); ctx.fill();
+  }
+  // Two eyes with pupils - the quickest way to make anything look alive.
+  function peepers(cx, cy, r, spread) {
+    for (var e = -1; e <= 1; e += 2) {
+      ell(cx + e * spread, cy, r, r, '#fff');
+      ell(cx + e * spread, cy, r * 0.45, r * 0.45, '#141018');
+    }
+  }
+
+  function drawMonsterArt(i, cx, cy, s, col) {
+    var dark = rgb(shade(col, 0.55));
+    var mid  = rgb(shade(col, 0.78));
+    var pale = rgb(lift(col, 0.45));
+
+    if (i === 0) {                                    // SNOT SLUG
+      ell(cx, cy + s * 0.22, s * 0.52, s * 0.26, mid);
+      ell(cx, cy - s * 0.02, s * 0.34, s * 0.30, dark);
+      for (var a = -1; a <= 1; a += 2) {
+        ctx.strokeStyle = dark; ctx.lineWidth = s * 0.07;
+        ctx.beginPath();
+        ctx.moveTo(cx + a * s * 0.14, cy - s * 0.24);
+        ctx.lineTo(cx + a * s * 0.24, cy - s * 0.5);
+        ctx.stroke();
+        ell(cx + a * s * 0.24, cy - s * 0.52, s * 0.07, s * 0.07, dark);
+      }
+      peepers(cx, cy - s * 0.02, s * 0.11, s * 0.14);
+      ell(cx + s * 0.42, cy + s * 0.44, s * 0.09, s * 0.12, pale);
+
+    } else if (i === 1) {                             // NOSE GOBLIN
+      ell(cx, cy + s * 0.06, s * 0.40, s * 0.42, mid);
+      tri(cx - s * 0.44, cy - s * 0.10, cx - s * 0.72, cy - s * 0.46,
+          cx - s * 0.20, cy - s * 0.40, dark);
+      tri(cx + s * 0.44, cy - s * 0.10, cx + s * 0.72, cy - s * 0.46,
+          cx + s * 0.20, cy - s * 0.40, dark);
+      peepers(cx, cy - s * 0.08, s * 0.11, s * 0.17);
+      ell(cx, cy + s * 0.20, s * 0.16, s * 0.20, dark);
+
+    } else if (i === 2) {                             // BURP TOAD
+      ell(cx, cy + s * 0.14, s * 0.56, s * 0.40, mid);
+      ctx.fillStyle = dark;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy + s * 0.24, s * 0.40, s * 0.16, 0, 0, Math.PI);
+      ctx.fill();
+      peepers(cx, cy - s * 0.20, s * 0.14, s * 0.24);
+      ctx.strokeStyle = pale; ctx.lineWidth = s * 0.05;
+      ctx.beginPath(); ctx.arc(cx + s * 0.52, cy - s * 0.34, s * 0.13, 0, Math.PI * 2);
+      ctx.stroke();
+
+    } else if (i === 3) {                             // BOOGER BAT
+      for (var w = -1; w <= 1; w += 2) {
+        ctx.fillStyle = mid;
+        ctx.beginPath();
+        ctx.moveTo(cx + w * s * 0.16, cy);
+        ctx.lineTo(cx + w * s * 0.78, cy - s * 0.34);
+        ctx.lineTo(cx + w * s * 0.66, cy + s * 0.10);
+        ctx.lineTo(cx + w * s * 0.80, cy + s * 0.22);
+        ctx.closePath(); ctx.fill();
+      }
+      ell(cx, cy, s * 0.26, s * 0.30, dark);
+      tri(cx - s * 0.22, cy - s * 0.22, cx - s * 0.28, cy - s * 0.52, cx - s * 0.06, cy - s * 0.34, dark);
+      tri(cx + s * 0.22, cy - s * 0.22, cx + s * 0.28, cy - s * 0.52, cx + s * 0.06, cy - s * 0.34, dark);
+      peepers(cx, cy - s * 0.04, s * 0.09, s * 0.11);
+
+    } else if (i === 4) {                             // BUM BADGER
+      ell(cx, cy + s * 0.10, s * 0.46, s * 0.42, dark);
+      ctx.fillStyle = pale;
+      ctx.fillRect(cx - s * 0.09, cy - s * 0.34, s * 0.18, s * 0.62);
+      peepers(cx, cy - s * 0.06, s * 0.10, s * 0.22);
+      ell(cx, cy + s * 0.24, s * 0.10, s * 0.08, '#141018');
+      tri(cx - s * 0.46, cy - s * 0.28, cx - s * 0.30, cy - s * 0.52, cx - s * 0.20, cy - s * 0.24, dark);
+      tri(cx + s * 0.46, cy - s * 0.28, cx + s * 0.30, cy - s * 0.52, cx + s * 0.20, cy - s * 0.24, dark);
+
+    } else if (i === 5) {                             // FART OGRE
+      for (var b = 0; b < 4; b++) {
+        ell(cx - s * 0.55 - b * s * 0.13, cy + s * 0.30 - b * s * 0.06,
+            s * (0.16 - b * 0.02), s * (0.14 - b * 0.02), pale);
+      }
+      ctx.fillStyle = mid;
+      ctx.fillRect(cx - s * 0.42, cy - s * 0.30, s * 0.84, s * 0.72);
+      ctx.fillStyle = dark;
+      ctx.fillRect(cx - s * 0.42, cy + s * 0.24, s * 0.84, s * 0.18);
+      peepers(cx, cy - s * 0.08, s * 0.12, s * 0.19);
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(cx - s * 0.20, cy + s * 0.10, s * 0.09, s * 0.14);
+      ctx.fillRect(cx + s * 0.11, cy + s * 0.10, s * 0.09, s * 0.14);
+
+    } else if (i === 6) {                             // EARWAX OWL
+      ell(cx, cy + s * 0.06, s * 0.46, s * 0.46, mid);
+      tri(cx - s * 0.40, cy - s * 0.26, cx - s * 0.34, cy - s * 0.60, cx - s * 0.12, cy - s * 0.34, dark);
+      tri(cx + s * 0.40, cy - s * 0.26, cx + s * 0.34, cy - s * 0.60, cx + s * 0.12, cy - s * 0.34, dark);
+      ell(cx - s * 0.19, cy - s * 0.04, s * 0.19, s * 0.19, pale);
+      ell(cx + s * 0.19, cy - s * 0.04, s * 0.19, s * 0.19, pale);
+      peepers(cx, cy - s * 0.04, s * 0.11, s * 0.19);
+      tri(cx, cy + s * 0.10, cx - s * 0.09, cy + s * 0.26, cx + s * 0.09, cy + s * 0.26, dark);
+
+    } else if (i === 7) {                             // ROBO DOG
+      ctx.fillStyle = mid;
+      ctx.fillRect(cx - s * 0.44, cy - s * 0.20, s * 0.88, s * 0.56);
+      ctx.fillStyle = dark;
+      ctx.fillRect(cx - s * 0.30, cy - s * 0.44, s * 0.60, s * 0.30);
+      ctx.strokeStyle = dark; ctx.lineWidth = s * 0.06;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - s * 0.44); ctx.lineTo(cx, cy - s * 0.66); ctx.stroke();
+      ell(cx, cy - s * 0.70, s * 0.08, s * 0.08, pale);
+      peepers(cx, cy - s * 0.02, s * 0.10, s * 0.18);
+      ctx.fillStyle = '#141018';
+      ctx.fillRect(cx - s * 0.16, cy + s * 0.16, s * 0.32, s * 0.07);
+
+    } else if (i === 8) {                             // SOCK GOLEM
+      ctx.fillStyle = mid;
+      ctx.beginPath();
+      ctx.moveTo(cx - s * 0.30, cy - s * 0.50);
+      ctx.lineTo(cx + s * 0.24, cy - s * 0.50);
+      ctx.lineTo(cx + s * 0.24, cy + s * 0.18);
+      ctx.lineTo(cx + s * 0.62, cy + s * 0.20);
+      ctx.lineTo(cx + s * 0.62, cy + s * 0.46);
+      ctx.lineTo(cx - s * 0.30, cy + s * 0.46);
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle = dark;
+      ctx.fillRect(cx - s * 0.30, cy - s * 0.50, s * 0.54, s * 0.14);
+      peepers(cx - s * 0.04, cy - s * 0.14, s * 0.10, s * 0.14);
+      ctx.fillStyle = pale;
+      ctx.fillRect(cx - s * 0.52, cy - s * 0.30, s * 0.05, s * 0.20);
+      ctx.fillRect(cx - s * 0.42, cy - s * 0.42, s * 0.05, s * 0.20);
+
+    } else if (i === 9) {                             // TOENAIL TROLL
+      ell(cx, cy - s * 0.06, s * 0.42, s * 0.40, mid);
+      ctx.fillStyle = dark;
+      ctx.fillRect(cx - s * 0.62, cy + s * 0.24, s * 0.52, s * 0.24);
+      ctx.fillRect(cx + s * 0.10, cy + s * 0.24, s * 0.52, s * 0.24);
+      ctx.fillStyle = pale;
+      for (var t = 0; t < 3; t++) {
+        ctx.fillRect(cx - s * 0.60 + t * s * 0.16, cy + s * 0.26, s * 0.10, s * 0.09);
+        ctx.fillRect(cx + s * 0.12 + t * s * 0.16, cy + s * 0.26, s * 0.10, s * 0.09);
+      }
+      peepers(cx, cy - s * 0.12, s * 0.11, s * 0.17);
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(cx - s * 0.10, cy + s * 0.06, s * 0.08, s * 0.12);
+
+    } else if (i === 10) {                            // BELCH BEAST
+      ell(cx, cy + s * 0.04, s * 0.50, s * 0.46, mid);
+      ctx.fillStyle = '#2a1020';
+      ctx.beginPath();
+      ctx.ellipse(cx, cy + s * 0.18, s * 0.32, s * 0.26, 0, 0, Math.PI * 2);
+      ctx.fill();
+      for (var t2 = 0; t2 < 4; t2++) {
+        tri(cx - s * 0.26 + t2 * s * 0.17, cy - s * 0.06,
+            cx - s * 0.18 + t2 * s * 0.17, cy + s * 0.10,
+            cx - s * 0.10 + t2 * s * 0.17, cy - s * 0.06, '#fff');
+      }
+      peepers(cx, cy - s * 0.26, s * 0.10, s * 0.20);
+      ctx.strokeStyle = pale; ctx.lineWidth = s * 0.05;
+      ctx.beginPath(); ctx.arc(cx + s * 0.52, cy + s * 0.30, s * 0.11, 0, Math.PI * 2); ctx.stroke();
+
+    } else {                                          // PANTS DRAGON
+      for (var w2 = -1; w2 <= 1; w2 += 2) {
+        ctx.fillStyle = dark;
+        ctx.beginPath();
+        ctx.moveTo(cx + w2 * s * 0.18, cy - s * 0.20);
+        ctx.lineTo(cx + w2 * s * 0.78, cy - s * 0.52);
+        ctx.lineTo(cx + w2 * s * 0.62, cy + s * 0.06);
+        ctx.closePath(); ctx.fill();
+      }
+      ell(cx, cy - s * 0.04, s * 0.34, s * 0.38, mid);
+      for (var k = -1; k <= 1; k++) {
+        tri(cx + k * s * 0.16, cy - s * 0.36, cx + k * s * 0.16 - s * 0.07, cy - s * 0.52,
+            cx + k * s * 0.16 + s * 0.07, cy - s * 0.52, dark);
+      }
+      peepers(cx, cy - s * 0.10, s * 0.10, s * 0.15);
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(cx - s * 0.12, cy + s * 0.06, s * 0.07, s * 0.11);
+      ctx.fillRect(cx + s * 0.05, cy + s * 0.06, s * 0.07, s * 0.11);
+      ctx.fillStyle = '#3b6fd4';
+      ctx.fillRect(cx - s * 0.30, cy + s * 0.24, s * 0.60, s * 0.22);
+      ctx.fillStyle = '#2a4fa0';
+      ctx.fillRect(cx - s * 0.03, cy + s * 0.34, s * 0.06, s * 0.12);
+    }
+  }
+
 
 
   // A band of light sweeping across a gold or diamond card. Clipped to
@@ -916,29 +1088,42 @@
                     : rare.stars === 3 ? rgb(rare.col) : 'rgba(0,0,0,0.35)';
     roundRect(x, y, w, h, w * 0.09); ctx.stroke();
 
-    monsterFace(x, y, w, h, m);
+    // ---- THE CARD, TOP TO BOTTOM -------------------------------------
+    //  name  ->  HP  ->  picture  ->  attack
+    // Life lives at the top and the punch lives at the bottom, so you
+    // can read a whole line of monsters by scanning across one edge.
 
     ctx.textAlign = 'center';
-    let fs = w * 0.135;
+    let fs = w * 0.12;
     ctx.font = 'bold ' + fs + 'px system-ui, sans-serif';
     const room = w - 8, natural = ctx.measureText(m.name).width;
     if (natural > room) {
       fs *= room / natural;
       ctx.font = 'bold ' + fs + 'px system-ui, sans-serif';
     }
-    ctx.fillStyle = 'rgba(0,0,0,0.75)';
-    ctx.fillText(m.name, x + w / 2, y + h * 0.145);
+    ctx.fillStyle = 'rgba(0,0,0,0.72)';
+    ctx.fillText(m.name, x + w / 2, y + h * 0.12);
 
-    const nf = w * 0.24;
-    ctx.font = 'bold ' + nf + 'px system-ui, sans-serif';
-    ctx.textAlign = 'left';
-    ctx.fillStyle = '#2a1a10';
-    ctx.fillText(m.hit, x + w * 0.10, y + h * 0.93);
-    ctx.textAlign = 'right';
-    ctx.fillStyle = m.life < m.max ? '#7a1520' : '#2a1a10';
-    // Never show a minus. Hit something for more than it had left and
-    // it is on nought, not on minus two.
-    ctx.fillText(Math.max(0, m.life), x + w * 0.90, y + h * 0.93);
+    // HP at the top. It goes red once something has taken a bite.
+    ctx.font = 'bold ' + w * 0.13 + 'px system-ui, sans-serif';
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillText('HP', x + w * 0.30, y + h * 0.265);
+    ctx.font = 'bold ' + w * 0.23 + 'px system-ui, sans-serif';
+    ctx.fillStyle = m.life < m.max ? '#7a1520' : '#231a10';
+    // Never a minus - hit something for more than it had left and it is
+    // on nought, not on minus two.
+    ctx.fillText(Math.max(0, m.life), x + w * 0.60, y + h * 0.28);
+
+    // The monster itself, in the middle.
+    drawMonsterArt(m.i, x + w * 0.5, y + h * 0.56, w * 0.42, m.col);
+
+    // And what it hits for, along the bottom.
+    ctx.font = 'bold ' + w * 0.13 + 'px system-ui, sans-serif';
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillText('HIT', x + w * 0.29, y + h * 0.945);
+    ctx.font = 'bold ' + w * 0.23 + 'px system-ui, sans-serif';
+    ctx.fillStyle = '#231a10';
+    ctx.fillText(m.hit, x + w * 0.62, y + h * 0.955);
 
     ctx.restore();
   }
