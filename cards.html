@@ -811,15 +811,97 @@
   function gridCols() { return W < 420 ? 3 : W < 700 ? 4 : 6; }
   function gridTop()  { return H < 520 ? 84 : 118; }
 
+  // Every shiny card you own, gold first, then diamond.
+  function shinyList() {
+    const out = [];
+    for (let f = GOLD; f <= DIAMOND; f++) {
+      for (let i = 0; i < CARDS.length; i++) {
+        if (own[f][i] > 0) out.push({ i: i, f: f, n: own[f][i] });
+      }
+    }
+    return out;
+  }
+
+  // A band along the bottom, under the ordinary monsters, where the
+  // shiny ones get to show off on their own. Empty until you win a gold
+  // pack, and then it grows.
+  // The set wraps onto a second row rather than shrinking for ever. A
+  // full shiny collection is 24 cards, which in one row came out 20px
+  // wide and hung off the side of a phone. Anything that still does not
+  // fit is counted at the end instead of being silently dropped.
+  const SHINY_MIN = 30, SHINY_GAP = 6, SHINY_LABEL = 16;
+
+  function shinyBand() {
+    const list = shinyList();
+    const bottom = packBox().y - 12;
+    const w = W - 28;
+
+    if (!list.length) {
+      return { x: 14, y: bottom - 30, w: w, h: 30, list: list,
+               cols: 0, rows: 0, cw: 0, shown: 0 };
+    }
+
+    // A phone on its side has nowhere near the height for two sets of
+    // cards. Rather than squash both until neither can be read, the
+    // shiny set becomes one line that says where its cards have gone.
+    if (H < 470) {
+      return { x: 14, y: bottom - 22, w: w, h: 22, list: list,
+               cols: 0, rows: 0, cw: 0, shown: 0 };
+    }
+
+    // How many COULD sit in a row at the smallest readable size...
+    const maxCols = Math.max(1, Math.floor((w + SHINY_GAP) / (SHINY_MIN + SHINY_GAP)));
+    let rows = Math.min(2, Math.ceil(list.length / maxCols));
+
+    // ...but the size comes from how many there ACTUALLY are. Sizing by
+    // maxCols drew eight shiny cards at 30px when there was room for 53
+    // - a showcase where everything is tiny is not a showcase.
+    let cols = Math.min(maxCols, Math.ceil(list.length / rows));
+    let cw = Math.min(86, (w - (cols - 1) * SHINY_GAP) / cols);
+
+    // Never let the set eat more than its share, and less of it on a
+    // short screen where the ordinary monsters are already squeezed.
+    const ceiling = (bottom - gridTop()) * (H < 620 ? 0.32 : 0.46);
+    function heightFor(r, c) { return SHINY_LABEL + 8 + r * (c * 1.35 + 12); }
+
+    // Two rows if they fit, otherwise one - shrinking for ever just
+    // makes both sets unreadable instead of one of them shorter.
+    if (heightFor(rows, cw) > ceiling && rows > 1) {
+      rows = 1;
+      cols = Math.min(maxCols, list.length);
+      cw = Math.min(86, (w - (cols - 1) * SHINY_GAP) / cols);
+    }
+    let h = heightFor(rows, cw);
+    if (h > ceiling) {
+      cw = Math.max(22, ((ceiling - SHINY_LABEL - 8) / rows - 12) / 1.35);
+      h = heightFor(rows, cw);
+    }
+
+    const shown = Math.min(list.length, cols * rows);
+    return { x: 14, y: bottom - h, w: w, h: h, list: list,
+             cols: cols, rows: rows, cw: cw, shown: shown };
+  }
+
+  function shinySpot(k) {
+    const b = shinyBand();
+    if (!b.cols) return { x: 0, y: 0, w: 0, h: 0 };
+    const cx = k % b.cols, cy = Math.floor(k / b.cols);
+    const inRow = Math.min(b.cols, b.shown - cy * b.cols);
+    const total = inRow * b.cw + (inRow - 1) * SHINY_GAP;
+    return { x: b.x + (b.w - total) / 2 + cx * (b.cw + SHINY_GAP),
+             y: b.y + SHINY_LABEL + 4 + cy * (b.cw * 1.35 + 12),
+             w: b.cw, h: b.cw * 1.35 };
+  }
+
   function gridGeom() {
     const cols = gridCols();
     const rows = Math.ceil(CARDS.length / cols);
     const top = gridTop();
-    const room = (packBox().y - 10) - top;
+    const room = (shinyBand().y - 10) - top;
     // A row is the card (1.35 tall) plus a line of stars underneath.
     const byHeight = (room - (rows - 1) * 10) / rows / 1.56;
     const byWidth  = (W - 30 - (cols - 1) * 8) / cols;
-    const w = Math.max(28, Math.min(byWidth, byHeight));
+    const w = Math.max(20, Math.min(byWidth, byHeight));
     const h = w * 1.35;
     const gridW = cols * w + (cols - 1) * 8;
     const step = h + w * 0.21 + 6;
@@ -1308,12 +1390,6 @@
     ctx.fillStyle = '#8a7ea8';
     ctx.fillText(totalOwned() + ' cards  -  ' + kindsOwned() + ' of ' + CARDS.length +
                  ' kinds found', 16, 70);
-    if (shinyOwned() > 0) {
-      ctx.fillStyle = rgb(FINISHES[GOLD].col);
-      ctx.textAlign = 'right';
-      ctx.fillText(shinyOwned() + ' shiny', W - 116, 70);
-      ctx.textAlign = 'left';
-    }
     if (wins || losses) {
       ctx.fillStyle = '#6b6288';
       ctx.fillText('won ' + wins + ', lost ' + losses, 16, 92);
@@ -1321,11 +1397,10 @@
 
     for (let i = 0; i < CARDS.length; i++) {
       const p = gridSpot(i);
-      const have = countOf(i);
-      const best = bestFinish(i);
-      // Shown in the best finish you own, so a gold one announces itself
-      // from across the collection.
-      const m = newMonster(i, best < 0 ? PLAIN : best);
+      // The top set is your ORDINARY cards only. The shiny ones have
+      // their own set underneath, so they are not buried in here.
+      const have = own[PLAIN][i];
+      const m = newMonster(i, PLAIN);
       drawCard(p.x, p.y, p.w, p.h, m, { faded: have === 0 });
 
       if (have === 0) {
@@ -1347,12 +1422,8 @@
       // white for plain, gold for gold, pale blue for diamond. Zeroes
       // are left out so a card you have one of does not read as "1 0 0".
       const parts = [{ text: '★'.repeat(rare.stars), col: rgb(rare.col) }];
-      if (own[PLAIN][i] > 0)
-        parts.push({ text: ' ' + own[PLAIN][i], col: '#f0e9ff' });
-      if (own[GOLD][i] > 0)
-        parts.push({ text: ' ' + own[GOLD][i], col: rgb(FINISHES[GOLD].col) });
-      if (own[DIAMOND][i] > 0)
-        parts.push({ text: ' ' + own[DIAMOND][i], col: rgb(FINISHES[DIAMOND].col) });
+      if (own[PLAIN][i] > 1)
+        parts.push({ text: ' x' + own[PLAIN][i], col: '#f0e9ff' });
 
       let lineW = 0;
       for (const q of parts) lineW += ctx.measureText(q.text).width;
@@ -1387,6 +1458,8 @@
 
     drawButton(playBox(), 'FIGHT SOMEBODY', totalOwned() > 0);
 
+    drawShinySet();
+
     if (tradePick) drawTradePanel();
 
     // The game already writes everything down the moment it happens, so
@@ -1394,6 +1467,57 @@
     // "trust me" is not as good as a tick.
     drawButton(saveBox(), savedT > 0 ? 'SAVED ✓' : 'SAVE', true,
                savedT > 0 ? '#8fe07a' : '#8a7ea8');
+  }
+
+  function drawShinySet() {
+    const b = shinyBand();
+
+    ctx.textAlign = 'left';
+    ctx.font = 'bold ' + Math.min(W * 0.03, 15) + 'px system-ui, sans-serif';
+    ctx.fillStyle = rgb(FINISHES[GOLD].col);
+    ctx.fillText('SHINY SET', b.x + 2, b.y + 12);
+
+    ctx.font = Math.min(W * 0.026, 13) + 'px system-ui, sans-serif';
+    ctx.textAlign = 'right';
+
+    if (!b.list.length) {
+      ctx.fillStyle = '#6b6288';
+      ctx.fillText('win 3 duels for a gold pack', b.x + b.w - 2, b.y + 12);
+      return;
+    }
+    if (!b.shown) {                       // no room to lay them out
+      ctx.fillStyle = '#9a8fc0';
+      ctx.fillText(shinyOwned() + ' shiny - turn your phone upright to see them',
+                   b.x + b.w - 2, b.y + 12);
+      return;
+    }
+
+    ctx.textAlign = 'right';
+    ctx.font = Math.min(W * 0.026, 13) + 'px system-ui, sans-serif';
+    ctx.fillStyle = '#6b6288';
+    ctx.fillText(shinyOwned() + ' shiny  -  ' + b.list.length + ' of ' +
+                 (CARDS.length * 2) + ' kinds', b.x + b.w - 2, b.y + 12);
+
+    for (let k = 0; k < b.shown; k++) {
+      const e = b.list[k], q = shinySpot(k);
+      drawCard(q.x, q.y, q.w, q.h, newMonster(e.i, e.f));
+      if (e.n > 1) {
+        ctx.textAlign = 'center';
+        ctx.font = 'bold ' + Math.max(9, q.w * 0.2) + 'px system-ui, sans-serif';
+        ctx.fillStyle = rgb(FINISHES[e.f].col);
+        ctx.fillText('x' + e.n, q.x + q.w / 2, q.y + q.h + q.w * 0.2);
+      }
+    }
+
+    // Say so if there are more than there is room for, rather than
+    // quietly leaving them out.
+    if (b.list.length > b.shown) {
+      ctx.textAlign = 'center';
+      ctx.font = 'bold ' + Math.min(W * 0.03, 14) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#9a8fc0';
+      ctx.fillText('+ ' + (b.list.length - b.shown) + ' more',
+                   b.x + b.w / 2, b.y + b.h - 2);
+    }
   }
 
   function drawTradePanel() {
@@ -1764,16 +1888,29 @@
       if (inBox(mx, my, goldBox()) && goldPacks > 0) { openGoldPack(); return; }
       if (inBox(mx, my, playBox()) && totalOwned() > 0) { startDuel(); return; }
 
-      // Tap a monster you have spares of to offer a swap.
-      for (let i = 0; i < CARDS.length; i++) {
-        if (!inBox(mx, my, gridSpot(i))) continue;
-        const f = tradeableFinish(i);
-        if (f < 0) {
-          say(countOf(i) ? 'you need ' + TRADE_COST + ' the same to swap'
-                         : 'you have not found that one yet');
+      // Tap a monster you have spares of to offer a swap. The set you
+      // tap decides which pile it comes out of - tap a gold one and you
+      // are swapping GOLD, not quietly spending your plain ones.
+      const band = shinyBand();
+      for (let k = 0; k < band.shown; k++) {
+        if (!inBox(mx, my, shinySpot(k))) continue;
+        const e = band.list[k];
+        if (e.n < TRADE_COST) {
+          say('you need ' + TRADE_COST + ' the same ' + FINISHES[e.f].name + ' ones');
           return;
         }
-        tradePick = { i: i, f: f };
+        tradePick = { i: e.i, f: e.f };
+        return;
+      }
+
+      for (let i = 0; i < CARDS.length; i++) {
+        if (!inBox(mx, my, gridSpot(i))) continue;
+        if (own[PLAIN][i] < TRADE_COST) {
+          say(own[PLAIN][i] ? 'you need ' + TRADE_COST + ' the same to swap'
+                            : 'you have not found that one yet');
+          return;
+        }
+        tradePick = { i: i, f: PLAIN };
         return;
       }
       return;
