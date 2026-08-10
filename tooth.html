@@ -67,8 +67,13 @@
   // board filling only the top third of the screen.
   const COLS = 10, ROWS = 15;
 
-  // How many hits a MEGA GERM takes. Not how much damage - HITS.
+  // How many hits the armoured ones take. Not how much damage - HITS.
   const MEGA_HITS = 50;
+  const ULTRA_HITS = 200;
+
+  // And how often the ULTRA turns up: on the CLOCK, not on the wave
+  // count. Fifteen real minutes.
+  const ULTRA_EVERY = 15 * 60;
 
   let road = [];      // the cells the germs walk, start to tooth
   let isRoad = [];    // quick lookup: is this cell part of the road?
@@ -137,7 +142,14 @@
     // ordinary germs, right where it stood. So the fifty hits only buy
     // you the mega; you still have to deal with what falls out.
     { name: 'MEGA GERM', hp: MEGA_HITS, speed: 0.75, cash: 60,
-      col: [230, 110, 190], r: 0.62, armour: true, splits: 4, into: 0 }
+      col: [230, 110, 190], r: 0.62, armour: true, splits: 4, into: 0 },
+
+    // ---- THE ULTRA MEGA GERM ---------------------------------------
+    // Two hundred hits, and when it finally goes it leaves TWO mega
+    // germs - which are fifty hits each and burst into four apiece. So
+    // one of these is 200 + 100 hits and eight germs at the end of it.
+    { name: 'ULTRA MEGA', hp: ULTRA_HITS, speed: 0.55, cash: 250,
+      col: [255, 80, 80], r: 0.92, armour: true, splits: 2, into: 3 }
   ];
 
 
@@ -154,6 +166,8 @@
   let toSpawn = [], spawnT = 0;
   let says = '', saysT = 0;
   let lost = false;
+  let clock = 0;                  // real seconds of playing, all runs
+  let ultrasDue = 0;              // how many are waiting to be sent in
 
   function say(w) { says = w; saysT = 2.8; }
 
@@ -162,6 +176,12 @@
     towers = []; germs = []; shots = []; bits = [];
     cash = START_CASH; teeth = START_TEETH; wave = 0;
     picked = 0; running = false; toSpawn = []; lost = false;
+    // The ULTRA clock is NOT reset here, on purpose. It counts the whole
+    // time you have been playing, not one go - because a run only lasts
+    // about eleven minutes and the ULTRA is due at fifteen, so resetting
+    // it every game meant it could never arrive at all. Measured: 0 of
+    // 15 runs ever saw one. Now it turns up while you are playing, even
+    // if you died and started again on the way there.
     say('put a brush next to the road, then send them in');
   }
 
@@ -199,6 +219,8 @@
     if (running || lost) return;
     wave++;
     toSpawn = buildWave(wave);
+    // Anything the clock has queued up joins this wave, at the back.
+    while (ultrasDue > 0) { toSpawn.push(4); ultrasDue--; }
     spawnT = 0;
     running = true;
     say('wave ' + wave + ' - ' + toSpawn.length + ' of them');
@@ -283,6 +305,18 @@
 
   function update(dt) {
     if (saysT > 0) saysT -= dt;
+
+    // The ULTRA runs on a real clock, so it keeps ticking whether you
+    // are fighting or still deciding where to put a brush.
+    if (!lost) {
+      const was = Math.floor(clock / ULTRA_EVERY);
+      clock += dt;
+      if (Math.floor(clock / ULTRA_EVERY) > was) {
+        ultrasDue++;
+        say('SOMETHING BIG IS COMING');
+        if (running) toSpawn.push(4);        // straight into this wave
+      }
+    }
 
     for (let i = bits.length - 1; i >= 0; i--) {
       const b = bits[i];
@@ -640,10 +674,18 @@
     ctx.font = 'bold ' + Math.min(W * 0.04, 22) + 'px system-ui, sans-serif';
     ctx.fillStyle = '#eaf2ff';
     ctx.fillText('WAVE ' + wave, W / 2, 36);
+
+    // The ULTRA countdown, so it is never a nasty surprise out of
+    // nowhere - you can watch it coming and save up.
+    const left = Math.max(0, ULTRA_EVERY - (clock % ULTRA_EVERY));
+    const mm = Math.floor(left / 60), ss = Math.floor(left % 60);
+    ctx.font = Math.min(W * 0.026, 13) + 'px system-ui, sans-serif';
     if (running) {
-      ctx.font = Math.min(W * 0.026, 13) + 'px system-ui, sans-serif';
       ctx.fillStyle = '#63708a';
       ctx.fillText((toSpawn.length + germs.length) + ' left', W / 2, 54);
+    } else {
+      ctx.fillStyle = left < 60 ? '#ff8a7a' : '#63708a';
+      ctx.fillText('ULTRA in ' + mm + ':' + (ss < 10 ? '0' : '') + ss, W / 2, 54);
     }
 
     ctx.textAlign = 'right';
