@@ -84,16 +84,22 @@
 
   // ---- HOW A CARD IS FINISHED ---------------------------------------
   //
-  // Every monster can turn up plain, GOLD or DIAMOND. A gold PANTS
-  // DRAGON is exactly the same dragon with exactly the same numbers -
-  // it just looks incredible. Nothing you can only get from a gold pack
-  // is allowed to make you stronger, or the packs stop being a treat
-  // and start being an advantage.
+  // Every monster can turn up plain, GOLD or DIAMOND - and a shiny one
+  // is genuinely BETTER, not just prettier. Gold adds 1 to both its
+  // numbers, diamond adds 2. A gold PANTS DRAGON is 7/3 where the plain
+  // one is 6/2.
+  //
+  // This started out purely for show, on the grounds that a pack should
+  // not buy you power. But the opponent draws from the same mix of
+  // monsters you own, so a bigger collection had stopped making you any
+  // stronger at all - it only made you prettier. The bonus is where
+  // collecting pays now. Their cards are always plain, so every shiny
+  // one you own is an edge you earned.
   const PLAIN = 0, GOLD = 1, DIAMOND = 2;
   const FINISHES = [
-    { name: 'plain',   shine: null,      col: null },
-    { name: 'GOLD',    shine: 'gold',    col: [255, 214,  92] },
-    { name: 'DIAMOND', shine: 'diamond', col: [190, 238, 255] }
+    { name: 'plain',   shine: null,      col: null,             bonus: 0 },
+    { name: 'GOLD',    shine: 'gold',    col: [255, 214,  92],  bonus: 1 },
+    { name: 'DIAMOND', shine: 'diamond', col: [190, 238, 255],  bonus: 2 }
   ];
 
   // How rare something is, worked out FROM the find numbers rather than
@@ -385,8 +391,11 @@
 
   function newMonster(i, f) {
     const c = CARDS[i];
-    return { i: i, f: f || PLAIN, name: c.name, hit: c.hit, life: c.life,
-             max: c.life, col: c.col, wobble: 0, justHit: 0 };
+    const fin = f || PLAIN;
+    const plus = FINISHES[fin].bonus;      // gold +1, diamond +2
+    return { i: i, f: fin, name: c.name,
+             hit: c.hit + plus, life: c.life + plus, max: c.life + plus,
+             col: c.col, wobble: 0, justHit: 0 };
   }
 
   function shuffle(a) {
@@ -655,23 +664,24 @@
   // space, their king could not be scratched. Sixty games, sixty
   // losses, twenty life untouched every time. This is the compromise
   // Max picked.
-  // ONE each per turn - they patch one hole, you send in one monster.
-  // Back to the number Max picked, because once your cards stopped
-  // running out the whole balance moved. Sixty games each way:
-  //     they patch 3, you play 3 -> nobody EVER wins. 80-turn stalemate.
-  //     they patch 2, you play 3 -> you win 60 of 60.
-  //     they patch 1, you play 1 -> you win 36, they win 24.
-  // Fair, and it makes each card you put down an actual decision.
-  // They patch one hole a turn, and TWO on every third turn.
+  // You send in TWO a turn, so they patch two - and three on every
+  // third turn, which is the half-step that makes it a fight.
   //
-  // A whole number was too blunt. Once you got all three monsters down
-  // on your first turn, one-a-turn meant you won 58 of 60 and two-every-
-  // other-turn meant you lost 40 of 60. Two every THIRD turn sits
-  // between them - about 38 wins to 22 over three runs of sixty.
-  const PLACE_PER_TURN = 1;
+  // Sixty games at each setting, with you playing two a turn:
+  //     they patch 1.33 -> you win 60 of 60
+  //     they patch 1.67 -> you win 60 of 60
+  //     they patch 2    -> you win 56 of 60
+  //     they patch 2.33 -> you win 33, they win 27   <- this one
+  //     they patch 2.5  -> you win 19, they win 41
+  //
+  // Two a turn does make games far longer - about 40 turns where one a
+  // turn was 10 - because both lines stay full and a king is only ever
+  // reachable through a gap. Dropping the kings to 12 life would bring
+  // that back to 22, but 20 is the number Max set.
+  const PLACE_PER_TURN = 2;
   const BIG_REFILL_EVERY = 3;
   function refillThisTurn() {
-    return (theirTurnNo % BIG_REFILL_EVERY === 0) ? 2 : 1;
+    return (theirTurnNo % BIG_REFILL_EVERY === 0) ? 3 : 2;
   }
 
   // THEY start the battle three deep and you start with nothing, which
