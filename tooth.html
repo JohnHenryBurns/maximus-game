@@ -67,6 +67,9 @@
   // board filling only the top third of the screen.
   const COLS = 10, ROWS = 15;
 
+  // How many hits a MEGA GERM takes. Not how much damage - HITS.
+  const MEGA_HITS = 50;
+
   let road = [];      // the cells the germs walk, start to tooth
   let isRoad = [];    // quick lookup: is this cell part of the road?
 
@@ -120,7 +123,18 @@
   const GERMS = [
     { name: 'GERM',   hp: 14,  speed: 1.9, cash: 4,  col: [120, 220, 130], r: 0.30 },
     { name: 'SUGAR',  hp: 9,   speed: 3.4, cash: 5,  col: [255, 210, 120], r: 0.26 },
-    { name: 'PLAQUE', hp: 52,  speed: 1.1, cash: 12, col: [200, 190, 150], r: 0.40 }
+    { name: 'PLAQUE', hp: 52,  speed: 1.1, cash: 12, col: [200, 190, 150], r: 0.40 },
+
+    // ---- THE MEGA GERM -------------------------------------------------
+    // It does not care how HARD you hit it, only how OFTEN. Every shot
+    // takes exactly one off, whatever fired it - so fifty hits, always.
+    //
+    // Which turns the towers upside down. FLOSS hits for 14 and is the
+    // best thing you own against everything else; against this it is the
+    // worst, because 14 damage and 4 damage are both worth one hit. Four
+    // cheap BRUSHES firing fast beat one expensive FLOSS.
+    { name: 'MEGA GERM', hp: MEGA_HITS, speed: 0.75, cash: 60,
+      col: [230, 110, 190], r: 0.62, armour: true }
   ];
 
 
@@ -160,6 +174,12 @@
       if (n >= 3 && i % 7 === 6) kind = 2;              // and the fat ones
       list.push(kind);
     }
+    // MEGA GERMS bring up the rear from wave 5, and another one every
+    // four waves after that.
+    if (n >= 5) {
+      const megas = 1 + Math.floor((n - 5) / 4);
+      for (let m = 0; m < megas; m++) list.push(3);
+    }
     return list;
   }
 
@@ -183,9 +203,12 @@
 
   function spawnGerm(kind) {
     const g = GERMS[kind];
-    germs.push({ kind: kind, at: 0, hp: g.hp * toughness(wave),
-                 max: g.hp * toughness(wave), speed: g.speed,
-                 wob: Math.random() * 6 });
+    // An armoured one is exactly MEGA_HITS hits, in wave 5 and in wave
+    // 25. Scaling that with the wave would have meant 250 hits by the
+    // end, which is not a monster, it is a wait.
+    const hp = g.armour ? g.hp : g.hp * toughness(wave);
+    germs.push({ kind: kind, at: 0, hp: hp, max: hp, speed: g.speed,
+                 armour: !!g.armour, wob: Math.random() * 6 });
   }
 
   // Where a germ is on the map right now, in cell coordinates.
@@ -303,7 +326,8 @@
       shots.push({ fromC: t.c, fromR: t.r, toC: p.c, toR: p.r,
                    life: 0.09, col: spec.col });
 
-      best.hp -= spec.dmg;
+      // Armour ignores how hard the shot was. One hit, one off.
+      best.hp -= best.armour ? 1 : spec.dmg;
       if (best.hp <= 0) {
         cash += GERMS[best.kind].cash;
         const b = board();
@@ -497,7 +521,24 @@
         ctx.fill();
       }
 
-      if (g.hp < g.max) {                       // a health bar once hurt
+      if (g.armour) {
+        // A spiky crust, so you can see at a glance this is the one that
+        // does not care how hard you hit it.
+        ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+        ctx.lineWidth = Math.max(1.5, rad * 0.10);
+        for (let i = 0; i < 10; i++) {
+          const a = g.wob * 0.3 + i * (Math.PI * 2 / 10);
+          ctx.beginPath();
+          ctx.moveTo(x + Math.cos(a) * rad * 0.9, y + wob + Math.sin(a) * rad * 0.9);
+          ctx.lineTo(x + Math.cos(a) * rad * 1.22, y + wob + Math.sin(a) * rad * 1.22);
+          ctx.stroke();
+        }
+        // Hits left, in plain numbers - a bar cannot tell you it is 37.
+        ctx.textAlign = 'center';
+        ctx.font = 'bold ' + rad * 0.75 + 'px system-ui, sans-serif';
+        ctx.fillStyle = '#fff';
+        ctx.fillText(Math.ceil(g.hp), x, y + wob - rad - b.s * 0.06);
+      } else if (g.hp < g.max) {                // a health bar once hurt
         const bw = rad * 2;
         ctx.fillStyle = 'rgba(0,0,0,0.5)';
         ctx.fillRect(x - bw / 2, y - rad - b.s * 0.16, bw, b.s * 0.08);
