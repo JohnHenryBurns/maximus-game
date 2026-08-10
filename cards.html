@@ -223,11 +223,6 @@
     for (let i = 0; i < CARDS.length; i++) if (countOf(i) > 0) n++;
     return n;
   }
-  function shinyOwned() {
-    let n = 0;
-    for (let i = 0; i < CARDS.length; i++) n += own[GOLD][i] + own[DIAMOND][i];
-    return n;
-  }
 
   function msUntilPack() {
     return Math.max(0, lastPack + DAY - Date.now());
@@ -817,42 +812,40 @@
   function tabH()     { return 44; }            // a fingertip, not a hair
   function gridTop()  { return tabTop() + tabH() + 10; }
 
-  // Two sets of twelve, the SAME size as each other - you look at one
-  // at a time. Two full grids will not share a phone screen, and
-  // shrinking the shiny one into a strip along the bottom made it the
-  // poor relation instead of a set.
-  const SET_PLAIN = 0, SET_SHINY = 1;
-  let setView = SET_PLAIN;
+  // THREE sets of twelve, all the same size - normal, gold and diamond.
+  // You look at one at a time, because three full grids will not share a
+  // phone screen and shrinking any of them makes it the poor relation
+  // instead of a set.
+  //
+  // The tab you are on IS the finish, so there is nothing to keep in
+  // step: setView is a finish everywhere it is used.
+  let setView = PLAIN;
+
+  const SET_NAMES = ['NORMAL', 'GOLD', 'DIAMOND'];
 
   function tabBox(i) {
-    const w = Math.min((W - 40) / 2 - 5, 170), h = tabH();
-    const total = 2 * w + 10;
-    return { x: (W - total) / 2 + i * (w + 10), y: tabTop(), w: w, h: h };
+    const n = FINISHES.length;
+    const gap = 8;
+    const w = Math.min((W - 32 - gap * (n - 1)) / n, 150), h = tabH();
+    const total = n * w + gap * (n - 1);
+    return { x: (W - total) / 2 + i * (w + gap), y: tabTop(), w: w, h: h };
   }
 
-  // How many shiny cards, and of how many kinds, out of the 24 there are.
-  function shinyKinds() {
+  function countIn(f) {
     let n = 0;
-    for (let i = 0; i < CARDS.length; i++) {
-      if (own[GOLD][i] > 0) n++;
-      if (own[DIAMOND][i] > 0) n++;
-    }
+    for (let i = 0; i < CARDS.length; i++) n += own[f][i];
+    return n;
+  }
+  function kindsIn(f) {
+    let n = 0;
+    for (let i = 0; i < CARDS.length; i++) if (own[f][i] > 0) n++;
     return n;
   }
 
-  // The shiniest one you have of this monster, for the shiny set's tile.
-  function bestShiny(i) {
-    if (own[DIAMOND][i] > 0) return DIAMOND;
-    if (own[GOLD][i] > 0) return GOLD;
-    return -1;
-  }
-
-  // Which pile a swap comes from, in the set you are looking at.
+  // Which pile a swap comes from: the one you are looking at, and only
+  // that one. No quietly spending your plain copies to feed a gold swap.
   function pileFor(i) {
-    if (setView === SET_PLAIN) return own[PLAIN][i] >= TRADE_COST ? PLAIN : -1;
-    if (own[GOLD][i] >= TRADE_COST) return GOLD;        // spend gold before
-    if (own[DIAMOND][i] >= TRADE_COST) return DIAMOND;  // ever a diamond
-    return -1;
+    return own[setView][i] >= TRADE_COST ? setView : -1;
   }
 
   function gridGeom() {
@@ -1351,9 +1344,8 @@
 
     // Counts and record on ONE line, so the tabs have room underneath.
     if (!tight()) {
-      let sub = setView === SET_PLAIN
-        ? totalOwned() + ' cards  -  ' + kindsOwned() + ' of ' + CARDS.length + ' kinds'
-        : shinyOwned() + ' shiny  -  ' + shinyKinds() + ' of ' + (CARDS.length * 2) + ' kinds';
+      let sub = countIn(setView) + ' ' + (setView === PLAIN ? 'cards' : SET_NAMES[setView]) +
+                '  -  ' + kindsIn(setView) + ' of ' + CARDS.length + ' kinds';
       if (wins || losses) sub += '  -  won ' + wins + ', lost ' + losses;
       let fs2 = Math.min(W * 0.032, 16);
       ctx.font = fs2 + 'px system-ui, sans-serif';
@@ -1368,13 +1360,10 @@
 
     for (let i = 0; i < CARDS.length; i++) {
       const p = gridSpot(i);
-      // Each set shows only its own cards, so a gold one never stands
+      // Each set shows only its own finish, so a gold one never stands
       // in for a plain one you have not found.
-      const shinyF = bestShiny(i);
-      const have = setView === SET_PLAIN ? own[PLAIN][i]
-                                         : own[GOLD][i] + own[DIAMOND][i];
-      const m = newMonster(i, setView === SET_PLAIN ? PLAIN
-                                                   : (shinyF < 0 ? GOLD : shinyF));
+      const have = own[setView][i];
+      const m = newMonster(i, setView);
       drawCard(p.x, p.y, p.w, p.h, m, { faded: have === 0 });
 
       if (have === 0) {
@@ -1396,14 +1385,9 @@
       // white for plain, gold for gold, pale blue for diamond. Zeroes
       // are left out so a card you have one of does not read as "1 0 0".
       const parts = [{ text: '★'.repeat(rare.stars), col: rgb(rare.col) }];
-      if (setView === SET_PLAIN) {
-        if (own[PLAIN][i] > 1) parts.push({ text: ' x' + own[PLAIN][i], col: '#f0e9ff' });
-      } else {
-        // Gold and diamond counted separately, in their own colours.
-        if (own[GOLD][i] > 0)
-          parts.push({ text: ' ' + own[GOLD][i], col: rgb(FINISHES[GOLD].col) });
-        if (own[DIAMOND][i] > 0)
-          parts.push({ text: ' ' + own[DIAMOND][i], col: rgb(FINISHES[DIAMOND].col) });
+      if (own[setView][i] > 1) {
+        parts.push({ text: ' x' + own[setView][i],
+                     col: FINISHES[setView].col ? rgb(FINISHES[setView].col) : '#f0e9ff' });
       }
 
       let lineW = 0;
@@ -1418,21 +1402,34 @@
       }
     }
 
-    // The two tabs.
-    for (let t = 0; t < 2; t++) {
+    // One tab per finish.
+    for (let t = 0; t < FINISHES.length; t++) {
       const b = tabBox(t), on = setView === t;
-      const col = t === SET_SHINY ? FINISHES[GOLD].col : [240, 233, 255];
+      const col = FINISHES[t].col || [240, 233, 255];
       ctx.fillStyle = on ? 'rgba(255,215,106,0.16)' : 'rgba(255,255,255,0.04)';
       roundRect(b.x, b.y, b.w, b.h, 10); ctx.fill();
       ctx.lineWidth = on ? 3 : 2;
       ctx.strokeStyle = on ? rgb(col) : 'rgba(255,255,255,0.14)';
       roundRect(b.x, b.y, b.w, b.h, 10); ctx.stroke();
-      if (on && t === SET_SHINY) drawShine(b.x, b.y, b.w, b.h, 'gold', 0);
+      if (on && FINISHES[t].shine) drawShine(b.x, b.y, b.w, b.h, FINISHES[t].shine, 0);
+
+      // The label shrinks to fit - DIAMOND is a long word on a narrow tab.
       ctx.textAlign = 'center';
-      ctx.font = 'bold ' + Math.min(W * 0.034, 17) + 'px system-ui, sans-serif';
+      let tf = Math.min(W * 0.034, 17);
+      ctx.font = 'bold ' + tf + 'px system-ui, sans-serif';
+      const roomT = b.w - 10, wideT = ctx.measureText(SET_NAMES[t]).width;
+      if (wideT > roomT) {
+        tf *= roomT / wideT;
+        ctx.font = 'bold ' + tf + 'px system-ui, sans-serif';
+      }
       ctx.fillStyle = on ? rgb(col) : '#6b6288';
-      ctx.fillText(t === SET_PLAIN ? 'NORMAL' : 'SHINY',
-                   b.x + b.w / 2, b.y + b.h * 0.66);
+      ctx.fillText(SET_NAMES[t], b.x + b.w / 2, b.y + b.h * 0.63);
+
+      // A little tally on each tab, so you can see where your cards are
+      // without opening every set.
+      ctx.font = Math.max(9, tf * 0.66) + 'px system-ui, sans-serif';
+      ctx.fillStyle = on ? 'rgba(255,255,255,0.65)' : '#5a5278';
+      ctx.fillText(kindsIn(t) + '/' + CARDS.length, b.x + b.w / 2, b.y + b.h * 0.92);
     }
 
     const pb = packBox();
@@ -1833,7 +1830,7 @@
       if (inBox(mx, my, goldBox()) && goldPacks > 0) { openGoldPack(); return; }
       if (inBox(mx, my, playBox()) && totalOwned() > 0) { startDuel(); return; }
 
-      for (let t = 0; t < 2; t++) {
+      for (let t = 0; t < FINISHES.length; t++) {
         if (inBox(mx, my, tabBox(t))) { setView = t; return; }
       }
 
@@ -1844,10 +1841,8 @@
         if (!inBox(mx, my, gridSpot(i))) continue;
         const f = pileFor(i);
         if (f < 0) {
-          const held = setView === SET_PLAIN ? own[PLAIN][i]
-                                             : own[GOLD][i] + own[DIAMOND][i];
-          say(held ? 'you need ' + TRADE_COST + ' the same to swap'
-                   : 'you have not found that one yet');
+          say(own[setView][i] ? 'you need ' + TRADE_COST + ' the same to swap'
+                              : 'you have not found that one yet');
           return;
         }
         tradePick = { i: i, f: f };
