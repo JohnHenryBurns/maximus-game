@@ -352,11 +352,103 @@
 
 
 // -------------------------------------------------------------------
+//  THE HEARTBEAT
+//
+//  Your own heart, through the helmet. It is not decoration: it beats
+//  faster the closer you are to dead, so you can HEAR how much trouble
+//  you are in without looking at the bar.
+//
+//  A browser will not make a sound until you have touched the screen -
+//  that is a rule of the web, not a bug - so the sound kit is built on
+//  your first tap rather than when the page loads.
+// -------------------------------------------------------------------
+
+  const CALM_BPM = 66, PANIC_BPM = 152;
+
+  let ac = null, master = null, soundOn = true;
+  let beatT = 0, beatPhase = 0;
+
+  function ensureAudio() {
+    if (ac) { if (ac.state === 'suspended') ac.resume(); return; }
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;                       // no sound on this machine
+    ac = new Ctx();
+    master = ac.createGain();
+    master.gain.value = 0.9;                // loud, as asked
+    master.connect(ac.destination);
+  }
+
+  // One thump. A low sine that drops in pitch as it fades is what a
+  // heartbeat sounds like; the little click on top is what makes it
+  // audible on a phone speaker, which cannot really do 60Hz.
+  function thump(at, level, from, to) {
+    if (!ac) return;
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(from, at);
+    o.frequency.exponentialRampToValueAtTime(to, at + 0.16);
+    g.gain.setValueAtTime(0.0001, at);
+    g.gain.exponentialRampToValueAtTime(level, at + 0.014);
+    g.gain.exponentialRampToValueAtTime(0.0001, at + 0.26);
+    o.connect(g); g.connect(master);
+    o.start(at); o.stop(at + 0.3);
+
+    const c = ac.createOscillator(), cg = ac.createGain();
+    c.type = 'triangle';
+    c.frequency.setValueAtTime(from * 2.6, at);
+    cg.gain.setValueAtTime(0.0001, at);
+    cg.gain.exponentialRampToValueAtTime(level * 0.32, at + 0.008);
+    cg.gain.exponentialRampToValueAtTime(0.0001, at + 0.09);
+    c.connect(cg); cg.connect(master);
+    c.start(at); c.stop(at + 0.12);
+  }
+
+  // Lub-DUB. Two thumps close together, then the wait.
+  function beat(hard) {
+    if (!ac || !soundOn) return;
+    const now = ac.currentTime;
+    thump(now, 0.55 * hard, 62, 30);
+    thump(now + 0.17, 0.38 * hard, 52, 26);
+  }
+
+  function heartRate() {
+    const left = clamp(you.hp / you.max, 0, 1);
+    return CALM_BPM + (PANIC_BPM - CALM_BPM) * (1 - left);
+  }
+
+  function stepHeart(dt) {
+    if (!ac || !soundOn || dead) return;
+    beatT -= dt;
+    if (beatT <= 0) {
+      // Harder as well as faster when you are in trouble.
+      const left = clamp(you.hp / you.max, 0, 1);
+      beat(0.75 + (1 - left) * 0.5);
+      beatT = 60 / heartRate();
+      beatPhase = 1;
+    }
+    if (beatPhase > 0) beatPhase -= dt * 3.5;
+  }
+
+  function soundBox() {
+    const r = 22;
+    return { x: W - 16 - r, y: 74 + r, r: r };
+  }
+  function inCircle(mx, my, b) {
+    const dx = mx - b.x, dy = my - b.y;
+    return dx * dx + dy * dy < (b.r * 1.4) * (b.r * 1.4);
+  }
+
+
+// -------------------------------------------------------------------
 //  CONTROLS
 // -------------------------------------------------------------------
 
   const keys = {};
-  window.addEventListener('keydown', function (e) { keys[e.key.toLowerCase()] = true; });
+  window.addEventListener('keydown', function (e) {
+    ensureAudio();
+    if (e.key.toLowerCase() === 'm') soundOn = !soundOn;   // M for mute
+    keys[e.key.toLowerCase()] = true;
+  });
   window.addEventListener('keyup', function (e) { keys[e.key.toLowerCase()] = false; });
 
   // Thumbs first: two on the left to walk, two on the right to jump and
@@ -400,6 +492,10 @@
 
   canvas.addEventListener('touchstart', function (e) {
     e.preventDefault();
+    ensureAudio();
+    for (const t of e.changedTouches) {
+      if (inCircle(t.clientX, t.clientY, soundBox())) { soundOn = !soundOn; return; }
+    }
     if (dead) { reset(); return; }
     if (puzzle) {                        // the panel takes every tap
       for (const t of e.changedTouches) panelTap(t.clientX, t.clientY);
@@ -428,6 +524,8 @@
   canvas.addEventListener('touchcancel', endTouch, { passive: false });
 
   canvas.addEventListener('mousedown', function (e) {
+    ensureAudio();
+    if (inCircle(e.clientX, e.clientY, soundBox())) { soundOn = !soundOn; return; }
     if (dead) { reset(); return; }
     if (puzzle) { panelTap(e.clientX, e.clientY); return; }
     const b = whichButton(e.clientX, e.clientY);
@@ -544,6 +642,7 @@
 
   function update(dt) {
     if (saysT > 0) saysT -= dt;
+    stepHeart(dt);
 
     if (puzzle) {
       // The ship waits while you are elbow-deep in the wiring.
@@ -1378,6 +1477,13 @@
     ctx.fillRect(14, 14, bw, 18);
     ctx.fillStyle = you.hp < you.max * 0.3 ? '#ff6a6a' : '#7ee08f';
     ctx.fillRect(14, 14, bw * clamp(you.hp / you.max, 0, 1), 18);
+
+    // The bar flashes on every beat, so the heartbeat is something you
+    // can SEE as well as hear - which matters if the sound is off.
+    if (beatPhase > 0) {
+      ctx.fillStyle = 'rgba(255,255,255,' + clamp(beatPhase, 0, 1) * 0.4 + ')';
+      ctx.fillRect(14, 14, bw * clamp(you.hp / you.max, 0, 1), 18);
+    }
     ctx.textAlign = 'left';
     ctx.font = 'bold 12px system-ui, sans-serif';
     ctx.fillStyle = '#080c14';
@@ -1409,6 +1515,25 @@
       ctx.fillText('PLASMA BLADE', 16, 62);
     }
 
+    // A little heart beside the bar, squeezing in time.
+    // On the XP-bar line, not the HP line - up there it was printed
+    // straight over the LV number and the two read as one word.
+    const sq = 1 + clamp(beatPhase, 0, 1) * 0.35;
+    const hx = 14 + bw + 18, hy = 48;
+    ctx.fillStyle = you.hp < you.max * 0.3 ? '#ff6a6a' : '#ff8a9a';
+    ctx.beginPath();
+    ctx.arc(hx - 4 * sq, hy - 2 * sq, 4.5 * sq, 0, Math.PI * 2);
+    ctx.arc(hx + 4 * sq, hy - 2 * sq, 4.5 * sq, 0, Math.PI * 2);
+    ctx.moveTo(hx - 8.5 * sq, hy);
+    ctx.lineTo(hx, hy + 9 * sq);
+    ctx.lineTo(hx + 8.5 * sq, hy);
+    ctx.closePath();
+    ctx.fill();
+    ctx.font = '10px system-ui, sans-serif';
+    ctx.fillStyle = '#7d8ca3';
+    ctx.textAlign = 'left';
+    ctx.fillText(Math.round(heartRate()) + ' bpm', hx + 14, 52);
+
     ctx.textAlign = 'right';
     ctx.font = 'bold ' + Math.min(W * 0.045, 24) + 'px system-ui, sans-serif';
     ctx.fillStyle = '#ffd76a';
@@ -1416,6 +1541,36 @@
     ctx.font = '12px system-ui, sans-serif';
     ctx.fillStyle = '#8fa08a';
     ctx.fillText(depthOf(you.x) + 'm in', W - 16, 46);
+
+    // ---- sound on or off ----------------------------------------------
+    const sb = soundBox();
+    ctx.fillStyle = 'rgba(255,255,255,0.07)';
+    ctx.beginPath(); ctx.arc(sb.x, sb.y, sb.r, 0, Math.PI * 2); ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = soundOn ? 'rgba(223,232,245,0.45)' : 'rgba(255,138,122,0.6)';
+    ctx.beginPath(); ctx.arc(sb.x, sb.y, sb.r, 0, Math.PI * 2); ctx.stroke();
+
+    ctx.fillStyle = soundOn ? '#dfe8f5' : '#7d8ca3';
+    ctx.fillRect(sb.x - 9, sb.y - 4, 5, 8);            // the speaker
+    ctx.beginPath();
+    ctx.moveTo(sb.x - 4, sb.y - 4); ctx.lineTo(sb.x + 2, sb.y - 10);
+    ctx.lineTo(sb.x + 2, sb.y + 10); ctx.lineTo(sb.x - 4, sb.y + 4);
+    ctx.closePath(); ctx.fill();
+    if (soundOn) {
+      ctx.strokeStyle = '#dfe8f5';
+      ctx.lineWidth = 2;
+      for (let w = 1; w <= 2; w++) {
+        ctx.beginPath();
+        ctx.arc(sb.x + 3, sb.y, 3 + w * 4, -0.7, 0.7);
+        ctx.stroke();
+      }
+    } else {
+      ctx.strokeStyle = '#ff8a7a';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(sb.x + 5, sb.y - 7); ctx.lineTo(sb.x + 14, sb.y + 7);
+      ctx.stroke();
+    }
 
     // ---- the buttons -------------------------------------------------------
     ring(btnLeft(), '<', wantLeft(), '#dfe8f5');
