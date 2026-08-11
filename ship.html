@@ -4,20 +4,20 @@
 <meta charset="utf-8">
 <meta name="viewport"
       content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>THE LONG WOODS</title>
+<title>THE LOST SHIP</title>
 
 <link rel="manifest" href="manifest.webmanifest">
-<meta name="theme-color" content="#0e1410">
+<meta name="theme-color" content="#080c14">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="The Long Woods">
+<meta name="apple-mobile-web-app-title" content="The Lost Ship">
 <link rel="apple-touch-icon" href="icon-192.png">
 <link rel="icon" href="icon-192.png">
 
 <style>
   html, body {
     margin: 0; height: 100%; overflow: hidden;
-    background: #0e1410; color: #e7f0e4;
+    background: #080c14; color: #dfe8f5;
     font-family: system-ui, sans-serif;
     -webkit-user-select: none; user-select: none;
     overscroll-behavior: none; touch-action: none;
@@ -31,12 +31,13 @@
 
 <script>
 // ===================================================================
-//  THE LONG WOODS
+//  THE LOST SHIP
 //
-//  Walk right. Things want to eat you. Hit them with a sword.
+//  You are in a spacesuit, walking the decks of a ship nobody came
+//  back from. The robots still work. They do not want you here.
 //
-//  Every monster you beat makes you a little bigger, and the woods
-//  get a little meaner the further in you go - so the question is
+//  Every one you scrap makes you a little stronger, and the deeper
+//  into the ship you get the nastier they are - so the question is
 //  never "can I beat this one" but "am I strong enough YET".
 // ===================================================================
 
@@ -103,12 +104,12 @@
 // -------------------------------------------------------------------
 
   const KINDS = [
-    { name: 'SLIME',  hp: 10, hit: 4,  speed: 60,  xp: 5,  col: [110, 200, 120], r: 26, flies: false },
-    { name: 'BAT',    hp: 7,  hit: 3,  speed: 130, xp: 7,  col: [170, 140, 220], r: 21, flies: true },
-    { name: 'BRUTE',  hp: 30, hit: 9,  speed: 45,  xp: 18, col: [215, 130, 100], r: 36, flies: false }
+    { name: 'SPARKBOT', hp: 10, hit: 4,  speed: 60,  xp: 5,  col: [120, 200, 230], r: 26, flies: false },
+    { name: 'DRONE',    hp: 7,  hit: 3,  speed: 130, xp: 7,  col: [235, 180,  90], r: 21, flies: true },
+    { name: 'CRUSHER',  hp: 30, hit: 9,  speed: 45,  xp: 18, col: [230, 100, 110], r: 36, flies: false }
   ];
 
-  // One pace is 40 pixels. Depth is what makes everything harder.
+  // One metre is 40 pixels. How far in is what makes everything harder.
   function depthOf(x) { return Math.max(0, Math.floor(x / 40)); }
   function meanness(x) { return 1 + depthOf(x) / 220; }
 
@@ -137,7 +138,7 @@
     you.swing = 0; you.cool = 0; you.hurt = 0; you.coins = 0;
     mobs = []; drops = []; bits = []; floats = [];
     camX = 0; dead = false; spawnedTo = 0;
-    say('walk right. hit things.');
+    say('walk right. cut through them.');
   }
 
   function levelUp() {
@@ -205,7 +206,7 @@
     if (you.hp <= 0) {
       you.hp = 0; dead = true;
       you.best = Math.max(you.best, depthOf(you.x));
-      say('the woods got you - tap to go again');
+      say('suit breached - tap to try again');
     }
   }
 
@@ -440,40 +441,64 @@
 
   function rgb(v) { return 'rgb(' + (v[0]|0) + ',' + (v[1]|0) + ',' + (v[2]|0) + ')'; }
 
-  function drawTrees() {
-    // Two rows of trees at different speeds, which is the cheapest way
-    // to make flat ground feel like somewhere.
-    // Three rows now, and tall enough to fill the sky - two short rows
-    // left most of the screen an empty green wall.
-    for (let layer = 0; layer < 3; layer++) {
-      const speed = [0.12, 0.28, 0.52][layer];
-      // The nearest row is spread WIDE apart. Close together, their
-      // trunks lined up into a picket fence across the whole floor.
-      const step = [120, 132, 210][layer];
-      const shade = ['#132018', '#17271c', '#1d3123'][layer];
-      const from = Math.floor((camX * speed) / step) - 1;
-      for (let i = from; i < from + Math.ceil(W / step) + 3; i++) {
-        const x = i * step - camX * speed + hash(i * 2.1 + layer) * 40;
-        const tall = [0.62, 0.5, 0.4][layer];
-        const hgt = groundY() * tall + hash(i * 3.3 + layer) * groundY() * 0.28;
-        const wide = hgt * 0.26;
-        ctx.fillStyle = shade;
-        // Only the near row gets a trunk - the far ones are just canopy
-        // over the horizon, and their trunks only made stripes.
-        if (layer === 2) {
-          ctx.fillRect(x - hgt * 0.028, groundY() - hgt * 0.72, hgt * 0.056, hgt * 0.72);
-        }
-        // Three stacked triangles make a fir instead of an arrow.
-        for (let t = 0; t < 3; t++) {
-          const top = groundY() - hgt * (1.02 - t * 0.24);
-          const spread = wide * (0.6 + t * 0.28);
-          ctx.beginPath();
-          ctx.moveTo(x - spread, top + hgt * 0.30);
-          ctx.lineTo(x, top);
-          ctx.lineTo(x + spread, top + hgt * 0.30);
-          ctx.closePath(); ctx.fill();
-        }
+  function drawShip() {
+    // Three layers again, but a ship this time: stars through the far
+    // windows, then ribs of the hull, then pipes and panels close by.
+    const far = groundY();
+
+    // ---- the black outside, seen through window slots ------------------
+    ctx.fillStyle = '#05070d';
+    ctx.fillRect(-30, far * 0.12, W + 60, far * 0.5);
+    const step0 = 190;
+    const from0 = Math.floor((camX * 0.10) / step0) - 1;
+    for (let i = from0; i < from0 + Math.ceil(W / step0) + 3; i++) {
+      const x = i * step0 - camX * 0.10;
+      ctx.fillStyle = '#0a1020';
+      ctx.fillRect(x, far * 0.14, 120, far * 0.44);
+      // stars, fixed per window so they do not twinkle randomly
+      for (let k = 0; k < 9; k++) {
+        const sx = x + 8 + hash(i * 7.7 + k) * 104;
+        const sy = far * 0.16 + hash(i * 3.1 + k * 2.3) * far * 0.40;
+        const b = 0.4 + hash(i + k * 5.5) * 0.6;
+        ctx.fillStyle = 'rgba(220,235,255,' + b + ')';
+        ctx.fillRect(sx, sy, 2, 2);
       }
+      ctx.strokeStyle = '#1b2942';
+      ctx.lineWidth = 5;
+      ctx.strokeRect(x, far * 0.14, 120, far * 0.44);
+    }
+
+    // ---- ribs of the hull ----------------------------------------------
+    const step1 = 150;
+    const from1 = Math.floor((camX * 0.32) / step1) - 1;
+    for (let i = from1; i < from1 + Math.ceil(W / step1) + 3; i++) {
+      const x = i * step1 - camX * 0.32;
+      ctx.fillStyle = '#141d2e';
+      ctx.fillRect(x - 16, 0, 32, far);
+      ctx.fillStyle = '#1c2740';
+      ctx.fillRect(x - 16, far * 0.62, 32, 10);
+      ctx.fillStyle = hash(i * 4.4) > 0.6 ? '#2e6c8a' : '#20304a';
+      ctx.fillRect(x - 6, far * 0.68, 12, 12);      // a little status light
+    }
+
+    // ---- pipes and panels along the near wall ---------------------------
+    ctx.fillStyle = '#101827';
+    ctx.fillRect(-30, far * 0.66, W + 60, far * 0.34);
+    const step2 = 96;
+    const from2 = Math.floor((camX * 0.55) / step2) - 1;
+    for (let i = from2; i < from2 + Math.ceil(W / step2) + 3; i++) {
+      const x = i * step2 - camX * 0.55;
+      ctx.fillStyle = '#18233a';
+      ctx.fillRect(x, far * 0.70, 70, 46);
+      ctx.fillStyle = '#0d1524';
+      ctx.fillRect(x + 6, far * 0.76, 58, 5);
+    }
+    ctx.fillStyle = '#22314e';
+    ctx.fillRect(-30, far * 0.90, W + 60, 12);       // a pipe running through
+    ctx.fillStyle = '#2b3d60';
+    for (let i = from2; i < from2 + Math.ceil(W / step2) + 3; i++) {
+      const x = i * step2 - camX * 0.55;
+      ctx.fillRect(x + 30, far * 0.88, 14, 16);      // and its brackets
     }
   }
 
@@ -482,17 +507,39 @@
     const flash = you.hurt > 0 && Math.floor(you.hurt * 20) % 2 === 0;
     ctx.globalAlpha = flash ? 0.4 : 1;
 
-    ctx.fillStyle = '#5b8cd6';                       // body
-    ctx.fillRect(x - 15, y - 52, 30, 38);
-    ctx.fillStyle = '#f0c9a0';                       // head
-    ctx.fillRect(x - 13, y - 78, 26, 26);
-    ctx.fillStyle = '#3a2a20';                       // hair
-    ctx.fillRect(x - 14, y - 81, 28, 9);
-    ctx.fillStyle = '#1b2418';                       // eyes
-    ctx.fillRect(x + (you.face > 0 ? 3 : -8), y - 68, 5, 5);
-    ctx.fillStyle = '#2b3d5c';                       // legs
-    ctx.fillRect(x - 12, y - 16, 9, 16);
-    ctx.fillRect(x + 3, y - 16, 9, 16);
+    // A spacesuit: life support on the back, padded body, round helmet
+    // with the ship reflected in the visor.
+    ctx.fillStyle = '#8f99ab';
+    ctx.fillRect(x - (you.face > 0 ? 22 : 8), y - 50, 14, 30);
+    ctx.fillStyle = '#5fd0e8';
+    ctx.fillRect(x - (you.face > 0 ? 20 : 6), y - 46, 10, 5);
+
+    ctx.fillStyle = '#e6ecf5';                       // suit
+    ctx.fillRect(x - 16, y - 52, 32, 38);
+    ctx.fillStyle = '#e8913f';                       // hazard stripe
+    ctx.fillRect(x - 16, y - 34, 32, 7);
+    ctx.fillStyle = '#aab6c8';                       // shoulder seam
+    ctx.fillRect(x - 16, y - 52, 32, 5);
+
+    ctx.fillStyle = '#cfd8e6';                       // helmet
+    ctx.beginPath();
+    ctx.arc(x, y - 66, 17, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#12203a';                       // visor
+    ctx.beginPath();
+    ctx.ellipse(x + you.face * 3, y - 67, 12, 9, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(140,220,255,0.7)';         // shine on the glass
+    ctx.beginPath();
+    ctx.ellipse(x + you.face * 6, y - 70, 4, 2.5, -0.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = '#dfe6f0';                       // boots
+    ctx.fillRect(x - 13, y - 16, 10, 16);
+    ctx.fillRect(x + 3, y - 16, 10, 16);
+    ctx.fillStyle = '#8f99ab';
+    ctx.fillRect(x - 13, y - 4, 10, 4);
+    ctx.fillRect(x + 3, y - 4, 10, 4);
 
     // The sword, swung as an arc so you can see the reach.
     if (you.swing > 0) {
@@ -501,13 +548,18 @@
       ctx.save();
       ctx.translate(x, y - 44);
       ctx.rotate(a);
-      ctx.fillStyle = '#d8e4ee';
+      // A blade of light, with a handle behind it.
+      ctx.fillStyle = 'rgba(120,235,255,0.35)';
+      ctx.fillRect(0, -9, you.face > 0 ? REACH : -REACH, 18);
+      ctx.fillStyle = '#bff2ff';
       ctx.fillRect(0, -4, you.face > 0 ? REACH : -REACH, 8);
-      ctx.fillStyle = '#8a6a3a';
-      ctx.fillRect(you.face > 0 ? -8 : 0, -5, 8, 10);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, -1.5, you.face > 0 ? REACH : -REACH, 3);
+      ctx.fillStyle = '#6b7688';
+      ctx.fillRect(you.face > 0 ? -11 : 0, -6, 11, 12);
       ctx.restore();
 
-      ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+      ctx.strokeStyle = 'rgba(150,230,255,0.4)';
       ctx.lineWidth = 5;
       ctx.beginPath();
       ctx.arc(x, y - 44, REACH * 0.85,
@@ -523,37 +575,57 @@
     const x = m.x - camX, y = m.y;
     const col = m.hurt > 0 ? [255, 255, 255] : k.col;
 
-    if (m.kind === 0) {                              // SLIME
-      ctx.fillStyle = rgb(col);
+    if (m.kind === 0) {                              // SPARKBOT
+      ctx.fillStyle = rgb(col);                      // a squat box on rollers
+      ctx.fillRect(x - k.r, y - k.r * 1.05, k.r * 2, k.r * 0.8);
+      ctx.fillStyle = rgb([col[0] * 0.55, col[1] * 0.55, col[2] * 0.6]);
+      ctx.fillRect(x - k.r, y - k.r * 0.3, k.r * 2, k.r * 0.3);
+      for (let w = 0; w < 3; w++) {
+        ctx.beginPath();
+        ctx.arc(x - k.r * 0.6 + w * k.r * 0.6, y - k.r * 0.14, k.r * 0.16, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.strokeStyle = rgb(col); ctx.lineWidth = 3;
       ctx.beginPath();
-      ctx.ellipse(x, y - k.r * 0.5, k.r, k.r * 0.72, 0, 0, Math.PI * 2);
-      ctx.fill();
-    } else if (m.kind === 1) {                       // BAT
+      ctx.moveTo(x, y - k.r * 1.05); ctx.lineTo(x, y - k.r * 1.5); ctx.stroke();
+      ctx.fillStyle = '#ff8a7a';
+      ctx.beginPath(); ctx.arc(x, y - k.r * 1.55, 3.5, 0, Math.PI * 2); ctx.fill();
+
+    } else if (m.kind === 1) {                       // DRONE
+      const spin = m.t * 16;
       ctx.fillStyle = rgb(col);
-      ctx.beginPath(); ctx.arc(x, y, k.r * 0.7, 0, Math.PI * 2); ctx.fill();
-      const flap = Math.sin(m.t * 14) * 8;
-      ctx.beginPath();
-      ctx.moveTo(x - 4, y);
-      ctx.lineTo(x - k.r * 1.7, y - 8 + flap);
-      ctx.lineTo(x - 6, y + 8);
-      ctx.closePath(); ctx.fill();
-      ctx.beginPath();
-      ctx.moveTo(x + 4, y);
-      ctx.lineTo(x + k.r * 1.7, y - 8 + flap);
-      ctx.lineTo(x + 6, y + 8);
-      ctx.closePath(); ctx.fill();
-    } else {                                         // BRUTE
+      ctx.beginPath(); ctx.arc(x, y, k.r * 0.72, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = rgb([col[0] * 0.6, col[1] * 0.6, col[2] * 0.6]);
+      ctx.lineWidth = 3;
+      for (let a2 = 0; a2 < 2; a2++) {               // two rotors, blurring
+        const px = x + (a2 ? 1 : -1) * k.r * 1.1;
+        ctx.beginPath(); ctx.moveTo(x, y - 3); ctx.lineTo(px, y - 10); ctx.stroke();
+        ctx.beginPath();
+        ctx.ellipse(px, y - 10, k.r * 0.7, 3 + Math.abs(Math.sin(spin)) * 3,
+                    0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+    } else {                                         // CRUSHER
       ctx.fillStyle = rgb(col);
-      ctx.fillRect(x - k.r, y - k.r * 1.6, k.r * 2, k.r * 1.6);
-      ctx.fillStyle = rgb([col[0] * 0.7, col[1] * 0.7, col[2] * 0.7]);
-      ctx.fillRect(x - k.r, y - k.r * 1.6, k.r * 2, 8);
+      ctx.fillRect(x - k.r, y - k.r * 1.5, k.r * 2, k.r * 1.1);
+      ctx.fillStyle = rgb([col[0] * 0.6, col[1] * 0.6, col[2] * 0.62]);
+      ctx.fillRect(x - k.r * 0.8, y - k.r * 0.45, k.r * 0.5, k.r * 0.45);
+      ctx.fillRect(x + k.r * 0.3, y - k.r * 0.45, k.r * 0.5, k.r * 0.45);
+      ctx.fillStyle = rgb(col);                      // arms
+      ctx.fillRect(x - k.r * 1.35, y - k.r * 1.3, k.r * 0.4, k.r * 0.9);
+      ctx.fillRect(x + k.r * 0.95, y - k.r * 1.3, k.r * 0.4, k.r * 0.9);
+      ctx.fillStyle = '#2a1620';
+      ctx.fillRect(x - k.r * 0.75, y - k.r * 1.42, k.r * 1.5, k.r * 0.32);
     }
 
-    ctx.fillStyle = '#141a12';
+    // Glowing optics - the one thing every robot in here has.
     for (let e = -1; e <= 1; e += 2) {
-      ctx.beginPath();
-      ctx.arc(x + e * k.r * 0.32, y - k.r * (m.kind === 2 ? 1.0 : 0.6), 3.4, 0, Math.PI * 2);
-      ctx.fill();
+      const ey = y - k.r * (m.kind === 2 ? 1.26 : m.kind === 1 ? 0.1 : 0.72);
+      ctx.fillStyle = 'rgba(255,120,110,0.35)';
+      ctx.beginPath(); ctx.arc(x + e * k.r * 0.32, ey, 7, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#ff6a5a';
+      ctx.beginPath(); ctx.arc(x + e * k.r * 0.32, ey, 3.4, 0, Math.PI * 2); ctx.fill();
     }
 
     if (m.hp < m.max) {
@@ -582,39 +654,62 @@
                                  (Math.random() - 0.5) * shake * 16);
 
     const sky = ctx.createLinearGradient(0, 0, 0, groundY());
-    sky.addColorStop(0, '#15251f');
-    sky.addColorStop(1, '#22322a');
+    sky.addColorStop(0, '#0a1120');
+    sky.addColorStop(1, '#121c2e');
     ctx.fillStyle = sky;
     ctx.fillRect(-30, -30, W + 60, groundY() + 30);
 
-    drawTrees();
+    drawShip();
 
-    ctx.fillStyle = '#2e3d24';
+    ctx.fillStyle = '#1a2437';
     ctx.fillRect(-30, groundY(), W + 60, H - groundY() + 30);
-    ctx.fillStyle = '#3d5130';
+    ctx.fillStyle = '#334765';
     ctx.fillRect(-30, groundY(), W + 60, 8);
+    // Deck plates, with the seams marching past as you walk.
+    const plate = 74, fromP = Math.floor(camX / plate) - 1;
+    for (let i = fromP; i < fromP + Math.ceil(W / plate) + 3; i++) {
+      const px = i * plate - camX;
+      ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(px, groundY() + 8); ctx.lineTo(px, H); ctx.stroke();
+      ctx.fillStyle = 'rgba(255,255,255,0.05)';
+      ctx.fillRect(px + 8, groundY() + 18, 8, 8);
+      ctx.fillRect(px + plate - 20, groundY() + 18, 8, 8);
+    }
 
     for (const p of platformsNear(camX - 200, camX + W + 200)) {
-      ctx.fillStyle = '#3d5130';
+      ctx.fillStyle = '#2a3a56';                     // catwalk
       ctx.fillRect(p.x - camX, p.y, p.w, p.h);
-      ctx.fillStyle = '#4d6640';
+      ctx.fillStyle = '#43597f';
       ctx.fillRect(p.x - camX, p.y, p.w, 5);
+      ctx.fillStyle = 'rgba(0,0,0,0.35)';            // grating
+      for (let g = 6; g < p.w - 4; g += 12) {
+        ctx.fillRect(p.x - camX + g, p.y + 6, 5, p.h - 8);
+      }
     }
 
     for (const d of drops) {
       const x = d.x - camX, y = d.y - 10 + Math.sin(d.t * 3) * 5;
-      if (d.kind === 'heart') {
-        ctx.fillStyle = '#ff7b8a';
-        ctx.beginPath(); ctx.arc(x - 5, y, 6, 0, Math.PI * 2); ctx.fill();
-        ctx.beginPath(); ctx.arc(x + 5, y, 6, 0, Math.PI * 2); ctx.fill();
-        ctx.beginPath();
-        ctx.moveTo(x - 10, y + 2); ctx.lineTo(x, y + 15); ctx.lineTo(x + 10, y + 2);
-        ctx.closePath(); ctx.fill();
-      } else {
+      if (d.kind === 'heart') {                    // a repair cell
+        ctx.fillStyle = '#7ee0a0';
+        ctx.fillRect(x - 8, y - 9, 16, 20);
+        ctx.fillStyle = '#0d1a14';
+        ctx.fillRect(x - 3, y - 5, 6, 12);
+        ctx.fillRect(x - 6, y - 1, 12, 4);
+        ctx.fillStyle = '#cfeee0';
+        ctx.fillRect(x - 5, y - 12, 10, 4);
+      } else {                                       // a bolt of scrap
         ctx.fillStyle = '#ffd76a';
-        ctx.beginPath(); ctx.arc(x, y, 8, 0, Math.PI * 2); ctx.fill();
-        ctx.fillStyle = '#c9a233';
-        ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath();
+        for (let a3 = 0; a3 < 6; a3++) {
+          const ang = a3 * Math.PI / 3;
+          const px = x + Math.cos(ang) * 9, py = y + Math.sin(ang) * 9;
+          if (a3 === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        }
+        ctx.closePath(); ctx.fill();
+        ctx.fillStyle = '#8a6a20';
+        ctx.beginPath(); ctx.arc(x, y, 3.5, 0, Math.PI * 2); ctx.fill();
       }
     }
 
@@ -647,7 +742,7 @@
     ctx.fillRect(14, 14, bw * clamp(you.hp / you.max, 0, 1), 18);
     ctx.textAlign = 'left';
     ctx.font = 'bold 12px system-ui, sans-serif';
-    ctx.fillStyle = '#0e1410';
+    ctx.fillStyle = '#080c14';
     ctx.fillText(Math.ceil(you.hp) + ' / ' + you.max, 20, 27);
 
     ctx.fillStyle = 'rgba(0,0,0,0.45)';
@@ -656,7 +751,7 @@
     ctx.fillRect(14, 36, bw * clamp(you.xp / xpNeeded(you.lv), 0, 1), 8);
 
     ctx.font = 'bold ' + Math.min(W * 0.04, 20) + 'px system-ui, sans-serif';
-    ctx.fillStyle = '#e7f0e4';
+    ctx.fillStyle = '#dfe8f5';
     ctx.fillText('LV ' + you.lv, 18 + bw, 30);
 
     ctx.textAlign = 'right';
@@ -665,11 +760,11 @@
     ctx.fillText(you.coins, W - 16, 30);
     ctx.font = '12px system-ui, sans-serif';
     ctx.fillStyle = '#8fa08a';
-    ctx.fillText(depthOf(you.x) + ' paces in', W - 16, 46);
+    ctx.fillText(depthOf(you.x) + 'm in', W - 16, 46);
 
     // ---- the buttons -------------------------------------------------------
-    ring(btnLeft(), '<', wantLeft(), '#e7f0e4');
-    ring(btnRight(), '>', wantRight(), '#e7f0e4');
+    ring(btnLeft(), '<', wantLeft(), '#dfe8f5');
+    ring(btnRight(), '>', wantRight(), '#dfe8f5');
     ring(btnJump(), 'JUMP', wantJump(), '#8ab4ff');
     ring(btnHit(), 'HIT', wantHit(), '#ffd76a');
 
@@ -690,14 +785,14 @@
       ctx.textAlign = 'center';
       ctx.font = 'bold ' + Math.min(W * 0.1, 56) + 'px system-ui, sans-serif';
       ctx.fillStyle = '#ff8a7a';
-      ctx.fillText('DOWN YOU GO', W / 2, H * 0.42);
+      ctx.fillText('SUIT BREACHED', W / 2, H * 0.42);
       ctx.font = 'bold ' + Math.min(W * 0.045, 24) + 'px system-ui, sans-serif';
-      ctx.fillStyle = '#e7f0e4';
-      ctx.fillText('level ' + you.lv + '  -  ' + depthOf(you.x) + ' paces in', W / 2, H * 0.5);
+      ctx.fillStyle = '#dfe8f5';
+      ctx.fillText('level ' + you.lv + '  -  ' + depthOf(you.x) + 'm in', W / 2, H * 0.5);
       ctx.font = Math.min(W * 0.035, 18) + 'px system-ui, sans-serif';
       ctx.fillStyle = '#8fa08a';
-      ctx.fillText('best so far: ' + you.best + ' paces', W / 2, H * 0.56);
-      ctx.fillText('tap anywhere to walk in again', W / 2, H * 0.63);
+      ctx.fillText('best so far: ' + you.best + 'm', W / 2, H * 0.56);
+      ctx.fillText('tap anywhere to go back in', W / 2, H * 0.63);
     }
   }
 
