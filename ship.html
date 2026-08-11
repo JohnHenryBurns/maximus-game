@@ -97,6 +97,61 @@
 
 
 // -------------------------------------------------------------------
+//  BULKHEAD DOORS
+//
+//  Sealed doors across the deck. You cannot squeeze past one - you open
+//  it by rewiring the panel beside it, and once a door is open it stays
+//  open.
+// -------------------------------------------------------------------
+
+  const DOOR_EVERY = 900;
+  const WIRE_COLS = [
+    { name: 'RED',   col: [235,  90,  90] },
+    { name: 'GREEN', col: [110, 220, 130] },
+    { name: 'BLUE',  col: [110, 175, 255] }
+  ];
+
+  let opened = {};                 // which doors you have already done
+
+  function doorX(i) { return i * DOOR_EVERY + 520; }
+  function doorsNear(x0, x1) {
+    const out = [];
+    const from = Math.floor(x0 / DOOR_EVERY) - 1, to = Math.floor(x1 / DOOR_EVERY) + 1;
+    for (let i = Math.max(0, from); i <= to; i++) out.push({ i: i, x: doorX(i) });
+    return out;
+  }
+
+  // The nearest door you are actually standing at, or nothing.
+  function doorAtHand() {
+    for (const d of doorsNear(you.x - 200, you.x + 200)) {
+      if (opened[d.i]) continue;
+      if (Math.abs(d.x - you.x) < 90) return d;
+    }
+    return null;
+  }
+
+  // The right-hand sockets are shuffled, so the wires always cross in a
+  // different way. Worked out from the door number, so walking away and
+  // coming back gives you the SAME puzzle rather than a fresh one.
+  function puzzleFor(i) {
+    const right = [0, 1, 2];
+    for (let k = 2; k > 0; k--) {
+      const j = Math.floor(hash(i * 5.5 + k) * (k + 1));
+      const t = right[k]; right[k] = right[j]; right[j] = t;
+    }
+    return { left: [0, 1, 2], right: right, joined: [-1, -1, -1], pick: -1, buzz: 0 };
+  }
+
+  let puzzle = null, puzzleDoor = -1;
+
+  function openPanel(d) {
+    puzzle = puzzleFor(d.i);
+    puzzleDoor = d.i;
+    say('match the colours - tap one side, then the other');
+  }
+
+
+// -------------------------------------------------------------------
 //  WHAT LIVES OUT THERE
 //
 //  hp and hit grow with how deep into the woods they are, so the same
@@ -172,6 +227,12 @@
     while (spawnedTo < upTo) {
       spawnedTo += 150 + hash(spawnedTo * 1.7) * 220;
       if (spawnedTo < 320) continue;                 // a quiet start
+      // Never right on a doorway, or you open a door into a face.
+      let onDoor = false;
+      for (const d of doorsNear(spawnedTo - 200, spawnedTo + 200)) {
+        if (Math.abs(d.x - spawnedTo) < 130) onDoor = true;
+      }
+      if (onDoor) continue;
       const r = hash(spawnedTo * 4.3);
       const deep = depthOf(spawnedTo);
       let kind = 0;
@@ -241,6 +302,7 @@
   function whichButton(x, y) {
     const list = [['left', btnLeft()], ['right', btnRight()],
                   ['jump', btnJump()], ['hit', btnHit()]];
+    if (doorAtHand() && !puzzle) list.push(['use', btnUse()]);
     for (const [name, b] of list) {
       const dx = x - b.x, dy = y - b.y;
       // A generous circle - a thumb is not a pixel.
@@ -250,7 +312,7 @@
   }
 
   function refreshHeld() {
-    held = { left: false, right: false, jump: false, hit: false };
+    held = { left: false, right: false, jump: false, hit: false, use: false };
     for (const id in touches) {
       const name = touches[id];
       if (name) held[name] = true;
@@ -260,6 +322,10 @@
   canvas.addEventListener('touchstart', function (e) {
     e.preventDefault();
     if (dead) { reset(); return; }
+    if (puzzle) {                        // the panel takes every tap
+      for (const t of e.changedTouches) panelTap(t.clientX, t.clientY);
+      return;
+    }
     for (const t of e.changedTouches) {
       touches[t.identifier] = whichButton(t.clientX, t.clientY);
     }
@@ -284,6 +350,7 @@
 
   canvas.addEventListener('mousedown', function (e) {
     if (dead) { reset(); return; }
+    if (puzzle) { panelTap(e.clientX, e.clientY); return; }
     const b = whichButton(e.clientX, e.clientY);
     if (b) { touches['mouse'] = b; refreshHeld(); }
   });
@@ -296,12 +363,96 @@
   function wantJump()  { return held.jump  || keys[' '] || keys['arrowup'] || keys['w']; }
   function wantHit()   { return held.hit   || keys['j'] || keys['k'] || keys['f']; }
 
+  // E on a keyboard, and a button that appears at a door on a phone -
+  // because a phone has no E.
+  function btnUse() {
+    const r = padR() * 0.78;
+    // ABOVE the thumb row, not between the two clusters - down there it
+    // overlapped both RIGHT and JUMP, so one thumb hit two buttons.
+    return { x: W / 2, y: padY() - padR() - r - 14, r: r };
+  }
+  let useWasDown = false;
+  function useDown() { return held.use || keys['e']; }
+
 
 // -------------------------------------------------------------------
 //  THE GAME
 // -------------------------------------------------------------------
 
   const SWING_TIME = 0.18, SWING_COOL = 0.34, REACH = 78;
+
+  // ---- the wiring panel -------------------------------------------------
+  function panelBox() {
+    const w = Math.min(W - 40, 380), h = Math.min(H - 120, 380);
+    return { x: (W - w) / 2, y: (H - h) / 2, w: w, h: h };
+  }
+  // side 0 is the left column, side 1 the right.
+  function socketAt(side, row) {
+    const p = panelBox();
+    // Sized from the panel's HEIGHT as well as its width - on a phone
+    // held sideways the panel is short, and width alone had the three
+    // sockets touching each other.
+    const r = Math.max(20, Math.min(p.w * 0.085, p.h * 0.074, 26));
+    const x = side === 0 ? p.x + p.w * 0.18 : p.x + p.w * 0.82;
+    // Rows sit higher and tighter, so the line of instructions at the
+    // bottom has somewhere to go - it was printed through the last
+    // socket before.
+    const y = p.y + p.h * 0.28 + row * p.h * 0.16;
+    return { x: x, y: y, r: r };
+  }
+  function panelDoneBox() {
+    const p = panelBox();
+    return { x: p.x + p.w * 0.28, y: p.y + p.h - 52, w: p.w * 0.44, h: 40 };
+  }
+
+  function panelTap(mx, my) {
+    if (!puzzle) return;
+
+    if (inBoxXY(mx, my, panelDoneBox())) { puzzle = null; return; }
+
+    for (let side = 0; side < 2; side++) {
+      for (let row = 0; row < 3; row++) {
+        const sk = socketAt(side, row);
+        const dx = mx - sk.x, dy = my - sk.y;
+        if (dx * dx + dy * dy > (sk.r * 1.6) * (sk.r * 1.6)) continue;
+
+        if (side === 0) {
+          // Picking a left socket that is already wired unhooks it again,
+          // so a mistake is never permanent.
+          if (puzzle.joined[row] >= 0) { puzzle.joined[row] = -1; puzzle.pick = -1; return; }
+          puzzle.pick = (puzzle.pick === row) ? -1 : row;
+          return;
+        }
+
+        if (puzzle.pick < 0) { puzzle.buzz = 0.4; return; }   // nothing held
+        const wantCol = puzzle.left[puzzle.pick];
+        const gotCol = puzzle.right[row];
+        const taken = puzzle.joined.indexOf(row) >= 0;
+        if (taken) { puzzle.buzz = 0.4; return; }
+        if (wantCol !== gotCol) { puzzle.buzz = 0.5; puzzle.pick = -1; return; }
+
+        puzzle.joined[puzzle.pick] = row;
+        puzzle.pick = -1;
+
+        if (puzzle.joined.every(function (v) { return v >= 0; })) {
+          opened[puzzleDoor] = true;
+          puzzle = null;
+          say('the door grinds open');
+          for (let i = 0; i < 26; i++) {
+            const a = Math.random() * Math.PI * 2, sp = 60 + Math.random() * 220;
+            bits.push({ x: doorX(puzzleDoor), y: groundY() - 60,
+                        vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+                        life: 0.7, col: [150, 230, 255] });
+          }
+        }
+        return;
+      }
+    }
+  }
+
+  function inBoxXY(mx, my, b) {
+    return mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h;
+  }
 
   function swordBox() {
     return { x: you.x + (you.face > 0 ? 8 : -REACH - 8), y: you.y - 60,
@@ -314,6 +465,20 @@
 
   function update(dt) {
     if (saysT > 0) saysT -= dt;
+
+    if (puzzle) {
+      // The ship waits while you are elbow-deep in the wiring.
+      if (puzzle.buzz > 0) puzzle.buzz -= dt;
+      return;
+    }
+
+    // E opens the panel - on the press, not while held down.
+    const useNow = useDown();
+    if (useNow && !useWasDown) {
+      const d = doorAtHand();
+      if (d) openPanel(d);
+    }
+    useWasDown = useNow;
     if (shake > 0) shake -= dt * 2;
 
     for (let i = bits.length - 1; i >= 0; i--) {
@@ -369,7 +534,16 @@
       }
     }
 
+    const wasX = you.x;
     you.x += you.vx * dt;
+
+    // A shut door is a wall. You are stopped just short of it, either
+    // side, so you can walk back the way you came.
+    for (const d of doorsNear(you.x - 300, you.x + 300)) {
+      if (opened[d.i]) continue;
+      if (wasX <= d.x - 26 && you.x > d.x - 26) you.x = d.x - 26;
+      else if (wasX >= d.x + 26 && you.x < d.x + 26) you.x = d.x + 26;
+    }
     you.vy += GRAV * dt;
     you.y += you.vy * dt;
     if (you.x < 20) you.x = 20;
@@ -648,6 +822,89 @@
     ctx.fillText(label, b.x, b.y + b.r * 0.22);
   }
 
+  function drawPanel() {
+    const p = panelBox();
+
+    ctx.fillStyle = 'rgba(4,8,16,0.86)';
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.fillStyle = '#16223a';
+    ctx.fillRect(p.x, p.y, p.w, p.h);
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = puzzle.buzz > 0 ? '#ff6a5a' : '#7ee0ff';
+    ctx.strokeRect(p.x, p.y, p.w, p.h);
+
+    ctx.textAlign = 'center';
+    ctx.font = 'bold ' + Math.min(W * 0.04, 21) + 'px system-ui, sans-serif';
+    ctx.fillStyle = '#dfe8f5';
+    ctx.fillText('JOIN THE COLOURS', p.x + p.w / 2, p.y + 34);
+
+    // The wires you have already run.
+    for (let row = 0; row < 3; row++) {
+      const to = puzzle.joined[row];
+      if (to < 0) continue;
+      const a = socketAt(0, row), b = socketAt(1, to);
+      ctx.strokeStyle = rgb(WIRE_COLS[puzzle.left[row]].col);
+      ctx.lineWidth = 7;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.bezierCurveTo(a.x + p.w * 0.3, a.y, b.x - p.w * 0.3, b.y, b.x, b.y);
+      ctx.stroke();
+    }
+
+    // A dangling lead from whichever one you are holding.
+    if (puzzle.pick >= 0) {
+      const a = socketAt(0, puzzle.pick);
+      ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+      ctx.lineWidth = 4;
+      ctx.setLineDash([8, 7]);
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(p.x + p.w * 0.82, a.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    for (let side = 0; side < 2; side++) {
+      for (let row = 0; row < 3; row++) {
+        const sk = socketAt(side, row);
+        const colIdx = side === 0 ? puzzle.left[row] : puzzle.right[row];
+        const wired = side === 0 ? puzzle.joined[row] >= 0
+                                 : puzzle.joined.indexOf(row) >= 0;
+        ctx.fillStyle = '#0b1322';
+        ctx.beginPath(); ctx.arc(sk.x, sk.y, sk.r * 1.35, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = rgb(WIRE_COLS[colIdx].col);
+        ctx.beginPath(); ctx.arc(sk.x, sk.y, sk.r, 0, Math.PI * 2); ctx.fill();
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = (side === 0 && puzzle.pick === row) ? '#ffffff'
+                        : wired ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.5)';
+        ctx.beginPath(); ctx.arc(sk.x, sk.y, sk.r, 0, Math.PI * 2); ctx.stroke();
+        if (!wired) {
+          ctx.fillStyle = '#0b1322';
+          ctx.beginPath(); ctx.arc(sk.x, sk.y, sk.r * 0.38, 0, Math.PI * 2); ctx.fill();
+        }
+      }
+    }
+
+    ctx.textAlign = 'center';
+    ctx.font = Math.min(W * 0.03, 15) + 'px system-ui, sans-serif';
+    ctx.fillStyle = puzzle.buzz > 0 ? '#ff8a7a' : '#8fa3c0';
+    ctx.fillText(puzzle.buzz > 0 ? 'wrong colour!' :
+                 puzzle.pick >= 0 ? 'now tap the same colour on the right'
+                                  : 'tap a socket on the left',
+                 p.x + p.w / 2, p.y + p.h - 72);
+
+    const db = panelDoneBox();
+    ctx.fillStyle = 'rgba(255,255,255,0.06)';
+    ctx.fillRect(db.x, db.y, db.w, db.h);
+    ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+    ctx.strokeRect(db.x, db.y, db.w, db.h);
+    ctx.font = 'bold ' + Math.min(W * 0.032, 16) + 'px system-ui, sans-serif';
+    ctx.fillStyle = '#8fa3c0';
+    ctx.fillText('BACK', db.x + db.w / 2, db.y + db.h * 0.66);
+  }
+
   function draw() {
     ctx.save();
     if (shake > 0) ctx.translate((Math.random() - 0.5) * shake * 16,
@@ -686,6 +943,44 @@
       ctx.fillStyle = 'rgba(0,0,0,0.35)';            // grating
       for (let g = 6; g < p.w - 4; g += 12) {
         ctx.fillRect(p.x - camX + g, p.y + 6, 5, p.h - 8);
+      }
+    }
+
+    // ---- bulkhead doors ---------------------------------------------
+    for (const d of doorsNear(camX - 200, camX + W + 200)) {
+      const x = d.x - camX;
+      if (x < -140 || x > W + 140) continue;
+      const top = groundY() - 190, hgt = 190;
+
+      ctx.fillStyle = '#101a2c';                     // the frame
+      ctx.fillRect(x - 34, top - 14, 68, hgt + 14);
+      ctx.fillStyle = '#2a3a56';
+      ctx.fillRect(x - 34, top - 14, 68, 12);
+
+      if (opened[d.i]) {
+        // Open: the two halves have slid into the frame.
+        ctx.fillStyle = '#1c2b44';
+        ctx.fillRect(x - 32, top, 8, hgt);
+        ctx.fillRect(x + 24, top, 8, hgt);
+        ctx.fillStyle = '#7ee0a0';
+        ctx.fillRect(x - 4, top - 10, 8, 6);         // green light
+      } else {
+        ctx.fillStyle = '#3a4c6d';                   // shut
+        ctx.fillRect(x - 30, top, 60, hgt);
+        ctx.fillStyle = '#2b3a56';
+        for (let b2 = 0; b2 < 5; b2++) ctx.fillRect(x - 30, top + 10 + b2 * 36, 60, 6);
+        ctx.fillStyle = '#101a2c';                   // the seam down the middle
+        ctx.fillRect(x - 2, top, 4, hgt);
+        ctx.fillStyle = '#ff8a7a';
+        ctx.fillRect(x - 4, top - 10, 8, 6);         // red light
+
+        // The wiring box beside it.
+        ctx.fillStyle = '#22304a';
+        ctx.fillRect(x + 34, top + 60, 26, 34);
+        for (let c2 = 0; c2 < 3; c2++) {
+          ctx.fillStyle = rgb(WIRE_COLS[c2].col);
+          ctx.fillRect(x + 38, top + 66 + c2 * 9, 18, 5);
+        }
       }
     }
 
@@ -768,7 +1063,19 @@
     ring(btnJump(), 'JUMP', wantJump(), '#8ab4ff');
     ring(btnHit(), 'HIT', wantHit(), '#ffd76a');
 
-    if (saysT > 0) {
+    // ---- standing at a door -------------------------------------------
+    const at = doorAtHand();
+    if (at && !puzzle && !dead) {
+      ring(btnUse(), 'E', useDown(), '#7ee0ff');
+      ctx.textAlign = 'center';
+      ctx.font = 'bold ' + Math.min(W * 0.034, 18) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#7ee0ff';
+      ctx.fillText('SEALED - press E to open', W / 2, btnUse().y - btnUse().r - 14);
+    }
+
+    if (puzzle) drawPanel();
+
+    if (saysT > 0 && !puzzle) {
       ctx.textAlign = 'center';
       ctx.font = 'bold ' + Math.min(W * 0.038, 20) + 'px system-ui, sans-serif';
       const wid = ctx.measureText(says).width;
