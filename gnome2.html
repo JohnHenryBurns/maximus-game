@@ -398,7 +398,7 @@ const SNAIL_SPEED  = 0.45;         // a snail runs at under half speed
 // BALLOONS. They carry you steadily UPWARD until they pop - either when an
 // enemy hits them (they're a shield too) or when the timer runs out.
 const BALLOON_TIME  = 330;         // ~5.5 seconds of floating before they pop
-const BALLOON_FLOAT = 6.3;         // steady rise speed - a gentle drift up (was 9, too zippy)
+const BALLOON_FLOAT = 4.4;         // steady rise speed - a gentle drift up (9 -> 6.3 -> 4.4, kept slowing)
 
 const RAPID_GAP    = 4;         // frames between shots while rapid-firing
 const ROCKET_THRUST = 0.92;     // how hard the rocket boots push up
@@ -2113,7 +2113,13 @@ function update() {
       continue;
     }
 
-    f.y += FIREBALL_SPEED;
+    // It falls at its normal speed. BUT once it's BELOW you, it never falls
+    // slower than you are falling - so if you dodged it and then dropped, you
+    // can't catch back up and clip it from above. Above you it keeps its
+    // normal speed, so it never emerges any faster than before.
+    let fspeed = FIREBALL_SPEED;
+    if (f.y > gnome.y - 17 && gnome.vy > fspeed) fspeed = gnome.vy;
+    f.y += fspeed;
 
     // It smashes any ledge it passes through. It doesn't stop - it goes
     // straight on down, wrecking everything in that column, and the
