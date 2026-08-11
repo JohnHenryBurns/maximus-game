@@ -177,13 +177,37 @@
 
 
 // -------------------------------------------------------------------
+//  GUNS
+//
+//  A gun goes in the same hand as the blade, and fires with the same
+//  button - so a phone never grows a fifth thumb. What the HIT button
+//  does depends on what you are holding.
+//
+//  Ammo always runs out, and then the blade is still there. A gun is a
+//  treat, not a replacement.
+// -------------------------------------------------------------------
+
+  const GUNS = [
+    { name: 'PISTOL',  dmg: 7,  rate: 4.0, ammo: 34, speed: 780, shots: 1, spread: 0,
+      col: [150, 220, 255] },
+    { name: 'SCATTER', dmg: 5,  rate: 1.6, ammo: 20, speed: 640, shots: 3, spread: 0.20,
+      col: [255, 190, 110] },
+    { name: 'RAILGUN', dmg: 26, rate: 0.9, ammo: 12, speed: 1500, shots: 1, spread: 0,
+      pierce: true, col: [220, 150, 255] }
+  ];
+
+  let shotsOut = [];             // bullets in the air
+
+
+// -------------------------------------------------------------------
 //  YOU
 // -------------------------------------------------------------------
 
   const you = {
     x: 0, y: 0, vx: 0, vy: 0, onGround: false, face: 1,
     hp: 20, max: 20, lv: 1, xp: 0, dmg: 6,
-    swing: 0, cool: 0, hurt: 0, coins: 0, best: 0
+    swing: 0, cool: 0, hurt: 0, coins: 0, best: 0,
+    gun: -1, ammo: 0
   };
 
   let mobs = [], drops = [], bits = [], floats = [];
@@ -198,7 +222,8 @@
     you.x = 60; you.y = groundY() - 40; you.vx = 0; you.vy = 0;
     you.hp = 20; you.max = 20; you.lv = 1; you.xp = 0; you.dmg = 6;
     you.swing = 0; you.cool = 0; you.hurt = 0; you.coins = 0;
-    mobs = []; drops = []; bits = []; floats = [];
+    you.gun = -1; you.ammo = 0;
+    mobs = []; drops = []; bits = []; floats = []; shotsOut = [];
     camX = 0; dead = false; spawnedTo = 0;
     say('walk right. cut through them.');
   }
@@ -284,6 +309,32 @@
                   life: 0.4 + Math.random() * 0.4, col: col });
     }
     if (bits.length > 260) bits.splice(0, bits.length - 260);
+  }
+
+  // Everything that finishes a robot goes through here, so the blade and
+  // a bullet cannot drift apart in what a kill is worth or what it drops.
+  function killMob(m) {
+    const idx = mobs.indexOf(m);
+    if (idx < 0) return;                    // something already got it
+    const k = KINDS[m.kind];
+    pop(m.x, m.y, k.col, 16);
+    giveXp(Math.round(k.xp * meanness(m.x)));
+
+    const roll = hash(m.x * 13.3);
+    if (roll < 0.10) {
+      // A gun, and which one leans on how deep in you are - the heavy
+      // stuff is further into the ship.
+      const deep = depthOf(m.x);
+      const g2 = hash(m.x * 21.7);
+      let which = 0;
+      if (deep > 60 && g2 > 0.55) which = 1;
+      if (deep > 140 && g2 > 0.85) which = 2;
+      drops.push({ x: m.x, y: m.y, kind: 'gun', gun: which, t: 0 });
+    }
+    else if (roll < 0.34) drops.push({ x: m.x, y: m.y, kind: 'heart', t: 0 });
+    else if (roll < 0.74) drops.push({ x: m.x, y: m.y, kind: 'coin', t: 0 });
+
+    mobs.splice(idx, 1);
   }
 
   function hurtYou(n) {
@@ -537,7 +588,27 @@
 
     if (wantJump() && you.onGround) { you.vy = -JUMP; you.onGround = false; }
 
-    if (wantHit() && you.cool <= 0) {
+    if (wantHit() && you.cool <= 0 && you.gun >= 0 && you.ammo > 0) {
+      // ---- firing --------------------------------------------------
+      const g4 = GUNS[you.gun];
+      you.cool = 1 / g4.rate;
+      you.ammo--;
+      you.swing = 0.08;                        // a little recoil flash
+      shake = 0.12;
+
+      for (let n = 0; n < g4.shots; n++) {
+        const off = g4.shots > 1 ? (n - (g4.shots - 1) / 2) * g4.spread : 0;
+        shotsOut.push({ x: you.x + you.face * 26, y: you.y - 44,
+                        vx: you.face * g4.speed, vy: off * g4.speed,
+                        dmg: g4.dmg, pierce: !!g4.pierce, col: g4.col,
+                        life: 1.4, hitAlready: [] });
+      }
+      if (you.ammo <= 0) {
+        say(g4.name + ' is empty - back to the blade');
+        you.gun = -1;
+      }
+
+    } else if (wantHit() && you.cool <= 0) {
       you.swing = SWING_TIME;
       you.cool = SWING_COOL;
 
@@ -550,15 +621,7 @@
         floats.push({ x: m.x, y: m.y - k.r, text: '-' + you.dmg, life: 0.9,
                       col: [255, 220, 140] });
         pop(m.x, m.y, k.col, 6);
-        if (m.hp <= 0) {
-          pop(m.x, m.y, k.col, 16);
-          giveXp(Math.round(k.xp * meanness(m.x)));
-          // Something to pick up, sometimes.
-          const roll = hash(m.x * 13.3);
-          if (roll < 0.28) drops.push({ x: m.x, y: m.y, kind: 'heart', t: 0 });
-          else if (roll < 0.72) drops.push({ x: m.x, y: m.y, kind: 'coin', t: 0 });
-          mobs.splice(i, 1);
-        }
+        if (m.hp <= 0) killMob(m);
       }
     }
 
@@ -596,6 +659,36 @@
       }
     }
 
+    // ---- bullets -----------------------------------------------------
+    for (let i = shotsOut.length - 1; i >= 0; i--) {
+      const b = shotsOut[i];
+      b.life -= dt;
+      b.x += b.vx * dt;
+      b.y += b.vy * dt;
+
+      // A shut door stops a bullet, same as it stops you.
+      let stopped = b.life <= 0;
+      for (const d of doorsNear(b.x - 60, b.x + 60)) {
+        if (!opened[d.i] && Math.abs(d.x - b.x) < 20) stopped = true;
+      }
+
+      for (const m of mobs) {
+        if (b.hitAlready.indexOf(m) >= 0) continue;
+        const k = KINDS[m.kind];
+        if (Math.abs(m.x - b.x) > k.r || Math.abs(m.y - b.y) > k.r + 14) continue;
+
+        m.hp -= b.dmg;
+        m.hurt = 0.25;
+        b.hitAlready.push(m);
+        floats.push({ x: m.x, y: m.y - k.r, text: '-' + b.dmg, life: 0.9, col: b.col });
+        pop(m.x, m.y, b.col, 5);
+        if (m.hp <= 0) killMob(m);
+        if (!b.pierce) { stopped = true; break; }
+      }
+
+      if (stopped) shotsOut.splice(i, 1);
+    }
+
     // ---- the monsters ----------------------------------------------------
     spawnAhead();
     for (const m of mobs) {
@@ -625,7 +718,14 @@
       const d = drops[i];
       d.t += dt;
       if (Math.abs(d.x - you.x) < 34 && Math.abs(d.y - you.y + 20) < 44) {
-        if (d.kind === 'heart') {
+        if (d.kind === 'gun') {
+          const g3 = GUNS[d.gun];
+          you.gun = d.gun;
+          you.ammo = g3.ammo;                  // a fresh one, fully loaded
+          you.cool = 0;
+          say(g3.name + '!  ' + g3.ammo + ' shots - the HIT button fires it');
+          floats.push({ x: you.x, y: you.y - 50, text: g3.name, life: 1.2, col: g3.col });
+        } else if (d.kind === 'heart') {
           you.hp = Math.min(you.max, you.hp + 8);
           floats.push({ x: you.x, y: you.y - 50, text: '+8', life: 1, col: [140, 255, 150] });
         } else {
@@ -907,8 +1007,29 @@
     ctx.fillRect(x - 13, y - 4, 10, 4);
     ctx.fillRect(x + 3, y - 4, 10, 4);
 
-    // The sword, swung as an arc so you can see the reach.
-    if (you.swing > 0) {
+    // What you are holding. A gun sits in your fist and flashes when it
+    // goes off; the blade sweeps an arc.
+    if (you.gun >= 0) {
+      const g5 = GUNS[you.gun];
+      ctx.save();
+      ctx.translate(x, y - 44);
+      ctx.scale(you.face, 1);
+      ctx.fillStyle = '#6b7688';
+      ctx.fillRect(2, -6, 30, 12);
+      ctx.fillRect(6, 2, 9, 14);
+      ctx.fillStyle = rgb(g5.col);
+      ctx.fillRect(26, -4, 10, 8);
+      if (you.swing > 0) {                     // muzzle flash
+        ctx.fillStyle = 'rgba(255,255,255,0.9)';
+        ctx.beginPath();
+        ctx.moveTo(36, 0); ctx.lineTo(52, -11); ctx.lineTo(50, 0);
+        ctx.lineTo(52, 11); ctx.closePath(); ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    // The blade, swung as an arc so you can see the reach.
+    if (you.gun < 0 && you.swing > 0) {
       const t = 1 - you.swing / SWING_TIME;
       const a = (-0.9 + t * 1.9) * you.face;
       ctx.save();
@@ -1181,7 +1302,17 @@
 
     for (const d of drops) {
       const x = d.x - camX, y = d.y - 10 + Math.sin(d.t * 3) * 5;
-      if (d.kind === 'heart') {                    // a repair cell
+      if (d.kind === 'gun') {                      // a gun on the deck
+        const g6 = GUNS[d.gun];
+        ctx.fillStyle = 'rgba(' + (g6.col[0]|0) + ',' + (g6.col[1]|0) + ',' +
+                        (g6.col[2]|0) + ',0.22)';
+        ctx.beginPath(); ctx.arc(x, y + 2, 20, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#6b7688';
+        ctx.fillRect(x - 13, y - 4, 24, 9);
+        ctx.fillRect(x - 9, y + 4, 7, 10);
+        ctx.fillStyle = rgb(g6.col);
+        ctx.fillRect(x + 7, y - 3, 9, 7);
+      } else if (d.kind === 'heart') {             // a repair cell
         ctx.fillStyle = '#7ee0a0';
         ctx.fillRect(x - 8, y - 9, 16, 20);
         ctx.fillStyle = '#0d1a14';
@@ -1208,6 +1339,23 @@
       drawMob(m);
     }
     drawHero();
+
+    for (const b of shotsOut) {
+      const x = b.x - camX;
+      ctx.strokeStyle = 'rgba(' + (b.col[0]|0) + ',' + (b.col[1]|0) + ',' +
+                        (b.col[2]|0) + ',0.45)';
+      ctx.lineWidth = 7;
+      ctx.beginPath();
+      ctx.moveTo(x - b.vx * 0.012, b.y - b.vy * 0.012);
+      ctx.lineTo(x, b.y);
+      ctx.stroke();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(x - b.vx * 0.008, b.y - b.vy * 0.008);
+      ctx.lineTo(x, b.y);
+      ctx.stroke();
+    }
 
     for (const b of bits) {
       ctx.fillStyle = 'rgba(' + (b.col[0]|0) + ',' + (b.col[1]|0) + ',' + (b.col[2]|0) +
@@ -1243,6 +1391,23 @@
     ctx.font = 'bold ' + Math.min(W * 0.04, 20) + 'px system-ui, sans-serif';
     ctx.fillStyle = '#dfe8f5';
     ctx.fillText('LV ' + you.lv, 18 + bw, 30);
+
+    // What is in your hand, and how much of it is left.
+    ctx.textAlign = 'left';
+    ctx.font = 'bold ' + Math.min(W * 0.03, 15) + 'px system-ui, sans-serif';
+    if (you.gun >= 0) {
+      const g7 = GUNS[you.gun];
+      ctx.fillStyle = rgb(g7.col);
+      ctx.fillText(g7.name + '  ' + you.ammo, 16, 62);
+      const bw2 = Math.min(W * 0.30, 150);
+      ctx.fillStyle = 'rgba(0,0,0,0.4)';
+      ctx.fillRect(16, 68, bw2, 5);
+      ctx.fillStyle = rgb(g7.col);
+      ctx.fillRect(16, 68, bw2 * clamp(you.ammo / g7.ammo, 0, 1), 5);
+    } else {
+      ctx.fillStyle = '#7d8ca3';
+      ctx.fillText('PLASMA BLADE', 16, 62);
+    }
 
     ctx.textAlign = 'right';
     ctx.font = 'bold ' + Math.min(W * 0.045, 24) + 'px system-ui, sans-serif';
