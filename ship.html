@@ -225,7 +225,11 @@
   function spawnAhead() {
     const upTo = you.x + W + 400;
     while (spawnedTo < upTo) {
-      spawnedTo += 150 + hash(spawnedTo * 1.7) * 220;
+      // The ship fills up the deeper in you get. Near the airlock they
+      // are spread out; a long way in it is a crowd. Making it crowded
+      // everywhere put eleven robots on screen at level one.
+      const packed = clamp(1 - depthOf(spawnedTo) / 250, 0, 1);
+      spawnedTo += (80 + hash(spawnedTo * 1.7) * 150) * (1 + 1.3 * packed);
       if (spawnedTo < 320) continue;                 // a quiet start
       // Never right on a doorway, or you open a door into a face.
       let onDoor = false;
@@ -240,12 +244,29 @@
       if (r > 0.84 && deep > 25) kind = 2;
       const k = KINDS[kind];
       const m = meanness(spawnedTo);
-      mobs.push({
-        kind: kind, x: spawnedTo, y: k.flies ? groundY() - 120 - hash(spawnedTo) * 60
-                                             : groundY() - k.r,
-        vy: 0, hp: Math.round(k.hp * m), max: Math.round(k.hp * m),
-        hit: Math.round(k.hit * m), t: hash(spawnedTo * 8.1) * 6, hurt: 0
-      });
+
+      // A knot of two or three, once you are properly inside.
+      const pack = (depthOf(spawnedTo) > 45 && hash(spawnedTo * 6.1) > 0.72)
+                 ? 2 + Math.floor(hash(spawnedTo * 2.2) * 2) : 1;
+      for (let n = 0; n < pack; n++) {
+        const px = spawnedTo + n * (34 + hash(spawnedTo + n) * 26);
+
+        // Check EVERY one of the knot against the doors, not just the
+        // first - the others are shoved sideways and three of them ended
+        // up standing in a doorway.
+        let blocksDoor = false;
+        for (const d of doorsNear(px - 200, px + 200)) {
+          if (Math.abs(d.x - px) < 130) blocksDoor = true;
+        }
+        if (blocksDoor) continue;
+
+        mobs.push({
+          kind: kind, x: px, y: k.flies ? groundY() - 120 - hash(px) * 60
+                                        : groundY() - k.r,
+          vy: 0, hp: Math.round(k.hp * m), max: Math.round(k.hp * m),
+          hit: Math.round(k.hit * m), t: hash(px * 8.1) * 6, hurt: 0
+        });
+      }
     }
   }
 
@@ -615,6 +636,68 @@
 
   function rgb(v) { return 'rgb(' + (v[0]|0) + ',' + (v[1]|0) + ',' + (v[2]|0) + ')'; }
 
+  // Crates, barrels, terminals and signs, worked out from where they are
+  // so the ship remembers nothing and never rearranges itself. Purely
+  // scenery - you walk straight through it, because a crate you can trip
+  // over in a fight is a crate that gets you killed unfairly.
+  function drawClutter() {
+    const step = 96;
+    const from = Math.floor(camX / step) - 1;
+    for (let i = from; i < from + Math.ceil(W / step) + 3; i++) {
+      const r = hash(i * 11.3);
+      if (r < 0.22) continue;
+      const x = i * step - camX + hash(i * 4.9) * 50;
+      const g = groundY();
+
+      if (r < 0.56) {                                 // stacked crates
+        const n = 1 + Math.floor(hash(i * 3.1) * 3);
+        for (let c = 0; c < n; c++) {
+          const sz = 42 - c * 6;
+          const ty = g - sz * (c + 1) - c * 2;
+          ctx.fillStyle = c % 2 ? '#4a5f85' : '#56709c';
+          ctx.fillRect(x - sz / 2, ty, sz, sz);
+          ctx.fillStyle = '#6b86b5';                   // lit top edge
+          ctx.fillRect(x - sz / 2, ty, sz, 4);
+          ctx.fillStyle = 'rgba(0,0,0,0.35)';          // strapping
+          ctx.fillRect(x - sz / 2, ty + sz * 0.44, sz, 5);
+          ctx.fillStyle = '#e8b13f';
+          ctx.fillRect(x - 4, ty + sz * 0.2, 8, 8);    // a stencil mark
+        }
+      } else if (r < 0.74) {                          // a barrel
+        ctx.fillStyle = '#5d7a49';
+        ctx.fillRect(x - 17, g - 52, 34, 52);
+        ctx.fillStyle = '#7a9c61';
+        ctx.fillRect(x - 17, g - 52, 34, 4);
+        ctx.fillStyle = '#42583a';
+        ctx.fillRect(x - 17, g - 40, 34, 6);
+        ctx.fillRect(x - 17, g - 18, 34, 6);
+        ctx.fillStyle = '#e8b13f';
+        ctx.fillRect(x - 7, g - 34, 14, 11);
+      } else if (r < 0.88) {                          // a wall terminal
+        ctx.fillStyle = '#33456a';
+        ctx.fillRect(x - 22, g - 118, 44, 54);
+        ctx.fillStyle = '#465c85';
+        ctx.fillRect(x - 22, g - 118, 44, 4);
+        ctx.fillStyle = hash(i * 7.7) > 0.5 ? '#5fd0e8' : '#7ee0a0';
+        ctx.fillRect(x - 16, g - 111, 32, 26);
+        ctx.fillStyle = '#0d1524';
+        for (let l = 0; l < 4; l++) ctx.fillRect(x - 13, g - 107 + l * 6, 22, 2);
+        ctx.fillStyle = '#3b4f74';
+        ctx.fillRect(x - 5, g - 64, 10, 64);          // its stand
+      } else {                                        // a hazard sign
+        ctx.fillStyle = '#3b4f74';
+        ctx.fillRect(x - 4, g - 58, 8, 58);
+        ctx.fillStyle = '#f0bd44';
+        ctx.beginPath();
+        ctx.moveTo(x, g - 96); ctx.lineTo(x + 23, g - 56); ctx.lineTo(x - 23, g - 56);
+        ctx.closePath(); ctx.fill();
+        ctx.fillStyle = '#1a2437';
+        ctx.fillRect(x - 3, g - 84, 6, 16);
+        ctx.fillRect(x - 3, g - 65, 6, 5);
+      }
+    }
+  }
+
   function drawShip() {
     // Three layers again, but a ship this time: stars through the far
     // windows, then ribs of the hull, then pipes and panels close by.
@@ -917,6 +1000,8 @@
     ctx.fillRect(-30, -30, W + 60, groundY() + 30);
 
     drawShip();
+
+    drawClutter();
 
     ctx.fillStyle = '#1a2437';
     ctx.fillRect(-30, groundY(), W + 60, H - groundY() + 30);
