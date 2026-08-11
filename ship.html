@@ -74,6 +74,12 @@
 
   function groundY() { return H * GROUND; }
 
+  // A corridor, not a field. The deck head is barely taller than a jump,
+  // which is the whole point: you cannot simply hop over anything.
+  const CEIL_H = 200;
+  const SUIT_H = 84;                 // boots to the top of the helmet
+  function ceilingY() { return groundY() - CEIL_H; }
+
   // Platforms are worked out from where they are, not stored in a list,
   // so the world can go on for ever without remembering any of it.
   const PLAT_EVERY = 340;
@@ -82,7 +88,8 @@
     if (r < 0.42) return null;                       // not every slot has one
     const x = i * PLAT_EVERY + hash(i * 9.1) * 120;
     const w = 90 + hash(i * 5.3) * 110;
-    const up = 90 + hash(i * 2.9) * 110;
+    // Low enough to stand on without your helmet in the ceiling.
+    const up = 54 + hash(i * 2.9) * 44;
     return { x: x, y: groundY() - up, w: w, h: 16 };
   }
   function platformsNear(x0, x1) {
@@ -261,7 +268,7 @@
         if (blocksDoor) continue;
 
         mobs.push({
-          kind: kind, x: px, y: k.flies ? groundY() - 120 - hash(px) * 60
+          kind: kind, x: px, y: k.flies ? groundY() - 62 - hash(px) * 58
                                         : groundY() - k.r,
           vy: 0, hp: Math.round(k.hp * m), max: Math.round(k.hp * m),
           hit: Math.round(k.hit * m), t: hash(px * 8.1) * 6, hurt: 0
@@ -569,6 +576,13 @@
     you.y += you.vy * dt;
     if (you.x < 20) you.x = 20;
 
+    // Helmet on the ceiling. Stops you dead rather than bouncing, so a
+    // jump under a low deck head is just a short jump.
+    if (you.y - SUIT_H < ceilingY()) {
+      you.y = ceilingY() + SUIT_H;
+      if (you.vy < 0) you.vy = 0;
+    }
+
     // land on the ground, or on a platform on the way down
     you.onGround = false;
     if (you.y >= groundY()) { you.y = groundY(); you.vy = 0; you.onGround = true; }
@@ -596,7 +610,8 @@
         m.x += dir * k.speed * dt;
         if (k.flies) {
           // Bats bob, so they are awkward to time.
-          m.y = groundY() - 130 + Math.sin(m.t * 2.4) * 46;
+          // Bobbing, but never up into the ceiling.
+          m.y = groundY() - 96 + Math.sin(m.t * 2.4) * 34;
         }
       }
 
@@ -699,63 +714,157 @@
   }
 
   function drawShip() {
-    // Three layers again, but a ship this time: stars through the far
-    // windows, then ribs of the hull, then pipes and panels close by.
-    const far = groundY();
+    const g = groundY(), c = ceilingY(), band = g - c;
 
-    // ---- the black outside, seen through window slots ------------------
-    ctx.fillStyle = '#05070d';
-    ctx.fillRect(-30, far * 0.12, W + 60, far * 0.5);
-    const step0 = 190;
-    const from0 = Math.floor((camX * 0.10) / step0) - 1;
+    // ---- the far wall of the corridor, and windows onto the black -----
+    ctx.fillStyle = '#0c1424';
+    ctx.fillRect(-30, c, W + 60, band);
+
+    const step0 = 230;
+    const from0 = Math.floor((camX * 0.12) / step0) - 1;
     for (let i = from0; i < from0 + Math.ceil(W / step0) + 3; i++) {
-      const x = i * step0 - camX * 0.10;
-      ctx.fillStyle = '#0a1020';
-      ctx.fillRect(x, far * 0.14, 120, far * 0.44);
-      // stars, fixed per window so they do not twinkle randomly
-      for (let k = 0; k < 9; k++) {
-        const sx = x + 8 + hash(i * 7.7 + k) * 104;
-        const sy = far * 0.16 + hash(i * 3.1 + k * 2.3) * far * 0.40;
-        const b = 0.4 + hash(i + k * 5.5) * 0.6;
-        ctx.fillStyle = 'rgba(220,235,255,' + b + ')';
+      const x = i * step0 - camX * 0.12;
+      if (hash(i * 3.3) < 0.35) continue;             // not every bay
+      const wy = c + band * 0.16, wh = band * 0.44;
+      ctx.fillStyle = '#05070d';
+      ctx.fillRect(x, wy, 130, wh);
+      for (let k = 0; k < 8; k++) {
+        const sx = x + 8 + hash(i * 7.7 + k) * 114;
+        const sy = wy + 6 + hash(i * 3.1 + k * 2.3) * (wh - 12);
+        ctx.fillStyle = 'rgba(220,235,255,' + (0.35 + hash(i + k * 5.5) * 0.6) + ')';
         ctx.fillRect(sx, sy, 2, 2);
       }
-      ctx.strokeStyle = '#1b2942';
-      ctx.lineWidth = 5;
-      ctx.strokeRect(x, far * 0.14, 120, far * 0.44);
+      ctx.strokeStyle = '#22314e';
+      ctx.lineWidth = 6;
+      ctx.strokeRect(x, wy, 130, wh);
     }
 
-    // ---- ribs of the hull ----------------------------------------------
-    const step1 = 150;
-    const from1 = Math.floor((camX * 0.32) / step1) - 1;
+    // ---- ribs of the hull, floor to ceiling ---------------------------
+    const step1 = 165;
+    const from1 = Math.floor((camX * 0.34) / step1) - 1;
     for (let i = from1; i < from1 + Math.ceil(W / step1) + 3; i++) {
-      const x = i * step1 - camX * 0.32;
-      ctx.fillStyle = '#141d2e';
-      ctx.fillRect(x - 16, 0, 32, far);
-      ctx.fillStyle = '#1c2740';
-      ctx.fillRect(x - 16, far * 0.62, 32, 10);
+      const x = i * step1 - camX * 0.34;
+      ctx.fillStyle = '#16213a';
+      ctx.fillRect(x - 17, c, 34, band);
       ctx.fillStyle = hash(i * 4.4) > 0.6 ? '#2e6c8a' : '#20304a';
-      ctx.fillRect(x - 6, far * 0.68, 12, 12);      // a little status light
+      ctx.fillRect(x - 6, c + band * 0.72, 12, 12);
     }
 
-    // ---- pipes and panels along the near wall ---------------------------
-    ctx.fillStyle = '#101827';
-    ctx.fillRect(-30, far * 0.66, W + 60, far * 0.34);
-    const step2 = 96;
+    // ---- wall panels along the near side -------------------------------
+    const step2 = 104;
     const from2 = Math.floor((camX * 0.55) / step2) - 1;
     for (let i = from2; i < from2 + Math.ceil(W / step2) + 3; i++) {
       const x = i * step2 - camX * 0.55;
       ctx.fillStyle = '#18233a';
-      ctx.fillRect(x, far * 0.70, 70, 46);
+      ctx.fillRect(x, c + band * 0.66, 74, band * 0.24);
       ctx.fillStyle = '#0d1524';
-      ctx.fillRect(x + 6, far * 0.76, 58, 5);
+      ctx.fillRect(x + 6, c + band * 0.74, 62, 5);
     }
     ctx.fillStyle = '#22314e';
-    ctx.fillRect(-30, far * 0.90, W + 60, 12);       // a pipe running through
-    ctx.fillStyle = '#2b3d60';
-    for (let i = from2; i < from2 + Math.ceil(W / step2) + 3; i++) {
-      const x = i * step2 - camX * 0.55;
-      ctx.fillRect(x + 30, far * 0.88, 14, 16);      // and its brackets
+    ctx.fillRect(-30, g - 26, W + 60, 11);            // a pipe at knee height
+  }
+
+  // Everything ABOVE the corridor: the guts of the deck overhead. It
+  // fills whatever screen is left, which is what makes the ceiling read
+  // as LOW rather than as an empty sky.
+  function drawCeiling() {
+    const c = ceilingY();
+
+    ctx.fillStyle = '#0a1020';
+    ctx.fillRect(-30, -30, W + 60, c + 30);
+
+    // The guts of the deck overhead. A low ceiling on a tall screen
+    // leaves a LOT of room up here, and two flat bands read as an empty
+    // wall rather than as machinery - so it is packed with runs of duct
+    // and cable at five different depths, each drifting at its own speed.
+    const RUNS = [
+      { at: 0.14, thick: 0.10, col: '#0f1728', speed: 0.16 },
+      { at: 0.32, thick: 0.15, col: '#131d31', speed: 0.24 },
+      { at: 0.52, thick: 0.09, col: '#18243c', speed: 0.34 },
+      { at: 0.68, thick: 0.17, col: '#1a2740', speed: 0.44 },
+      { at: 0.88, thick: 0.07, col: '#22314e', speed: 0.56 }
+    ];
+
+    for (const run of RUNS) {
+      const y = c * (1 - run.at) - c * run.thick * 0.5;
+      const th = c * run.thick;
+      ctx.fillStyle = run.col;
+      ctx.fillRect(-30, y, W + 60, th);
+
+      // bands round the duct, and the odd valve
+      const step = 130, from = Math.floor((camX * run.speed) / step) - 1;
+      for (let i = from; i < from + Math.ceil(W / step) + 3; i++) {
+        const x = i * step - camX * run.speed;
+        ctx.fillStyle = 'rgba(0,0,0,0.32)';
+        ctx.fillRect(x, y, 10, th);
+        if (hash(i * 8.8 + run.at) > 0.72) {
+          ctx.fillStyle = '#2f4468';
+          ctx.fillRect(x + 24, y - 7, 22, th + 14);
+        }
+        if (hash(i * 5.1 + run.at) > 0.88) {
+          ctx.fillStyle = '#e8b13f';
+          ctx.fillRect(x + 60, y + th * 0.3, 9, 9);   // a warning light
+        }
+      }
+    }
+
+    // cable bundles slung between the runs
+    const cstep = 96, cfrom = Math.floor((camX * 0.3) / cstep) - 1;
+    for (let i = cfrom; i < cfrom + Math.ceil(W / cstep) + 3; i++) {
+      if (hash(i * 12.7) < 0.55) continue;
+      const x = i * cstep - camX * 0.3;
+      const y0 = c * 0.28, y1 = c * 0.62;
+      ctx.strokeStyle = '#0c1322';
+      ctx.lineWidth = 5;
+      for (let k = 0; k < 3; k++) {
+        ctx.beginPath();
+        ctx.moveTo(x + k * 7, y0);
+        ctx.quadraticCurveTo(x + 26 + k * 7, (y0 + y1) / 2, x + k * 7, y1);
+        ctx.stroke();
+      }
+    }
+
+    // a vent grille here and there, right up in the dark
+    const vstep = 260, vfrom = Math.floor((camX * 0.2) / vstep) - 1;
+    for (let i = vfrom; i < vfrom + Math.ceil(W / vstep) + 3; i++) {
+      if (hash(i * 15.3) < 0.5) continue;
+      const x = i * vstep - camX * 0.2;
+      ctx.fillStyle = '#111a2c';
+      ctx.fillRect(x, c * 0.06, 84, 44);
+      ctx.fillStyle = '#0a1120';
+      for (let l = 0; l < 5; l++) ctx.fillRect(x + 6, c * 0.06 + 6 + l * 7, 72, 4);
+    }
+
+    // the ceiling plate itself, ribbed
+    ctx.fillStyle = '#1b2740';
+    ctx.fillRect(-30, c - 20, W + 60, 26);
+    ctx.fillStyle = '#26355a';
+    ctx.fillRect(-30, c - 4, W + 60, 6);
+    const step3 = 78, from3 = Math.floor(camX / step3) - 1;
+    for (let i = from3; i < from3 + Math.ceil(W / step3) + 3; i++) {
+      const x = i * step3 - camX;
+      ctx.fillStyle = '#121c30';
+      ctx.fillRect(x, c - 20, 7, 24);
+
+      // strip lights every few ribs, throwing a little glow down
+      if (hash(i * 6.6) > 0.66) {
+        ctx.fillStyle = '#cfe9ff';
+        ctx.fillRect(x + 14, c - 8, 44, 6);
+        const glow = ctx.createLinearGradient(0, c, 0, c + 90);
+        glow.addColorStop(0, 'rgba(180,225,255,0.16)');
+        glow.addColorStop(1, 'rgba(180,225,255,0)');
+        ctx.fillStyle = glow;
+        ctx.fillRect(x + 4, c, 64, 90);
+      }
+      // and the odd hanging cable
+      if (hash(i * 9.2) > 0.82) {
+        ctx.strokeStyle = '#101a2c';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(x + 30, c + 4);
+        ctx.quadraticCurveTo(x + 38, c + 26, x + 46, c + 8);
+        ctx.stroke();
+      }
     }
   }
 
@@ -1000,6 +1109,7 @@
     ctx.fillRect(-30, -30, W + 60, groundY() + 30);
 
     drawShip();
+    drawCeiling();
 
     drawClutter();
 
@@ -1035,7 +1145,7 @@
     for (const d of doorsNear(camX - 200, camX + W + 200)) {
       const x = d.x - camX;
       if (x < -140 || x > W + 140) continue;
-      const top = groundY() - 190, hgt = 190;
+      const top = ceilingY(), hgt = CEIL_H;         // floor to ceiling
 
       ctx.fillStyle = '#101a2c';                     // the frame
       ctx.fillRect(x - 34, top - 14, 68, hgt + 14);
@@ -1053,7 +1163,7 @@
         ctx.fillStyle = '#3a4c6d';                   // shut
         ctx.fillRect(x - 30, top, 60, hgt);
         ctx.fillStyle = '#2b3a56';
-        for (let b2 = 0; b2 < 5; b2++) ctx.fillRect(x - 30, top + 10 + b2 * 36, 60, 6);
+        for (let b2 = 0; b2 * 36 + 10 < hgt; b2++) ctx.fillRect(x - 30, top + 10 + b2 * 36, 60, 6);
         ctx.fillStyle = '#101a2c';                   // the seam down the middle
         ctx.fillRect(x - 2, top, 4, hgt);
         ctx.fillStyle = '#ff8a7a';
