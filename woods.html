@@ -1,0 +1,723 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>THE LONG WOODS</title>
+
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#0e1410">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="The Long Woods">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="icon" href="icon-192.png">
+
+<style>
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: #0e1410; color: #e7f0e4;
+    font-family: system-ui, sans-serif;
+    -webkit-user-select: none; user-select: none;
+    overscroll-behavior: none; touch-action: none;
+  }
+  canvas { display: block; cursor: pointer; }
+</style>
+</head>
+<body>
+
+<canvas id="screen"></canvas>
+
+<script>
+// ===================================================================
+//  THE LONG WOODS
+//
+//  Walk right. Things want to eat you. Hit them with a sword.
+//
+//  Every monster you beat makes you a little bigger, and the woods
+//  get a little meaner the further in you go - so the question is
+//  never "can I beat this one" but "am I strong enough YET".
+// ===================================================================
+
+  const canvas = document.getElementById('screen');
+  const ctx = canvas.getContext('2d');
+
+  let W = 0, H = 0;
+  function resize() {
+    W = canvas.width  = canvas.clientWidth  = window.innerWidth;
+    H = canvas.height = canvas.clientHeight = window.innerHeight;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+  // Same number in, same number out, for ever. The woods are built from
+  // this, so the trees and platforms 500 paces ahead are already decided
+  // and do not shuffle about when you walk back.
+  function hash(n) {
+    n = Math.sin(n * 127.1) * 43758.5453;
+    return n - Math.floor(n);
+  }
+
+
+// -------------------------------------------------------------------
+//  THE WORLD
+// -------------------------------------------------------------------
+
+  const GROUND = 0.78;             // how far down the screen the floor is
+  const GRAV = 2100;
+  const JUMP = 720;
+  const RUN = 250;
+
+  function groundY() { return H * GROUND; }
+
+  // Platforms are worked out from where they are, not stored in a list,
+  // so the world can go on for ever without remembering any of it.
+  const PLAT_EVERY = 340;
+  function platformAt(i) {
+    const r = hash(i * 3.7);
+    if (r < 0.42) return null;                       // not every slot has one
+    const x = i * PLAT_EVERY + hash(i * 9.1) * 120;
+    const w = 90 + hash(i * 5.3) * 110;
+    const up = 90 + hash(i * 2.9) * 110;
+    return { x: x, y: groundY() - up, w: w, h: 16 };
+  }
+  function platformsNear(x0, x1) {
+    const out = [];
+    const from = Math.floor(x0 / PLAT_EVERY) - 1, to = Math.floor(x1 / PLAT_EVERY) + 1;
+    for (let i = from; i <= to; i++) {
+      const p = platformAt(i);
+      if (p) out.push(p);
+    }
+    return out;
+  }
+
+
+// -------------------------------------------------------------------
+//  WHAT LIVES OUT THERE
+//
+//  hp and hit grow with how deep into the woods they are, so the same
+//  three monsters stay dangerous the whole way.
+// -------------------------------------------------------------------
+
+  const KINDS = [
+    { name: 'SLIME',  hp: 10, hit: 4,  speed: 60,  xp: 5,  col: [110, 200, 120], r: 26, flies: false },
+    { name: 'BAT',    hp: 7,  hit: 3,  speed: 130, xp: 7,  col: [170, 140, 220], r: 21, flies: true },
+    { name: 'BRUTE',  hp: 30, hit: 9,  speed: 45,  xp: 18, col: [215, 130, 100], r: 36, flies: false }
+  ];
+
+  // One pace is 40 pixels. Depth is what makes everything harder.
+  function depthOf(x) { return Math.max(0, Math.floor(x / 40)); }
+  function meanness(x) { return 1 + depthOf(x) / 220; }
+
+
+// -------------------------------------------------------------------
+//  YOU
+// -------------------------------------------------------------------
+
+  const you = {
+    x: 0, y: 0, vx: 0, vy: 0, onGround: false, face: 1,
+    hp: 20, max: 20, lv: 1, xp: 0, dmg: 6,
+    swing: 0, cool: 0, hurt: 0, coins: 0, best: 0
+  };
+
+  let mobs = [], drops = [], bits = [], floats = [];
+  let camX = 0, dead = false, says = '', saysT = 0, shake = 0;
+  let spawnedTo = 0;
+
+  function say(w) { says = w; saysT = 2.6; }
+
+  function xpNeeded(lv) { return 20 + (lv - 1) * 18; }
+
+  function reset() {
+    you.x = 60; you.y = groundY() - 40; you.vx = 0; you.vy = 0;
+    you.hp = 20; you.max = 20; you.lv = 1; you.xp = 0; you.dmg = 6;
+    you.swing = 0; you.cool = 0; you.hurt = 0; you.coins = 0;
+    mobs = []; drops = []; bits = []; floats = [];
+    camX = 0; dead = false; spawnedTo = 0;
+    say('walk right. hit things.');
+  }
+
+  function levelUp() {
+    you.xp -= xpNeeded(you.lv);
+    you.lv++;
+    you.max += 6;
+    you.hp = you.max;                       // a level up puts you right
+    you.dmg += 3;
+    say('LEVEL ' + you.lv + '!  stronger, and patched up');
+    for (let i = 0; i < 24; i++) {
+      const a = Math.random() * Math.PI * 2, sp = 60 + Math.random() * 200;
+      bits.push({ x: you.x, y: you.y - 20, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+                  life: 0.7, col: [255, 220, 120] });
+    }
+  }
+
+  function giveXp(n) {
+    you.xp += n;
+    while (you.xp >= xpNeeded(you.lv)) levelUp();
+  }
+
+
+// -------------------------------------------------------------------
+//  MONSTERS
+// -------------------------------------------------------------------
+
+  // They are put out ahead of you as you go, never behind - so walking
+  // back down the path you have cleared stays cleared.
+  function spawnAhead() {
+    const upTo = you.x + W + 400;
+    while (spawnedTo < upTo) {
+      spawnedTo += 150 + hash(spawnedTo * 1.7) * 220;
+      if (spawnedTo < 320) continue;                 // a quiet start
+      const r = hash(spawnedTo * 4.3);
+      const deep = depthOf(spawnedTo);
+      let kind = 0;
+      if (r > 0.55) kind = 1;
+      if (r > 0.84 && deep > 25) kind = 2;
+      const k = KINDS[kind];
+      const m = meanness(spawnedTo);
+      mobs.push({
+        kind: kind, x: spawnedTo, y: k.flies ? groundY() - 120 - hash(spawnedTo) * 60
+                                             : groundY() - k.r,
+        vy: 0, hp: Math.round(k.hp * m), max: Math.round(k.hp * m),
+        hit: Math.round(k.hit * m), t: hash(spawnedTo * 8.1) * 6, hurt: 0
+      });
+    }
+  }
+
+  function pop(x, y, col, n) {
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2, sp = 40 + Math.random() * 220;
+      bits.push({ x: x, y: y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 60,
+                  life: 0.4 + Math.random() * 0.4, col: col });
+    }
+    if (bits.length > 260) bits.splice(0, bits.length - 260);
+  }
+
+  function hurtYou(n) {
+    if (you.hurt > 0 || dead) return;         // a moment of mercy after a hit
+    you.hp -= n;
+    you.hurt = 0.8;
+    shake = 0.3;
+    floats.push({ x: you.x, y: you.y - 40, text: '-' + n, life: 1, col: [255, 120, 120] });
+    if (you.hp <= 0) {
+      you.hp = 0; dead = true;
+      you.best = Math.max(you.best, depthOf(you.x));
+      say('the woods got you - tap to go again');
+    }
+  }
+
+
+// -------------------------------------------------------------------
+//  CONTROLS
+// -------------------------------------------------------------------
+
+  const keys = {};
+  window.addEventListener('keydown', function (e) { keys[e.key.toLowerCase()] = true; });
+  window.addEventListener('keyup', function (e) { keys[e.key.toLowerCase()] = false; });
+
+  // Thumbs first: two on the left to walk, two on the right to jump and
+  // swing. Everything else in the game is drawn around what is left.
+  // The size comes FROM the room available, not from a guess. Four
+  // circles at 3.1 radii apart need 8.2 radii plus the margins to fit
+  // across - guessing 62 made the RIGHT and JUMP buttons overlap on a
+  // 430px phone, so one thumb would have pressed both.
+  const SPREAD = 3.1;
+  function padR() {
+    return Math.max(22, Math.min(W * 0.12, (W - 52) / (SPREAD * 2 + 2), 62));
+  }
+  function padY() { return H - padR() - 24; }
+  function btnLeft()  { return { x: 20 + padR(), y: padY(), r: padR() }; }
+  function btnRight() { return { x: 20 + padR() * SPREAD, y: padY(), r: padR() }; }
+  function btnJump()  { return { x: W - 24 - padR() * SPREAD, y: padY(), r: padR() }; }
+  function btnHit()   { return { x: W - 24 - padR(), y: padY(), r: padR() }; }
+
+  let held = { left: false, right: false, jump: false, hit: false };
+  const touches = {};
+
+  function whichButton(x, y) {
+    const list = [['left', btnLeft()], ['right', btnRight()],
+                  ['jump', btnJump()], ['hit', btnHit()]];
+    for (const [name, b] of list) {
+      const dx = x - b.x, dy = y - b.y;
+      // A generous circle - a thumb is not a pixel.
+      if (dx * dx + dy * dy < (b.r * 1.25) * (b.r * 1.25)) return name;
+    }
+    return null;
+  }
+
+  function refreshHeld() {
+    held = { left: false, right: false, jump: false, hit: false };
+    for (const id in touches) {
+      const name = touches[id];
+      if (name) held[name] = true;
+    }
+  }
+
+  canvas.addEventListener('touchstart', function (e) {
+    e.preventDefault();
+    if (dead) { reset(); return; }
+    for (const t of e.changedTouches) {
+      touches[t.identifier] = whichButton(t.clientX, t.clientY);
+    }
+    refreshHeld();
+  }, { passive: false });
+
+  canvas.addEventListener('touchmove', function (e) {
+    e.preventDefault();
+    for (const t of e.changedTouches) {
+      touches[t.identifier] = whichButton(t.clientX, t.clientY);
+    }
+    refreshHeld();
+  }, { passive: false });
+
+  function endTouch(e) {
+    e.preventDefault();
+    for (const t of e.changedTouches) delete touches[t.identifier];
+    refreshHeld();
+  }
+  canvas.addEventListener('touchend', endTouch, { passive: false });
+  canvas.addEventListener('touchcancel', endTouch, { passive: false });
+
+  canvas.addEventListener('mousedown', function (e) {
+    if (dead) { reset(); return; }
+    const b = whichButton(e.clientX, e.clientY);
+    if (b) { touches['mouse'] = b; refreshHeld(); }
+  });
+  window.addEventListener('mouseup', function () {
+    delete touches['mouse']; refreshHeld();
+  });
+
+  function wantLeft()  { return held.left  || keys['arrowleft']  || keys['a']; }
+  function wantRight() { return held.right || keys['arrowright'] || keys['d']; }
+  function wantJump()  { return held.jump  || keys[' '] || keys['arrowup'] || keys['w']; }
+  function wantHit()   { return held.hit   || keys['j'] || keys['k'] || keys['f']; }
+
+
+// -------------------------------------------------------------------
+//  THE GAME
+// -------------------------------------------------------------------
+
+  const SWING_TIME = 0.18, SWING_COOL = 0.34, REACH = 78;
+
+  function swordBox() {
+    return { x: you.x + (you.face > 0 ? 8 : -REACH - 8), y: you.y - 60,
+             w: REACH, h: 66 };
+  }
+
+  function hits(b, mx, my, r) {
+    return mx + r > b.x && mx - r < b.x + b.w && my + r > b.y && my - r < b.y + b.h;
+  }
+
+  function update(dt) {
+    if (saysT > 0) saysT -= dt;
+    if (shake > 0) shake -= dt * 2;
+
+    for (let i = bits.length - 1; i >= 0; i--) {
+      const b = bits[i];
+      b.life -= dt;
+      if (b.life <= 0) { bits.splice(i, 1); continue; }
+      b.x += b.vx * dt; b.y += b.vy * dt; b.vy += GRAV * 0.35 * dt;
+    }
+    for (let i = floats.length - 1; i >= 0; i--) {
+      const f = floats[i];
+      f.life -= dt;
+      if (f.life <= 0) { floats.splice(i, 1); continue; }
+      f.y -= dt * 46;
+    }
+
+    if (dead) return;
+
+    // ---- you ------------------------------------------------------------
+    if (you.hurt > 0) you.hurt -= dt;
+    if (you.cool > 0) you.cool -= dt;
+    if (you.swing > 0) you.swing -= dt;
+
+    let move = 0;
+    if (wantLeft()) move -= 1;
+    if (wantRight()) move += 1;
+    if (move) you.face = move;
+    you.vx = move * RUN;
+
+    if (wantJump() && you.onGround) { you.vy = -JUMP; you.onGround = false; }
+
+    if (wantHit() && you.cool <= 0) {
+      you.swing = SWING_TIME;
+      you.cool = SWING_COOL;
+
+      const box = swordBox();
+      for (let i = mobs.length - 1; i >= 0; i--) {
+        const m = mobs[i], k = KINDS[m.kind];
+        if (!hits(box, m.x, m.y, k.r)) continue;
+        m.hp -= you.dmg;
+        m.hurt = 0.25;
+        floats.push({ x: m.x, y: m.y - k.r, text: '-' + you.dmg, life: 0.9,
+                      col: [255, 220, 140] });
+        pop(m.x, m.y, k.col, 6);
+        if (m.hp <= 0) {
+          pop(m.x, m.y, k.col, 16);
+          giveXp(Math.round(k.xp * meanness(m.x)));
+          // Something to pick up, sometimes.
+          const roll = hash(m.x * 13.3);
+          if (roll < 0.28) drops.push({ x: m.x, y: m.y, kind: 'heart', t: 0 });
+          else if (roll < 0.72) drops.push({ x: m.x, y: m.y, kind: 'coin', t: 0 });
+          mobs.splice(i, 1);
+        }
+      }
+    }
+
+    you.x += you.vx * dt;
+    you.vy += GRAV * dt;
+    you.y += you.vy * dt;
+    if (you.x < 20) you.x = 20;
+
+    // land on the ground, or on a platform on the way down
+    you.onGround = false;
+    if (you.y >= groundY()) { you.y = groundY(); you.vy = 0; you.onGround = true; }
+    if (you.vy >= 0) {
+      for (const p of platformsNear(camX - 200, camX + W + 200)) {
+        const wasAbove = you.y - you.vy * dt <= p.y + 2;
+        if (wasAbove && you.y >= p.y && you.y <= p.y + 26 &&
+            you.x > p.x - 14 && you.x < p.x + p.w + 14) {
+          you.y = p.y; you.vy = 0; you.onGround = true;
+        }
+      }
+    }
+
+    // ---- the monsters ----------------------------------------------------
+    spawnAhead();
+    for (const m of mobs) {
+      const k = KINDS[m.kind];
+      if (m.hurt > 0) m.hurt -= dt;
+      m.t += dt;
+
+      const gap = you.x - m.x;
+      const near = Math.abs(gap) < W * 0.7;
+      if (near) {
+        const dir = gap > 0 ? 1 : -1;
+        m.x += dir * k.speed * dt;
+        if (k.flies) {
+          // Bats bob, so they are awkward to time.
+          m.y = groundY() - 130 + Math.sin(m.t * 2.4) * 46;
+        }
+      }
+
+      if (Math.abs(m.x - you.x) < k.r + 16 && Math.abs(m.y - you.y + 22) < k.r + 26) {
+        hurtYou(m.hit);
+      }
+    }
+
+    // ---- picking things up ------------------------------------------------
+    for (let i = drops.length - 1; i >= 0; i--) {
+      const d = drops[i];
+      d.t += dt;
+      if (Math.abs(d.x - you.x) < 34 && Math.abs(d.y - you.y + 20) < 44) {
+        if (d.kind === 'heart') {
+          you.hp = Math.min(you.max, you.hp + 8);
+          floats.push({ x: you.x, y: you.y - 50, text: '+8', life: 1, col: [140, 255, 150] });
+        } else {
+          you.coins++;
+          floats.push({ x: you.x, y: you.y - 50, text: '+1', life: 1, col: [255, 215, 120] });
+        }
+        drops.splice(i, 1);
+      }
+    }
+
+    // ---- the camera --------------------------------------------------------
+    const want = you.x - W * 0.34;
+    camX += (want - camX) * Math.min(1, dt * 6);
+    if (camX < 0) camX = 0;
+
+    you.best = Math.max(you.best, depthOf(you.x));
+  }
+
+
+// -------------------------------------------------------------------
+//  DRAWING
+// -------------------------------------------------------------------
+
+  function rgb(v) { return 'rgb(' + (v[0]|0) + ',' + (v[1]|0) + ',' + (v[2]|0) + ')'; }
+
+  function drawTrees() {
+    // Two rows of trees at different speeds, which is the cheapest way
+    // to make flat ground feel like somewhere.
+    // Three rows now, and tall enough to fill the sky - two short rows
+    // left most of the screen an empty green wall.
+    for (let layer = 0; layer < 3; layer++) {
+      const speed = [0.12, 0.28, 0.52][layer];
+      // The nearest row is spread WIDE apart. Close together, their
+      // trunks lined up into a picket fence across the whole floor.
+      const step = [120, 132, 210][layer];
+      const shade = ['#132018', '#17271c', '#1d3123'][layer];
+      const from = Math.floor((camX * speed) / step) - 1;
+      for (let i = from; i < from + Math.ceil(W / step) + 3; i++) {
+        const x = i * step - camX * speed + hash(i * 2.1 + layer) * 40;
+        const tall = [0.62, 0.5, 0.4][layer];
+        const hgt = groundY() * tall + hash(i * 3.3 + layer) * groundY() * 0.28;
+        const wide = hgt * 0.26;
+        ctx.fillStyle = shade;
+        // Only the near row gets a trunk - the far ones are just canopy
+        // over the horizon, and their trunks only made stripes.
+        if (layer === 2) {
+          ctx.fillRect(x - hgt * 0.028, groundY() - hgt * 0.72, hgt * 0.056, hgt * 0.72);
+        }
+        // Three stacked triangles make a fir instead of an arrow.
+        for (let t = 0; t < 3; t++) {
+          const top = groundY() - hgt * (1.02 - t * 0.24);
+          const spread = wide * (0.6 + t * 0.28);
+          ctx.beginPath();
+          ctx.moveTo(x - spread, top + hgt * 0.30);
+          ctx.lineTo(x, top);
+          ctx.lineTo(x + spread, top + hgt * 0.30);
+          ctx.closePath(); ctx.fill();
+        }
+      }
+    }
+  }
+
+  function drawHero() {
+    const x = you.x - camX, y = you.y;
+    const flash = you.hurt > 0 && Math.floor(you.hurt * 20) % 2 === 0;
+    ctx.globalAlpha = flash ? 0.4 : 1;
+
+    ctx.fillStyle = '#5b8cd6';                       // body
+    ctx.fillRect(x - 15, y - 52, 30, 38);
+    ctx.fillStyle = '#f0c9a0';                       // head
+    ctx.fillRect(x - 13, y - 78, 26, 26);
+    ctx.fillStyle = '#3a2a20';                       // hair
+    ctx.fillRect(x - 14, y - 81, 28, 9);
+    ctx.fillStyle = '#1b2418';                       // eyes
+    ctx.fillRect(x + (you.face > 0 ? 3 : -8), y - 68, 5, 5);
+    ctx.fillStyle = '#2b3d5c';                       // legs
+    ctx.fillRect(x - 12, y - 16, 9, 16);
+    ctx.fillRect(x + 3, y - 16, 9, 16);
+
+    // The sword, swung as an arc so you can see the reach.
+    if (you.swing > 0) {
+      const t = 1 - you.swing / SWING_TIME;
+      const a = (-0.9 + t * 1.9) * you.face;
+      ctx.save();
+      ctx.translate(x, y - 44);
+      ctx.rotate(a);
+      ctx.fillStyle = '#d8e4ee';
+      ctx.fillRect(0, -4, you.face > 0 ? REACH : -REACH, 8);
+      ctx.fillStyle = '#8a6a3a';
+      ctx.fillRect(you.face > 0 ? -8 : 0, -5, 8, 10);
+      ctx.restore();
+
+      ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+      ctx.lineWidth = 5;
+      ctx.beginPath();
+      ctx.arc(x, y - 44, REACH * 0.85,
+              you.face > 0 ? -0.9 : Math.PI + 0.9,
+              you.face > 0 ? 0.9 : Math.PI - 0.9, you.face < 0);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawMob(m) {
+    const k = KINDS[m.kind];
+    const x = m.x - camX, y = m.y;
+    const col = m.hurt > 0 ? [255, 255, 255] : k.col;
+
+    if (m.kind === 0) {                              // SLIME
+      ctx.fillStyle = rgb(col);
+      ctx.beginPath();
+      ctx.ellipse(x, y - k.r * 0.5, k.r, k.r * 0.72, 0, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (m.kind === 1) {                       // BAT
+      ctx.fillStyle = rgb(col);
+      ctx.beginPath(); ctx.arc(x, y, k.r * 0.7, 0, Math.PI * 2); ctx.fill();
+      const flap = Math.sin(m.t * 14) * 8;
+      ctx.beginPath();
+      ctx.moveTo(x - 4, y);
+      ctx.lineTo(x - k.r * 1.7, y - 8 + flap);
+      ctx.lineTo(x - 6, y + 8);
+      ctx.closePath(); ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(x + 4, y);
+      ctx.lineTo(x + k.r * 1.7, y - 8 + flap);
+      ctx.lineTo(x + 6, y + 8);
+      ctx.closePath(); ctx.fill();
+    } else {                                         // BRUTE
+      ctx.fillStyle = rgb(col);
+      ctx.fillRect(x - k.r, y - k.r * 1.6, k.r * 2, k.r * 1.6);
+      ctx.fillStyle = rgb([col[0] * 0.7, col[1] * 0.7, col[2] * 0.7]);
+      ctx.fillRect(x - k.r, y - k.r * 1.6, k.r * 2, 8);
+    }
+
+    ctx.fillStyle = '#141a12';
+    for (let e = -1; e <= 1; e += 2) {
+      ctx.beginPath();
+      ctx.arc(x + e * k.r * 0.32, y - k.r * (m.kind === 2 ? 1.0 : 0.6), 3.4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    if (m.hp < m.max) {
+      ctx.fillStyle = 'rgba(0,0,0,0.5)';
+      ctx.fillRect(x - k.r, y - k.r * 1.9 - 12, k.r * 2, 5);
+      ctx.fillStyle = '#8fe07a';
+      ctx.fillRect(x - k.r, y - k.r * 1.9 - 12, k.r * 2 * (m.hp / m.max), 5);
+    }
+  }
+
+  function ring(b, label, on, col) {
+    ctx.fillStyle = on ? 'rgba(255,255,255,0.20)' : 'rgba(255,255,255,0.07)';
+    ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2); ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = on ? col : 'rgba(255,255,255,0.22)';
+    ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2); ctx.stroke();
+    ctx.textAlign = 'center';
+    ctx.font = 'bold ' + b.r * 0.62 + 'px system-ui, sans-serif';
+    ctx.fillStyle = on ? col : 'rgba(231,240,228,0.75)';
+    ctx.fillText(label, b.x, b.y + b.r * 0.22);
+  }
+
+  function draw() {
+    ctx.save();
+    if (shake > 0) ctx.translate((Math.random() - 0.5) * shake * 16,
+                                 (Math.random() - 0.5) * shake * 16);
+
+    const sky = ctx.createLinearGradient(0, 0, 0, groundY());
+    sky.addColorStop(0, '#15251f');
+    sky.addColorStop(1, '#22322a');
+    ctx.fillStyle = sky;
+    ctx.fillRect(-30, -30, W + 60, groundY() + 30);
+
+    drawTrees();
+
+    ctx.fillStyle = '#2e3d24';
+    ctx.fillRect(-30, groundY(), W + 60, H - groundY() + 30);
+    ctx.fillStyle = '#3d5130';
+    ctx.fillRect(-30, groundY(), W + 60, 8);
+
+    for (const p of platformsNear(camX - 200, camX + W + 200)) {
+      ctx.fillStyle = '#3d5130';
+      ctx.fillRect(p.x - camX, p.y, p.w, p.h);
+      ctx.fillStyle = '#4d6640';
+      ctx.fillRect(p.x - camX, p.y, p.w, 5);
+    }
+
+    for (const d of drops) {
+      const x = d.x - camX, y = d.y - 10 + Math.sin(d.t * 3) * 5;
+      if (d.kind === 'heart') {
+        ctx.fillStyle = '#ff7b8a';
+        ctx.beginPath(); ctx.arc(x - 5, y, 6, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(x + 5, y, 6, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(x - 10, y + 2); ctx.lineTo(x, y + 15); ctx.lineTo(x + 10, y + 2);
+        ctx.closePath(); ctx.fill();
+      } else {
+        ctx.fillStyle = '#ffd76a';
+        ctx.beginPath(); ctx.arc(x, y, 8, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#c9a233';
+        ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+
+    for (const m of mobs) {
+      if (m.x - camX < -120 || m.x - camX > W + 120) continue;
+      drawMob(m);
+    }
+    drawHero();
+
+    for (const b of bits) {
+      ctx.fillStyle = 'rgba(' + (b.col[0]|0) + ',' + (b.col[1]|0) + ',' + (b.col[2]|0) +
+                      ',' + clamp(b.life * 2, 0, 1) + ')';
+      ctx.fillRect(b.x - camX, b.y, 4, 4);
+    }
+    for (const f of floats) {
+      ctx.textAlign = 'center';
+      ctx.font = 'bold 18px system-ui, sans-serif';
+      ctx.fillStyle = 'rgba(' + f.col[0] + ',' + f.col[1] + ',' + f.col[2] + ',' +
+                      clamp(f.life, 0, 1) + ')';
+      ctx.fillText(f.text, f.x - camX, f.y);
+    }
+
+    ctx.restore();
+
+    // ---- the bar along the top --------------------------------------------
+    const bw = Math.min(W * 0.42, 240);
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.fillRect(14, 14, bw, 18);
+    ctx.fillStyle = you.hp < you.max * 0.3 ? '#ff6a6a' : '#7ee08f';
+    ctx.fillRect(14, 14, bw * clamp(you.hp / you.max, 0, 1), 18);
+    ctx.textAlign = 'left';
+    ctx.font = 'bold 12px system-ui, sans-serif';
+    ctx.fillStyle = '#0e1410';
+    ctx.fillText(Math.ceil(you.hp) + ' / ' + you.max, 20, 27);
+
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.fillRect(14, 36, bw, 8);
+    ctx.fillStyle = '#8ab4ff';
+    ctx.fillRect(14, 36, bw * clamp(you.xp / xpNeeded(you.lv), 0, 1), 8);
+
+    ctx.font = 'bold ' + Math.min(W * 0.04, 20) + 'px system-ui, sans-serif';
+    ctx.fillStyle = '#e7f0e4';
+    ctx.fillText('LV ' + you.lv, 18 + bw, 30);
+
+    ctx.textAlign = 'right';
+    ctx.font = 'bold ' + Math.min(W * 0.045, 24) + 'px system-ui, sans-serif';
+    ctx.fillStyle = '#ffd76a';
+    ctx.fillText(you.coins, W - 16, 30);
+    ctx.font = '12px system-ui, sans-serif';
+    ctx.fillStyle = '#8fa08a';
+    ctx.fillText(depthOf(you.x) + ' paces in', W - 16, 46);
+
+    // ---- the buttons -------------------------------------------------------
+    ring(btnLeft(), '<', wantLeft(), '#e7f0e4');
+    ring(btnRight(), '>', wantRight(), '#e7f0e4');
+    ring(btnJump(), 'JUMP', wantJump(), '#8ab4ff');
+    ring(btnHit(), 'HIT', wantHit(), '#ffd76a');
+
+    if (saysT > 0) {
+      ctx.textAlign = 'center';
+      ctx.font = 'bold ' + Math.min(W * 0.038, 20) + 'px system-ui, sans-serif';
+      const wid = ctx.measureText(says).width;
+      const y = H * 0.2;
+      ctx.fillStyle = 'rgba(14,20,16,' + clamp(saysT, 0, 1) * 0.85 + ')';
+      ctx.fillRect(W / 2 - wid / 2 - 14, y - 22, wid + 28, 30);
+      ctx.fillStyle = 'rgba(231,240,228,' + clamp(saysT, 0, 1) + ')';
+      ctx.fillText(says, W / 2, y);
+    }
+
+    if (dead) {
+      ctx.fillStyle = 'rgba(14,20,16,0.72)';
+      ctx.fillRect(0, 0, W, H);
+      ctx.textAlign = 'center';
+      ctx.font = 'bold ' + Math.min(W * 0.1, 56) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#ff8a7a';
+      ctx.fillText('DOWN YOU GO', W / 2, H * 0.42);
+      ctx.font = 'bold ' + Math.min(W * 0.045, 24) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#e7f0e4';
+      ctx.fillText('level ' + you.lv + '  -  ' + depthOf(you.x) + ' paces in', W / 2, H * 0.5);
+      ctx.font = Math.min(W * 0.035, 18) + 'px system-ui, sans-serif';
+      ctx.fillStyle = '#8fa08a';
+      ctx.fillText('best so far: ' + you.best + ' paces', W / 2, H * 0.56);
+      ctx.fillText('tap anywhere to walk in again', W / 2, H * 0.63);
+    }
+  }
+
+
+// -------------------------------------------------------------------
+//  THE LOOP
+// -------------------------------------------------------------------
+
+  let last = 0;
+  function frame(now) {
+    const dt = Math.min(0.05, Math.max(0.0005, (now - last) / 1000));
+    last = now;
+    update(dt);
+    draw();
+    requestAnimationFrame(frame);
+  }
+
+  reset();
+  requestAnimationFrame(frame);
+
+</script>
+</body>
+</html>
