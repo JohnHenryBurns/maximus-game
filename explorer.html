@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>The Explorer</title>
+<style>
+  html, body { margin: 0; background: #000; height: 100%; overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh;
+           /* keeps the chunky retro pixels sharp instead of blurry */
+           image-rendering: pixelated; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+// =====================================================================
+// THE EXPLORER  —  a 3D adventure with levels!
+//
+// THE BIG 3D TRICK (same as before):
+// For every column of pixels, shoot an invisible laser line from the
+// explorer's eyes. It walks forward in baby steps until it smacks
+// something. Close thing = draw it TALL. Far thing = draw it short.
+// 320 lasers later, your brain says "that's a forest."
+// =====================================================================
+
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const W = 320, H = 200;      // we draw small + chunky, CSS stretches it
+canvas.width = W;
+canvas.height = H;
+
+// ---------------------------------------------------------------------
+// GAME STATE — which screen are we on?
+// This is just a variable. 'menu' = level select, 'playing' = in a level.
+// ---------------------------------------------------------------------
+let screen = 'menu';
+let current = null;          // the level we're playing right now
+let lockedMessageTimer = 0;  // for teasing you about un-invented levels
+
+// ---------------------------------------------------------------------
+// THE LEVELS. Each level is a package: a name, its colors, and its MAP.
+// Map letters:  T = tree   # = stone wall   . = ground you can walk on
+// Levels 2 and 3 don't exist yet — the game designer (Max) hasn't
+// invented them!
+// ---------------------------------------------------------------------
+const LEVELS = [
+  {
+    name: 'The Forest',
+    unlocked: true,
+    sky: '#8fd4ff',          // daytime blue
+    ground: '#4a7c3a',       // grass
+    start: { x: 1.5, y: 14.5, angle: -1.2 },   // bottom-left clearing
+    map: [
+      'TTTTTTTTTTTTTTTT',
+      'T......T.......T',
+      'T.TT...T..TTT..T',
+      'T.TT...........T',
+      'T........TT..T.T',
+      'T..T..........TT',
+      'T......TTT.....T',
+      'T.TTT..TTT..T..T',
+      'T............T.T',
+      'T..T...........T',
+      'TT.....TT..TT..T',
+      'T...T..TT......T',
+      'T.T............T',
+      'T....TTT...T.TTT',
+      'T..............T',
+      'TTTTTTTTTTTTTTTT',
+    ],
+  },
+  { name: '???', unlocked: false },
+  { name: '???', unlocked: false },
+];
+
+// Is this spot something solid (tree, wall, edge of the world)?
+function isWall(x, y) {
+  const row = current.map[Math.floor(y)];
+  if (!row) return true;
+  const cell = row[Math.floor(x)];
+  return cell !== undefined && cell !== '.';
+}
+
+// What EXACTLY is at this spot? ('T', '#', or '.')
+function cellAt(x, y) {
+  const row = current.map[Math.floor(y)];
+  return row ? row[Math.floor(x)] : '#';
+}
+
+// ---------------------------------------------------------------------
+// THE EXPLORER (you)
+// ---------------------------------------------------------------------
+const player = { x: 1.5, y: 1.5, angle: 0 };
+const walkSpeed = 2.2;       // map squares per second
+const turnSpeed = 2.4;       // spin speed
+
+function startLevel(i) {
+  current = LEVELS[i];
+  player.x = current.start.x;
+  player.y = current.start.y;
+  player.angle = current.start.angle;
+  screen = 'playing';
+}
+
+// ---------------------------------------------------------------------
+// A pocket randomness machine. Feed it the same number, it always spits
+// out the same "random-looking" number between 0 and 1. That's how every
+// tree gets its OWN shade of green that doesn't flicker every frame.
+// ---------------------------------------------------------------------
+function noise(n) {
+  const s = Math.sin(n * 127.1) * 43758.5453;
+  return s - Math.floor(s);
+}
+
+// ---------------------------------------------------------------------
+// THE LASER LINE — now it also reports WHAT it hit and WHERE
+// ---------------------------------------------------------------------
+function castRay(angle) {
+  const step = 0.02;
+  const dx = Math.cos(angle) * step;
+  const dy = Math.sin(angle) * step;
+  let x = player.x, y = player.y;
+  for (let dist = 0; dist < 24; dist += step) {
+    x += dx;
+    y += dy;
+    if (isWall(x, y)) return { dist, cell: cellAt(x, y), x, y };
+  }
+  return { dist: 24, cell: '#', x, y };
+}
+
+// ---------------------------------------------------------------------
+// DRAWING the 3D world
+// ---------------------------------------------------------------------
+const FOV = Math.PI / 3;     // how wide your eyes see (60 degrees)
+
+function draw3D() {
+  ctx.fillStyle = current.sky;
+  ctx.fillRect(0, 0, W, H / 2);
+  ctx.fillStyle = current.ground;
+  ctx.fillRect(0, H / 2, W, H / 2);
+
+  for (let col = 0; col < W; col++) {
+    const rayAngle = player.angle - FOV / 2 + FOV * (col / W);
+    const hit = castRay(rayAngle);
+
+    // fisheye fix — stops walls looking bendy at the screen edges
+    const dist = hit.dist * Math.cos(rayAngle - player.angle);
+
+    let sliceHeight = Math.min(H, H / dist);
+
+    // "bright" = 1 up close, 0 far away. Far stuff fades into the mist.
+    const bright = Math.max(0, 1 - dist / 10);
+
+    if (hit.cell === 'T') {
+      // ---- a TREE ----
+      // every tree picks its own green (same tree = same green forever)
+      const treeId = Math.floor(hit.x) + Math.floor(hit.y) * 16;
+      const ownGreen = 90 + noise(treeId) * 60;
+
+      // raggedy leafy top: nudge each column's height a little
+      sliceHeight *= 0.75 + 0.3 * noise(hit.x * 7.3 + hit.y * 3.1);
+
+      const g = Math.floor(ownGreen * bright + 60 * (1 - bright));
+      const r = Math.floor(30 * bright + 100 * (1 - bright));
+      const b = Math.floor(30 * bright + 140 * (1 - bright));
+      ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+    } else {
+      // ---- a STONE WALL ----
+      const shade = Math.floor(60 + 140 * bright);
+      ctx.fillStyle = `rgb(${shade}, ${shade}, ${Math.floor(shade * 1.1)})`;
+    }
+
+    ctx.fillRect(col, (H - sliceHeight) / 2, 1, sliceHeight);
+  }
+
+  drawMinimap();
+
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.font = '7px monospace';
+  ctx.textAlign = 'right';
+  ctx.fillText('Esc = levels', W - 4, H - 5);
+}
+
+// ---------------------------------------------------------------------
+// MINIMAP — proof that those strings up top ARE the world
+// ---------------------------------------------------------------------
+function drawMinimap() {
+  const size = 3;
+  for (let y = 0; y < current.map.length; y++) {
+    for (let x = 0; x < current.map[y].length; x++) {
+      const c = current.map[y][x];
+      ctx.fillStyle = c === '.' ? 'rgba(0,0,0,0.35)'
+                    : c === 'T' ? '#2e7d32'
+                    : '#8892aa';
+      ctx.fillRect(4 + x * size, 4 + y * size, size, size);
+    }
+  }
+  ctx.fillStyle = '#ffd23f';   // you are the yellow dot
+  ctx.fillRect(4 + player.x * size - 1, 4 + player.y * size - 1, 2, 2);
+}
+
+// ---------------------------------------------------------------------
+// THE MENU SCREEN — pick your level
+// ---------------------------------------------------------------------
+// Where each level's card sits on screen (so clicks know what they hit)
+const cards = [
+  { x: 25,  y: 85, w: 82, h: 62 },
+  { x: 119, y: 85, w: 82, h: 62 },
+  { x: 213, y: 85, w: 82, h: 62 },
+];
+
+function drawMenu() {
+  // night-sky background with stars
+  ctx.fillStyle = '#0d1030';
+  ctx.fillRect(0, 0, W, H);
+  for (let i = 0; i < 60; i++) {
+    ctx.fillStyle = `rgba(255,255,255,${0.3 + noise(i) * 0.7})`;
+    ctx.fillRect(Math.floor(noise(i * 3.3) * W), Math.floor(noise(i * 7.7) * H), 1, 1);
+  }
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffd23f';
+  ctx.font = 'bold 22px monospace';
+  ctx.fillText('THE EXPLORER', W / 2, 45);
+  ctx.fillStyle = '#9fb4ff';
+  ctx.font = '9px monospace';
+  ctx.fillText('choose your level', W / 2, 62);
+
+  for (let i = 0; i < LEVELS.length; i++) {
+    const c = cards[i];
+    const lv = LEVELS[i];
+    ctx.fillStyle = lv.unlocked ? '#1d4d2b' : '#20233d';
+    ctx.fillRect(c.x, c.y, c.w, c.h);
+    ctx.strokeStyle = lv.unlocked ? '#7ddf8f' : '#3a3f66';
+    ctx.strokeRect(c.x + 0.5, c.y + 0.5, c.w - 1, c.h - 1);
+
+    ctx.fillStyle = lv.unlocked ? '#ffffff' : '#666b99';
+    ctx.font = 'bold 10px monospace';
+    ctx.fillText(String(i + 1), c.x + c.w / 2, c.y + 18);
+    ctx.font = '9px monospace';
+    ctx.fillText(lv.name, c.x + c.w / 2, c.y + 36);
+    ctx.font = '8px monospace';
+    ctx.fillText(lv.unlocked ? 'press 1 or tap' : 'locked', c.x + c.w / 2, c.y + 52);
+  }
+
+  // tease message when you poke a level that doesn't exist yet
+  if (lockedMessageTimer > 0) {
+    ctx.fillStyle = '#ff9f43';
+    ctx.font = '9px monospace';
+    ctx.fillText("You haven't invented that level yet!", W / 2, 168);
+  }
+}
+
+// ---------------------------------------------------------------------
+// CONTROLS — keyboard
+// ---------------------------------------------------------------------
+const keys = {};
+addEventListener('keydown', e => {
+  keys[e.key.toLowerCase()] = true;
+
+  if (screen === 'menu') {
+    // number keys pick a level
+    const n = parseInt(e.key) - 1;
+    if (n >= 0 && n < LEVELS.length) {
+      if (LEVELS[n].unlocked) startLevel(n);
+      else lockedMessageTimer = 2;
+    }
+  } else if (e.key === 'Escape') {
+    screen = 'menu';         // back to the level select
+  }
+});
+addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+
+// ---------------------------------------------------------------------
+// CONTROLS — mouse clicks and finger taps on the menu cards
+// The canvas is stretched to fill the screen, so we have to shrink the
+// click position back down to our little 320x200 world first.
+// ---------------------------------------------------------------------
+function toCanvasXY(clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: (clientX - rect.left) / rect.width * W,
+    y: (clientY - rect.top) / rect.height * H,
+  };
+}
+
+function tryPickLevel(clientX, clientY) {
+  const p = toCanvasXY(clientX, clientY);
+  for (let i = 0; i < LEVELS.length; i++) {
+    const c = cards[i];
+    if (p.x > c.x && p.x < c.x + c.w && p.y > c.y && p.y < c.y + c.h) {
+      if (LEVELS[i].unlocked) startLevel(i);
+      else lockedMessageTimer = 2;
+    }
+  }
+}
+
+addEventListener('click', e => {
+  if (screen === 'menu') tryPickLevel(e.clientX, e.clientY);
+});
+
+// ---------------------------------------------------------------------
+// CONTROLS — touch (phones and tablets)
+// In the menu: tap a card. In the game: left half = walk, right = turn.
+// ---------------------------------------------------------------------
+const touches = {};
+addEventListener('touchstart', e => {
+  e.preventDefault();
+  if (screen === 'menu') {
+    const t = e.changedTouches[0];
+    tryPickLevel(t.clientX, t.clientY);
+    return;
+  }
+  for (const t of e.changedTouches) {
+    touches[t.identifier] = { startX: t.clientX, startY: t.clientY,
+                              x: t.clientX, y: t.clientY };
+  }
+}, { passive: false });
+addEventListener('touchmove', e => {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    const f = touches[t.identifier];
+    if (f) { f.x = t.clientX; f.y = t.clientY; }
+  }
+}, { passive: false });
+addEventListener('touchend', e => {
+  for (const t of e.changedTouches) delete touches[t.identifier];
+});
+addEventListener('touchcancel', e => {
+  for (const t of e.changedTouches) delete touches[t.identifier];
+});
+
+function readTouch() {
+  let walk = 0, turn = 0;
+  for (const id in touches) {
+    const f = touches[id];
+    if (f.startX < innerWidth / 2) {
+      walk = Math.max(-1, Math.min(1, (f.startY - f.y) / 60));
+    } else {
+      turn = Math.max(-1, Math.min(1, (f.x - f.startX) / 60));
+    }
+  }
+  return { walk, turn };
+}
+
+// ---------------------------------------------------------------------
+// UPDATE — moves you around (only while playing)
+// dt = seconds since last frame; multiplying by it keeps the game the
+// same speed on fast and slow computers.
+// ---------------------------------------------------------------------
+function update(dt) {
+  if (lockedMessageTimer > 0) lockedMessageTimer -= dt;
+  if (screen !== 'playing') return;
+
+  const touch = readTouch();
+  let walk = touch.walk;
+  if (keys['w'] || keys['arrowup'])   walk = 1;
+  if (keys['s'] || keys['arrowdown']) walk = -1;
+
+  let turn = touch.turn;
+  if (keys['a'] || keys['arrowleft'])  turn = -1;
+  if (keys['d'] || keys['arrowright']) turn = 1;
+
+  player.angle += turn * turnSpeed * dt;
+
+  const newX = player.x + Math.cos(player.angle) * walk * walkSpeed * dt;
+  const newY = player.y + Math.sin(player.angle) * walk * walkSpeed * dt;
+
+  // check x and y separately so you slide along trees instead of sticking
+  if (!isWall(newX, player.y)) player.x = newX;
+  if (!isWall(player.x, newY)) player.y = newY;
+}
+
+// ---------------------------------------------------------------------
+// THE GAME LOOP — update, draw, repeat forever, really fast
+// ---------------------------------------------------------------------
+let lastTime = 0;
+function loop(time) {
+  const dt = Math.min(0.05, (time - lastTime) / 1000);
+  lastTime = time;
+  update(dt);
+  if (screen === 'menu') drawMenu();
+  else draw3D();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
