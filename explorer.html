@@ -6,107 +6,48 @@
 <title>The Explorer</title>
 <style>
   html, body { margin: 0; background: #000; height: 100%; overflow: hidden; }
-  canvas { display: block; width: 100vw; height: 100vh;
-           /* keeps the chunky retro pixels sharp instead of blurry */
-           image-rendering: pixelated; }
+  canvas { display: block; }
 </style>
 </head>
 <body>
 <canvas id="game"></canvas>
 <script>
 // =====================================================================
-// THE EXPLORER  —  a 3D adventure with levels!
+// THE EXPLORER — top-down adventure!
 //
-// THE BIG 3D TRICK (same as before):
-// For every column of pixels, shoot an invisible laser line from the
-// explorer's eyes. It walks forward in baby steps until it smacks
-// something. Close thing = draw it TALL. Far thing = draw it short.
-// 320 lasers later, your brain says "that's a forest."
+// You float above the world like a friendly drone, watching your
+// explorer walk around a big open forest. Two tricks make it work:
+//
+// 1. THE CAMERA: the world is way bigger than the screen. Every frame
+//    we figure out where the camera is (following you) and slide the
+//    whole drawing over, so you stay near the middle of the screen.
+//
+// 2. DRAW ORDER: things LOWER on the screen get drawn IN FRONT. That's
+//    why you can walk behind a tree and peek out from under its leaves.
 // =====================================================================
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
-const W = 320, H = 200;      // we draw small + chunky, CSS stretches it
-canvas.width = W;
-canvas.height = H;
+
+// make the canvas fill the whole window, even if the window changes size
+function fitCanvas() {
+  canvas.width = innerWidth;
+  canvas.height = innerHeight;
+}
+fitCanvas();
+addEventListener('resize', fitCanvas);
 
 // ---------------------------------------------------------------------
-// GAME STATE — which screen are we on?
-// This is just a variable. 'menu' = level select, 'playing' = in a level.
+// GAME STATE — which screen are we on? 'menu' or 'playing'
 // ---------------------------------------------------------------------
 let screen = 'menu';
-let current = null;          // the level we're playing right now
-let lockedMessageTimer = 0;  // for teasing you about un-invented levels
+let current = null;            // the level being played
+let lockedMessageTimer = 0;
 
 // ---------------------------------------------------------------------
-// THE LEVELS. Each level is a package: a name, its colors, and its MAP.
-// Map letters:  T = tree   # = stone wall   . = ground you can walk on
-// Levels 2 and 3 don't exist yet — the game designer (Max) hasn't
-// invented them!
-// ---------------------------------------------------------------------
-const LEVELS = [
-  {
-    name: 'The Forest',
-    unlocked: true,
-    sky: '#8fd4ff',          // daytime blue
-    ground: '#4a7c3a',       // grass
-    start: { x: 1.5, y: 14.5, angle: -1.2 },   // bottom-left clearing
-    map: [
-      'TTTTTTTTTTTTTTTT',
-      'T......T.......T',
-      'T.TT...T..TTT..T',
-      'T.TT...........T',
-      'T........TT..T.T',
-      'T..T..........TT',
-      'T......TTT.....T',
-      'T.TTT..TTT..T..T',
-      'T............T.T',
-      'T..T...........T',
-      'TT.....TT..TT..T',
-      'T...T..TT......T',
-      'T.T............T',
-      'T....TTT...T.TTT',
-      'T..............T',
-      'TTTTTTTTTTTTTTTT',
-    ],
-  },
-  { name: '???', unlocked: false },
-  { name: '???', unlocked: false },
-];
-
-// Is this spot something solid (tree, wall, edge of the world)?
-function isWall(x, y) {
-  const row = current.map[Math.floor(y)];
-  if (!row) return true;
-  const cell = row[Math.floor(x)];
-  return cell !== undefined && cell !== '.';
-}
-
-// What EXACTLY is at this spot? ('T', '#', or '.')
-function cellAt(x, y) {
-  const row = current.map[Math.floor(y)];
-  return row ? row[Math.floor(x)] : '#';
-}
-
-// ---------------------------------------------------------------------
-// THE EXPLORER (you)
-// ---------------------------------------------------------------------
-const player = { x: 1.5, y: 1.5, angle: 0 };
-const walkSpeed = 2.2;       // map squares per second
-const turnSpeed = 2.4;       // spin speed
-
-function startLevel(i) {
-  current = LEVELS[i];
-  player.x = current.start.x;
-  player.y = current.start.y;
-  player.angle = current.start.angle;
-  screen = 'playing';
-}
-
-// ---------------------------------------------------------------------
-// A pocket randomness machine. Feed it the same number, it always spits
-// out the same "random-looking" number between 0 and 1. That's how every
-// tree gets its OWN shade of green that doesn't flicker every frame.
+// A pocket randomness machine: feed it the same number, get the same
+// "random-looking" answer every time. That's how the forest looks
+// scattered and wild, but every tree stays in its spot forever.
 // ---------------------------------------------------------------------
 function noise(n) {
   const s = Math.sin(n * 127.1) * 43758.5453;
@@ -114,142 +55,205 @@ function noise(n) {
 }
 
 // ---------------------------------------------------------------------
-// THE LASER LINE — now it also reports WHAT it hit and WHERE
+// THE LEVELS
 // ---------------------------------------------------------------------
-function castRay(angle) {
-  const step = 0.02;
-  const dx = Math.cos(angle) * step;
-  const dy = Math.sin(angle) * step;
-  let x = player.x, y = player.y;
-  for (let dist = 0; dist < 24; dist += step) {
-    x += dx;
-    y += dy;
-    if (isWall(x, y)) return { dist, cell: cellAt(x, y), x, y };
-  }
-  return { dist: 24, cell: '#', x, y };
-}
-
-// ---------------------------------------------------------------------
-// DRAWING the 3D world
-// ---------------------------------------------------------------------
-const FOV = Math.PI / 3;     // how wide your eyes see (60 degrees)
-
-function draw3D() {
-  ctx.fillStyle = current.sky;
-  ctx.fillRect(0, 0, W, H / 2);
-  ctx.fillStyle = current.ground;
-  ctx.fillRect(0, H / 2, W, H / 2);
-
-  for (let col = 0; col < W; col++) {
-    const rayAngle = player.angle - FOV / 2 + FOV * (col / W);
-    const hit = castRay(rayAngle);
-
-    // fisheye fix — stops walls looking bendy at the screen edges
-    const dist = hit.dist * Math.cos(rayAngle - player.angle);
-
-    let sliceHeight = Math.min(H, H / dist);
-
-    // "bright" = 1 up close, 0 far away. Far stuff fades into the mist.
-    const bright = Math.max(0, 1 - dist / 10);
-
-    if (hit.cell === 'T') {
-      // ---- a TREE ----
-      // every tree picks its own green (same tree = same green forever)
-      const treeId = Math.floor(hit.x) + Math.floor(hit.y) * 16;
-      const ownGreen = 90 + noise(treeId) * 60;
-
-      // raggedy leafy top: nudge each column's height a little
-      sliceHeight *= 0.75 + 0.3 * noise(hit.x * 7.3 + hit.y * 3.1);
-
-      const g = Math.floor(ownGreen * bright + 60 * (1 - bright));
-      const r = Math.floor(30 * bright + 100 * (1 - bright));
-      const b = Math.floor(30 * bright + 140 * (1 - bright));
-      ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
-    } else {
-      // ---- a STONE WALL ----
-      const shade = Math.floor(60 + 140 * bright);
-      ctx.fillStyle = `rgb(${shade}, ${shade}, ${Math.floor(shade * 1.1)})`;
-    }
-
-    ctx.fillRect(col, (H - sliceHeight) / 2, 1, sliceHeight);
-  }
-
-  drawMinimap();
-
-  ctx.fillStyle = 'rgba(255,255,255,0.7)';
-  ctx.font = '7px monospace';
-  ctx.textAlign = 'right';
-  ctx.fillText('Esc = levels', W - 4, H - 5);
-}
-
-// ---------------------------------------------------------------------
-// MINIMAP — proof that those strings up top ARE the world
-// ---------------------------------------------------------------------
-function drawMinimap() {
-  const size = 3;
-  for (let y = 0; y < current.map.length; y++) {
-    for (let x = 0; x < current.map[y].length; x++) {
-      const c = current.map[y][x];
-      ctx.fillStyle = c === '.' ? 'rgba(0,0,0,0.35)'
-                    : c === 'T' ? '#2e7d32'
-                    : '#8892aa';
-      ctx.fillRect(4 + x * size, 4 + y * size, size, size);
-    }
-  }
-  ctx.fillStyle = '#ffd23f';   // you are the yellow dot
-  ctx.fillRect(4 + player.x * size - 1, 4 + player.y * size - 1, 2, 2);
-}
-
-// ---------------------------------------------------------------------
-// THE MENU SCREEN — pick your level
-// ---------------------------------------------------------------------
-// Where each level's card sits on screen (so clicks know what they hit)
-const cards = [
-  { x: 25,  y: 85, w: 82, h: 62 },
-  { x: 119, y: 85, w: 82, h: 62 },
-  { x: 213, y: 85, w: 82, h: 62 },
+const LEVELS = [
+  {
+    name: 'The Dark Forest',
+    unlocked: true,
+    grass: '#2c4423',          // gloomy, shadowy grass
+    worldW: 2000,              // the world in pixels — much bigger than the screen
+    worldH: 1500,
+    start: { x: 150, y: 1350 },   // the path begins in the bottom-left corner
+  },
+  { name: '???', unlocked: false },
+  { name: '???', unlocked: false },
 ];
 
-function drawMenu() {
-  // night-sky background with stars
-  ctx.fillStyle = '#0d1030';
-  ctx.fillRect(0, 0, W, H);
+// Things that live in the current level (filled in by buildForest)
+let trees = [];
+let flowers = [];
+let pond = null;
+let fireflies = [];
+let stumps = [];
+let zombies = [];
+let emeralds = [];      // dropped treasure waiting to be grabbed
+let particles = [];     // flying bits when a zombie goes POOF
+let emeraldCount = 0;   // your treasure so far
+
+// ---------------------------------------------------------------------
+// THE CUT — somebody chopped a trail of trees right through the middle
+// of this forest, from the bottom-left corner to a mysterious gate in
+// the top-right. These points trace where the chopping went. The trail
+// isn't drawn — it's just the empty space where trees AREN'T.
+// ---------------------------------------------------------------------
+const PATH = [
+  { x: 150,  y: 1350 }, { x: 380,  y: 1180 }, { x: 520,  y: 1250 },
+  { x: 760,  y: 1100 }, { x: 820,  y: 880 },  { x: 660,  y: 700 },
+  { x: 760,  y: 520 },  { x: 1000, y: 600 },  { x: 1220, y: 760 },
+  { x: 1450, y: 700 },  { x: 1560, y: 900 },  { x: 1750, y: 820 },
+  { x: 1850, y: 560 },  { x: 1780, y: 320 },  { x: 1850, y: 180 },
+];
+const gate = { x: 1850, y: 180, r: 34 };   // what's waiting at the end...
+
+// How far is this spot from the nearest piece of path? (We use this to
+// keep trees from growing in the middle of the trail.)
+function distToPath(x, y) {
+  let best = 999999;
+  for (let i = 0; i < PATH.length - 1; i++) {
+    const a = PATH[i], b = PATH[i + 1];
+    const dx = b.x - a.x, dy = b.y - a.y;
+    // find the closest point on this piece of path, then measure to it
+    const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / (dx * dx + dy * dy)));
+    best = Math.min(best, Math.hypot(x - (a.x + t * dx), y - (a.y + t * dy)));
+  }
+  return best;
+}
+
+// ---------------------------------------------------------------------
+// BUILDING THE FOREST — scatter trees around the open world.
+// No maze! Just clumps and clearings, like real woods.
+// ---------------------------------------------------------------------
+function buildForest(lv) {
+  trees = [];
+  flowers = [];
+  pond = { x: 1450, y: 450, rx: 160, ry: 100 };   // a little lake
+
+  // trees EVERYWHERE — a properly thick forest. The only easy way
+  // through is the trail of chopped-down trees.
+  for (let i = 0; i < 380; i++) {
+    const x = 60 + noise(i * 3.17) * (lv.worldW - 120);
+    const y = 60 + noise(i * 7.71) * (lv.worldH - 120);
+    const nearSpawn = Math.hypot(x - lv.start.x, y - lv.start.y) < 60;   // just a tiny pocket to start in
+    const inPond = ((x - pond.x) / (pond.rx + 60)) ** 2 + ((y - pond.y) / (pond.ry + 60)) ** 2 < 1;
+    const onPath = distToPath(x, y) < 50;          // the cut is NARROW — trees crowd right up to it
+    const nearGate = Math.hypot(x - gate.x, y - gate.y) < 110;
+    if (nearSpawn || inPond || onPath || nearGate) continue;
+    trees.push({ x, y, size: 0.8 + noise(i * 13.3) * 0.6 });
+  }
+
+  // a wall of trees around the edge, so the world has a natural border
+  for (let x = 30; x < lv.worldW; x += 70) {
+    trees.push({ x: x + noise(x) * 30, y: 25 + noise(x * 2) * 20, size: 1 });
+    trees.push({ x: x + noise(x * 3) * 30, y: lv.worldH - 25 - noise(x * 4) * 20, size: 1 });
+  }
+  for (let y = 30; y < lv.worldH; y += 70) {
+    trees.push({ x: 25 + noise(y * 5) * 20, y: y + noise(y * 6) * 30, size: 1 });
+    trees.push({ x: lv.worldW - 25 - noise(y * 7) * 20, y: y + noise(y * 8) * 30, size: 1 });
+  }
+
+  // flowers are just decoration — you can walk right over them
+  for (let i = 0; i < 120; i++) {
+    flowers.push({
+      x: noise(i * 31.7 + 5) * lv.worldW,
+      y: noise(i * 77.1 + 5) * lv.worldH,
+      kind: Math.floor(noise(i * 9.9) * 3),        // 0, 1, or 2 = different colors
+    });
+  }
+
+  // stumps — all that's left of the chopped-down trees. We throw 300
+  // darts at the map and only keep the ones that land along the trail.
+  stumps = [];
+  for (let i = 0; i < 300; i++) {
+    const x = 100 + noise(i * 91.7) * (lv.worldW - 200);
+    const y = 100 + noise(i * 13.9) * (lv.worldH - 200);
+    const d = distToPath(x, y);
+    const nearSpawn2 = Math.hypot(x - lv.start.x, y - lv.start.y) < 60;
+    if (d > 14 && d < 46 && !nearSpawn2) {
+      stumps.push({ x, y, size: 0.7 + noise(i * 3.3) * 0.6 });
+    }
+  }
+
+  // fireflies! drifting little lights that keep the dark forest alive
+  fireflies = [];
   for (let i = 0; i < 60; i++) {
-    ctx.fillStyle = `rgba(255,255,255,${0.3 + noise(i) * 0.7})`;
-    ctx.fillRect(Math.floor(noise(i * 3.3) * W), Math.floor(noise(i * 7.7) * H), 1, 1);
+    fireflies.push({
+      x: noise(i * 21.3 + 9) * lv.worldW,
+      y: noise(i * 47.7 + 9) * lv.worldH,
+      phase: noise(i * 5.5) * 6.28,      // so they don't all blink together
+      speed: 0.5 + noise(i * 2.2),
+    });
   }
 
-  ctx.textAlign = 'center';
-  ctx.fillStyle = '#ffd23f';
-  ctx.font = 'bold 22px monospace';
-  ctx.fillText('THE EXPLORER', W / 2, 45);
-  ctx.fillStyle = '#9fb4ff';
-  ctx.font = '9px monospace';
-  ctx.fillText('choose your level', W / 2, 62);
-
-  for (let i = 0; i < LEVELS.length; i++) {
-    const c = cards[i];
-    const lv = LEVELS[i];
-    ctx.fillStyle = lv.unlocked ? '#1d4d2b' : '#20233d';
-    ctx.fillRect(c.x, c.y, c.w, c.h);
-    ctx.strokeStyle = lv.unlocked ? '#7ddf8f' : '#3a3f66';
-    ctx.strokeRect(c.x + 0.5, c.y + 0.5, c.w - 1, c.h - 1);
-
-    ctx.fillStyle = lv.unlocked ? '#ffffff' : '#666b99';
-    ctx.font = 'bold 10px monospace';
-    ctx.fillText(String(i + 1), c.x + c.w / 2, c.y + 18);
-    ctx.font = '9px monospace';
-    ctx.fillText(lv.name, c.x + c.w / 2, c.y + 36);
-    ctx.font = '8px monospace';
-    ctx.fillText(lv.unlocked ? 'press 1 or tap' : 'locked', c.x + c.w / 2, c.y + 52);
+  // ZOMBIES — they lurk along the trail ahead, Minecraft Dungeons style.
+  // Never near your camp, never blocking the gate. 12 of them. Good luck.
+  zombies = [];
+  for (let i = 0; i < 200 && zombies.length < 12; i++) {
+    const x = noise(i * 61.3 + 2) * lv.worldW;
+    const y = noise(i * 37.9 + 2) * lv.worldH;
+    const farFromCamp = Math.hypot(x - lv.start.x, y - lv.start.y) > 320;
+    const onTrail = distToPath(x, y) < 55;
+    const awayFromGate = Math.hypot(x - gate.x, y - gate.y) > 130;
+    if (farFromCamp && onTrail && awayFromGate) {
+      zombies.push({
+        x, y,
+        zombie: true,                    // tells the drawing code what this is
+        hp: 2,                           // two sword bonks each
+        wanderAngle: noise(i) * 6.28,    // which way it shambles when bored
+        lastHitSwing: 0,                 // so one swing can't hit it twice
+        hurtFlash: 0,                    // flashes white when bonked
+      });
+    }
   }
 
-  // tease message when you poke a level that doesn't exist yet
-  if (lockedMessageTimer > 0) {
-    ctx.fillStyle = '#ff9f43';
-    ctx.font = '9px monospace';
-    ctx.fillText("You haven't invented that level yet!", W / 2, 168);
+  emeralds = [];
+  particles = [];
+  emeraldCount = 0;
+  player.hp = player.maxHp;
+}
+
+// ---------------------------------------------------------------------
+// THE EXPLORER (you!)
+// ---------------------------------------------------------------------
+const player = {
+  x: 0, y: 0,
+  radius: 12,          // how much space your body takes up (for bumping)
+  speed: 230,          // pixels per second
+  facing: 1,           // 1 = facing right, -1 = facing left
+  walkTime: 0,         // for the little walking bounce
+  moving: false,
+  attackTime: 0,       // counts down while the sword is mid-swing
+  swingId: 0,          // which swing number we're on (so one swing = one hit per zombie)
+  hp: 5,               // hearts left
+  maxHp: 5,
+  hurtTimer: 0,        // brief "ouch" shield after a zombie gets you
+  deathTimer: 0,       // counting down to respawn when you go down
+};
+
+// ---------------------------------------------------------------------
+// THE SWORD SWING — 0.25 seconds of glory. You can't start a new swing
+// until the old one finishes (no helicopter-sword cheating).
+// ---------------------------------------------------------------------
+function swingSword() {
+  if (screen === 'playing' && player.attackTime <= 0 && player.deathTimer <= 0) {
+    player.attackTime = 0.25;
+    player.swingId++;
   }
+}
+
+function startLevel(i) {
+  current = LEVELS[i];
+  buildForest(current);
+  player.x = current.start.x;
+  player.y = current.start.y;
+  screen = 'playing';
+}
+
+// ---------------------------------------------------------------------
+// BUMPING INTO THINGS — is this spot blocked?
+// ---------------------------------------------------------------------
+// r = how chunky the thing trying to walk is (you, a zombie, whatever)
+function blocked(x, y, r = player.radius) {
+  // edge of the world
+  if (x < 20 || y < 20 || x > current.worldW - 20 || y > current.worldH - 20) return true;
+  // the pond (explorers hate wet socks; zombies can't swim either)
+  if (((x - pond.x) / (pond.rx + r)) ** 2 +
+      ((y - pond.y) / (pond.ry + r)) ** 2 < 1) return true;
+  // tree trunks — checks the distance to each trunk
+  for (const t of trees) {
+    if (Math.hypot(x - t.x, y - t.y) < r + 13 * t.size) return true;
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------
@@ -258,53 +262,25 @@ function drawMenu() {
 const keys = {};
 addEventListener('keydown', e => {
   keys[e.key.toLowerCase()] = true;
-
   if (screen === 'menu') {
-    // number keys pick a level
     const n = parseInt(e.key) - 1;
     if (n >= 0 && n < LEVELS.length) {
       if (LEVELS[n].unlocked) startLevel(n);
       else lockedMessageTimer = 2;
     }
   } else if (e.key === 'Escape') {
-    screen = 'menu';         // back to the level select
+    screen = 'menu';
+  } else if (e.key === ' ') {
+    swingSword();            // spacebar = sword!
   }
 });
 addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
 
 // ---------------------------------------------------------------------
-// CONTROLS — mouse clicks and finger taps on the menu cards
-// The canvas is stretched to fill the screen, so we have to shrink the
-// click position back down to our little 320x200 world first.
+// CONTROLS — touch: put your finger anywhere and drag. Your finger
+// becomes an invisible joystick.
 // ---------------------------------------------------------------------
-function toCanvasXY(clientX, clientY) {
-  const rect = canvas.getBoundingClientRect();
-  return {
-    x: (clientX - rect.left) / rect.width * W,
-    y: (clientY - rect.top) / rect.height * H,
-  };
-}
-
-function tryPickLevel(clientX, clientY) {
-  const p = toCanvasXY(clientX, clientY);
-  for (let i = 0; i < LEVELS.length; i++) {
-    const c = cards[i];
-    if (p.x > c.x && p.x < c.x + c.w && p.y > c.y && p.y < c.y + c.h) {
-      if (LEVELS[i].unlocked) startLevel(i);
-      else lockedMessageTimer = 2;
-    }
-  }
-}
-
-addEventListener('click', e => {
-  if (screen === 'menu') tryPickLevel(e.clientX, e.clientY);
-});
-
-// ---------------------------------------------------------------------
-// CONTROLS — touch (phones and tablets)
-// In the menu: tap a card. In the game: left half = walk, right = turn.
-// ---------------------------------------------------------------------
-const touches = {};
+let stick = null;
 addEventListener('touchstart', e => {
   e.preventDefault();
   if (screen === 'menu') {
@@ -313,64 +289,581 @@ addEventListener('touchstart', e => {
     return;
   }
   for (const t of e.changedTouches) {
-    touches[t.identifier] = { startX: t.clientX, startY: t.clientY,
-                              x: t.clientX, y: t.clientY };
+    // finger on the sword button (bottom-right)? Swing!
+    // Anywhere else becomes the invisible walking joystick.
+    if (Math.hypot(t.clientX - (innerWidth - 70), t.clientY - (innerHeight - 70)) < 50) {
+      swingSword();
+    } else if (!stick) {
+      stick = { id: t.identifier, startX: t.clientX, startY: t.clientY, x: t.clientX, y: t.clientY };
+    }
   }
 }, { passive: false });
 addEventListener('touchmove', e => {
   e.preventDefault();
   for (const t of e.changedTouches) {
-    const f = touches[t.identifier];
-    if (f) { f.x = t.clientX; f.y = t.clientY; }
+    if (stick && t.identifier === stick.id) { stick.x = t.clientX; stick.y = t.clientY; }
   }
 }, { passive: false });
 addEventListener('touchend', e => {
-  for (const t of e.changedTouches) delete touches[t.identifier];
-});
-addEventListener('touchcancel', e => {
-  for (const t of e.changedTouches) delete touches[t.identifier];
-});
-
-function readTouch() {
-  let walk = 0, turn = 0;
-  for (const id in touches) {
-    const f = touches[id];
-    if (f.startX < innerWidth / 2) {
-      walk = Math.max(-1, Math.min(1, (f.startY - f.y) / 60));
-    } else {
-      turn = Math.max(-1, Math.min(1, (f.x - f.startX) / 60));
-    }
+  for (const t of e.changedTouches) {
+    if (stick && t.identifier === stick.id) stick = null;
   }
-  return { walk, turn };
-}
+});
+addEventListener('touchcancel', () => { stick = null; });
 
 // ---------------------------------------------------------------------
-// UPDATE — moves you around (only while playing)
-// dt = seconds since last frame; multiplying by it keeps the game the
-// same speed on fast and slow computers.
+// UPDATE — runs every frame. dt = seconds since last frame, so the game
+// runs the same speed on every computer.
 // ---------------------------------------------------------------------
+let elapsed = 0;   // a clock that counts up forever — powers all the glowing/pulsing
+
 function update(dt) {
+  elapsed += dt;
   if (lockedMessageTimer > 0) lockedMessageTimer -= dt;
   if (screen !== 'playing') return;
 
-  const touch = readTouch();
-  let walk = touch.walk;
-  if (keys['w'] || keys['arrowup'])   walk = 1;
-  if (keys['s'] || keys['arrowdown']) walk = -1;
+  if (player.attackTime > 0) player.attackTime -= dt;   // swing winds down
 
-  let turn = touch.turn;
-  if (keys['a'] || keys['arrowleft'])  turn = -1;
-  if (keys['d'] || keys['arrowright']) turn = 1;
+  // figure out which way you're trying to go (-1, 0, or 1 each way)
+  let dx = 0, dy = 0;
+  if (keys['w'] || keys['arrowup'])    dy -= 1;
+  if (keys['s'] || keys['arrowdown'])  dy += 1;
+  if (keys['a'] || keys['arrowleft'])  dx -= 1;
+  if (keys['d'] || keys['arrowright']) dx += 1;
 
-  player.angle += turn * turnSpeed * dt;
+  if (stick) {
+    dx = Math.max(-1, Math.min(1, (stick.x - stick.startX) / 50));
+    dy = Math.max(-1, Math.min(1, (stick.y - stick.startY) / 50));
+  }
 
-  const newX = player.x + Math.cos(player.angle) * walk * walkSpeed * dt;
-  const newY = player.y + Math.sin(player.angle) * walk * walkSpeed * dt;
+  // walking diagonally shouldn't be faster than walking straight,
+  // so we shrink the arrow back to length 1 if it's longer
+  const len = Math.hypot(dx, dy);
+  if (len > 1) { dx /= len; dy /= len; }
 
-  // check x and y separately so you slide along trees instead of sticking
-  if (!isWall(newX, player.y)) player.x = newX;
-  if (!isWall(player.x, newY)) player.y = newY;
+  player.moving = len > 0.1 && player.deathTimer <= 0;   // no walking while down!
+  if (player.moving) {
+    player.walkTime += dt;
+    if (dx > 0.1) player.facing = 1;
+    if (dx < -0.1) player.facing = -1;
+
+    const newX = player.x + dx * player.speed * dt;
+    const newY = player.y + dy * player.speed * dt;
+    // try x and y separately so you slide around trees instead of sticking
+    if (!blocked(newX, player.y)) player.x = newX;
+    if (!blocked(player.x, newY)) player.y = newY;
+  }
+
+  // ---- ZOMBIES ----
+  for (const z of zombies) {
+    if (z.hurtFlash > 0) z.hurtFlash -= dt;
+    const distToYou = Math.hypot(player.x - z.x, player.y - z.y);
+
+    // THE ZOMBIE BRAIN (it's a very small brain):
+    // If you're close, shamble at you. Otherwise wander around aimlessly.
+    let zdx, zdy, zombieSpeed;
+    if (distToYou < 240 && player.deathTimer <= 0) {
+      zdx = (player.x - z.x) / distToYou;      // an arrow pointing at YOU
+      zdy = (player.y - z.y) / distToYou;
+      zombieSpeed = 75;                        // slower than you. barely.
+    } else {
+      z.wanderAngle += (noise(Math.floor(elapsed) + z.x) - 0.5) * dt * 4;
+      zdx = Math.cos(z.wanderAngle);
+      zdy = Math.sin(z.wanderAngle);
+      zombieSpeed = 22;
+    }
+    const zx = z.x + zdx * zombieSpeed * dt;
+    const zy = z.y + zdy * zombieSpeed * dt;
+    if (!blocked(zx, z.y, 10)) z.x = zx;
+    if (!blocked(z.x, zy, 10)) z.y = zy;
+
+    // Did your sword catch it? Must be mid-swing, in reach, on the side
+    // you're FACING (no cheating hits behind your back), and not already
+    // hit by this same swing.
+    if (player.attackTime > 0 && z.lastHitSwing !== player.swingId &&
+        distToYou < 55 && (z.x - player.x) * player.facing > -8) {
+      z.lastHitSwing = player.swingId;
+      z.hp -= 1;
+      z.hurtFlash = 0.15;
+      // knock it backwards, away from you
+      const push = 40 / Math.max(1, distToYou);
+      if (!blocked(z.x + (z.x - player.x) * push, z.y, 10)) z.x += (z.x - player.x) * push;
+      if (!blocked(z.x, z.y + (z.y - player.y) * push, 10)) z.y += (z.y - player.y) * push;
+
+      if (z.hp <= 0) {
+        // POOF! burst into blocky bits and drop the goods
+        for (let i = 0; i < 14; i++) {
+          particles.push({
+            x: z.x, y: z.y - 14,
+            vx: (noise(i * 3.3 + elapsed) - 0.5) * 240,
+            vy: (noise(i * 7.7 + elapsed) - 0.9) * 220,
+            life: 0.6,
+            color: i % 2 ? '#4a9e4a' : '#2e6e8e',
+          });
+        }
+        emeralds.push({ x: z.x, y: z.y, born: elapsed });
+      }
+    }
+
+    // Did it get YOU? (hurtTimer = a moment of safety after each hit,
+    // so one zombie can't eat all five hearts in one second)
+    if (distToYou < 26 && z.hp > 0 && player.hurtTimer <= 0 && player.deathTimer <= 0) {
+      player.hp -= 1;
+      player.hurtTimer = 1;
+      // shove you away from it
+      const push = 50 / Math.max(1, distToYou);
+      const nx = player.x + (player.x - z.x) * push;
+      const ny = player.y + (player.y - z.y) * push;
+      if (!blocked(nx, player.y)) player.x = nx;
+      if (!blocked(player.x, ny)) player.y = ny;
+      if (player.hp <= 0) player.deathTimer = 2.5;
+    }
+  }
+  zombies = zombies.filter(z => z.hp > 0);   // sweep up the defeated
+
+  if (player.hurtTimer > 0) player.hurtTimer -= dt;
+
+  // down for the count → respawn back at camp
+  if (player.deathTimer > 0) {
+    player.deathTimer -= dt;
+    if (player.deathTimer <= 0) {
+      player.x = current.start.x;
+      player.y = current.start.y;
+      player.hp = player.maxHp;
+    }
+  }
+
+  // walk near an emerald and it hops into your pocket
+  emeralds = emeralds.filter(e => {
+    if (Math.hypot(player.x - e.x, player.y - e.y) < 30) {
+      emeraldCount++;
+      return false;                          // false = remove from the list
+    }
+    return true;
+  });
+
+  // zombie bits fly out, fall down, fade away
+  for (const p of particles) {
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.vy += 500 * dt;                        // gravity pulls the bits down
+    p.life -= dt;
+  }
+  particles = particles.filter(p => p.life > 0);
 }
+
+// ---------------------------------------------------------------------
+// THE CAMERA — where should the screen's window into the world be?
+// It follows you, but stops at the world's edges (no peeking outside).
+// ---------------------------------------------------------------------
+function getCamera() {
+  const cx = Math.max(0, Math.min(current.worldW - canvas.width,  player.x - canvas.width / 2));
+  const cy = Math.max(0, Math.min(current.worldH - canvas.height, player.y - canvas.height / 2));
+  return { x: cx, y: cy };
+}
+
+// ---------------------------------------------------------------------
+// DRAWING THE WORLD
+// ---------------------------------------------------------------------
+function drawGame() {
+  const cam = getCamera();
+
+  // grass everywhere
+  ctx.fillStyle = current.grass;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // darker grass patches, so the ground isn't one flat color
+  ctx.fillStyle = 'rgba(0, 60, 0, 0.10)';
+  for (let i = 0; i < 40; i++) {
+    const px = noise(i * 51.3) * current.worldW - cam.x;
+    const py = noise(i * 17.9) * current.worldH - cam.y;
+    ctx.beginPath();
+    ctx.ellipse(px, py, 90, 55, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // tree stumps — the leftovers of whoever chopped this trail. Flat on
+  // the ground, so you can walk right over them.
+  for (const s of stumps) {
+    const sx = s.x - cam.x, sy = s.y - cam.y;
+    if (sx < -20 || sy < -20 || sx > canvas.width + 20 || sy > canvas.height + 20) continue;
+    ctx.fillStyle = '#4a3520';       // bark ring
+    ctx.beginPath();
+    ctx.ellipse(sx, sy, 11 * s.size, 8 * s.size, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#7d603a';       // pale cut wood on top
+    ctx.beginPath();
+    ctx.ellipse(sx, sy - 1, 8 * s.size, 5.5 * s.size, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#5e4729';     // one tree ring, for style
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.ellipse(sx, sy - 1, 4 * s.size, 2.5 * s.size, 0, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  // emeralds — spinning, bobbing, begging to be collected
+  for (const e of emeralds) {
+    const ex = e.x - cam.x;
+    const ey = e.y - cam.y + Math.sin((elapsed - e.born) * 4) * 3;   // gentle bob
+    if (ex < -20 || ey < -20 || ex > canvas.width + 20 || ey > canvas.height + 20) continue;
+    ctx.save();
+    ctx.translate(ex, ey - 8);
+    ctx.rotate(Math.PI / 4);                 // a square on its corner = a gem
+    ctx.fillStyle = '#2ecc71';
+    ctx.fillRect(-6, -6, 12, 12);
+    ctx.strokeStyle = '#aaffcc';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(-6, -6, 12, 12);
+    ctx.restore();
+  }
+
+  // the pond — dark, still night water
+  ctx.fillStyle = '#1d3a55';
+  ctx.beginPath();
+  ctx.ellipse(pond.x - cam.x, pond.y - cam.y, pond.rx, pond.ry, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#28516f';
+  ctx.beginPath();
+  ctx.ellipse(pond.x - cam.x, pond.y - cam.y, pond.rx * 0.8, pond.ry * 0.8, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // flowers (flat on the ground, so they go before trees and you)
+  for (const f of flowers) {
+    const fx = f.x - cam.x, fy = f.y - cam.y;
+    if (fx < -10 || fy < -10 || fx > canvas.width + 10 || fy > canvas.height + 10) continue;
+    ctx.fillStyle = ['#ffe066', '#ff8fa3', '#ffffff'][f.kind];
+    ctx.fillRect(fx, fy, 4, 4);
+    ctx.fillStyle = '#2e5c1e';
+    ctx.fillRect(fx + 1, fy + 4, 2, 4);
+  }
+
+  // ---- THE DRAW-ORDER TRICK ----
+  // Put the trees and YOU in one list, sort it by how far down the world
+  // each thing is, then draw top-to-bottom. Lower = drawn later = in front.
+  const things = [...trees, ...zombies, player];
+  things.sort((a, b) => a.y - b.y);
+  for (const thing of things) {
+    if (thing === player) drawPlayer(cam);
+    else if (thing.zombie) drawZombie(thing, cam);
+    else drawTree(thing, cam);
+  }
+
+  // flying zombie bits
+  for (const p of particles) {
+    ctx.globalAlpha = Math.max(0, p.life / 0.6);   // fade out as life runs out
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x - cam.x - 3, p.y - cam.y - 3, 6, 6);
+  }
+  ctx.globalAlpha = 1;                              // back to normal, please
+
+  // ---- NIGHT FALLS ----
+  // A see-through dark blanket over the whole screen, with a hole cut
+  // around the explorer. Clear near you, pitch dark far away.
+  const px = player.x - cam.x, py = player.y - cam.y;
+  const night = ctx.createRadialGradient(px, py - 14, 40, px, py - 14, 270);
+  night.addColorStop(0, 'rgba(5, 5, 20, 0)');       // clear right at you
+  night.addColorStop(0.5, 'rgba(5, 5, 20, 0.45)');  // getting murky...
+  night.addColorStop(1, 'rgba(5, 5, 20, 0.88)');    // proper gloom
+  ctx.fillStyle = night;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // warm lantern light right around the explorer
+  const warm = ctx.createRadialGradient(px, py - 14, 5, px, py - 14, 130);
+  warm.addColorStop(0, 'rgba(255, 200, 110, 0.20)');
+  warm.addColorStop(1, 'rgba(255, 200, 110, 0)');
+  ctx.fillStyle = warm;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // fireflies — drawn AFTER the darkness because they glow through it
+  for (const f of fireflies) {
+    const fx = f.x + Math.sin(elapsed * f.speed + f.phase) * 40 - cam.x;
+    const fy = f.y + Math.cos(elapsed * f.speed * 0.7 + f.phase * 2) * 26 - cam.y;
+    if (fx < -10 || fy < -10 || fx > canvas.width + 10 || fy > canvas.height + 10) continue;
+    const twinkle = 0.5 + 0.5 * Math.sin(elapsed * 3 + f.phase * 7);
+    ctx.fillStyle = `rgba(190, 255, 130, ${0.15 + 0.25 * twinkle})`;
+    ctx.beginPath(); ctx.arc(fx, fy, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = `rgba(220, 255, 170, ${0.4 + 0.5 * twinkle})`;
+    ctx.beginPath(); ctx.arc(fx, fy, 2, 0, Math.PI * 2); ctx.fill();
+  }
+
+  // zombie eyes glow faintly through the dark... consider yourself warned
+  for (const z of zombies) {
+    const zx = z.x - cam.x, zy = z.y - cam.y;
+    if (zx < -20 || zy < -20 || zx > canvas.width + 20 || zy > canvas.height + 20) continue;
+    ctx.fillStyle = 'rgba(150, 255, 150, 0.5)';
+    ctx.fillRect(zx - 5, zy - 26, 3, 3);
+    ctx.fillRect(zx + 2, zy - 26, 3, 3);
+  }
+
+  // the gate at the end of the path — its glow cuts through the gloom
+  const gx = gate.x - cam.x, gy = gate.y - cam.y;
+  const pulse = 1 + 0.08 * Math.sin(elapsed * 2.5);
+  const glow = ctx.createRadialGradient(gx, gy, 4, gx, gy, 100);
+  glow.addColorStop(0, 'rgba(120, 210, 255, 0.4)');
+  glow.addColorStop(1, 'rgba(120, 210, 255, 0)');
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.strokeStyle = '#7fd4ff';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(gx, gy, gate.r * pulse, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // stand close to the gate and it talks to you
+  if (Math.hypot(player.x - gate.x, player.y - gate.y) < 90) {
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#aee3ff';
+    ctx.font = '18px monospace';
+    ctx.fillText('A mysterious gate hums softly...', canvas.width / 2, 60);
+    ctx.fillText("It leads to Level 2 — which you haven't invented yet!", canvas.width / 2, 85);
+  }
+
+  // sword button, only on touch screens (phones/tablets)
+  if (navigator.maxTouchPoints > 0) {
+    const bx = canvas.width - 70, by = canvas.height - 70;
+    ctx.fillStyle = 'rgba(255,255,255,0.12)';
+    ctx.beginPath(); ctx.arc(bx, by, 42, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(bx, by, 42, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.font = '28px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('⚔', bx, by + 10);
+  }
+
+  // ---- HUD (the stuff glued to the screen, not the world) ----
+  // hearts, top-left
+  for (let i = 0; i < player.maxHp; i++) {
+    drawHeart(14 + i * 26, 14, i < player.hp);
+  }
+  // emerald counter under the hearts
+  ctx.save();
+  ctx.translate(24, 52);
+  ctx.rotate(Math.PI / 4);
+  ctx.fillStyle = '#2ecc71';
+  ctx.fillRect(-6, -6, 12, 12);
+  ctx.restore();
+  ctx.fillStyle = '#bfffdd';
+  ctx.font = '18px monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText('x ' + emeraldCount, 40, 58);
+
+  // red flash right when a zombie gets you
+  if (player.hurtTimer > 0.7) {
+    ctx.fillStyle = `rgba(255, 40, 40, ${(player.hurtTimer - 0.7) * 0.8})`;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
+
+  // down! the respawn screen
+  if (player.deathTimer > 0) {
+    ctx.fillStyle = 'rgba(40, 0, 0, 0.55)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#ffdddd';
+    ctx.font = 'bold 34px monospace';
+    ctx.fillText('The zombies got you!', canvas.width / 2, canvas.height / 2 - 10);
+    ctx.font = '18px monospace';
+    ctx.fillText('Respawning at camp...', canvas.width / 2, canvas.height / 2 + 24);
+  }
+
+  // little helper text
+  ctx.fillStyle = 'rgba(255,255,255,0.8)';
+  ctx.font = '14px monospace';
+  ctx.textAlign = 'right';
+  ctx.fillText('Space = sword   Esc = levels', canvas.width - 10, canvas.height - 12);
+}
+
+function drawTree(t, cam) {
+  const x = t.x - cam.x, y = t.y - cam.y;
+  if (x < -60 || y < -80 || x > canvas.width + 60 || y > canvas.height + 80) return;
+
+  // shadow on the grass
+  ctx.fillStyle = 'rgba(0,0,0,0.20)';
+  ctx.beginPath();
+  ctx.ellipse(x + 6, y + 5, 24 * t.size, 10 * t.size, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // trunk
+  ctx.fillStyle = '#3f2a15';
+  ctx.fillRect(x - 5 * t.size, y - 18 * t.size, 10 * t.size, 20 * t.size);
+
+  // blocky leaf top — every tree gets its own shade of gloomy green
+  const g = 55 + noise(t.x * 0.13 + t.y) * 35;
+  ctx.fillStyle = `rgb(22, ${Math.floor(g)}, 30)`;
+  ctx.fillRect(x - 24 * t.size, y - 58 * t.size, 48 * t.size, 44 * t.size);
+  // a faint square of moonlight on the leaves
+  ctx.fillStyle = 'rgba(200,220,255,0.10)';
+  ctx.fillRect(x - 18 * t.size, y - 52 * t.size, 16 * t.size, 12 * t.size);
+}
+
+function drawPlayer(cam) {
+  const x = player.x - cam.x, y = player.y - cam.y;
+  // a tiny hop while walking — this one line is the whole "walk animation"
+  const bob = player.moving ? Math.abs(Math.sin(player.walkTime * 10)) * 4 : 0;
+
+  // shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  ctx.beginPath();
+  ctx.ellipse(x, y + 8, 12, 5, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // body (explorer shirt) — blocky, like everything worth loving
+  ctx.fillStyle = '#c98a3d';
+  ctx.fillRect(x - 8, y - 14 - bob, 16, 16);
+
+  // square head
+  ctx.fillStyle = '#f2c79b';
+  ctx.fillRect(x - 7, y - 30 - bob, 14, 14);
+
+  // explorer hat: flat brim + flat top
+  ctx.fillStyle = '#7a5230';
+  ctx.fillRect(x - 11, y - 30 - bob, 22, 4);
+  ctx.fillRect(x - 7, y - 36 - bob, 14, 7);
+
+  // a square eye on whichever side you're facing
+  ctx.fillStyle = '#222';
+  ctx.fillRect(x + 3 * player.facing, y - 25 - bob, 3, 3);
+
+  // ---- THE SWORD ----
+  // progress goes 0 -> 1 during a swing. The blade sweeps a big arc.
+  const swinging = player.attackTime > 0;
+  const progress = swinging ? 1 - player.attackTime / 0.25 : 0;
+
+  ctx.save();                                    // remember normal drawing
+  ctx.translate(x + 9 * player.facing, y - 8 - bob);  // move pen to your hand
+  if (player.facing === -1) ctx.scale(-1, 1);    // facing left? mirror everything
+  // resting angle points the blade down; swinging sweeps it up-and-over
+  ctx.rotate(swinging ? (-1.3 + 2.6 * progress) : 1.0);
+
+  ctx.fillStyle = '#5b3b1e'; ctx.fillRect(0, -2, 7, 4);      // handle
+  ctx.fillStyle = '#c9a83c'; ctx.fillRect(6, -5, 3, 10);     // crossguard
+  ctx.fillStyle = '#dbe4ee'; ctx.fillRect(9, -2, 17, 4);     // blade
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(9, -2, 17, 1.5);   // shiny edge
+
+  // the whoosh trail, fading out as the swing finishes
+  if (swinging) {
+    ctx.strokeStyle = `rgba(255,255,255,${0.5 * (1 - progress)})`;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(0, 0, 26, -1.3, -1.3 + 2.6 * progress);
+    ctx.stroke();
+  }
+  ctx.restore();                                 // put the pen back to normal
+}
+
+// ---------------------------------------------------------------------
+// A ZOMBIE — blocky green head, ragged shirt, grabby little arms
+// ---------------------------------------------------------------------
+function drawZombie(z, cam) {
+  const x = z.x - cam.x, y = z.y - cam.y;
+  if (x < -40 || y < -60 || x > canvas.width + 40 || y > canvas.height + 60) return;
+  const stomp = Math.abs(Math.sin(elapsed * 6 + z.x)) * 3;   // shamble-bounce
+
+  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  ctx.beginPath();
+  ctx.ellipse(x, y + 8, 11, 5, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // when bonked, the whole zombie flashes white for a blink
+  const flash = z.hurtFlash > 0;
+
+  ctx.fillStyle = flash ? '#ffffff' : '#2e6e8e';   // ragged shirt
+  ctx.fillRect(x - 8, y - 14 - stomp, 16, 16);
+  ctx.fillStyle = flash ? '#ffffff' : '#4a9e4a';   // square green head
+  ctx.fillRect(x - 7, y - 30 - stomp, 14, 14);
+  ctx.fillStyle = '#1c3b1c';                       // those eyes...
+  ctx.fillRect(x - 5, y - 25 - stomp, 3, 3);
+  ctx.fillRect(x + 2, y - 25 - stomp, 3, 3);
+  ctx.fillStyle = flash ? '#ffffff' : '#4a9e4a';   // grabby arms, reaching for YOU
+  ctx.fillRect(x - 12, y - 12 - stomp, 4, 9);
+  ctx.fillRect(x + 8, y - 12 - stomp, 4, 9);
+}
+
+// ---------------------------------------------------------------------
+// A blocky pixel heart (two squares on top + a diamond below)
+// ---------------------------------------------------------------------
+function drawHeart(hx, hy, full) {
+  ctx.fillStyle = full ? '#ff4757' : 'rgba(255,255,255,0.25)';
+  ctx.fillRect(hx, hy, 8, 8);
+  ctx.fillRect(hx + 10, hy, 8, 8);
+  ctx.save();
+  ctx.translate(hx + 9, hy + 10);
+  ctx.rotate(Math.PI / 4);
+  ctx.fillRect(-6.4, -6.4, 12.8, 12.8);
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------------
+// THE MENU SCREEN
+// ---------------------------------------------------------------------
+let cards = [];   // filled in each frame so clicks know where the boxes are
+
+function drawMenu() {
+  const W = canvas.width, H = canvas.height;
+
+  ctx.fillStyle = '#0d1030';
+  ctx.fillRect(0, 0, W, H);
+  for (let i = 0; i < 120; i++) {
+    ctx.fillStyle = `rgba(255,255,255,${0.3 + noise(i) * 0.7})`;
+    ctx.fillRect(Math.floor(noise(i * 3.3) * W), Math.floor(noise(i * 7.7) * H), 2, 2);
+  }
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffd23f';
+  ctx.font = `bold ${Math.min(60, W / 9)}px monospace`;
+  ctx.fillText('THE EXPLORER', W / 2, H * 0.25);
+  ctx.fillStyle = '#9fb4ff';
+  ctx.font = '18px monospace';
+  ctx.fillText('choose your level', W / 2, H * 0.25 + 35);
+
+  // lay out the three level cards, centered
+  const cw = Math.min(210, W / 4), ch = cw * 0.75, gap = cw * 0.15;
+  const totalW = cw * 3 + gap * 2;
+  cards = [];
+  for (let i = 0; i < LEVELS.length; i++) {
+    const cx = W / 2 - totalW / 2 + i * (cw + gap);
+    const cy = H * 0.42;
+    cards.push({ x: cx, y: cy, w: cw, h: ch });
+    const lv = LEVELS[i];
+
+    ctx.fillStyle = lv.unlocked ? '#1d4d2b' : '#20233d';
+    ctx.fillRect(cx, cy, cw, ch);
+    ctx.strokeStyle = lv.unlocked ? '#7ddf8f' : '#3a3f66';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(cx, cy, cw, ch);
+
+    ctx.fillStyle = lv.unlocked ? '#ffffff' : '#666b99';
+    ctx.font = `bold ${ch * 0.25}px monospace`;
+    ctx.fillText(String(i + 1), cx + cw / 2, cy + ch * 0.35);
+    ctx.font = `${ch * 0.14}px monospace`;
+    ctx.fillText(lv.name, cx + cw / 2, cy + ch * 0.62);
+    ctx.font = `${ch * 0.11}px monospace`;
+    ctx.fillText(lv.unlocked ? 'press 1 or tap' : 'locked', cx + cw / 2, cy + ch * 0.85);
+  }
+
+  if (lockedMessageTimer > 0) {
+    ctx.fillStyle = '#ff9f43';
+    ctx.font = '18px monospace';
+    ctx.fillText("You haven't invented that level yet!", W / 2, H * 0.42 + ch + 45);
+  }
+}
+
+function tryPickLevel(px, py) {
+  for (let i = 0; i < cards.length; i++) {
+    const c = cards[i];
+    if (px > c.x && px < c.x + c.w && py > c.y && py < c.y + c.h) {
+      if (LEVELS[i].unlocked) startLevel(i);
+      else lockedMessageTimer = 2;
+    }
+  }
+}
+
+addEventListener('click', e => {
+  if (screen === 'menu') tryPickLevel(e.clientX, e.clientY);
+  else swingSword();           // clicking anywhere in the game swings too
+});
 
 // ---------------------------------------------------------------------
 // THE GAME LOOP — update, draw, repeat forever, really fast
@@ -381,7 +874,7 @@ function loop(time) {
   lastTime = time;
   update(dt);
   if (screen === 'menu') drawMenu();
-  else draw3D();
+  else drawGame();
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);
