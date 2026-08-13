@@ -43,6 +43,13 @@ addEventListener('resize', fitCanvas);
 let screen = 'menu';
 let current = null;            // the level being played
 let lockedMessageTimer = 0;
+let inventoryOpen = false;     // is the bag open right now?
+
+// Did you ever beat Level 1? The browser remembers this FOREVER, even
+// after you close the game — localStorage is a tiny storage box every
+// game gets to keep stuff in between visits.
+let hasArmor = localStorage.getItem('explorer_plate_armor') === 'yes';
+let victoryTimer = 0;          // counts down the LEVEL COMPLETE celebration
 
 // ---------------------------------------------------------------------
 // A pocket randomness machine: feed it the same number, get the same
@@ -200,6 +207,7 @@ function buildForest(lv) {
   particles = [];
   emeraldCount = 0;
   player.hp = player.maxHp;
+  player.armor = hasArmor ? 3 : 0;   // suit up (if you've earned it)
 }
 
 // ---------------------------------------------------------------------
@@ -218,6 +226,7 @@ const player = {
   maxHp: 5,
   hurtTimer: 0,        // brief "ouch" shield after a zombie gets you
   deathTimer: 0,       // counting down to respawn when you go down
+  armor: 0,            // silver armor points — they take hits before hearts do
 };
 
 // ---------------------------------------------------------------------
@@ -225,7 +234,7 @@ const player = {
 // until the old one finishes (no helicopter-sword cheating).
 // ---------------------------------------------------------------------
 function swingSword() {
-  if (screen === 'playing' && player.attackTime <= 0 && player.deathTimer <= 0) {
+  if (screen === 'playing' && !inventoryOpen && player.attackTime <= 0 && player.deathTimer <= 0) {
     player.attackTime = 0.25;
     player.swingId++;
   }
@@ -269,9 +278,12 @@ addEventListener('keydown', e => {
       else lockedMessageTimer = 2;
     }
   } else if (e.key === 'Escape') {
-    screen = 'menu';
+    if (inventoryOpen) inventoryOpen = false;   // Esc closes the bag first...
+    else screen = 'menu';                       // ...and only then quits to the menu
   } else if (e.key === ' ') {
     swingSword();            // spacebar = sword!
+  } else if (e.key.toLowerCase() === 'e') {
+    inventoryOpen = !inventoryOpen;             // E flips the bag open/closed
   }
 });
 addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
@@ -289,9 +301,12 @@ addEventListener('touchstart', e => {
     return;
   }
   for (const t of e.changedTouches) {
+    // finger on the bag button? Open/close the inventory.
+    if (Math.hypot(t.clientX - (innerWidth - 70), t.clientY - (innerHeight - 165)) < 42) {
+      inventoryOpen = !inventoryOpen;
     // finger on the sword button (bottom-right)? Swing!
     // Anywhere else becomes the invisible walking joystick.
-    if (Math.hypot(t.clientX - (innerWidth - 70), t.clientY - (innerHeight - 70)) < 50) {
+    } else if (Math.hypot(t.clientX - (innerWidth - 70), t.clientY - (innerHeight - 70)) < 50) {
       swingSword();
     } else if (!stick) {
       stick = { id: t.identifier, startX: t.clientX, startY: t.clientY, x: t.clientX, y: t.clientY };
@@ -321,6 +336,8 @@ function update(dt) {
   elapsed += dt;
   if (lockedMessageTimer > 0) lockedMessageTimer -= dt;
   if (screen !== 'playing') return;
+  if (inventoryOpen) return;   // bag's open — the whole world holds still
+  if (victoryTimer > 0) { victoryTimer -= dt; return; }   // celebrating! world waits
 
   if (player.attackTime > 0) player.attackTime -= dt;   // swing winds down
 
@@ -408,7 +425,8 @@ function update(dt) {
     // Did it get YOU? (hurtTimer = a moment of safety after each hit,
     // so one zombie can't eat all five hearts in one second)
     if (distToYou < 26 && z.hp > 0 && player.hurtTimer <= 0 && player.deathTimer <= 0) {
-      player.hp -= 1;
+      if (player.armor > 0) player.armor -= 1;   // CLANK — the armor takes it!
+      else player.hp -= 1;
       player.hurtTimer = 1;
       // shove you away from it
       const push = 50 / Math.max(1, distToYou);
@@ -430,7 +448,18 @@ function update(dt) {
       player.x = current.start.x;
       player.y = current.start.y;
       player.hp = player.maxHp;
+      player.armor = hasArmor ? 3 : 0;   // fresh armor plates too
     }
+  }
+
+  // ---- BEATING THE LEVEL ----
+  // Reaching the gate for the first time = Level 1 complete → PLATE ARMOR!
+  if (!hasArmor && player.deathTimer <= 0 &&
+      Math.hypot(player.x - gate.x, player.y - gate.y) < 60) {
+    hasArmor = true;
+    player.armor = 3;
+    localStorage.setItem('explorer_plate_armor', 'yes');   // remembered forever
+    victoryTimer = 5;
   }
 
   // walk near an emerald and it hops into your pocket
@@ -638,6 +667,12 @@ function drawGame() {
   for (let i = 0; i < player.maxHp; i++) {
     drawHeart(14 + i * 26, 14, i < player.hp);
   }
+  // silver armor points line up after the hearts
+  if (hasArmor) {
+    for (let i = 0; i < 3; i++) {
+      drawHeart(22 + (player.maxHp + i) * 26, 14, i < player.armor, '#b8c4d0');
+    }
+  }
   // emerald counter under the hearts
   ctx.save();
   ctx.translate(24, 52);
@@ -668,11 +703,129 @@ function drawGame() {
     ctx.fillText('Respawning at camp...', canvas.width / 2, canvas.height / 2 + 24);
   }
 
+  // bag button, only on touch screens
+  if (navigator.maxTouchPoints > 0) {
+    const bx = canvas.width - 70, by = canvas.height - 165;
+    ctx.fillStyle = 'rgba(255,255,255,0.12)';
+    ctx.beginPath(); ctx.arc(bx, by, 34, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(bx, by, 34, 0, Math.PI * 2); ctx.stroke();
+    ctx.font = '26px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('🎒', bx, by + 9);
+  }
+
   // little helper text
   ctx.fillStyle = 'rgba(255,255,255,0.8)';
   ctx.font = '14px monospace';
   ctx.textAlign = 'right';
-  ctx.fillText('Space = sword   Esc = levels', canvas.width - 10, canvas.height - 12);
+  ctx.fillText('Space = sword   E = bag   Esc = levels', canvas.width - 10, canvas.height - 12);
+
+  // ---- LEVEL COMPLETE! the golden celebration ----
+  if (victoryTimer > 0) {
+    ctx.fillStyle = 'rgba(10, 25, 12, 0.7)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#ffd23f';
+    ctx.font = 'bold 40px monospace';
+    ctx.fillText('LEVEL 1 COMPLETE!', canvas.width / 2, canvas.height / 2 - 60);
+    drawChestplate(canvas.width / 2, canvas.height / 2 + 4, 2.4);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 22px monospace';
+    ctx.fillText('You found: PLATE ARMOR', canvas.width / 2, canvas.height / 2 + 62);
+    ctx.fillStyle = '#bfd4e8';
+    ctx.font = '16px monospace';
+    ctx.fillText('3 armor points — they take the hits before your hearts do',
+                 canvas.width / 2, canvas.height / 2 + 90);
+  }
+
+  // the bag goes on top of everything
+  if (inventoryOpen) drawInventory();
+}
+
+// ---------------------------------------------------------------------
+// THE INVENTORY — a grid of slots, Minecraft style. Most are empty for
+// now... which is really a to-do list for future treasure.
+// ---------------------------------------------------------------------
+function drawInventory() {
+  const W = canvas.width, H = canvas.height;
+
+  // dim the world behind the bag
+  ctx.fillStyle = 'rgba(8, 8, 22, 0.75)';
+  ctx.fillRect(0, 0, W, H);
+
+  // the panel
+  const pw = Math.min(460, W - 30), ph = 300;
+  const px = W / 2 - pw / 2, py = H / 2 - ph / 2;
+  ctx.fillStyle = '#23283e';
+  ctx.fillRect(px, py, pw, ph);
+  ctx.strokeStyle = '#5a6390';
+  ctx.lineWidth = 3;
+  ctx.strokeRect(px, py, pw, ph);
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffd23f';
+  ctx.font = 'bold 24px monospace';
+  ctx.fillText('INVENTORY', W / 2, py + 38);
+
+  // a 4x2 grid of slots
+  const cols = 4, rows = 2, slot = Math.min(78, (pw - 60) / cols), gap = 12;
+  const gridW = cols * slot + (cols - 1) * gap;
+  const startX = W / 2 - gridW / 2, startY = py + 62;
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const sx = startX + c * (slot + gap), sy = startY + r * (slot + gap);
+      ctx.fillStyle = '#161a2b';
+      ctx.fillRect(sx, sy, slot, slot);
+      ctx.strokeStyle = '#3a4162';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(sx, sy, slot, slot);
+    }
+  }
+
+  // SLOT 1: the trusty sword (drawn big and tilted, like it's on display)
+  ctx.save();
+  ctx.translate(startX + slot / 2, startY + slot / 2);
+  ctx.rotate(-Math.PI / 4);
+  ctx.scale(1.8, 1.8);
+  ctx.fillStyle = '#5b3b1e'; ctx.fillRect(-14, -2, 7, 4);     // handle
+  ctx.fillStyle = '#c9a83c'; ctx.fillRect(-8, -5, 3, 10);     // crossguard
+  ctx.fillStyle = '#dbe4ee'; ctx.fillRect(-5, -2, 17, 4);     // blade
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(-5, -2, 17, 1.5);   // shiny edge
+  ctx.restore();
+  ctx.fillStyle = '#cdd6f4';
+  ctx.font = '13px monospace';
+  ctx.fillText('Sword', startX + slot / 2, startY + slot + 16);
+
+  // SLOT 2: emeralds, with how many you've got
+  const ex = startX + slot + gap + slot / 2, ey = startY + slot / 2;
+  ctx.save();
+  ctx.translate(ex, ey);
+  ctx.rotate(Math.PI / 4);
+  ctx.fillStyle = '#2ecc71';
+  ctx.fillRect(-11, -11, 22, 22);
+  ctx.strokeStyle = '#aaffcc';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(-11, -11, 22, 22);
+  ctx.restore();
+  ctx.fillStyle = '#cdd6f4';
+  ctx.font = '13px monospace';
+  ctx.fillText('Emeralds x ' + emeraldCount, ex, startY + slot + 16);
+
+  // SLOT 3: plate armor — but only once you've earned it
+  if (hasArmor) {
+    const ax = startX + 2 * (slot + gap) + slot / 2;
+    drawChestplate(ax, startY + slot / 2, 1.6);
+    ctx.fillStyle = '#cdd6f4';
+    ctx.font = '13px monospace';
+    ctx.fillText('Plate Armor', ax, startY + slot + 16);
+  }
+
+  ctx.fillStyle = '#8890b8';
+  ctx.font = '14px monospace';
+  ctx.fillText('(the empty slots are waiting for future treasure...)', W / 2, py + ph - 40);
+  ctx.fillText('E to close', W / 2, py + ph - 18);
 }
 
 function drawTree(t, cam) {
@@ -709,9 +862,15 @@ function drawPlayer(cam) {
   ctx.ellipse(x, y + 8, 12, 5, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // body (explorer shirt) — blocky, like everything worth loving
-  ctx.fillStyle = '#c98a3d';
+  // body — regular shirt, OR gleaming plate armor if you've earned it
+  ctx.fillStyle = hasArmor ? '#b8c4d0' : '#c98a3d';
   ctx.fillRect(x - 8, y - 14 - bob, 16, 16);
+  if (hasArmor) {
+    ctx.fillStyle = '#dde6ee';                 // shine across the shoulders
+    ctx.fillRect(x - 8, y - 14 - bob, 16, 3);
+    ctx.fillStyle = '#8b98a8';                 // ridge down the middle
+    ctx.fillRect(x - 1, y - 11 - bob, 3, 12);
+  }
 
   // square head
   ctx.fillStyle = '#f2c79b';
@@ -782,10 +941,28 @@ function drawZombie(z, cam) {
 }
 
 // ---------------------------------------------------------------------
+// A blocky chestplate (for the victory screen and the inventory)
+// ---------------------------------------------------------------------
+function drawChestplate(cx, cy, s) {
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(s, s);
+  ctx.fillStyle = '#b8c4d0';
+  ctx.fillRect(-12, -10, 24, 20);    // chest
+  ctx.fillRect(-16, -10, 4, 8);      // left shoulder
+  ctx.fillRect(12, -10, 4, 8);       // right shoulder
+  ctx.fillStyle = '#dde6ee';
+  ctx.fillRect(-12, -10, 24, 4);     // shine across the top
+  ctx.fillStyle = '#8b98a8';
+  ctx.fillRect(-2, -6, 4, 14);       // ridge down the middle
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------------
 // A blocky pixel heart (two squares on top + a diamond below)
 // ---------------------------------------------------------------------
-function drawHeart(hx, hy, full) {
-  ctx.fillStyle = full ? '#ff4757' : 'rgba(255,255,255,0.25)';
+function drawHeart(hx, hy, full, color = '#ff4757') {
+  ctx.fillStyle = full ? color : 'rgba(255,255,255,0.25)';
   ctx.fillRect(hx, hy, 8, 8);
   ctx.fillRect(hx + 10, hy, 8, 8);
   ctx.save();
