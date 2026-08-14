@@ -43,13 +43,17 @@ addEventListener('resize', fitCanvas);
 let screen = 'menu';
 let current = null;            // the level being played
 let lockedMessageTimer = 0;
+let lockedText = '';           // what the menu says when you poke a locked level
 let inventoryOpen = false;     // is the bag open right now?
 
 // Did you ever beat Level 1? The browser remembers this FOREVER, even
 // after you close the game — localStorage is a tiny storage box every
 // game gets to keep stuff in between visits.
 let hasArmor = localStorage.getItem('explorer_plate_armor') === 'yes';
+let hasGoldSword = localStorage.getItem('explorer_gold_sword') === 'yes';
 let victoryTimer = 0;          // counts down the LEVEL COMPLETE celebration
+let victoryLevel = 1;          // which level we're celebrating
+let gateArmed = false;         // you must step AWAY from the gate before it teleports you
 
 // ---------------------------------------------------------------------
 // A pocket randomness machine: feed it the same number, get the same
@@ -67,15 +71,26 @@ function noise(n) {
 const LEVELS = [
   {
     name: 'The Dark Forest',
+    kind: 'forest',
     unlocked: true,
     grass: '#2c4423',          // gloomy, shadowy grass
     worldW: 2000,              // the world in pixels — much bigger than the screen
     worldH: 1500,
     start: { x: 150, y: 1350 },   // the path begins in the bottom-left corner
   },
-  { name: '???', unlocked: false },
+  {
+    name: 'Creeper Temple',
+    kind: 'temple',
+    unlocked: false,             // opens when you beat Level 1
+    grass: '#43453b',            // ancient stone floor
+    worldW: 1800,
+    worldH: 1400,
+    start: { x: 900, y: 1300 },  // the temple entrance, at the bottom
+  },
   { name: '???', unlocked: false },
 ];
+// if you earned the armor on a past visit, the temple is already open
+LEVELS[1].unlocked = hasArmor;
 
 // Things that live in the current level (filled in by buildForest)
 let trees = [];
@@ -84,8 +99,11 @@ let pond = null;
 let fireflies = [];
 let stumps = [];
 let zombies = [];
+let creepers = [];      // sssssss...
+let torches = [];       // flickering lights along the temple walkway
+let scorches = [];      // burn marks left by creeper explosions
 let emeralds = [];      // dropped treasure waiting to be grabbed
-let particles = [];     // flying bits when a zombie goes POOF
+let particles = [];     // flying bits when a monster goes POOF
 let emeraldCount = 0;   // your treasure so far
 
 // ---------------------------------------------------------------------
@@ -105,10 +123,10 @@ const gate = { x: 1850, y: 180, r: 34 };   // what's waiting at the end...
 
 // How far is this spot from the nearest piece of path? (We use this to
 // keep trees from growing in the middle of the trail.)
-function distToPath(x, y) {
+function distToPath(x, y, path = PATH) {
   let best = 999999;
-  for (let i = 0; i < PATH.length - 1; i++) {
-    const a = PATH[i], b = PATH[i + 1];
+  for (let i = 0; i < path.length - 1; i++) {
+    const a = path[i], b = path[i + 1];
     const dx = b.x - a.x, dy = b.y - a.y;
     // find the closest point on this piece of path, then measure to it
     const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / (dx * dx + dy * dy)));
@@ -116,6 +134,17 @@ function distToPath(x, y) {
   }
   return best;
 }
+
+// ---------------------------------------------------------------------
+// THE TEMPLE WALKWAY — the grand route from the entrance up to the
+// golden altar at the temple's heart.
+// ---------------------------------------------------------------------
+const TEMPLE_PATH = [
+  { x: 900,  y: 1300 }, { x: 900,  y: 1050 }, { x: 700,  y: 950 },
+  { x: 700,  y: 750 },  { x: 900,  y: 650 },  { x: 1100, y: 550 },
+  { x: 1100, y: 380 },  { x: 900,  y: 300 },  { x: 900,  y: 220 },
+];
+const altar = { x: 900, y: 200 };   // the golden altar. the prize.
 
 // ---------------------------------------------------------------------
 // BUILDING THE FOREST — scatter trees around the open world.
@@ -203,11 +232,97 @@ function buildForest(lv) {
     }
   }
 
+  creepers = [];
+  torches = [];
+  scorches = [];
   emeralds = [];
   particles = [];
   emeraldCount = 0;
   player.hp = player.maxHp;
   player.armor = hasArmor ? 3 : 0;   // suit up (if you've earned it)
+}
+
+// ---------------------------------------------------------------------
+// BUILDING THE CREEPER TEMPLE — ancient stone, torchlight, lava... and
+// the quiet green residents nobody invited.
+// ---------------------------------------------------------------------
+function buildTemple(lv) {
+  // rows of stone pillars, but ancient and ruined — some have fallen,
+  // and a wide walkway is kept clear from the entrance to the altar
+  trees = [];
+  let n = 0;
+  for (let gx = 140; gx < lv.worldW - 100; gx += 150) {
+    for (let gy = 140; gy < lv.worldH - 100; gy += 150) {
+      n++;
+      if (noise(n * 7.3) < 0.3) continue;             // this one fell down long ago
+      const x = gx + (noise(n * 3.1) - 0.5) * 50;
+      const y = gy + (noise(n * 5.7) - 0.5) * 50;
+      if (distToPath(x, y, TEMPLE_PATH) < 95) continue;
+      if (Math.hypot(x - altar.x, y - altar.y) < 140) continue;
+      if (Math.hypot(x - lv.start.x, y - lv.start.y) < 110) continue;
+      if (((x - 480) / 200) ** 2 + ((y - 520) / 150) ** 2 < 1) continue;   // lava zone
+      trees.push({ x, y, size: 0.9 + noise(n * 9.1) * 0.4, pillar: true });
+    }
+  }
+  // solid pillar walls around the edge of the temple
+  for (let x = 40; x < lv.worldW; x += 60) {
+    trees.push({ x, y: 35, size: 1.1, pillar: true });
+    trees.push({ x, y: lv.worldH - 35, size: 1.1, pillar: true });
+  }
+  for (let y = 40; y < lv.worldH; y += 60) {
+    trees.push({ x: 35, y, size: 1.1, pillar: true });
+    trees.push({ x: lv.worldW - 35, y, size: 1.1, pillar: true });
+  }
+
+  pond = { x: 480, y: 520, rx: 130, ry: 85, lava: true };   // not water. NOT water.
+  stumps = [];
+  flowers = [];
+  scorches = [];
+
+  // torches flank the walkway — a pair at every bend
+  torches = [];
+  for (let i = 0; i < TEMPLE_PATH.length - 1; i++) {
+    const a = TEMPLE_PATH[i], b = TEMPLE_PATH[i + 1];
+    torches.push({ x: (a.x + b.x) / 2 + 70, y: (a.y + b.y) / 2, torch: true });
+    torches.push({ x: (a.x + b.x) / 2 - 70, y: (a.y + b.y) / 2, torch: true });
+  }
+
+  // drifting embers instead of fireflies (same idea, temple colors)
+  fireflies = [];
+  for (let i = 0; i < 50; i++) {
+    fireflies.push({
+      x: noise(i * 21.3 + 9) * lv.worldW,
+      y: noise(i * 47.7 + 9) * lv.worldH,
+      phase: noise(i * 5.5) * 6.28,
+      speed: 0.5 + noise(i * 2.2),
+    });
+  }
+
+  // CREEPERS. They wait along the walkway. Ssssss.
+  creepers = [];
+  for (let i = 0; i < 220 && creepers.length < 10; i++) {
+    const x = noise(i * 57.1 + 4) * lv.worldW;
+    const y = noise(i * 33.7 + 4) * lv.worldH;
+    if (Math.hypot(x - lv.start.x, y - lv.start.y) < 320) continue;
+    if (distToPath(x, y, TEMPLE_PATH) > 70) continue;
+    if (Math.hypot(x - altar.x, y - altar.y) < 160) continue;
+    creepers.push({
+      x, y,
+      creeper: true,
+      hp: 2,
+      fuse: 0,                       // when this is ticking, RUN (or bonk it)
+      wanderAngle: noise(i) * 6.28,
+      lastHitSwing: 0,
+      hurtFlash: 0,
+    });
+  }
+
+  zombies = [];
+  emeralds = [];
+  particles = [];
+  emeraldCount = 0;
+  player.hp = player.maxHp;
+  player.armor = hasArmor ? 3 : 0;
 }
 
 // ---------------------------------------------------------------------
@@ -242,9 +357,11 @@ function swingSword() {
 
 function startLevel(i) {
   current = LEVELS[i];
-  buildForest(current);
+  if (current.kind === 'temple') buildTemple(current);
+  else buildForest(current);
   player.x = current.start.x;
   player.y = current.start.y;
+  gateArmed = false;
   screen = 'playing';
 }
 
@@ -258,9 +375,10 @@ function blocked(x, y, r = player.radius) {
   // the pond (explorers hate wet socks; zombies can't swim either)
   if (((x - pond.x) / (pond.rx + r)) ** 2 +
       ((y - pond.y) / (pond.ry + r)) ** 2 < 1) return true;
-  // tree trunks — checks the distance to each trunk
+  // tree trunks and stone pillars — pillars are fatter than trunks
   for (const t of trees) {
-    if (Math.hypot(x - t.x, y - t.y) < r + 13 * t.size) return true;
+    const chunk = t.pillar ? 18 : 13;
+    if (Math.hypot(x - t.x, y - t.y) < r + chunk * t.size) return true;
   }
   return false;
 }
@@ -275,7 +393,11 @@ addEventListener('keydown', e => {
     const n = parseInt(e.key) - 1;
     if (n >= 0 && n < LEVELS.length) {
       if (LEVELS[n].unlocked) startLevel(n);
-      else lockedMessageTimer = 2;
+      else {
+        lockedText = n === 1 ? 'Beat Level 1 to open the Creeper Temple!'
+                             : "You haven't invented that level yet!";
+        lockedMessageTimer = 2;
+      }
     }
   } else if (e.key === 'Escape') {
     if (inventoryOpen) inventoryOpen = false;   // Esc closes the bag first...
@@ -400,7 +522,7 @@ function update(dt) {
     if (player.attackTime > 0 && z.lastHitSwing !== player.swingId &&
         distToYou < 55 && (z.x - player.x) * player.facing > -8) {
       z.lastHitSwing = player.swingId;
-      z.hp -= 1;
+      z.hp -= hasGoldSword ? 2 : 1;    // golden sword = one-bonk wonders
       z.hurtFlash = 0.15;
       // knock it backwards, away from you
       const push = 40 / Math.max(1, distToYou);
@@ -439,6 +561,95 @@ function update(dt) {
   }
   zombies = zombies.filter(z => z.hp > 0);   // sweep up the defeated
 
+  // ---- CREEPERS (temple only) ----
+  for (const c of creepers) {
+    if (c.hurtFlash > 0) c.hurtFlash -= dt;
+    const distToYou = Math.hypot(player.x - c.x, player.y - c.y);
+
+    if (c.fuse > 0) {
+      // SSSSSS — it's lit! It stands still, swells up, and counts down.
+      c.fuse -= dt;
+      if (distToYou > 120) {
+        c.fuse = 0;                    // you got away — it fizzles out, annoyed
+      } else if (c.fuse <= 0) {
+        // ---- BOOM ----
+        for (let i = 0; i < 30; i++) {
+          particles.push({
+            x: c.x, y: c.y - 10,
+            vx: (noise(i * 3.7 + elapsed) - 0.5) * 420,
+            vy: (noise(i * 8.1 + elapsed) - 0.6) * 380,
+            life: 0.7,
+            color: ['#ff9f43', '#ffd23f', '#7f8c8d', '#4a9e4a'][i % 4],
+          });
+        }
+        scorches.push({ x: c.x, y: c.y });   // permanent burn mark. rude.
+        c.hp = 0;
+        c.exploded = true;             // exploded creepers destroy their own loot
+        if (distToYou < 100 && player.deathTimer <= 0) {
+          // an explosion hits TWICE — armor takes the hits first
+          for (let i = 0; i < 2; i++) {
+            if (player.armor > 0) player.armor -= 1;
+            else player.hp -= 1;
+          }
+          player.hurtTimer = 1;
+          // and it LAUNCHES you
+          const push = 130 / Math.max(20, distToYou);
+          const nx = player.x + (player.x - c.x) * push;
+          const ny = player.y + (player.y - c.y) * push;
+          if (!blocked(nx, player.y)) player.x = nx;
+          if (!blocked(player.x, ny)) player.y = ny;
+          if (player.hp <= 0) player.deathTimer = 2.5;
+        }
+      }
+    } else if (distToYou < 60 && player.deathTimer <= 0) {
+      c.fuse = 1.1;                    // uh oh. you have 1.1 seconds.
+    } else {
+      // same tiny brain as a zombie: chase if close, wander if bored
+      let cdx, cdy, creeperSpeed;
+      if (distToYou < 230 && player.deathTimer <= 0) {
+        cdx = (player.x - c.x) / distToYou;
+        cdy = (player.y - c.y) / distToYou;
+        creeperSpeed = 85;
+      } else {
+        c.wanderAngle += (noise(Math.floor(elapsed) + c.x) - 0.5) * dt * 4;
+        cdx = Math.cos(c.wanderAngle);
+        cdy = Math.sin(c.wanderAngle);
+        creeperSpeed = 24;
+      }
+      const cx2 = c.x + cdx * creeperSpeed * dt;
+      const cy2 = c.y + cdy * creeperSpeed * dt;
+      if (!blocked(cx2, c.y, 10)) c.x = cx2;
+      if (!blocked(c.x, cy2, 10)) c.y = cy2;
+    }
+
+    // sword bonk — it also knocks the hiss right out of them
+    if (player.attackTime > 0 && c.lastHitSwing !== player.swingId &&
+        distToYou < 55 && (c.x - player.x) * player.facing > -8 && c.hp > 0) {
+      c.lastHitSwing = player.swingId;
+      c.hp -= hasGoldSword ? 2 : 1;
+      c.hurtFlash = 0.15;
+      c.fuse = 0;                      // interrupted mid-hiss!
+      const push = 40 / Math.max(1, distToYou);
+      if (!blocked(c.x + (c.x - player.x) * push, c.y, 10)) c.x += (c.x - player.x) * push;
+      if (!blocked(c.x, c.y + (c.y - player.y) * push, 10)) c.y += (c.y - player.y) * push;
+      if (c.hp <= 0) {
+        for (let i = 0; i < 14; i++) {
+          particles.push({
+            x: c.x, y: c.y - 14,
+            vx: (noise(i * 3.3 + elapsed) - 0.5) * 240,
+            vy: (noise(i * 7.7 + elapsed) - 0.9) * 220,
+            life: 0.6,
+            color: i % 2 ? '#3faf3f' : '#2e8b57',
+          });
+        }
+        // a properly defused creeper drops DOUBLE emeralds
+        emeralds.push({ x: c.x - 10, y: c.y, born: elapsed });
+        emeralds.push({ x: c.x + 10, y: c.y, born: elapsed });
+      }
+    }
+  }
+  creepers = creepers.filter(c => c.hp > 0);
+
   if (player.hurtTimer > 0) player.hurtTimer -= dt;
 
   // down for the count → respawn back at camp
@@ -452,14 +663,37 @@ function update(dt) {
     }
   }
 
-  // ---- BEATING THE LEVEL ----
-  // Reaching the gate for the first time = Level 1 complete → PLATE ARMOR!
-  if (!hasArmor && player.deathTimer <= 0 &&
-      Math.hypot(player.x - gate.x, player.y - gate.y) < 60) {
-    hasArmor = true;
-    player.armor = 3;
-    localStorage.setItem('explorer_plate_armor', 'yes');   // remembered forever
+  // ---- THE GATE (forest only) ----
+  if (current.kind === 'forest') {
+    const gateDist = Math.hypot(player.x - gate.x, player.y - gate.y);
+    // the gate only "arms" once you've been properly away from it, so it
+    // can't teleport you again the instant you arrive
+    if (gateDist > 100) gateArmed = true;
+    if (player.deathTimer <= 0 && gateDist < 55) {
+      if (!hasArmor) {
+        // first time here = Level 1 complete → PLATE ARMOR!
+        hasArmor = true;
+        player.armor = 3;
+        localStorage.setItem('explorer_plate_armor', 'yes');   // remembered forever
+        LEVELS[1].unlocked = true;                             // the temple opens
+        victoryTimer = 5;
+        victoryLevel = 1;
+        gateArmed = false;
+      } else if (gateArmed) {
+        startLevel(1);               // through the gate → THE CREEPER TEMPLE
+        return;
+      }
+    }
+  }
+
+  // ---- THE ALTAR (temple only) ----
+  // Reach the golden altar = Level 2 complete → THE GOLDEN SWORD!
+  if (current.kind === 'temple' && !hasGoldSword && player.deathTimer <= 0 &&
+      Math.hypot(player.x - altar.x, player.y - altar.y) < 70) {
+    hasGoldSword = true;
+    localStorage.setItem('explorer_gold_sword', 'yes');
     victoryTimer = 5;
+    victoryLevel = 2;
   }
 
   // walk near an emerald and it hops into your pocket
@@ -547,15 +781,45 @@ function drawGame() {
     ctx.restore();
   }
 
-  // the pond — dark, still night water
-  ctx.fillStyle = '#1d3a55';
+  // scorch marks from creeper explosions (they never wash off)
+  for (const s of scorches) {
+    ctx.fillStyle = 'rgba(20, 15, 10, 0.55)';
+    ctx.beginPath();
+    ctx.ellipse(s.x - cam.x, s.y - cam.y, 34, 22, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // the pool — cold dark water in the forest... bubbling LAVA in the temple
+  ctx.fillStyle = pond.lava ? '#8a2f0e' : '#1d3a55';
   ctx.beginPath();
   ctx.ellipse(pond.x - cam.x, pond.y - cam.y, pond.rx, pond.ry, 0, 0, Math.PI * 2);
   ctx.fill();
-  ctx.fillStyle = '#28516f';
+  ctx.fillStyle = pond.lava ? '#e2641e' : '#28516f';
   ctx.beginPath();
   ctx.ellipse(pond.x - cam.x, pond.y - cam.y, pond.rx * 0.8, pond.ry * 0.8, 0, 0, Math.PI * 2);
   ctx.fill();
+  if (pond.lava) {
+    // bright blobs slowly swimming around so the lava looks alive
+    ctx.fillStyle = '#ff9f43';
+    for (let i = 0; i < 7; i++) {
+      const bx = pond.x + Math.sin(elapsed * 0.7 + i * 2.1) * pond.rx * 0.55 - cam.x;
+      const by = pond.y + Math.cos(elapsed * 0.5 + i * 1.3) * pond.ry * 0.55 - cam.y;
+      ctx.fillRect(bx - 5, by - 4, 10, 8);
+    }
+  }
+
+  // the golden altar at the temple's heart
+  if (current.kind === 'temple') {
+    const ax = altar.x - cam.x, ay = altar.y - cam.y;
+    ctx.fillStyle = '#6e7069';                     // stone steps
+    ctx.fillRect(ax - 44, ay - 6, 88, 18);
+    ctx.fillStyle = '#e8b93a';                     // the gold block
+    ctx.fillRect(ax - 18, ay - 42, 36, 38);
+    ctx.fillStyle = '#ffe38a';                     // shine on top
+    ctx.fillRect(ax - 18, ay - 42, 36, 9);
+    ctx.fillStyle = '#a8801a';                     // shadow at the base
+    ctx.fillRect(ax - 18, ay - 10, 36, 6);
+  }
 
   // flowers (flat on the ground, so they go before trees and you)
   for (const f of flowers) {
@@ -570,11 +834,14 @@ function drawGame() {
   // ---- THE DRAW-ORDER TRICK ----
   // Put the trees and YOU in one list, sort it by how far down the world
   // each thing is, then draw top-to-bottom. Lower = drawn later = in front.
-  const things = [...trees, ...zombies, player];
+  const things = [...trees, ...zombies, ...creepers, ...torches, player];
   things.sort((a, b) => a.y - b.y);
   for (const thing of things) {
     if (thing === player) drawPlayer(cam);
     else if (thing.zombie) drawZombie(thing, cam);
+    else if (thing.creeper) drawCreeper(thing, cam);
+    else if (thing.torch) drawTorch(thing, cam);
+    else if (thing.pillar) drawPillar(thing, cam);
     else drawTree(thing, cam);
   }
 
@@ -610,9 +877,13 @@ function drawGame() {
     const fy = f.y + Math.cos(elapsed * f.speed * 0.7 + f.phase * 2) * 26 - cam.y;
     if (fx < -10 || fy < -10 || fx > canvas.width + 10 || fy > canvas.height + 10) continue;
     const twinkle = 0.5 + 0.5 * Math.sin(elapsed * 3 + f.phase * 7);
-    ctx.fillStyle = `rgba(190, 255, 130, ${0.15 + 0.25 * twinkle})`;
+    // green fireflies in the forest, orange embers in the temple
+    const ember = current.kind === 'temple';
+    ctx.fillStyle = ember ? `rgba(255, 150, 70, ${0.15 + 0.25 * twinkle})`
+                          : `rgba(190, 255, 130, ${0.15 + 0.25 * twinkle})`;
     ctx.beginPath(); ctx.arc(fx, fy, 5, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = `rgba(220, 255, 170, ${0.4 + 0.5 * twinkle})`;
+    ctx.fillStyle = ember ? `rgba(255, 210, 140, ${0.4 + 0.5 * twinkle})`
+                          : `rgba(220, 255, 170, ${0.4 + 0.5 * twinkle})`;
     ctx.beginPath(); ctx.arc(fx, fy, 2, 0, Math.PI * 2); ctx.fill();
   }
 
@@ -625,27 +896,60 @@ function drawGame() {
     ctx.fillRect(zx + 2, zy - 26, 3, 3);
   }
 
-  // the gate at the end of the path — its glow cuts through the gloom
-  const gx = gate.x - cam.x, gy = gate.y - cam.y;
-  const pulse = 1 + 0.08 * Math.sin(elapsed * 2.5);
-  const glow = ctx.createRadialGradient(gx, gy, 4, gx, gy, 100);
-  glow.addColorStop(0, 'rgba(120, 210, 255, 0.4)');
-  glow.addColorStop(1, 'rgba(120, 210, 255, 0)');
-  ctx.fillStyle = glow;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.strokeStyle = '#7fd4ff';
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.arc(gx, gy, gate.r * pulse, 0, Math.PI * 2);
-  ctx.stroke();
+  if (current.kind === 'forest') {
+    // the gate at the end of the trail — its glow cuts through the gloom
+    const gx = gate.x - cam.x, gy = gate.y - cam.y;
+    const pulse = 1 + 0.08 * Math.sin(elapsed * 2.5);
+    const glow = ctx.createRadialGradient(gx, gy, 4, gx, gy, 100);
+    glow.addColorStop(0, 'rgba(120, 210, 255, 0.4)');
+    glow.addColorStop(1, 'rgba(120, 210, 255, 0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(gx - 110, gy - 110, 220, 220);
+    ctx.strokeStyle = '#7fd4ff';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(gx, gy, gate.r * pulse, 0, Math.PI * 2);
+    ctx.stroke();
 
-  // stand close to the gate and it talks to you
-  if (Math.hypot(player.x - gate.x, player.y - gate.y) < 90) {
-    ctx.textAlign = 'center';
-    ctx.fillStyle = '#aee3ff';
-    ctx.font = '18px monospace';
-    ctx.fillText('A mysterious gate hums softly...', canvas.width / 2, 60);
-    ctx.fillText("It leads to Level 2 — which you haven't invented yet!", canvas.width / 2, 85);
+    // stand close to the gate and it talks to you
+    if (Math.hypot(player.x - gate.x, player.y - gate.y) < 90) {
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#aee3ff';
+      ctx.font = '18px monospace';
+      if (hasArmor) {
+        ctx.fillText('The gate hums, wide awake now...', canvas.width / 2, 60);
+        ctx.fillText('Walk through → THE CREEPER TEMPLE', canvas.width / 2, 85);
+      } else {
+        ctx.fillText('A mysterious gate hums softly...', canvas.width / 2, 60);
+      }
+    }
+  }
+
+  if (current.kind === 'temple') {
+    // torchlight pushes back the dark along the walkway
+    for (const t of torches) {
+      const tx = t.x - cam.x, ty = t.y - cam.y - 28;
+      if (tx < -120 || ty < -120 || tx > canvas.width + 120 || ty > canvas.height + 120) continue;
+      const tg = ctx.createRadialGradient(tx, ty, 3, tx, ty, 95);
+      tg.addColorStop(0, 'rgba(255, 170, 80, 0.30)');
+      tg.addColorStop(1, 'rgba(255, 170, 80, 0)');
+      ctx.fillStyle = tg;
+      ctx.fillRect(tx - 95, ty - 95, 190, 190);
+    }
+    // the lava glows from below
+    const lx = pond.x - cam.x, ly = pond.y - cam.y;
+    const lg = ctx.createRadialGradient(lx, ly, 10, lx, ly, pond.rx * 1.7);
+    lg.addColorStop(0, 'rgba(255, 120, 40, 0.30)');
+    lg.addColorStop(1, 'rgba(255, 120, 40, 0)');
+    ctx.fillStyle = lg;
+    ctx.fillRect(lx - pond.rx * 1.7, ly - pond.rx * 1.7, pond.rx * 3.4, pond.rx * 3.4);
+    // and the altar shines gold
+    const ax = altar.x - cam.x, ay = altar.y - cam.y - 20;
+    const ag = ctx.createRadialGradient(ax, ay, 5, ax, ay, 130);
+    ag.addColorStop(0, 'rgba(255, 215, 90, 0.35)');
+    ag.addColorStop(1, 'rgba(255, 215, 90, 0)');
+    ctx.fillStyle = ag;
+    ctx.fillRect(ax - 130, ay - 130, 260, 260);
   }
 
   // sword button, only on touch screens (phones/tablets)
@@ -698,7 +1002,9 @@ function drawGame() {
     ctx.textAlign = 'center';
     ctx.fillStyle = '#ffdddd';
     ctx.font = 'bold 34px monospace';
-    ctx.fillText('The zombies got you!', canvas.width / 2, canvas.height / 2 - 10);
+    ctx.fillText(current.kind === 'temple' ? 'BOOM! The creepers got you!'
+                                           : 'The zombies got you!',
+                 canvas.width / 2, canvas.height / 2 - 10);
     ctx.font = '18px monospace';
     ctx.fillText('Respawning at camp...', canvas.width / 2, canvas.height / 2 + 24);
   }
@@ -729,15 +1035,35 @@ function drawGame() {
     ctx.textAlign = 'center';
     ctx.fillStyle = '#ffd23f';
     ctx.font = 'bold 40px monospace';
-    ctx.fillText('LEVEL 1 COMPLETE!', canvas.width / 2, canvas.height / 2 - 60);
-    drawChestplate(canvas.width / 2, canvas.height / 2 + 4, 2.4);
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 22px monospace';
-    ctx.fillText('You found: PLATE ARMOR', canvas.width / 2, canvas.height / 2 + 62);
-    ctx.fillStyle = '#bfd4e8';
-    ctx.font = '16px monospace';
-    ctx.fillText('3 armor points — they take the hits before your hearts do',
-                 canvas.width / 2, canvas.height / 2 + 90);
+    ctx.fillText(`LEVEL ${victoryLevel} COMPLETE!`, canvas.width / 2, canvas.height / 2 - 60);
+    if (victoryLevel === 1) {
+      drawChestplate(canvas.width / 2, canvas.height / 2 + 4, 2.4);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 22px monospace';
+      ctx.fillText('You found: PLATE ARMOR', canvas.width / 2, canvas.height / 2 + 62);
+      ctx.fillStyle = '#bfd4e8';
+      ctx.font = '16px monospace';
+      ctx.fillText('3 armor points — they take the hits before your hearts do',
+                   canvas.width / 2, canvas.height / 2 + 90);
+    } else {
+      // the golden sword, displayed big and proud
+      ctx.save();
+      ctx.translate(canvas.width / 2, canvas.height / 2 + 4);
+      ctx.rotate(-Math.PI / 4);
+      ctx.scale(2.4, 2.4);
+      ctx.fillStyle = '#5b3b1e'; ctx.fillRect(-14, -2, 7, 4);
+      ctx.fillStyle = '#c9a83c'; ctx.fillRect(-8, -5, 3, 10);
+      ctx.fillStyle = '#f2c94c'; ctx.fillRect(-5, -2, 17, 4);
+      ctx.fillStyle = '#fff3b8'; ctx.fillRect(-5, -2, 17, 1.5);
+      ctx.restore();
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 22px monospace';
+      ctx.fillText('You found: THE GOLDEN SWORD', canvas.width / 2, canvas.height / 2 + 62);
+      ctx.fillStyle = '#bfd4e8';
+      ctx.font = '16px monospace';
+      ctx.fillText('One bonk and monsters go POOF',
+                   canvas.width / 2, canvas.height / 2 + 90);
+    }
   }
 
   // the bag goes on top of everything
@@ -791,12 +1117,12 @@ function drawInventory() {
   ctx.scale(1.8, 1.8);
   ctx.fillStyle = '#5b3b1e'; ctx.fillRect(-14, -2, 7, 4);     // handle
   ctx.fillStyle = '#c9a83c'; ctx.fillRect(-8, -5, 3, 10);     // crossguard
-  ctx.fillStyle = '#dbe4ee'; ctx.fillRect(-5, -2, 17, 4);     // blade
-  ctx.fillStyle = '#ffffff'; ctx.fillRect(-5, -2, 17, 1.5);   // shiny edge
+  ctx.fillStyle = hasGoldSword ? '#f2c94c' : '#dbe4ee'; ctx.fillRect(-5, -2, 17, 4);     // blade
+  ctx.fillStyle = hasGoldSword ? '#fff3b8' : '#ffffff'; ctx.fillRect(-5, -2, 17, 1.5);   // shiny edge
   ctx.restore();
   ctx.fillStyle = '#cdd6f4';
   ctx.font = '13px monospace';
-  ctx.fillText('Sword', startX + slot / 2, startY + slot + 16);
+  ctx.fillText(hasGoldSword ? 'Golden Sword' : 'Sword', startX + slot / 2, startY + slot + 16);
 
   // SLOT 2: emeralds, with how many you've got
   const ex = startX + slot + gap + slot / 2, ey = startY + slot / 2;
@@ -898,8 +1224,8 @@ function drawPlayer(cam) {
 
   ctx.fillStyle = '#5b3b1e'; ctx.fillRect(0, -2, 7, 4);      // handle
   ctx.fillStyle = '#c9a83c'; ctx.fillRect(6, -5, 3, 10);     // crossguard
-  ctx.fillStyle = '#dbe4ee'; ctx.fillRect(9, -2, 17, 4);     // blade
-  ctx.fillStyle = '#ffffff'; ctx.fillRect(9, -2, 17, 1.5);   // shiny edge
+  ctx.fillStyle = hasGoldSword ? '#f2c94c' : '#dbe4ee'; ctx.fillRect(9, -2, 17, 4);     // blade
+  ctx.fillStyle = hasGoldSword ? '#fff3b8' : '#ffffff'; ctx.fillRect(9, -2, 17, 1.5);   // shiny edge
 
   // the whoosh trail, fading out as the swing finishes
   if (swinging) {
@@ -938,6 +1264,76 @@ function drawZombie(z, cam) {
   ctx.fillStyle = flash ? '#ffffff' : '#4a9e4a';   // grabby arms, reaching for YOU
   ctx.fillRect(x - 12, y - 12 - stomp, 4, 9);
   ctx.fillRect(x + 8, y - 12 - stomp, 4, 9);
+}
+
+// ---------------------------------------------------------------------
+// A CREEPER — that face. THAT face. It flashes and swells when lit.
+// ---------------------------------------------------------------------
+function drawCreeper(c, cam) {
+  const x = c.x - cam.x, y = c.y - cam.y;
+  if (x < -40 || y < -60 || x > canvas.width + 40 || y > canvas.height + 60) return;
+
+  const lit = c.fuse > 0;
+  // swell = it puffs up bigger and bigger as the fuse burns down
+  const swell = lit ? 1 + (1.1 - c.fuse) * 0.25 : 1;
+  const flash = c.hurtFlash > 0 || (lit && Math.floor(elapsed * 12) % 2 === 0);
+
+  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  ctx.beginPath();
+  ctx.ellipse(x, y + 8, 11 * swell, 5 * swell, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = flash ? '#ffffff' : '#3faf3f';
+  ctx.fillRect(x - 8 * swell, y - 16 * swell, 16 * swell, 18 * swell);  // body
+  ctx.fillRect(x - 8 * swell, y - 33 * swell, 16 * swell, 16 * swell);  // head
+  ctx.fillRect(x - 9 * swell, y - 2, 7, 5);                             // stubby feet
+  ctx.fillRect(x + 2 * swell, y - 2, 7, 5);
+
+  // the famous frown
+  ctx.fillStyle = '#143814';
+  ctx.fillRect(x - 6 * swell, y - 29 * swell, 4, 4);   // eyes
+  ctx.fillRect(x + 2 * swell, y - 29 * swell, 4, 4);
+  ctx.fillRect(x - 3 * swell, y - 24 * swell, 6, 4);   // nose-mouth
+  ctx.fillRect(x - 5 * swell, y - 21 * swell, 4, 5);   // frown corners
+  ctx.fillRect(x + 1 * swell, y - 21 * swell, 4, 5);
+}
+
+// ---------------------------------------------------------------------
+// A STONE PILLAR — ancient, mossy, very in-the-way
+// ---------------------------------------------------------------------
+function drawPillar(p, cam) {
+  const x = p.x - cam.x, y = p.y - cam.y;
+  if (x < -60 || y < -100 || x > canvas.width + 60 || y > canvas.height + 100) return;
+  const s = p.size;
+
+  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  ctx.beginPath();
+  ctx.ellipse(x + 5, y + 5, 20 * s, 8 * s, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#565851'; ctx.fillRect(x - 17 * s, y - 8 * s, 34 * s, 12 * s);   // base
+  ctx.fillStyle = '#75776e'; ctx.fillRect(x - 13 * s, y - 62 * s, 26 * s, 58 * s);  // shaft
+  ctx.fillStyle = '#8b8d83'; ctx.fillRect(x - 13 * s, y - 62 * s, 8 * s, 58 * s);   // lit edge
+  // moss patches — noise() means each pillar keeps its own moss forever
+  ctx.fillStyle = '#3f6a34';
+  if (noise(p.x * 1.7) > 0.4) ctx.fillRect(x - 13 * s, y - 30 * s, 10 * s, 12 * s);
+  if (noise(p.y * 2.3) > 0.5) ctx.fillRect(x + 2 * s, y - 52 * s, 9 * s, 10 * s);
+  ctx.fillStyle = '#63655c'; ctx.fillRect(x - 17 * s, y - 70 * s, 34 * s, 10 * s);  // cap
+}
+
+// ---------------------------------------------------------------------
+// A TORCH — a stick with a flickering flame on top
+// ---------------------------------------------------------------------
+function drawTorch(t, cam) {
+  const x = t.x - cam.x, y = t.y - cam.y;
+  if (x < -30 || y < -50 || x > canvas.width + 30 || y > canvas.height + 50) return;
+  ctx.fillStyle = '#5b3b1e';
+  ctx.fillRect(x - 2, y - 26, 5, 26);
+  const flick = noise(Math.floor(elapsed * 8) + t.x) * 3;   // flame wobble
+  ctx.fillStyle = '#ff9f43';
+  ctx.fillRect(x - 4, y - 34 - flick, 9, 9 + flick);
+  ctx.fillStyle = '#ffd23f';
+  ctx.fillRect(x - 2, y - 31 - flick, 5, 6 + flick);
 }
 
 // ---------------------------------------------------------------------
@@ -1017,13 +1413,15 @@ function drawMenu() {
     ctx.font = `${ch * 0.14}px monospace`;
     ctx.fillText(lv.name, cx + cw / 2, cy + ch * 0.62);
     ctx.font = `${ch * 0.11}px monospace`;
-    ctx.fillText(lv.unlocked ? 'press 1 or tap' : 'locked', cx + cw / 2, cy + ch * 0.85);
+    ctx.fillText(lv.unlocked ? `press ${i + 1} or tap`
+               : i === 1 ? 'beat Level 1 first'
+               : 'locked', cx + cw / 2, cy + ch * 0.85);
   }
 
   if (lockedMessageTimer > 0) {
     ctx.fillStyle = '#ff9f43';
     ctx.font = '18px monospace';
-    ctx.fillText("You haven't invented that level yet!", W / 2, H * 0.42 + ch + 45);
+    ctx.fillText(lockedText, W / 2, H * 0.42 + ch + 45);
   }
 }
 
@@ -1032,7 +1430,11 @@ function tryPickLevel(px, py) {
     const c = cards[i];
     if (px > c.x && px < c.x + c.w && py > c.y && py < c.y + c.h) {
       if (LEVELS[i].unlocked) startLevel(i);
-      else lockedMessageTimer = 2;
+      else {
+        lockedText = i === 1 ? 'Beat Level 1 to open the Creeper Temple!'
+                             : "You haven't invented that level yet!";
+        lockedMessageTimer = 2;
+      }
     }
   }
 }
