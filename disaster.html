@@ -591,6 +591,7 @@ const BUZZ = {
   flood:   [200, 80, 300],
   balls:   [30, 50, 30, 50, 30, 50, 30],
   badguys: [80, 60, 80, 60, 80],
+  dinos:   [260, 120, 260, 120, 420],     // great big footsteps, then a ROAR
 };
 function buzz(type) {
   try { if (navigator.vibrate) navigator.vibrate(BUZZ[type] || 180); } catch (e) {}
@@ -656,6 +657,24 @@ function beginDisaster(type) {
       });
     }
     disasters.push({ type, life: 3.8, balls });
+  } else if (type === 'dinos') {
+    // TWO HUNGRY DINOSAURS stomp in from opposite edges of the map.
+    for (let i = 0; i < 2; i++) {
+      const side = Math.floor(Math.random() * 4);
+      dinos.push({
+        x: side === 0 ? -40 : side === 1 ? gridW() + 40 : Math.random() * gridW(),
+        y: side === 2 ? TOPBAR - 30 : side === 3 ? TOPBAR + gridH() + 30
+                                    : TOPBAR + Math.random() * gridH(),
+        angle: 0, face: 1,
+        walk: Math.random() * 6.28,
+        hp: 7,                   // knights and bandits CAN bring one down
+        hurt: 0,                 // flashes red when it takes a hit
+        life: 22,                // how long it hunts before wandering off
+        meal: null,              // whoever is currently in its jaws
+        phase: null, phaseT: 0,  // the eating animation
+        fed: 0,                  // how many it's swallowed (pies follow...)
+      });
+    }
   } else if (type === 'badguys') {
     // a GANG of four, storming in from the edges of town
     for (let i = 0; i < 4; i++) {
@@ -681,6 +700,18 @@ function beginDisaster(type) {
 // ---------------------------------------------------------------------
 let badGuys = [];
 let badGuysDefeated = 0;   // the knights keep score
+
+// ---------------------------------------------------------------------
+// DINOSAURS. They are not interested in your buildings — they stomp right
+// over the top of them without leaving a scratch. They are interested in
+// anything that MOVES: people, cows, dogs, knights, and yes, bad guys.
+// Knights and bad guys are the only ones who fight back, and enough of
+// them together really can bring a dinosaur down.
+// ---------------------------------------------------------------------
+let dinos = [];
+let eaten = 0;
+let dinosFelled = 0;
+const EAT_LUNGE = 0.32, EAT_CHOMP = 0.38, EAT_GULP = 0.42;
 
 // SOMETHING HIT A BUILDING. It doesn't just vanish any more — it takes
 // damage and gets uglier: pristine -> lightly damaged -> heavily damaged ->
@@ -903,6 +934,7 @@ const MACHINE_MENU = [
   { label: '🌊 Flood',        type: 'flood',   cost: 12 },
   { label: '🔴 Rubber Balls', type: 'balls',   cost: 9 },
   { label: '🦹 Bad Guys',     type: 'badguys', cost: 10 },
+  { label: '🦖 Dinosaurs',    type: 'dinos',   cost: 14 },
 ];
 
 // quick point-in-box test, used all over the input code
@@ -1602,6 +1634,44 @@ function update(dt) {
       continue;
     }
 
+    // A DINOSAUR BEARING DOWN ON THEM changes a bandit's priorities. They
+    // stop robbing the place and lay into it with the club — cowardly, but
+    // a gang of them swinging together does add up.
+    let nearDino = null, dBest = 1e9;
+    for (const D4 of dinos) {
+      if (D4.gone) continue;
+      // a dinosaur is huge, so measure to its body and allow for its bulk
+      const d2 = Math.hypot(D4.x - b.x, (D4.y - 40) - b.y) - 26;
+      if (d2 < dBest) { dBest = d2; nearDino = D4; }
+    }
+    if (nearDino && dBest < 130) {
+      if (dBest > 34) {                      // out of reach — back away from it
+        b.angle = Math.atan2(b.y - nearDino.y, b.x - nearDino.x);
+        b.x += Math.cos(b.angle) * 70 * dt;
+        b.y += Math.sin(b.angle) * 70 * dt;
+      } else if (!(b.swing > 0)) {
+        b.swing = 1.1;                       // WHACK (slower than a knight's blade)
+        nearDino.hp -= 1;
+        nearDino.hurt = 0.35;
+        shake = Math.max(shake, 0.2);
+        for (let i = 0; i < 5; i++) {
+          debris.push({ x: nearDino.x, y: nearDino.y - 40,
+            vx: (Math.random() - 0.5) * 300, vy: -Math.random() * 240 - 30,
+            spin: Math.random() * 10, life: 0.5, color: '#5c8a4a' });
+        }
+        if (nearDino.hp <= 0) {
+          nearDino.gone = true;
+          dinosFelled++;
+          shake = Math.max(shake, 0.7);
+          dropLitter(nearDino.x, nearDino.y, 'dinopie');
+          setStatus('🦹 The bad guys clubbed a dinosaur down!', '#ffb454');
+        }
+      }
+      b.x = Math.max(10, Math.min(gridW() - 10, b.x));
+      b.y = Math.max(TOPBAR + 10, Math.min(TOPBAR + gridH() - 10, b.y));
+      continue;
+    }
+
     // find the nearest smashable shelter (bunkers are club-proof)
     let target = null, best = 999999;
     for (let gy = 0; gy < ROWS; gy++) {
@@ -1661,7 +1731,94 @@ function update(dt) {
   }
   badGuys = badGuys.filter(b => !b.gone);
 
-  const panicking = disasters.length > 0 || badGuys.length > 0;
+  // ---- DINOSAURS: hunt, grab, chomp, swallow, repeat ----
+  for (const D2 of dinos) {
+    D2.life -= dt;
+    if (D2.hurt > 0) D2.hurt -= dt;
+    D2.walk += dt * (D2.meal ? 2 : 5);
+
+    // MID-MEAL? Then it isn't going anywhere until it's finished.
+    if (D2.meal) {
+      D2.phaseT += dt;
+      if (D2.phase === 'lunge' && D2.phaseT >= EAT_LUNGE) {
+        D2.phase = 'chomp'; D2.phaseT = 0;
+        shake = Math.max(shake, 0.4);
+        buzz('dinos');
+        // a spray of bits as the jaws come together
+        for (let i = 0; i < 10; i++) {
+          debris.push({ x: D2.x + D2.face * 34, y: D2.y - 54,
+            vx: (Math.random() - 0.5) * 380, vy: -Math.random() * 300 - 40,
+            spin: Math.random() * 10, life: 0.6,
+            color: i % 3 === 0 ? '#c0392b' : i % 3 === 1 ? (D2.meal.shirt || '#e8e8e8') : '#8a8178' });
+        }
+      } else if (D2.phase === 'chomp' && D2.phaseT >= EAT_CHOMP) {
+        D2.phase = 'gulp'; D2.phaseT = 0;
+      } else if (D2.phase === 'gulp' && D2.phaseT >= EAT_GULP) {
+        // DOWN IT GOES
+        D2.meal = null; D2.phase = null; D2.phaseT = 0;
+        D2.fed++;
+        eaten++;
+        // every couple of meals... well. Dinosaurs are not tidy.
+        if (D2.fed % 2 === 0) {
+          const L = dropLitter(D2.x - D2.face * 46, D2.y + 6, 'dinopie');
+          if (L) L.big = true;
+        }
+      }
+      continue;
+    }
+
+    // WHO'S FOR DINNER? Anything that moves — but not anyone safely indoors.
+    let prey = null, pBest = 1e9, preyIsBandit = false;
+    for (const q of people) {
+      if (q.gone || q.sheltering) continue;
+      const d2 = Math.hypot(q.x - D2.x, q.y - D2.y);
+      if (d2 < pBest) { pBest = d2; prey = q; preyIsBandit = false; }
+    }
+    for (const b of badGuys) {
+      if (b.gone) continue;
+      const d2 = Math.hypot(b.x - D2.x, b.y - D2.y);
+      if (d2 < pBest) { pBest = d2; prey = b; preyIsBandit = true; }
+    }
+
+    let spd = 52;
+    if (prey && D2.life > 0) {
+      D2.angle = Math.atan2(prey.y - D2.y, prey.x - D2.x);
+      if (Math.cos(D2.angle) !== 0) D2.face = Math.cos(D2.angle) < 0 ? -1 : 1;
+      if (pBest < 46) {
+        // GOTCHA. Snatch them up and start the show.
+        spd = 0;
+        D2.meal = { kind: preyIsBandit ? 'badguy' : prey.kind,
+                    shirt: preyIsBandit ? '#2c2c38' : (prey.shirt || '#e8e8e8') };
+        D2.phase = 'lunge'; D2.phaseT = 0;
+        prey.gone = true;
+        setStatus(preyIsBandit ? '🦖 The dinosaur ate a bad guy!'
+                               : '🦖 CHOMP! One less citizen.', '#ff9f43');
+      } else {
+        spd = 92;                      // thundering after them
+      }
+    } else if (D2.life <= 0) {
+      spd = 120;                       // full and bored — off it goes
+    } else if (Math.random() < dt * 0.5) {
+      D2.angle = Math.random() * 6.28; // nothing to chase, just stomping about
+    }
+
+    // Dinosaurs walk straight over the town without denting a thing.
+    D2.x += Math.cos(D2.angle) * spd * dt;
+    D2.y += Math.sin(D2.angle) * spd * dt;
+    if (spd > 0 && Math.cos(D2.angle) !== 0) D2.face = Math.cos(D2.angle) < 0 ? -1 : 1;
+    if (D2.life > 0) {                 // stay in town until it's had enough
+      D2.x = Math.max(20, Math.min(gridW() - 20, D2.x));
+      D2.y = Math.max(TOPBAR + 30, Math.min(TOPBAR + gridH() - 20, D2.y));
+      shake = Math.max(shake, 0.06);   // the ground shakes when it walks
+    } else if (D2.x < -80 || D2.x > gridW() + 80 ||
+               D2.y < TOPBAR - 80 || D2.y > TOPBAR + gridH() + 80) {
+      D2.gone = true;                  // wandered off the map
+    }
+    if (D2.hp <= 0) D2.gone = true;
+  }
+  dinos = dinos.filter(d => !d.gone);
+
+  const panicking = disasters.length > 0 || badGuys.length > 0 || dinos.length > 0;
   const cs = cellSize();
 
   // which broken buildings already have a worker on them (one each, no crowding)
@@ -1697,12 +1854,18 @@ function update(dt) {
       p.bob += dt * 5;
       if (p.clash > 0) p.clash -= dt;
 
-      // any bad guys about?
-      let foe = null, fBest = 999999;
+      // any bad guys about? or, gulp, a DINOSAUR?
+      let foe = null, fBest = 999999, foeIsDino = false;
       for (const b of badGuys) {
         if (b.gone) continue;
         const d2 = Math.hypot(b.x - p.x, b.y - p.y);
-        if (d2 < fBest) { fBest = d2; foe = b; }
+        if (d2 < fBest) { fBest = d2; foe = b; foeIsDino = false; }
+      }
+      for (const D3 of dinos) {
+        if (D3.gone) continue;
+        // a dinosaur is enormous, so you can reach it from further out
+        const d2 = Math.hypot(D3.x - p.x, (D3.y - 40) - p.y) - 26;
+        if (d2 < fBest) { fBest = d2; foe = D3; foeIsDino = true; }
       }
 
       let spd = 45;   // patrol pace
@@ -1718,10 +1881,28 @@ function update(dt) {
             p.clash = 0.6;
             foe.hp = (foe.hp == null ? 2 : foe.hp) - 1;
             for (let i = 0; i < 6; i++) {
-              debris.push({ x: foe.x, y: foe.y - 10,
+              debris.push({ x: foe.x, y: foe.y - (foeIsDino ? 44 : 10),
                 vx: (Math.random() - 0.5) * 320, vy: -Math.random() * 260 - 40,
                 spin: Math.random() * 10, life: 0.5,
                 color: i % 2 ? '#ffd23f' : '#e8ecf2' });
+            }
+            if (foeIsDino) {
+              // you don't knock a dinosaur back. It just gets CROSS.
+              foe.hurt = 0.4;
+              shake = Math.max(shake, 0.25);
+              if (foe.hp <= 0) {
+                foe.gone = true;
+                dinosFelled++;
+                shake = Math.max(shake, 0.7);
+                for (let i = 0; i < 26; i++) {
+                  debris.push({ x: foe.x, y: foe.y - 40,
+                    vx: (Math.random() - 0.5) * 520, vy: -Math.random() * 420 - 60,
+                    spin: Math.random() * 10, life: 1.1, color: i % 2 ? '#5c8a4a' : '#3f6b36' });
+                }
+                dropLitter(foe.x, foe.y, 'dinopie');
+                setStatus('⚔ A knight felled a DINOSAUR! (' + dinosFelled + ' total)', '#7ddf8f');
+              }
+              continue;
             }
             foe.x += (foe.x - p.x) * 2.5;   // knocked backwards
             foe.y += (foe.y - p.y) * 2.5;
@@ -2666,6 +2847,41 @@ function draw() {
       ctx.beginPath(); ctx.arc(L.x, L.y - 1 * u, 4.6 * u, 0, Math.PI * 2); ctx.fill();
       ctx.fillStyle = 'rgba(255,255,255,0.65)';
       ctx.beginPath(); ctx.arc(L.x - 1.5 * u, L.y - 2.5 * u, 1.4 * u, 0, Math.PI * 2); ctx.fill();
+    } else if (L.kind === 'dinopie') {
+      // A DINO PIE. Like a cow pie, but on a scale that makes you re-think
+      // your life choices — and with bones sticking out of it.
+      const B = 2.1;                                   // it's a BIG one
+      ctx.fillStyle = '#4e3418';
+      ctx.beginPath(); ctx.ellipse(L.x, L.y, 6.2 * u * B, 3.2 * u * B, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#5e4020';
+      ctx.beginPath(); ctx.ellipse(L.x - 1.4 * u * B, L.y - 1.4 * u * B, 4.2 * u * B, 2.3 * u * B, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#6f4d28';
+      ctx.beginPath(); ctx.ellipse(L.x + 0.8 * u * B, L.y - 2.8 * u * B, 2.6 * u * B, 1.6 * u * B, 0, 0, Math.PI * 2); ctx.fill();
+      // BONES poking out of the top, at silly angles
+      const bones = [[-3.2, -2.2, -0.7], [1.2, -3.6, 0.5], [3.4, -1.4, 1.25]];
+      bones.forEach(([bxp, byp, rot], i) => {
+        ctx.save();
+        ctx.translate(L.x + bxp * u * B, L.y + byp * u * B);
+        ctx.rotate(rot + (hash(L.seed + i) - 0.5) * 0.5);
+        ctx.fillStyle = '#f2ece0';
+        ctx.fillRect(-4 * u, -0.9 * u, 8 * u, 1.8 * u);       // the shaft
+        ctx.beginPath();                                       // knobbly ends
+        ctx.arc(-4 * u, -1.1 * u, 1.5 * u, 0, Math.PI * 2);
+        ctx.arc(-4 * u, 1.1 * u, 1.5 * u, 0, Math.PI * 2);
+        ctx.arc(4 * u, -1.1 * u, 1.5 * u, 0, Math.PI * 2);
+        ctx.arc(4 * u, 1.1 * u, 1.5 * u, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      });
+      // and rather a lot of flies
+      ctx.fillStyle = '#22242a';
+      for (let fI = 0; fI < 4; fI++) {
+        const a = elapsed * (3 + fI * 0.8) + L.seed + fI * 1.9;
+        ctx.beginPath();
+        ctx.arc(L.x + Math.cos(a) * 11 * u, L.y - 8 * u + Math.sin(a * 1.6) * 4 * u,
+                0.85 * u, 0, Math.PI * 2);
+        ctx.fill();
+      }
     } else if (L.kind === 'pie') {
       // a splat, in three shades of... let's call it brown.
       // a STEPPED-IN pie is wider, flatter, and has seen things.
@@ -2781,7 +2997,8 @@ function draw() {
   // notes. The moment doom is on the way they're TERRIFIED: eyes like
   // dinner plates, arms in the air, wobbling. Everyone pulls a slightly
   // different face, so a crowd doesn't look like clones.
-  const doom = disasters.length > 0 || pendings.length > 0;
+  const doom = disasters.length > 0 || pendings.length > 0 ||
+               badGuys.length > 0 || dinos.length > 0;
   const HAPPY_EMOTE = ['♪', '♥', '☺'];
   const PANIC_EMOTE = ['!!', '?!', 'AAA'];
 
@@ -2993,6 +3210,196 @@ function draw() {
   }
 
   // ---- THE BAD GUYS — dark clothes, masks, clubs, no manners ----
+  // ---- DINOSAURS ----
+  // A proper theropod: heavy tail out the back for balance, body slung
+  // level over two big legs, neck curving up to a head that's mostly jaws.
+  // Everything is outlined so it still reads when you're zoomed out.
+  for (const D5 of dinos) {
+    const U = s / 22;                       // dinosaurs get their own big unit
+    const f = D5.face;
+    const stride = Math.sin(D5.walk) * 6 * U;
+    // the eating animation drives the head: rear back, snap down, swallow
+    let jaw = 0, headLift = 0, headSwing = 0;
+    if (D5.phase === 'lunge') {
+      const t = D5.phaseT / EAT_LUNGE;
+      jaw = 0.35 + t * 0.65; headLift = -7 * U * t; headSwing = -4 * U * t;
+    } else if (D5.phase === 'chomp') {
+      const t = D5.phaseT / EAT_CHOMP;
+      jaw = Math.max(0, 1 - t * 3.2);        // SNAP
+      headLift = -7 * U * (1 - t) + 5 * U * t;
+      headSwing = -4 * U + 9 * U * t;
+    } else if (D5.phase === 'gulp') {
+      const t = D5.phaseT / EAT_GULP;
+      jaw = 0.12 * Math.sin(t * Math.PI * 3);
+      headLift = -12 * U * Math.sin(t * Math.PI);   // head thrown back to swallow
+    }
+    const hurtTint = D5.hurt > 0 && Math.sin(D5.hurt * 40) > 0;
+    const skin  = hurtTint ? '#c0524a' : '#5f9147';
+    const belly = hurtTint ? '#d8827a' : '#a8c98a';
+    const dark  = hurtTint ? '#8e3b36' : '#3d6330';
+    const line  = '#243b1d';
+
+    // fill a path and outline it, so the shape stays crisp at any size
+    const shape = (build, fill) => {
+      ctx.beginPath(); build();
+      ctx.fillStyle = fill; ctx.fill();
+      ctx.strokeStyle = line; ctx.lineWidth = 1.6 * U;
+      ctx.lineJoin = 'round'; ctx.stroke();
+    };
+
+    ctx.save();
+    ctx.translate(D5.x, D5.y);
+    ctx.scale(f, 1);                        // flip the whole beast to face its way
+
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';     // a big shadow on the grass
+    ctx.beginPath(); ctx.ellipse(-2 * U, 0, 30 * U, 6 * U, 0, 0, Math.PI * 2); ctx.fill();
+
+    // TAIL — long and heavy, counterbalancing the body
+    shape(() => {
+      ctx.moveTo(-8 * U, -30 * U);
+      ctx.quadraticCurveTo(-32 * U, -30 * U, -48 * U, -12 * U);
+      ctx.quadraticCurveTo(-34 * U, -20 * U, -8 * U, -19 * U);
+      ctx.closePath();
+    }, dark);
+
+    // FAR LEG (behind the body)
+    shape(() => {
+      ctx.moveTo(-9 * U, -30 * U);
+      ctx.quadraticCurveTo(-16 * U, -20 * U, -12 * U - stride, -12 * U);
+      ctx.lineTo(-9 * U - stride, -2 * U);
+      ctx.lineTo(-17 * U - stride, -2 * U);
+      ctx.lineTo(-19 * U - stride, -12 * U);
+      ctx.quadraticCurveTo(-22 * U, -22 * U, -15 * U, -31 * U);
+      ctx.closePath();
+    }, dark);
+
+    // BODY — slung level, deepest at the hips
+    shape(() => { ctx.ellipse(-4 * U, -32 * U, 21 * U, 13 * U, -0.12, 0, Math.PI * 2); }, skin);
+    ctx.save();                             // pale underside
+    ctx.beginPath(); ctx.ellipse(-4 * U, -32 * U, 21 * U, 13 * U, -0.12, 0, Math.PI * 2);
+    ctx.clip();
+    ctx.fillStyle = belly;
+    ctx.fillRect(-26 * U, -28 * U, 46 * U, 16 * U);
+    ctx.restore();
+    // a row of ridges down the spine
+    ctx.fillStyle = dark;
+    for (let i = 0; i < 5; i++) {
+      ctx.beginPath();
+      ctx.moveTo((-16 + i * 7) * U, -43 * U);
+      ctx.lineTo((-13 + i * 7) * U, -49 * U);
+      ctx.lineTo((-10 + i * 7) * U, -43 * U);
+      ctx.closePath(); ctx.fill();
+    }
+
+    // NEAR LEG — big thigh, bent knee, three-toed foot
+    shape(() => {
+      ctx.moveTo(2 * U, -30 * U);
+      ctx.quadraticCurveTo(12 * U, -22 * U, 7 * U + stride, -13 * U);
+      ctx.lineTo(10 * U + stride, -3 * U);
+      ctx.lineTo(2 * U + stride, -3 * U);
+      ctx.lineTo(0 * U + stride, -13 * U);
+      ctx.quadraticCurveTo(-4 * U, -22 * U, -4 * U, -31 * U);
+      ctx.closePath();
+    }, skin);
+    shape(() => {                            // foot
+      ctx.moveTo(-1 * U + stride, -4 * U);
+      ctx.lineTo(13 * U + stride, -4 * U);
+      ctx.lineTo(13 * U + stride, 0);
+      ctx.lineTo(-1 * U + stride, 0);
+      ctx.closePath();
+    }, dark);
+
+    // the famously useless little arm
+    shape(() => {
+      ctx.moveTo(12 * U, -38 * U); ctx.lineTo(19 * U, -36 * U);
+      ctx.lineTo(20 * U, -30 * U); ctx.lineTo(17 * U, -30 * U);
+      ctx.lineTo(16 * U, -34 * U); ctx.lineTo(12 * U, -35 * U);
+      ctx.closePath();
+    }, dark);
+
+    // NECK + HEAD
+    ctx.save();
+    ctx.translate(14 * U + headSwing, -44 * U + headLift);
+    shape(() => {                            // neck, curving up and forward
+      ctx.moveTo(-4 * U, 4 * U);
+      ctx.quadraticCurveTo(2 * U, -8 * U, 14 * U, -10 * U);
+      ctx.lineTo(15 * U, -3 * U);
+      ctx.quadraticCurveTo(6 * U, -1 * U, 4 * U, 7 * U);
+      ctx.closePath();
+    }, skin);
+    // SKULL — long and boxy, all snout
+    shape(() => {
+      ctx.moveTo(8 * U, -13 * U);
+      ctx.lineTo(26 * U, -10 * U);
+      ctx.lineTo(30 * U, -4 * U);
+      ctx.lineTo(10 * U, -1 * U);
+      ctx.quadraticCurveTo(5 * U, -7 * U, 8 * U, -13 * U);
+      ctx.closePath();
+    }, skin);
+    ctx.fillStyle = '#fdfaf2';               // upper teeth
+    for (let i = 0; i < 6; i++) ctx.fillRect((11 + i * 3.2) * U, -3 * U, 1.9 * U, 3.4 * U);
+    // LOWER JAW, hinged at the back so it swings wide open
+    ctx.save();
+    ctx.translate(9 * U, -2 * U);
+    ctx.rotate(jaw * 0.8);
+    shape(() => {
+      ctx.moveTo(0, -1 * U); ctx.lineTo(20 * U, 1 * U);
+      ctx.lineTo(20 * U, 6 * U); ctx.lineTo(0, 5 * U);
+      ctx.closePath();
+    }, dark);
+    ctx.fillStyle = '#fdfaf2';               // lower teeth
+    for (let i = 0; i < 5; i++) ctx.fillRect((2 + i * 3.4) * U, -1 * U, 1.8 * U, 3 * U);
+    ctx.restore();
+    ctx.fillStyle = '#f5e7c0';               // eye
+    ctx.beginPath(); ctx.ellipse(12 * U, -8.5 * U, 3 * U, 2.4 * U, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#1d1f22';
+    ctx.beginPath(); ctx.arc(13 * U, -8.5 * U, 1.4 * U, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = dark;                    // nostril
+    ctx.beginPath(); ctx.arc(26 * U, -7 * U, 1 * U, 0, Math.PI * 2); ctx.fill();
+
+    // THE VICTIM, kicking in the jaws (drawn unflipped so they stay upright)
+    if (D5.meal && D5.phase !== 'gulp') {
+      ctx.save();
+      ctx.scale(f, 1);                       // undo the beast's flip
+      const wob = Math.sin(elapsed * 30) * 1.8 * U;
+      ctx.translate(f * 18 * U, 1 * U + wob);
+      ctx.rotate(0.6);
+      const mu = U * 0.62;
+      ctx.fillStyle = D5.meal.shirt || '#e8e8e8';
+      ctx.fillRect(-4 * mu, -5 * mu, 8 * mu, 9 * mu);
+      ctx.fillStyle = '#f2c79b';
+      ctx.beginPath(); ctx.arc(0, -8.5 * mu, 3.8 * mu, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = '#f2c79b'; ctx.lineWidth = 2 * mu;   // flailing limbs
+      ctx.beginPath();
+      ctx.moveTo(-4 * mu, -4 * mu); ctx.lineTo(-9 * mu, -11 * mu + wob);
+      ctx.moveTo(4 * mu, -4 * mu); ctx.lineTo(9 * mu, -11 * mu - wob);
+      ctx.moveTo(-2 * mu, 4 * mu); ctx.lineTo(-6 * mu, 10 * mu - wob);
+      ctx.moveTo(2 * mu, 4 * mu); ctx.lineTo(6 * mu, 10 * mu + wob);
+      ctx.stroke();
+      ctx.restore();
+    }
+    ctx.restore();                           // end head
+
+    // the swallowed lump travelling down the neck
+    if (D5.phase === 'gulp') {
+      const t = D5.phaseT / EAT_GULP;
+      ctx.fillStyle = belly;
+      ctx.strokeStyle = line; ctx.lineWidth = 1.4 * U;
+      ctx.beginPath();
+      ctx.arc(20 * U - t * 16 * U, -50 * U + t * 14 * U, 4.5 * U, 0, Math.PI * 2);
+      ctx.fill(); ctx.stroke();
+    }
+    ctx.restore();                           // end beast
+
+    // CHOMP! in big letters, right at the moment the jaws meet
+    if (D5.phase === 'chomp' && D5.phaseT < 0.22) {
+      ctx.fillStyle = '#ff4757';
+      ctx.font = `bold ${Math.max(11, 13 * U)}px monospace`;
+      ctx.textAlign = 'center';
+      ctx.fillText('CHOMP!', D5.x + f * 26 * U, D5.y - 72 * U);
+    }
+  }
+
   for (const b of badGuys) {
     const step = Math.sin(b.walk) * 2.5;
     const facing = Math.cos(b.angle) < 0 ? -1 : 1;
@@ -3361,11 +3768,11 @@ function draw() {
 
   // the destruction scoreboard, tucked top-left under the bar
   // (hidden while a drop-down is open so it can't show through the menu)
-  if ((destroyed > 0 || peopleLaunched > 0 || repaired > 0 || carsPopped > 0 || tidied > 0) && !openMenu) {
+  if ((destroyed > 0 || peopleLaunched > 0 || repaired > 0 || carsPopped > 0 || tidied > 0 || eaten > 0) && !openMenu) {
     ctx.fillStyle = 'rgba(255, 159, 67, 0.9)';
     ctx.font = 'bold 12px monospace';
     ctx.textAlign = 'left';
-    ctx.fillText(`💥 ${destroyed}  🚀 ${peopleLaunched}  🔧 ${repaired}  🚗 ${carsPopped}  🧹 ${tidied}`,
+    ctx.fillText(`💥 ${destroyed}  🚀 ${peopleLaunched}  🔧 ${repaired}  🚗 ${carsPopped}  🧹 ${tidied}  🦖 ${eaten}`,
                  12, TOPBAR + 18);
   }
 }
