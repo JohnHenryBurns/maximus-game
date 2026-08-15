@@ -56,6 +56,18 @@ let cell = 34;                      // pixel size of one grid square
 // a phone instead of running off the side.
 const TOPBAR = 92;
 
+// ---------------------------------------------------------------------
+// THE CAMERA — lets you zoom in to build with detail, then slide around.
+//   zoom = 1  ->  the whole town fits on screen (all the way zoomed out)
+//   zoom = 4  ->  four times closer, for placing tiny blocks just so
+// panX/panY are how far we've slid the zoomed view left/right and up/down.
+// At zoom 1 the camera does nothing at all, so the game looks exactly the
+// same until you actually pinch or scroll to zoom in.
+// ---------------------------------------------------------------------
+let zoom = 1;
+let panX = 0, panY = 0;
+const MAX_ZOOM = 4;
+
 // make the grid: ROWS rows, each row is COLS zeros (all empty land)
 const grid = [];
 for (let y = 0; y < ROWS; y++) grid.push(new Array(COLS).fill(0));
@@ -171,10 +183,42 @@ function cellSize() {
   return Math.min(canvas.width / COLS, (canvas.height - TOPBAR) / ROWS);
 }
 
+// The camera slides and scales what we DRAW, so a finger tap on the glass
+// isn't the same spot in the town anymore. screenToWorld undoes the camera:
+// give it where you touched, it tells you which spot of the town that is.
+function screenToWorld(sx, sy) {
+  return {
+    x: (sx - panX) / zoom,
+    y: (sy - TOPBAR - panY) / zoom + TOPBAR,
+  };
+}
+
+// Keep the view glued to the town: never let a background gap show at the
+// edges. The more we're zoomed in, the further we're allowed to slide.
+function clampPan() {
+  const PW = canvas.width, PH = canvas.height - TOPBAR;
+  panX = Math.min(0, Math.max(-(zoom - 1) * PW, panX));
+  panY = Math.min(0, Math.max(-(zoom - 1) * PH, panY));
+}
+// after the window resizes (fitCanvas already ran), tidy the view back onto
+// the town so a rotate or resize can't leave a gap at the edge
+addEventListener('resize', clampPan);
+
+// Change the zoom while keeping one spot of the town pinned under a finger
+// (or the mouse). worldPt is that spot; (sx, sy) is where it should stay on
+// screen. This is what makes pinch-zoom feel like you're grabbing the map.
+function setCamera(newZoom, worldPt, sx, sy) {
+  zoom = Math.min(MAX_ZOOM, Math.max(1, newZoom));
+  panX = sx - zoom * worldPt.x;
+  panY = sy - TOPBAR - zoom * (worldPt.y - TOPBAR);
+  clampPan();
+}
+
 function placeAt(px, py) {
+  const w = screenToWorld(px, py);  // where in the town did we really touch?
   const s = cellSize();
-  const gx = Math.floor(px / s);
-  const gy = Math.floor((py - TOPBAR) / s);
+  const gx = Math.floor(w.x / s);
+  const gy = Math.floor((w.y - TOPBAR) / s);
   if (gx < 0 || gy < 0 || gx >= COLS || gy >= ROWS) return;
   grid[gy][gx] = selected;          // EMPTY works as the eraser
 }
@@ -277,18 +321,60 @@ addEventListener('mousedown', e => {
 addEventListener('mousemove', e => { if (painting) placeAt(e.clientX, e.clientY); });
 addEventListener('mouseup', () => { painting = false; });
 
+// MOUSE WHEEL / TRACKPAD ZOOM. Scroll up over the town to zoom in toward
+// the pointer, scroll down to zoom back out. We keep the spot under the
+// cursor pinned so it feels like leaning in, not jumping.
+addEventListener('wheel', e => {
+  if (onBackButton(e)) return;
+  if (e.clientY <= TOPBAR) return;             // leave the toolbar alone
+  e.preventDefault();
+  const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+  setCamera(zoom * factor, screenToWorld(e.clientX, e.clientY), e.clientX, e.clientY);
+}, { passive: false });
+
+// PINCH TO ZOOM. Two fingers on the glass = grab the map: spread apart to
+// zoom in, pinch together to zoom out, and slide both fingers to pan. One
+// finger still paints blocks like before.
+let pinch = null;   // remembers the two-finger gesture between frames, or null
+
+// distance between the two fingers, and the point exactly between them
+function twoFinger(e) {
+  const a = e.touches[0], b = e.touches[1];
+  return {
+    dist: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY),
+    x: (a.clientX + b.clientX) / 2,
+    y: (a.clientY + b.clientY) / 2,
+  };
+}
+
 addEventListener('touchstart', e => {
   if (onBackButton(e)) return;                 // don't preventDefault - let the link work
   e.preventDefault();
+  if (e.touches.length >= 2) {                 // two fingers down: start a pinch, don't paint
+    painting = false;
+    pinch = twoFinger(e);
+    return;
+  }
   const t = e.changedTouches[0];
   if (!pressAt(t.clientX, t.clientY)) { painting = true; placeAt(t.clientX, t.clientY); }
 }, { passive: false });
 addEventListener('touchmove', e => {
   e.preventDefault();
+  if (pinch && e.touches.length >= 2) {        // mid-pinch: zoom + pan together
+    const now = twoFinger(e);
+    // the town spot under the OLD midpoint should land under the NEW one
+    const anchor = screenToWorld(pinch.x, pinch.y);
+    setCamera(zoom * (now.dist / pinch.dist), anchor, now.x, now.y);
+    pinch = now;
+    return;
+  }
   const t = e.changedTouches[0];
   if (painting) placeAt(t.clientX, t.clientY);
 }, { passive: false });
-addEventListener('touchend', () => { painting = false; });
+addEventListener('touchend', e => {
+  painting = false;
+  if (e.touches.length < 2) pinch = null;      // pinch is over once a finger lifts
+});
 
 // number keys pick from the palette too
 addEventListener('keydown', e => {
@@ -300,6 +386,7 @@ addEventListener('keydown', e => {
   if (e.key === '6') selected = EMPTY;
   if (e.key.toLowerCase() === 'd') machineOpen = !machineOpen;   // D for DISASTER menu
   if (e.key.toLowerCase() === 'p') spawnPeople();                // P for PEOPLE
+  if (e.key === '0') { zoom = 1; panX = 0; panY = 0; }           // 0 zooms back out to the whole town
 });
 
 // ---------------------------------------------------------------------
@@ -617,6 +704,17 @@ function draw() {
   const shy = shake > 0 ? (Math.random() - 0.5) * 10 : 0;
   ctx.save();
   ctx.translate(shx, shy);
+
+  // THE CAMERA. Everything from here until ctx.restore() is drawn through
+  // the zoom lens. We clip to the play area first so zoomed-in scenery can
+  // never spill up over the toolbar, then slide (pan) and scale (zoom).
+  // At zoom 1 with no pan this is exactly the identity — nothing changes.
+  ctx.beginPath();
+  ctx.rect(0, TOPBAR, canvas.width, canvas.height - TOPBAR);
+  ctx.clip();
+  ctx.translate(panX, TOPBAR + panY);
+  ctx.scale(zoom, zoom);
+  ctx.translate(0, -TOPBAR);
 
   // grass everywhere
   ctx.fillStyle = '#4a7c3a';
