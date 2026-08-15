@@ -54,7 +54,7 @@ let cell = 34;                      // pixel size of one grid square
 // Room at the top for the toolbar. It's two tiers now (money + THE MACHINE
 // on top, the build palette in a full-width row below) so everything fits on
 // a phone instead of running off the side.
-const TOPBAR = 92;
+const TOPBAR = 54;
 
 // ---------------------------------------------------------------------
 // THE CAMERA — lets you zoom in to build with detail, then slide around.
@@ -96,10 +96,6 @@ function spawnPeople() {
   }
 }
 
-function peopleButtonRect() {
-  return { x: canvas.width - 210, y: canvas.height - 64, w: 200, h: 52 };
-}
-
 // scoreboard of destruction
 let destroyed = 0;
 
@@ -118,16 +114,42 @@ let debris = [];                    // flying bits of what used to be a town
 let craters = [];                   // meteor scars. they never heal.
 let shake = 0;                      // screen trembles while disaster reigns
 let elapsed = 0;
-let machineOpen = false;            // is the disaster menu showing?
 
-function summonDisaster(type) {
-  if (disasters.length >= 8) return;   // even chaos has a fire code
-  const item = MACHINE_MENU.find(m => m.type === type);
-  if (moneys < item.cost) {            // doom costs MONEYS, friend
+// Which dropdown is showing right now: 'items', 'disasters', or null (none).
+// Only one is ever open at a time.
+let openMenu = null;
+
+// Disasters you've PAID for but that haven't struck yet — they count down a
+// moment of dread first. This is the "build tension" delay.
+let pendings = [];
+const TENSION = 1.3;                 // seconds between choosing doom and it landing
+
+// A little message box at the bottom tells you what just happened.
+let statusText = '', statusColor = '#ffffff', statusTimer = 0;
+function setStatus(text, color) {
+  statusText = text;
+  statusColor = color || '#ffffff';
+  statusTimer = 2.4;                 // how long the message lingers before fading
+}
+
+// Pick a disaster from the menu: pay for it, close the menu, and start the
+// tension countdown. The actual mayhem begins later, in update().
+function pickDisaster(item) {
+  if (moneys < item.cost) {          // can't afford this one — say so, leave the menu open
     brokeFlash = 1.5;
+    setStatus('Not enough MONEYS — smashed blocks pay you back!', '#ff6b5e');
     return;
   }
   moneys -= item.cost;
+  openMenu = null;                   // CLOSE the menu before the disaster begins
+  pendings.push({ type: item.type, label: item.label, timer: TENSION });
+  setStatus(item.label + ' incoming…', '#ffb454');
+}
+
+// Actually unleash the disaster (called once its tension timer runs out).
+// No money changes hands here — that already happened in pickDisaster.
+function beginDisaster(type) {
+  if (disasters.length >= 8) return;   // even chaos has a fire code
   if (type === 'tornado') {
     disasters.push({ type, x: -60, y: TOPBAR + Math.random() * (canvas.height - TOPBAR),
                      life: 12, wobble: Math.random() * 6.28 });
@@ -224,9 +246,14 @@ function placeAt(px, py) {
 }
 
 // ---------------------------------------------------------------------
-// THE BUTTONS along the top (palette + THE MACHINE)
+// THE TOP BAR — three drop-down buttons and the money.
+//   Items ▾      the stuff you build (houses, trees, stone, bunkers…)
+//   Disasters ▾  the mayhem you rain down (this is the old MACHINE)
+//   People       spawns little citizens (no menu, just a button)
+// Each drop-down opens a list below it, like a real menu.
 // ---------------------------------------------------------------------
-// the build PALETTE (THE MACHINE is its own button, laid out separately)
+
+// everything you can BUILD — these fill the Items drop-down
 const buttons = [
   { icon: '🏠', short: 'House',  type: HOUSE },
   { icon: '🏢', short: 'Apt',    type: APT },
@@ -236,27 +263,7 @@ const buttons = [
   { icon: '❌', short: 'Erase',  type: EMPTY },
 ];
 
-// A narrow phone can't fit big buttons and their text, so the palette buttons
-// shrink and drop to just an icon + tiny label when there isn't room.
-function paletteRects() {
-  const n = buttons.length, gap = 6, pad = 8;
-  const w = Math.min(150, (canvas.width - pad * 2 - gap * (n - 1)) / n);
-  const total = w * n + gap * (n - 1);
-  const startX = (canvas.width - total) / 2;
-  const y = 46, h = TOPBAR - y - 6;                 // the lower tier
-  const compact = w < 118;                          // no room for the full "🏠 House"
-  return buttons.map((b, i) => ({ ...b, x: startX + i * (w + gap), y, w, h, compact }));
-}
-
-// THE MACHINE lives in the top tier, top-right. It shrinks on a phone.
-function machineBtnRect() {
-  const narrow = canvas.width < 620;
-  const w = narrow ? 138 : 200;
-  return { x: canvas.width - w - 8, y: 8, w, h: 30,
-           machine: true, label: narrow ? '🌪 MACHINE' : '🌪 THE MACHINE' };
-}
-
-// the machine's dial of doom
+// everything you can UNLEASH — these fill the Disasters drop-down
 const MACHINE_MENU = [
   { label: '🌪 Tornado',      type: 'tornado', cost: 10 },
   { label: '☄ Meteors',       type: 'meteors', cost: 15 },
@@ -265,47 +272,104 @@ const MACHINE_MENU = [
   { label: '🔴 Rubber Balls', type: 'balls',   cost: 9 },
 ];
 
-function machineRects() {
-  const rects = [];
-  const w = Math.min(220, canvas.width - 16), h = 44;
-  for (let i = 0; i < MACHINE_MENU.length; i++) {
-    rects.push({ ...MACHINE_MENU[i],
-      x: canvas.width - w - 8, y: TOPBAR + 8 + i * (h + 6), w, h });
+// quick point-in-box test, used all over the input code
+function inside(px, py, r) { return px > r.x && px < r.x + r.w && py > r.y && py < r.y + r.h; }
+
+// builds a rounded-rectangle path (call ctx.fill()/ctx.stroke() after).
+// We roll our own so it works even on browsers without ctx.roundRect.
+function rrect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+// the emoji of whatever build item is currently picked (shown on the Items button)
+function iconFor(type) {
+  const b = buttons.find(b => b.type === type);
+  return b ? b.icon : '🏠';
+}
+
+// The money chip sits just right of the ← Arcade pill (which lives in the
+// top-left corner), so we reserve room for the pill first.
+function moneyChipRect() {
+  const narrow = canvas.width < 560;
+  const y = 8, h = TOPBAR - 16;
+  const w = narrow ? 66 : 108;
+  return { x: 100, y, w, h, narrow };
+}
+
+// The three top buttons fill the space from the money chip to the right edge.
+function topButtons() {
+  const gap = 6, pad = 8, y = 8, h = TOPBAR - 16;
+  const money = moneyChipRect();
+  const x0 = money.x + money.w + gap;
+  const x1 = canvas.width - pad;
+  const w = (x1 - x0 - gap * 2) / 3;
+  const compact = w < 116;                 // too tight for the full word? show icon + ▾
+  const defs = [
+    { key: 'items',     icon: iconFor(selected), word: 'Items',     menu: true },
+    { key: 'disasters', icon: '🌪',              word: 'Disasters', menu: true },
+    { key: 'people',    icon: '🧍',              word: 'People',    menu: false },
+  ];
+  return defs.map((d, i) => ({ ...d, x: x0 + i * (w + gap), y, w, h, compact }));
+}
+
+// The list that drops down under an open button. Kept on-screen at the right edge.
+function menuRects(kind) {
+  const btn = topButtons().find(b => b.key === kind);
+  const items = kind === 'items'
+    ? buttons.map(b => ({ label: b.icon + ' ' + b.short, type: b.type, cost: 0 }))
+    : MACHINE_MENU.map(m => ({ ...m }));
+  // disasters need extra room so the name never crowds its price tag
+  const minW = kind === 'disasters' ? 214 : 168;
+  const w = Math.max(btn.w, minW), h = 40, gap = 4;
+  let x = btn.x;
+  if (x + w > canvas.width - 6) x = canvas.width - 6 - w;   // don't run off the right edge
+  return items.map((it, i) => ({ ...it, x, y: TOPBAR + 6 + i * (h + gap), w, h }));
+}
+
+// tapping a top button: open/close its menu, or (People) just spawn folk
+function handleTopButton(b) {
+  if (b.key === 'people') {
+    spawnPeople();
+    setStatus('🧍 New folk wander in!', '#7ddf8f');
+    openMenu = null;
+  } else {
+    openMenu = (openMenu === b.key) ? null : b.key;   // toggle the drop-down
   }
-  return rects;
+}
+
+// tapping a row inside an open menu
+function chooseFromMenu(kind, r) {
+  if (kind === 'items') {
+    selected = r.type;
+    setStatus('Now placing ' + r.label, '#7ddf8f');
+    openMenu = null;
+  } else {
+    pickDisaster(r);      // pays, closes the menu, and starts the tension countdown
+  }
 }
 
 function pressAt(px, py) {
-  // if the machine menu is open, its buttons get first dibs
-  if (machineOpen) {
-    for (const r of machineRects()) {
-      if (px > r.x && px < r.x + r.w && py > r.y && py < r.y + r.h) {
-        summonDisaster(r.type);
-        return true;
-      }
+  // if a menu is open, it gets first say
+  if (openMenu) {
+    for (const r of menuRects(openMenu)) {
+      if (inside(px, py, r)) { chooseFromMenu(openMenu, r); return true; }
     }
-  }
-  // the SPAWN PEOPLE button in the bottom-right corner
-  const pb = peopleButtonRect();
-  if (px > pb.x && px < pb.x + pb.w && py > pb.y && py < pb.y + pb.h) {
-    spawnPeople();
+    const tb = topButtons().find(b => inside(px, py, b));
+    if (tb) { handleTopButton(tb); return true; }   // let them switch menus
+    openMenu = null;                                 // tapped away — just close it
     return true;
   }
-  if (py > TOPBAR) { machineOpen = false; return false; }   // clicked the world
-  // THE MACHINE button opens/closes its menu of doom
-  const mb = machineBtnRect();
-  if (px > mb.x && px < mb.x + mb.w && py > mb.y && py < mb.y + mb.h) {
-    machineOpen = !machineOpen;
-    return true;
-  }
-  // a palette button picks what you paint
-  for (const r of paletteRects()) {
-    if (px > r.x && px < r.x + r.w && py > r.y && py < r.y + r.h) {
-      selected = r.type; machineOpen = false;
-      return true;
-    }
-  }
-  return true;                      // clicked the bar but no button — do nothing
+  // no menu open: check the top buttons
+  const tb = topButtons().find(b => inside(px, py, b));
+  if (tb) { handleTopButton(tb); return true; }
+  if (py <= TOPBAR) return true;    // tapped an empty part of the bar — do nothing
+  return false;                     // tapped the world — go ahead and paint
 }
 
 // ---------------------------------------------------------------------
@@ -376,16 +440,16 @@ addEventListener('touchend', e => {
   if (e.touches.length < 2) pinch = null;      // pinch is over once a finger lifts
 });
 
-// number keys pick from the palette too
+// number keys pick a build item too
+const KEY_ITEM = { '1': HOUSE, '2': APT, '3': TREE, '4': STONE, '5': BUNKER, '6': EMPTY };
 addEventListener('keydown', e => {
-  if (e.key === '1') selected = HOUSE;
-  if (e.key === '2') selected = APT;
-  if (e.key === '3') selected = TREE;
-  if (e.key === '4') selected = STONE;
-  if (e.key === '5') selected = BUNKER;
-  if (e.key === '6') selected = EMPTY;
-  if (e.key.toLowerCase() === 'd') machineOpen = !machineOpen;   // D for DISASTER menu
-  if (e.key.toLowerCase() === 'p') spawnPeople();                // P for PEOPLE
+  if (e.key in KEY_ITEM) {
+    selected = KEY_ITEM[e.key];
+    setStatus('Now placing ' + iconFor(selected), '#7ddf8f');
+  }
+  if (e.key.toLowerCase() === 'd') openMenu = openMenu === 'disasters' ? null : 'disasters';  // D for Disasters menu
+  if (e.key.toLowerCase() === 'i') openMenu = openMenu === 'items' ? null : 'items';          // I for Items menu
+  if (e.key.toLowerCase() === 'p') { spawnPeople(); setStatus('🧍 New folk wander in!', '#7ddf8f'); }
   if (e.key === '0') { zoom = 1; panX = 0; panY = 0; }           // 0 zooms back out to the whole town
 });
 
@@ -397,6 +461,24 @@ function update(dt) {
   elapsed += dt;
   if (shake > 0) shake -= dt;
   if (brokeFlash > 0) brokeFlash -= dt;
+  if (statusTimer > 0) statusTimer -= dt;
+
+  // Disasters you've paid for count down a moment of dread, with the ground
+  // rumbling harder the closer they get. When the timer hits zero, they strike.
+  if (pendings.length) {
+    for (const p of pendings) p.timer -= dt;
+    let worst = 0;
+    for (const p of pendings) worst = Math.max(worst, 1 - p.timer / TENSION);
+    shake = Math.max(shake, 0.05 + worst * 0.25);   // tension you can feel
+    for (const p of pendings) {
+      if (p.timer <= 0) {
+        beginDisaster(p.type);
+        setStatus(p.label + '!', '#ff9f43');
+        shake = Math.max(shake, 0.5);
+      }
+    }
+    pendings = pendings.filter(p => p.timer > 0);
+  }
 
   for (const D of disasters) {      // every active disaster does its thing
     D.life -= dt;
@@ -966,100 +1048,96 @@ function draw() {
 
   ctx.restore();   // stop shaking for the buttons — the UI stays calm
 
-  // the top bar background (two tiers)
+  // the top bar background (one tidy row now)
   ctx.fillStyle = '#10161d';
   ctx.fillRect(0, 0, canvas.width, TOPBAR);
 
-  // --- lower tier: the build PALETTE, spread across the full width ---
-  for (const r of paletteRects()) {
-    const active = selected === r.type;
-    ctx.fillStyle = active ? '#3d6b30' : '#26303b';
-    ctx.fillRect(r.x, r.y, r.w, r.h);
-    ctx.strokeStyle = active ? '#7ddf8f' : '#3a4654';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(r.x, r.y, r.w, r.h);
-    ctx.fillStyle = '#ffffff';
+  // --- the money chip, just right of the ← Arcade pill ---
+  const money = moneyChipRect();
+  const flashing = (brokeFlash > 0 && Math.sin(brokeFlash * 30) > 0);
+  ctx.fillStyle = '#1c2530';
+  rrect(money.x, money.y, money.w, money.h, 8); ctx.fill();
+  ctx.strokeStyle = flashing ? '#ff5046' : '#3a4654'; ctx.lineWidth = 2;
+  rrect(money.x, money.y, money.w, money.h, 8); ctx.stroke();
+  ctx.fillStyle = flashing ? '#ff5046' : '#ffd23f';
+  ctx.font = 'bold 15px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(`💰 ${moneys}`, money.x + money.w / 2, money.y + money.h / 2 + 5);
+
+  // --- the three drop-down buttons: Items, Disasters, People ---
+  const palette = {
+    items:     { bg: '#24343a', border: '#4f9d6b' },
+    disasters: { bg: '#7a1f2b', border: '#ff6b5e' },
+    people:    { bg: '#26473b', border: '#7ddf8f' },
+  };
+  for (const b of topButtons()) {
+    const col = palette[b.key];
+    const open = openMenu === b.key;
+    ctx.fillStyle = open ? col.border : col.bg;
+    rrect(b.x, b.y, b.w, b.h, 8); ctx.fill();
+    ctx.strokeStyle = col.border; ctx.lineWidth = 2;
+    rrect(b.x, b.y, b.w, b.h, 8); ctx.stroke();
+    ctx.fillStyle = open ? '#10161d' : '#ffffff';
     ctx.textAlign = 'center';
-    if (r.compact) {                       // tight: icon on top, tiny label under
-      ctx.font = '20px monospace';
-      ctx.fillText(r.icon, r.x + r.w / 2, r.y + r.h / 2 - 1);
-      ctx.font = 'bold 10px monospace';
-      ctx.fillText(r.short, r.x + r.w / 2, r.y + r.h - 6);
-    } else {                               // roomy: icon and word side by side
-      ctx.font = 'bold 15px monospace';
-      ctx.fillText(r.icon + ' ' + r.short, r.x + r.w / 2, r.y + r.h / 2 + 6);
-    }
+    const caret = b.menu ? ' ▾' : '';
+    const cap = b.compact ? b.icon + caret : b.icon + ' ' + b.word + caret;
+    ctx.font = 'bold 15px monospace';
+    ctx.fillText(cap, b.x + b.w / 2, b.y + b.h / 2 + 5);
   }
 
-  // --- top tier: THE MACHINE button, top-right ---
-  const mb = machineBtnRect();
-  ctx.fillStyle = '#7a1f2b';
-  ctx.fillRect(mb.x, mb.y, mb.w, mb.h);
-  ctx.strokeStyle = '#ff6b5e'; ctx.lineWidth = 2;
-  ctx.strokeRect(mb.x, mb.y, mb.w, mb.h);
-  ctx.fillStyle = '#ffffff';
-  ctx.font = 'bold 16px monospace';
-  ctx.textAlign = 'center';
-  ctx.fillText(mb.label, mb.x + mb.w / 2, mb.y + mb.h / 2 + 6);
-
-  // THE MACHINE's menu of doom, when open
-  if (machineOpen) {
-    for (const r of machineRects()) {
-      const canAfford = moneys >= r.cost;
-      ctx.fillStyle = canAfford ? '#7a1f2b' : '#2c2126';   // grayed out = too broke
-      ctx.fillRect(r.x, r.y, r.w, r.h);
-      ctx.strokeStyle = canAfford ? '#ff6b5e' : '#5a4a4e';
+  // --- the open drop-down list, if any ---
+  if (openMenu) {
+    for (const r of menuRects(openMenu)) {
+      const isItems = openMenu === 'items';
+      const canAfford = isItems || moneys >= r.cost;
+      const chosen = isItems && selected === r.type;
+      ctx.fillStyle = chosen ? '#3d6b30' : canAfford ? '#24343a' : '#2c2126';
+      rrect(r.x, r.y, r.w, r.h, 8); ctx.fill();
+      ctx.strokeStyle = chosen ? '#7ddf8f' : canAfford ? '#3a4654' : '#5a4a4e';
       ctx.lineWidth = 2;
-      ctx.strokeRect(r.x, r.y, r.w, r.h);
+      rrect(r.x, r.y, r.w, r.h, 8); ctx.stroke();
       ctx.fillStyle = canAfford ? '#ffffff' : '#8a7a7e';
       ctx.font = 'bold 15px monospace';
-      ctx.textAlign = 'center';
-      ctx.fillText(`${r.label} — ${r.cost}💰`, r.x + r.w / 2, r.y + r.h / 2 + 6);
+      ctx.textAlign = 'left';
+      ctx.fillText(r.label, r.x + 12, r.y + r.h / 2 + 5);
+      if (!isItems) {                       // disasters show their price on the right
+        ctx.textAlign = 'right';
+        ctx.fillStyle = canAfford ? '#ffd23f' : '#8a7a7e';
+        ctx.fillText(`${r.cost}💰`, r.x + r.w - 12, r.y + r.h / 2 + 5);
+      }
     }
-    // left-align the hint to the menu column so it never runs off a phone edge
-    const menu0 = machineRects()[0];
-    ctx.fillStyle = '#ffb3ab';
-    ctx.font = '12px monospace';
-    ctx.textAlign = 'left';
-    ctx.fillText('(stack all you can afford)', menu0.x,
-                 TOPBAR + 8 + MACHINE_MENU.length * (44 + 6) + 12);
   }
 
-  // THE BANK BALANCE — parked in the top tier just left of THE MACHINE,
-  // so you can see exactly what doom you can afford. On a narrow phone we
-  // drop the word "MONEYS" so the number never crashes into the button.
-  ctx.fillStyle = brokeFlash > 0 && Math.sin(brokeFlash * 30) > 0 ? '#ff5046' : '#ffd23f';
-  ctx.font = 'bold 17px monospace';
-  ctx.textAlign = 'right';
-  ctx.fillText(canvas.width < 620 ? `💰 ${moneys}` : `💰 ${moneys} MONEYS`, mb.x - 12, 29);
-
-  // tried to buy doom you can't afford
-  if (brokeFlash > 0) {
-    ctx.fillStyle = `rgba(255, 80, 70, ${Math.min(1, brokeFlash)})`;
-    ctx.font = 'bold 22px monospace';
-    ctx.fillText('NOT ENOUGH MONEYS! (smashed blocks pay 1 each)',
-                 canvas.width / 2, TOPBAR + 52);
+  // --- the STATUS BOX at the bottom: a readable box for the latest news ---
+  if (statusTimer > 0 && statusText) {
+    // shrink the text just enough to always fit on a narrow phone
+    let fs = 15;
+    ctx.font = `bold ${fs}px monospace`;
+    let tw = ctx.measureText(statusText).width;
+    const maxTextW = canvas.width - 44;
+    if (tw > maxTextW) {
+      fs = Math.max(10, Math.floor(fs * maxTextW / tw));
+      ctx.font = `bold ${fs}px monospace`;
+      tw = ctx.measureText(statusText).width;
+    }
+    const boxW = tw + 30, boxH = 34;
+    const bx = (canvas.width - boxW) / 2, by = canvas.height - boxH - 14;
+    ctx.globalAlpha = Math.min(1, statusTimer / 0.5);   // fade out at the end
+    ctx.fillStyle = 'rgba(10, 14, 20, 0.9)';
+    rrect(bx, by, boxW, boxH, 10); ctx.fill();
+    ctx.strokeStyle = statusColor; ctx.lineWidth = 2;
+    rrect(bx, by, boxW, boxH, 10); ctx.stroke();
+    ctx.fillStyle = statusColor; ctx.textAlign = 'center';
+    ctx.fillText(statusText, canvas.width / 2, by + boxH / 2 + 5);
+    ctx.globalAlpha = 1;
   }
 
-  // the SPAWN PEOPLE button, bottom-right corner (as ordered by Amos)
-  const pb = peopleButtonRect();
-  ctx.fillStyle = '#26473b';
-  ctx.fillRect(pb.x, pb.y, pb.w, pb.h);
-  ctx.strokeStyle = '#7ddf8f';
-  ctx.lineWidth = 2;
-  ctx.strokeRect(pb.x, pb.y, pb.w, pb.h);
-  ctx.fillStyle = '#ffffff';
-  ctx.font = 'bold 16px monospace';
-  ctx.textAlign = 'center';
-  ctx.fillText('🧍 SPAWN PEOPLE', pb.x + pb.w / 2, pb.y + pb.h / 2 + 6);
-
-  // the destruction scoreboard
+  // the destruction scoreboard, tucked top-left under the bar
   if (destroyed > 0 || peopleLaunched > 0) {
-    ctx.fillStyle = '#ff9f43';
-    ctx.font = 'bold 14px monospace';
-    ctx.textAlign = 'center';
-    ctx.fillText(`blocks destroyed: ${destroyed}    people launched: ${peopleLaunched}`,
-                 canvas.width / 2, TOPBAR + 22);
+    ctx.fillStyle = 'rgba(255, 159, 67, 0.9)';
+    ctx.font = 'bold 12px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(`💥 ${destroyed} smashed   🚀 ${peopleLaunched} launched`, 12, TOPBAR + 18);
   }
 }
 
