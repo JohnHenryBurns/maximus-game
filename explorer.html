@@ -83,9 +83,9 @@ const LEVELS = [
     kind: 'temple',
     unlocked: false,             // opens when you beat Level 1
     grass: '#43453b',            // ancient stone floor
-    worldW: 1800,
-    worldH: 1400,
-    start: { x: 900, y: 1300 },  // the temple entrance, at the bottom
+    worldW: 2600,                // WAY bigger now — a real expedition
+    worldH: 2600,
+    start: { x: 1300, y: 2500 }, // the temple entrance, at the bottom
   },
   { name: '???', unlocked: false },
 ];
@@ -100,6 +100,7 @@ let fireflies = [];
 let stumps = [];
 let zombies = [];
 let creepers = [];      // sssssss...
+let skeletons = [];     // spear patrol, temple only
 let torches = [];       // flickering lights along the temple walkway
 let scorches = [];      // burn marks left by creeper explosions
 let tiles = [];         // sand + stone paving squares on the temple walkway
@@ -141,11 +142,17 @@ function distToPath(x, y, path = PATH) {
 // golden altar at the temple's heart.
 // ---------------------------------------------------------------------
 const TEMPLE_PATH = [
-  { x: 900,  y: 1300 }, { x: 900,  y: 1050 }, { x: 700,  y: 950 },
-  { x: 700,  y: 750 },  { x: 900,  y: 650 },  { x: 1100, y: 550 },
-  { x: 1100, y: 380 },  { x: 900,  y: 300 },  { x: 900,  y: 220 },
+  { x: 1300, y: 2500 }, { x: 1300, y: 2260 }, { x: 1080, y: 2160 },
+  { x: 860,  y: 2220 }, { x: 700,  y: 2100 }, { x: 700,  y: 1900 },
+  { x: 900,  y: 1800 }, { x: 1150, y: 1850 }, { x: 1400, y: 1780 },
+  { x: 1600, y: 1650 }, { x: 1600, y: 1440 }, { x: 1400, y: 1350 },
+  { x: 1150, y: 1400 }, { x: 900,  y: 1330 }, { x: 760,  y: 1180 },
+  { x: 860,  y: 1020 }, { x: 1100, y: 980 },  { x: 1350, y: 1030 },
+  { x: 1580, y: 960 },  { x: 1700, y: 800 },  { x: 1620, y: 620 },
+  { x: 1400, y: 560 },  { x: 1160, y: 600 },  { x: 960,  y: 520 },
+  { x: 900,  y: 360 },  { x: 1060, y: 260 },  { x: 1300, y: 220 },
 ];
-const altar = { x: 900, y: 200 };   // the golden altar. the prize.
+const altar = { x: 1300, y: 200 };   // the golden altar. the prize.
 
 // ---------------------------------------------------------------------
 // BUILDING THE FOREST — scatter trees around the open world.
@@ -234,6 +241,7 @@ function buildForest(lv) {
   }
 
   creepers = [];
+  skeletons = [];
   torches = [];
   scorches = [];
   tiles = [];
@@ -262,7 +270,7 @@ function buildTemple(lv) {
       if (distToPath(x, y, TEMPLE_PATH) < 170) continue;   // clear of the trail AND the wall band
       if (Math.hypot(x - altar.x, y - altar.y) < 140) continue;
       if (Math.hypot(x - lv.start.x, y - lv.start.y) < 110) continue;
-      if (((x - 480) / 200) ** 2 + ((y - 520) / 150) ** 2 < 1) continue;   // lava zone
+      if (((x - 1950) / 220) ** 2 + ((y - 1500) / 170) ** 2 < 1) continue;   // lava zone
       trees.push({ x, y, size: 0.9 + noise(n * 9.1) * 0.4, pillar: true });
     }
   }
@@ -332,7 +340,7 @@ function buildTemple(lv) {
     }
   }
 
-  pond = { x: 480, y: 520, rx: 130, ry: 85, lava: true };   // not water. NOT water.
+  pond = { x: 1950, y: 1500, rx: 130, ry: 85, lava: true };   // not water. NOT water.
   stumps = [];
   flowers = [];
   scorches = [];
@@ -358,7 +366,7 @@ function buildTemple(lv) {
 
   // CREEPERS. They wait along the walkway. Ssssss.
   creepers = [];
-  for (let i = 0; i < 220 && creepers.length < 10; i++) {
+  for (let i = 0; i < 600 && creepers.length < 18; i++) {
     const x = noise(i * 57.1 + 4) * lv.worldW;
     const y = noise(i * 33.7 + 4) * lv.worldH;
     if (Math.hypot(x - lv.start.x, y - lv.start.y) < 320) continue;
@@ -376,6 +384,45 @@ function buildTemple(lv) {
   }
 
   zombies = [];
+  // SAND ZOMBIES — buried under the walkway, waiting for footsteps.
+  // All you'll see is a lump in the sand. Until it's too late.
+  for (let i = 0; i < 500 && zombies.length < 8; i++) {
+    const x = noise(i * 43.7 + 6) * lv.worldW;
+    const y = noise(i * 29.3 + 6) * lv.worldH;
+    if (Math.hypot(x - lv.start.x, y - lv.start.y) < 350) continue;
+    if (distToPath(x, y, TEMPLE_PATH) > 60) continue;
+    if (Math.hypot(x - altar.x, y - altar.y) < 180) continue;
+    zombies.push({
+      x, y,
+      zombie: true,
+      sand: true,           // sandy colors, tougher
+      buried: true,         // hiding under the trail!
+      hp: 3,                // three bonks — they're packed with sand
+      wanderAngle: noise(i) * 6.28,
+      lastHitSwing: 0,
+      hurtFlash: 0,
+    });
+  }
+
+  // SKELETONS — faster than zombies, and those spears have REACH
+  skeletons = [];
+  for (let i = 0; i < 500 && skeletons.length < 8; i++) {
+    const x = noise(i * 71.9 + 8) * lv.worldW;
+    const y = noise(i * 23.1 + 8) * lv.worldH;
+    if (Math.hypot(x - lv.start.x, y - lv.start.y) < 350) continue;
+    if (distToPath(x, y, TEMPLE_PATH) > 70) continue;
+    if (Math.hypot(x - altar.x, y - altar.y) < 180) continue;
+    skeletons.push({
+      x, y,
+      skeleton: true,
+      hp: 2,
+      facing: 1,
+      wanderAngle: noise(i * 1.7) * 6.28,
+      lastHitSwing: 0,
+      hurtFlash: 0,
+    });
+  }
+
   emeralds = [];
   particles = [];
   emeraldCount = 0;
@@ -556,6 +603,24 @@ function update(dt) {
     if (z.hurtFlash > 0) z.hurtFlash -= dt;
     const distToYou = Math.hypot(player.x - z.x, player.y - z.y);
 
+    // buried sand zombies do NOTHING until you step close... then AMBUSH
+    if (z.buried) {
+      if (distToYou < 90) {
+        z.buried = false;
+        for (let i = 0; i < 14; i++) {
+          particles.push({
+            x: z.x, y: z.y - 6,
+            vx: (noise(i * 4.1 + elapsed) - 0.5) * 260,
+            vy: (noise(i * 6.3 + elapsed) - 0.9) * 220,
+            life: 0.5,
+            color: i % 2 ? '#c2a05a' : '#8f7c54',   // flying sand!
+          });
+        }
+      } else {
+        continue;   // still hiding — skip the brain entirely
+      }
+    }
+
     // THE ZOMBIE BRAIN (it's a very small brain):
     // If you're close, shamble at you. Otherwise wander around aimlessly.
     let zdx, zdy, zombieSpeed;
@@ -705,6 +770,67 @@ function update(dt) {
     }
   }
   creepers = creepers.filter(c => c.hp > 0);
+
+  // ---- SKELETONS (temple only) — quick on their feet, long spears ----
+  for (const s of skeletons) {
+    if (s.hurtFlash > 0) s.hurtFlash -= dt;
+    const distToYou = Math.hypot(player.x - s.x, player.y - s.y);
+
+    let sdx, sdy, skelSpeed;
+    if (distToYou < 260 && player.deathTimer <= 0) {
+      sdx = (player.x - s.x) / distToYou;
+      sdy = (player.y - s.y) / distToYou;
+      skelSpeed = 95;                     // faster than a zombie!
+    } else {
+      s.wanderAngle += (noise(Math.floor(elapsed) + s.x) - 0.5) * dt * 4;
+      sdx = Math.cos(s.wanderAngle);
+      sdy = Math.sin(s.wanderAngle);
+      skelSpeed = 26;
+    }
+    if (sdx > 0.1) s.facing = 1;
+    if (sdx < -0.1) s.facing = -1;
+    const sx2 = s.x + sdx * skelSpeed * dt;
+    const sy2 = s.y + sdy * skelSpeed * dt;
+    if (!blocked(sx2, s.y, 10)) s.x = sx2;
+    if (!blocked(s.x, sy2, 10)) s.y = sy2;
+
+    // sword bonk
+    if (player.attackTime > 0 && s.lastHitSwing !== player.swingId &&
+        distToYou < 55 && (s.x - player.x) * player.facing > -8) {
+      s.lastHitSwing = player.swingId;
+      s.hp -= hasGoldSword ? 2 : 1;
+      s.hurtFlash = 0.15;
+      const push = 40 / Math.max(1, distToYou);
+      if (!blocked(s.x + (s.x - player.x) * push, s.y, 10)) s.x += (s.x - player.x) * push;
+      if (!blocked(s.x, s.y + (s.y - player.y) * push, 10)) s.y += (s.y - player.y) * push;
+      if (s.hp <= 0) {
+        for (let i = 0; i < 14; i++) {
+          particles.push({
+            x: s.x, y: s.y - 14,
+            vx: (noise(i * 3.3 + elapsed) - 0.5) * 240,
+            vy: (noise(i * 7.7 + elapsed) - 0.9) * 220,
+            life: 0.6,
+            color: i % 2 ? '#e8e8e2' : '#b8b8b0',   // clattering bones
+          });
+        }
+        emeralds.push({ x: s.x, y: s.y, born: elapsed });
+      }
+    }
+
+    // the spear pokes from 38 away — further than a zombie's 26 grab!
+    if (distToYou < 38 && s.hp > 0 && player.hurtTimer <= 0 && player.deathTimer <= 0) {
+      if (player.armor > 0) player.armor -= 1;
+      else player.hp -= 1;
+      player.hurtTimer = 1;
+      const push = 50 / Math.max(1, distToYou);
+      const nx = player.x + (player.x - s.x) * push;
+      const ny = player.y + (player.y - s.y) * push;
+      if (!blocked(nx, player.y)) player.x = nx;
+      if (!blocked(player.x, ny)) player.y = ny;
+      if (player.hp <= 0) player.deathTimer = 2.5;
+    }
+  }
+  skeletons = skeletons.filter(s => s.hp > 0);
 
   if (player.hurtTimer > 0) player.hurtTimer -= dt;
 
@@ -909,11 +1035,12 @@ function drawGame() {
   // ---- THE DRAW-ORDER TRICK ----
   // Put the trees and YOU in one list, sort it by how far down the world
   // each thing is, then draw top-to-bottom. Lower = drawn later = in front.
-  const things = [...trees, ...zombies, ...creepers, ...torches, player];
+  const things = [...trees, ...zombies, ...creepers, ...skeletons, ...torches, player];
   things.sort((a, b) => a.y - b.y);
   for (const thing of things) {
     if (thing === player) drawPlayer(cam);
     else if (thing.zombie) drawZombie(thing, cam);
+    else if (thing.skeleton) drawSkeleton(thing, cam);
     else if (thing.creeper) drawCreeper(thing, cam);
     else if (thing.torch) drawTorch(thing, cam);
     else if (thing.wall) drawWall(thing, cam);
@@ -964,7 +1091,9 @@ function drawGame() {
   }
 
   // zombie eyes glow faintly through the dark... consider yourself warned
+  // (buried sand zombies don't glow. that's what makes them scary.)
   for (const z of zombies) {
+    if (z.buried) continue;
     const zx = z.x - cam.x, zy = z.y - cam.y;
     if (zx < -20 || zy < -20 || zx > canvas.width + 20 || zy > canvas.height + 20) continue;
     ctx.fillStyle = 'rgba(150, 255, 150, 0.5)';
@@ -1078,7 +1207,7 @@ function drawGame() {
     ctx.textAlign = 'center';
     ctx.fillStyle = '#ffdddd';
     ctx.font = 'bold 34px monospace';
-    ctx.fillText(current.kind === 'temple' ? 'BOOM! The creepers got you!'
+    ctx.fillText(current.kind === 'temple' ? 'The temple got you!'
                                            : 'The zombies got you!',
                  canvas.width / 2, canvas.height / 2 - 10);
     ctx.font = '18px monospace';
@@ -1320,6 +1449,21 @@ function drawPlayer(cam) {
 function drawZombie(z, cam) {
   const x = z.x - cam.x, y = z.y - cam.y;
   if (x < -40 || y < -60 || x > canvas.width + 40 || y > canvas.height + 60) return;
+
+  // a buried sand zombie is just... a suspicious lump in the walkway
+  if (z.buried) {
+    const breathe = Math.sin(elapsed * 2 + z.x) * 1.5;   // it's ever so slightly moving
+    ctx.fillStyle = '#8f7c54';
+    ctx.beginPath();
+    ctx.ellipse(x, y, 15, 7 + breathe, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#a3854a';
+    ctx.beginPath();
+    ctx.ellipse(x - 2, y - 2, 8, 3, 0, 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
+
   const stomp = Math.abs(Math.sin(elapsed * 6 + z.x)) * 3;   // shamble-bounce
 
   ctx.fillStyle = 'rgba(0,0,0,0.25)';
@@ -1329,17 +1473,59 @@ function drawZombie(z, cam) {
 
   // when bonked, the whole zombie flashes white for a blink
   const flash = z.hurtFlash > 0;
+  // sand zombies wear desert colors; forest zombies keep the classics
+  const shirt = z.sand ? '#a3854a' : '#2e6e8e';
+  const skin  = z.sand ? '#cbb06a' : '#4a9e4a';
 
-  ctx.fillStyle = flash ? '#ffffff' : '#2e6e8e';   // ragged shirt
+  ctx.fillStyle = flash ? '#ffffff' : shirt;       // ragged shirt
   ctx.fillRect(x - 8, y - 14 - stomp, 16, 16);
-  ctx.fillStyle = flash ? '#ffffff' : '#4a9e4a';   // square green head
+  ctx.fillStyle = flash ? '#ffffff' : skin;        // square head
   ctx.fillRect(x - 7, y - 30 - stomp, 14, 14);
-  ctx.fillStyle = '#1c3b1c';                       // those eyes...
+  ctx.fillStyle = z.sand ? '#4a3b1c' : '#1c3b1c';  // those eyes...
   ctx.fillRect(x - 5, y - 25 - stomp, 3, 3);
   ctx.fillRect(x + 2, y - 25 - stomp, 3, 3);
-  ctx.fillStyle = flash ? '#ffffff' : '#4a9e4a';   // grabby arms, reaching for YOU
+  ctx.fillStyle = flash ? '#ffffff' : skin;        // grabby arms, reaching for YOU
   ctx.fillRect(x - 12, y - 12 - stomp, 4, 9);
   ctx.fillRect(x + 8, y - 12 - stomp, 4, 9);
+}
+
+// ---------------------------------------------------------------------
+// A SKELETON — bones, spear, bad intentions
+// ---------------------------------------------------------------------
+function drawSkeleton(s, cam) {
+  const x = s.x - cam.x, y = s.y - cam.y;
+  if (x < -40 || y < -60 || x > canvas.width + 40 || y > canvas.height + 60) return;
+  const stomp = Math.abs(Math.sin(elapsed * 8 + s.x)) * 3;   // quick rattly steps
+
+  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  ctx.beginPath();
+  ctx.ellipse(x, y + 8, 10, 5, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // skeletons are already white, so they flash RED when bonked
+  const bone = s.hurtFlash > 0 ? '#ff9a9a' : '#e8e8e2';
+
+  ctx.fillStyle = bone;                            // ribcage body
+  ctx.fillRect(x - 6, y - 14 - stomp, 12, 16);
+  ctx.fillStyle = s.hurtFlash > 0 ? '#e07a7a' : '#b0b0a8';
+  ctx.fillRect(x - 6, y - 10 - stomp, 12, 2);      // rib lines
+  ctx.fillRect(x - 6, y - 5 - stomp, 12, 2);
+  ctx.fillStyle = bone;                            // skull
+  ctx.fillRect(x - 7, y - 30 - stomp, 14, 14);
+  ctx.fillStyle = '#222';                          // hollow eye sockets
+  ctx.fillRect(x - 5, y - 25 - stomp, 4, 4);
+  ctx.fillRect(x + 1, y - 25 - stomp, 4, 4);
+
+  // THE SPEAR — a long shaft with a gray point, held out front
+  ctx.save();
+  ctx.translate(x + 8 * s.facing, y - 12 - stomp);
+  if (s.facing === -1) ctx.scale(-1, 1);
+  ctx.rotate(-0.35);                               // tilted, ready to poke
+  ctx.fillStyle = '#8a6b3f';
+  ctx.fillRect(-6, -1.5, 30, 3);                   // wooden shaft
+  ctx.fillStyle = '#c8c8c8';
+  ctx.fillRect(24, -3, 8, 6);                      // the pointy end
+  ctx.restore();
 }
 
 // ---------------------------------------------------------------------
