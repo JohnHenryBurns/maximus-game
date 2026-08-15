@@ -43,7 +43,7 @@ const TOPBAR = 64;                  // room at the top for the buttons
 const grid = [];
 for (let y = 0; y < ROWS; y++) grid.push(new Array(COLS).fill(0));
 
-const EMPTY = 0, HOUSE = 1, TREE = 2, STONE = 3;
+const EMPTY = 0, HOUSE = 1, TREE = 2, STONE = 3, APT = 4, BUNKER = 5;
 
 // what's selected in the palette right now
 let selected = HOUSE;
@@ -93,7 +93,7 @@ function smashBlock(gx, gy, bx, by, splash) {
   const kind = grid[gy][gx];
   grid[gy][gx] = EMPTY;
   destroyed++;
-  moneys++;          // insurance payout! destruction PAYS.
+  moneys += kind === APT ? 3 : 1;    // apartments pay TRIPLE. big building, big payout.
   for (let i = 0; i < 6; i++) {
     debris.push({
       x: bx, y: by,
@@ -102,7 +102,8 @@ function smashBlock(gx, gy, bx, by, splash) {
       spin: Math.random() * 10,
       life: 1.2,
       color: splash ? '#5da3e0'
-           : kind === TREE ? '#3f8a3f' : kind === STONE ? '#8a8d94' : '#b5563c',
+           : kind === TREE ? '#3f8a3f' : kind === STONE ? '#8a8d94'
+           : kind === APT ? '#5a6a7a' : '#b5563c',
     });
   }
 }
@@ -127,10 +128,12 @@ function placeAt(px, py) {
 // THE BUTTONS along the top (palette + THE MACHINE)
 // ---------------------------------------------------------------------
 const buttons = [
-  { label: '🏠 House', type: HOUSE },
-  { label: '🌳 Tree',  type: TREE },
-  { label: '🪨 Stone', type: STONE },
-  { label: '❌ Erase', type: EMPTY },
+  { label: '🏠 House',  type: HOUSE },
+  { label: '🏢 Apt',    type: APT },
+  { label: '🌳 Tree',   type: TREE },
+  { label: '🪨 Stone',  type: STONE },
+  { label: '🛡 Bunker', type: BUNKER },
+  { label: '❌ Erase',  type: EMPTY },
   { label: '🌪 THE MACHINE', machine: true },
 ];
 
@@ -139,7 +142,7 @@ function buttonRects() {
   const rects = [];
   let x = 10;
   for (const b of buttons) {
-    const w = b.machine ? 220 : 110;
+    const w = b.machine ? 220 : 98;
     const bx = b.machine ? canvas.width - w - 10 : x;
     rects.push({ ...b, x: bx, y: 10, w, h: TOPBAR - 20 });
     if (!b.machine) x += w + 8;
@@ -211,9 +214,11 @@ addEventListener('touchend', () => { painting = false; });
 // number keys pick from the palette too
 addEventListener('keydown', e => {
   if (e.key === '1') selected = HOUSE;
-  if (e.key === '2') selected = TREE;
-  if (e.key === '3') selected = STONE;
-  if (e.key === '4') selected = EMPTY;
+  if (e.key === '2') selected = APT;
+  if (e.key === '3') selected = TREE;
+  if (e.key === '4') selected = STONE;
+  if (e.key === '5') selected = BUNKER;
+  if (e.key === '6') selected = EMPTY;
   if (e.key.toLowerCase() === 'd') machineOpen = !machineOpen;   // D for DISASTER menu
 });
 
@@ -235,7 +240,7 @@ function update(dt) {
       let target = null, best = 999999;
       for (let gy = 0; gy < ROWS; gy++) {
         for (let gx = 0; gx < COLS; gx++) {
-          if (grid[gy][gx] !== HOUSE) continue;
+          if (grid[gy][gx] !== HOUSE && grid[gy][gx] !== APT) continue;
           const bx = gx * s + s / 2, by = TOPBAR + gy * s + s / 2;
           const d2 = Math.hypot(bx - D.x, by - D.y);
           if (d2 < best) { best = d2; target = { x: bx, y: by }; }
@@ -252,10 +257,11 @@ function update(dt) {
       }
       D.y = Math.max(TOPBAR + 40, Math.min(canvas.height - 40, D.y));
       shake = 0.2;
-      // it ONLY eats houses — trees and stone just get a wild hairdo
+      // it ONLY eats housing (houses AND apartments) — trees and stone
+      // just get a wild hairdo
       for (let gy = 0; gy < ROWS; gy++) {
         for (let gx = 0; gx < COLS; gx++) {
-          if (grid[gy][gx] !== HOUSE) continue;
+          if (grid[gy][gx] !== HOUSE && grid[gy][gx] !== APT) continue;
           const bx = gx * s + s / 2, by = TOPBAR + gy * s + s / 2;
           if (Math.hypot(bx - D.x, by - D.y) < 70) smashBlock(gx, gy, bx, by);
         }
@@ -284,7 +290,8 @@ function update(dt) {
           // BOOM — everything near the impact is gone, even stone
           for (let gy = 0; gy < ROWS; gy++) {
             for (let gx = 0; gx < COLS; gx++) {
-              if (grid[gy][gx] === EMPTY) continue;
+              // bunkers shrug off even a direct meteor hit
+              if (grid[gy][gx] === EMPTY || grid[gy][gx] === BUNKER) continue;
               const bx = gx * s + s / 2, by = TOPBAR + gy * s + s / 2;
               if (Math.hypot(bx - m.x, by - m.y) < 60) smashBlock(gx, gy, bx, by);
             }
@@ -308,7 +315,10 @@ function update(dt) {
         for (let gx = 0; gx < COLS; gx++) {
           const kind = grid[gy][gx];
           if (kind === EMPTY) continue;
-          const fragile = kind === HOUSE ? 0.9 : kind === TREE ? 0.35 : 0.15;
+          if (kind === BUNKER) continue;             // bunkers do not care
+          const fragile = kind === HOUSE ? 0.9
+                        : kind === APT ? 0.7         // tall = topply
+                        : kind === TREE ? 0.35 : 0.15;
           if (Math.random() < fragile * dt) {
             smashBlock(gx, gy, gx * s + s / 2, TOPBAR + gy * s + s / 2);
           }
@@ -329,7 +339,7 @@ function update(dt) {
       for (let gy = 0; gy < ROWS; gy++) {
         for (let gx = 0; gx < COLS; gx++) {
           const kind = grid[gy][gx];
-          if (kind === EMPTY || kind === STONE) continue;
+          if (kind === EMPTY || kind === STONE || kind === BUNKER) continue;   // waterproof
           const by = TOPBAR + gy * s + s / 2;
           if (by > D.waterY) smashBlock(gx, gy, gx * s + s / 2, by, true);
         }
@@ -423,6 +433,28 @@ function draw() {
         ctx.fillRect(x + s * 0.08, y + s * 0.12, s * 0.84, s * 0.8);
         ctx.fillStyle = '#a7aab2';
         ctx.fillRect(x + s * 0.08, y + s * 0.12, s * 0.84, s * 0.2);
+      } else if (kind === APT) {
+        ctx.fillStyle = '#5a6a7a';                      // the tall tower
+        ctx.fillRect(x + s * 0.12, y + s * 0.06, s * 0.76, s * 0.86);
+        ctx.fillStyle = '#7a8a9a';                      // roof ledge
+        ctx.fillRect(x + s * 0.12, y + s * 0.06, s * 0.76, s * 0.1);
+        ctx.fillStyle = '#ffd23f';                      // lit windows
+        for (let wy2 = 0; wy2 < 3; wy2++) {
+          for (let wx2 = 0; wx2 < 2; wx2++) {
+            ctx.fillRect(x + s * (0.24 + wx2 * 0.3), y + s * (0.24 + wy2 * 0.22),
+                         s * 0.16, s * 0.13);
+          }
+        }
+      } else if (kind === BUNKER) {
+        ctx.fillStyle = '#4a5548';                      // squat armored dome
+        ctx.beginPath();
+        ctx.arc(x + s * 0.5, y + s * 0.72, s * 0.4, Math.PI, 0);
+        ctx.fill();
+        ctx.fillRect(x + s * 0.1, y + s * 0.72, s * 0.8, s * 0.2);
+        ctx.fillStyle = '#6a7a66';                      // top rim
+        ctx.fillRect(x + s * 0.1, y + s * 0.72, s * 0.8, s * 0.06);
+        ctx.fillStyle = '#2c332b';                      // the sealed door
+        ctx.fillRect(x + s * 0.4, y + s * 0.6, s * 0.2, s * 0.32);
       }
     }
   }
