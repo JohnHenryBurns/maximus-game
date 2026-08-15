@@ -78,8 +78,23 @@ for (let y = 0; y < ROWS; y++) grid.push(new Array(COLS).fill(0));
 
 const EMPTY = 0, HOUSE = 1, TREE = 2, STONE = 3, APT = 4, BUNKER = 5;
 
-// what's selected in the palette right now
-let selected = HOUSE;
+// What you're placing right now. Starts as null — the game opens in
+// look-around mode, so you can drag and zoom before you build anything.
+let selected = null;
+
+// HOW BEATEN-UP EVERY SQUARE IS. Same shape as the grid.
+//   0 = pristine, 1 = lightly damaged, 2 = heavily damaged
+// A third hit (or an unlucky first one) knocks it down completely.
+const PRISTINE = 0, LIGHT = 1, HEAVY = 2, WRECKED = 3;
+const damage = [];
+for (let y = 0; y < ROWS; y++) damage.push(new Array(COLS).fill(PRISTINE));
+
+// A square that's just been hit is briefly immune, so a tornado sitting on
+// top of a house doesn't chew through all three damage levels in one frame.
+// You get to SEE each stage.
+const hitCool = [];
+for (let y = 0; y < ROWS; y++) hitCool.push(new Array(COLS).fill(0));
+const HIT_COOLDOWN = 0.55;
 
 // ---------------------------------------------------------------------
 // LITTLE PEOPLE (and cows, and dogs) — they live in your town. no idea.
@@ -131,8 +146,10 @@ function spawnCritters(kind) {
   return made;
 }
 
-// scoreboard of destruction
+// scoreboard of destruction (and of putting it all back together)
 let destroyed = 0;
+let repaired = 0;
+const REPAIR_TIME = 3.4;      // seconds of hammering per damage level — slow, so you can watch
 
 // THE ECONOMY. You start with 30 MONEYS. Disasters cost MONEYS.
 // Every block a disaster smashes pays you 1 MONEY. Yes, really.
@@ -181,6 +198,7 @@ function pickDisaster(item) {
   }
   moneys -= item.cost;
   openMenu = null;                   // CLOSE the menu before the disaster begins
+  selected = null;                   // and stop building — you'll want to watch this
   pendings.push({ type: item.type, label: item.label, timer: TENSION });
   setStatus(item.label + ' incoming…', '#ffb454');
 }
@@ -231,10 +249,39 @@ function beginDisaster(type) {
   }
 }
 
+// SOMETHING HIT A BUILDING. It doesn't just vanish any more — it takes
+// damage and gets uglier: pristine -> lightly damaged -> heavily damaged ->
+// gone. `force` is how hard the hit was: a big meteor usually flattens a
+// house outright, a bouncing ball usually just dents it. Every hit rolls
+// the dice, so even a gentle knock can occasionally finish a building off
+// and a direct meteor sometimes leaves a wall standing.
+function hitBlock(gx, gy, bx, by, force, splash) {
+  if (grid[gy][gx] === EMPTY) return;
+  if (hitCool[gy][gx] > 0) return;           // still reeling from the last hit
+  hitCool[gy][gx] = HIT_COOLDOWN;
+  const roll = 1 + Math.floor(Math.random() * (force || 1));   // 1 .. force
+  damage[gy][gx] += roll;
+  if (damage[gy][gx] >= WRECKED) {
+    smashBlock(gx, gy, bx, by, splash);      // that's the end of that
+  } else {
+    // a puff of bits flies off, but the building is still standing
+    for (let i = 0; i < 3; i++) {
+      debris.push({
+        x: bx, y: by,
+        vx: (Math.random() - 0.5) * 260,
+        vy: -Math.random() * 240 - 60,
+        spin: Math.random() * 10, life: 0.7,
+        color: splash ? '#5da3e0' : '#9a8a78',
+      });
+    }
+  }
+}
+
 // one block, smashed: emptied from the grid, launched as flying bits
 function smashBlock(gx, gy, bx, by, splash) {
   const kind = grid[gy][gx];
   grid[gy][gx] = EMPTY;
+  damage[gy][gx] = PRISTINE;         // empty ground isn't "damaged"
   destroyed++;
   moneys += kind === APT ? 3 : 1;    // apartments pay TRIPLE. big building, big payout.
   for (let i = 0; i < 6; i++) {
@@ -308,6 +355,7 @@ function placeAt(px, py) {
   const gy = Math.floor((w.y - TOPBAR) / s);
   if (gx < 0 || gy < 0 || gx >= COLS || gy >= ROWS) return;
   grid[gy][gx] = selected;          // EMPTY works as the eraser
+  damage[gy][gx] = PRISTINE;        // fresh out of the box
 }
 
 // slide the whole zoomed view by a screen-pixel delta (used for one-finger pan)
@@ -478,6 +526,7 @@ function chooseFromMenu(kind, r) {
     setStatus(made ? r.label + ' wander in!' : 'No open ground left to stand on!',
               made ? '#7ddf8f' : '#ff6b5e');
     openMenu = null;
+    selected = null;                 // stop building so you can watch them arrive
   } else {
     pickDisaster(r);      // pays, closes the menu, and starts the tension countdown
   }
@@ -612,6 +661,11 @@ function update(dt) {
   if (brokeFlash > 0) brokeFlash -= dt;
   if (statusTimer > 0 && !statusSticky) statusTimer -= dt;
 
+  // let squares recover from their "just been hit" moment
+  for (let y = 0; y < ROWS; y++) {
+    for (let x = 0; x < COLS; x++) if (hitCool[y][x] > 0) hitCool[y][x] -= dt;
+  }
+
   // Disasters you've paid for count down a moment of dread, with the ground
   // rumbling harder the closer they get. When the timer hits zero, they strike.
   if (pendings.length) {
@@ -662,7 +716,8 @@ function update(dt) {
         for (let gx = 0; gx < COLS; gx++) {
           if (grid[gy][gx] !== HOUSE && grid[gy][gx] !== APT) continue;
           const bx = gx * s + s / 2, by = TOPBAR + gy * s + s / 2;
-          if (Math.hypot(bx - D.x, by - D.y) < 70) smashBlock(gx, gy, bx, by);
+          // a tornado CHEWS — usually takes a house out in one go
+          if (Math.hypot(bx - D.x, by - D.y) < 70) hitBlock(gx, gy, bx, by, 3);
         }
       }
       if (D.life <= 0 || D.x > COLS * s + 80) D.done = true;
@@ -702,7 +757,8 @@ function update(dt) {
               // bunkers shrug off even a direct meteor hit
               if (grid[gy][gx] === EMPTY || grid[gy][gx] === BUNKER) continue;
               const bx = gx * s + s / 2, by = TOPBAR + gy * s + s / 2;
-              if (Math.hypot(bx - m.x, by - m.y) < 60) smashBlock(gx, gy, bx, by);
+              // a meteor lands hardest of all
+              if (Math.hypot(bx - m.x, by - m.y) < 60) hitBlock(gx, gy, bx, by, 4);
             }
           }
           for (let i = 0; i < 14; i++) {
@@ -729,7 +785,8 @@ function update(dt) {
                         : kind === APT ? 0.7         // tall = topply
                         : kind === TREE ? 0.35 : 0.15;
           if (Math.random() < fragile * dt) {
-            smashBlock(gx, gy, gx * s + s / 2, TOPBAR + gy * s + s / 2);
+            // a quake rattles things loose a crack at a time
+            hitBlock(gx, gy, gx * s + s / 2, TOPBAR + gy * s + s / 2, 2);
           }
         }
       }
@@ -750,7 +807,9 @@ function update(dt) {
           const kind = grid[gy][gx];
           if (kind === EMPTY || kind === STONE || kind === BUNKER) continue;   // waterproof
           const by = TOPBAR + gy * s + s / 2;
-          if (by > D.waterY) smashBlock(gx, gy, gx * s + s / 2, by, true);
+          // underwater: the damp works away at it
+          if (by > D.waterY && Math.random() < dt * 2.5)
+            hitBlock(gx, gy, gx * s + s / 2, by, 2, true);
         }
       }
       if (D.life <= 0) D.done = true;
@@ -772,7 +831,8 @@ function update(dt) {
             const kind = grid[gy][gx];
             if (kind === EMPTY || kind === BUNKER) continue;
             const bx = gx * s + s / 2, by = TOPBAR + gy * s + s / 2;
-            if (Math.hypot(bx - ball.x, by - ball.y) < 34) smashBlock(gx, gy, bx, by);
+            // a rubber ball mostly just DENTS things
+            if (Math.hypot(bx - ball.x, by - ball.y) < 34) hitBlock(gx, gy, bx, by, 2);
           }
         }
       }
@@ -791,9 +851,18 @@ function update(dt) {
   }
   disasters = disasters.filter(D => !D.done);   // sweep up the finished ones
 
-  // ---- THE LITTLE PEOPLE — wandering, panicking, or HIDING ----
+  // ---- THE LITTLE PEOPLE — wandering, panicking, HIDING, or REPAIRING ----
   const panicking = disasters.length > 0;
   const cs = cellSize();
+
+  // which broken buildings already have a worker on them (one each, no crowding)
+  const claimed = new Set();
+  for (const p of people) {
+    if (p.job) {
+      if (panicking) { p.job = null; p.jobT = 0; p.fixing = false; }   // drop tools and RUN
+      else claimed.add(p.job.gx + ',' + p.job.gy);
+    }
+  }
 
   // how many people are inside (or racing toward) each building? MAX 3.
   // a house is not a clown car.
@@ -879,9 +948,58 @@ function update(dt) {
         p.angle += (Math.random() - 0.5) * dt * 22;   // no shelter?! headless-chicken mode
       }
     } else {
+      // ---- ALL CLEAR: TIME TO FIX THE PLACE UP ----
+      // Only people do repairs (cows and dogs are no help at all). One
+      // worker per building, and it's slow on purpose so you can watch the
+      // building climb back from heavy damage to light to good as new.
       p.shelterTarget = null;
-      if (Math.random() < dt * 0.8) p.angle = Math.random() * 6.28;   // calm amble
+      if (p.kind === 'person') {
+        // is the job we picked still a job? (it may have been finished or flattened)
+        if (p.job && (grid[p.job.gy][p.job.gx] === EMPTY ||
+                      damage[p.job.gy][p.job.gx] === PRISTINE)) {
+          p.job = null; p.jobT = 0;
+        }
+        if (!p.job) {                       // look for the nearest broken thing
+          let best = 999999, found = null;
+          for (let gy = 0; gy < ROWS; gy++) {
+            for (let gx = 0; gx < COLS; gx++) {
+              if (grid[gy][gx] === EMPTY || damage[gy][gx] === PRISTINE) continue;
+              if (claimed.has(gx + ',' + gy)) continue;      // someone's already on it
+              const bx = gx * cs + cs / 2, by = TOPBAR + gy * cs + cs / 2;
+              const d2 = Math.hypot(bx - p.x, by - p.y);
+              if (d2 < best) { best = d2; found = { gx, gy, x: bx, y: by }; }
+            }
+          }
+          if (found) { p.job = found; p.jobT = 0; claimed.add(found.gx + ',' + found.gy); }
+        }
+        if (p.job) {
+          const reach = Math.hypot(p.job.x - p.x, p.job.y - p.y);
+          if (reach > cs * 0.75) {          // still walking over, toolbox in hand
+            p.angle = Math.atan2(p.job.y - p.y, p.job.x - p.x);
+            p.fixing = false;
+          } else {                          // ON SITE — start hammering
+            p.fixing = true;
+            p.jobT += dt;
+            p.hammer = (p.hammer || 0) + dt * 9;         // swing the hammer
+            if (p.jobT >= REPAIR_TIME) {                 // one damage level mended!
+              p.jobT = 0;
+              damage[p.job.gy][p.job.gx]--;
+              repaired++;
+              if (damage[p.job.gy][p.job.gx] <= PRISTINE) {
+                claimed.delete(p.job.gx + ',' + p.job.gy);
+                p.job = null; p.fixing = false;
+              }
+            }
+          }
+        } else {
+          p.fixing = false;
+          if (Math.random() < dt * 0.8) p.angle = Math.random() * 6.28;   // nothing to do, amble
+        }
+      } else {
+        if (Math.random() < dt * 0.8) p.angle = Math.random() * 6.28;     // calm amble
+      }
     }
+    if (p.fixing) continue;               // a worker mid-repair stands still
 
     // dogs scamper, cows plod, people are in between
     const pace = p.kind === 'dog' ? 1.35 : p.kind === 'cow' ? 0.6 : 1;
@@ -1135,7 +1253,59 @@ function draw() {
         ctx.fillRect(x + s * 0.16, y + s * 0.8, s * 0.05, s * 0.05);
         ctx.fillRect(x + s * 0.79, y + s * 0.8, s * 0.05, s * 0.05);
       }
+
+      // ---- BATTLE SCARS ----
+      // Lightly damaged: a couple of cracks and a scorch. Heavily damaged:
+      // deep cracks, a bite taken out of the top, and a wisp of smoke.
+      const dmg = damage[gy][gx];
+      if (dmg > PRISTINE) {
+        ctx.strokeStyle = dmg === HEAVY ? 'rgba(20,14,10,0.75)' : 'rgba(30,22,16,0.5)';
+        ctx.lineWidth = Math.max(1, s * (dmg === HEAVY ? 0.05 : 0.035));
+        ctx.beginPath();                                 // a jagged crack
+        ctx.moveTo(x + s * 0.32, y + s * 0.9);
+        ctx.lineTo(x + s * 0.42, y + s * 0.62);
+        ctx.lineTo(x + s * 0.34, y + s * 0.5);
+        ctx.stroke();
+        if (dmg === HEAVY) {
+          ctx.beginPath();                               // a second, worse one
+          ctx.moveTo(x + s * 0.72, y + s * 0.9);
+          ctx.lineTo(x + s * 0.62, y + s * 0.58);
+          ctx.lineTo(x + s * 0.74, y + s * 0.38);
+          ctx.stroke();
+          ctx.fillStyle = '#4a7c3a';                     // a chunk missing off the top
+          ctx.beginPath();
+          ctx.moveTo(x + s * 0.5, y + s * 0.06);
+          ctx.lineTo(x + s * 0.95, y + s * 0.1);
+          ctx.lineTo(x + s * 0.95, y + s * 0.34);
+          ctx.closePath(); ctx.fill();
+          // a lazy wisp of smoke
+          ctx.fillStyle = 'rgba(60, 60, 66, 0.35)';
+          ctx.beginPath();
+          ctx.arc(x + s * (0.7 + Math.sin(elapsed * 1.7 + gx) * 0.06),
+                  y + s * (0.16 - (elapsed * 0.15 + gy * 0.3) % 0.3),
+                  s * 0.09, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.fillStyle = dmg === HEAVY ? 'rgba(0,0,0,0.22)' : 'rgba(0,0,0,0.1)';
+        ctx.fillRect(x, y, s, s);                        // soot over the whole square
+      }
     }
+  }
+
+  // A little green progress bar over whatever building is being repaired,
+  // so you can see the work happening.
+  for (const p of people) {
+    if (!p.fixing || !p.job) continue;
+    const bx2 = p.job.gx * s, by2 = TOPBAR + p.job.gy * s;
+    const frac = Math.max(0, Math.min(1, p.jobT / REPAIR_TIME));
+    ctx.fillStyle = 'rgba(10, 14, 20, 0.75)';
+    ctx.fillRect(bx2 + s * 0.12, by2 - s * 0.16, s * 0.76, s * 0.1);
+    ctx.fillStyle = '#7ddf8f';
+    ctx.fillRect(bx2 + s * 0.13, by2 - s * 0.15, s * 0.74 * frac, s * 0.08);
+    ctx.fillStyle = '#ffe9a8';                       // a tiny wrench, to say "under repair"
+    ctx.font = `bold ${Math.max(7, s * 0.3)}px monospace`;
+    ctx.textAlign = 'center';
+    ctx.fillText('🔧', bx2 + s * 0.5, by2 - s * 0.22);
   }
 
   // tiny heads peeking out of every occupied shelter
@@ -1172,9 +1342,10 @@ function draw() {
   for (const p of people) {
     if (p.sheltering) continue;
     const u = s / 26;                                // one "unit" scaled to the square
-    const step = Math.sin(p.walk) * 2 * u;
+    const step = p.fixing ? 0 : Math.sin(p.walk) * 2 * u;   // planted feet while working
     const facing = Math.cos(p.angle) < 0 ? -1 : 1;   // which way are they pointed?
-    const hop = doom ? Math.abs(Math.sin(p.bob)) * 2.5 * u   // panicked jitter
+    const hop = p.fixing ? 0
+              : doom ? Math.abs(Math.sin(p.bob)) * 2.5 * u   // panicked jitter
                      : Math.sin(p.bob) * 1.2 * u;            // happy sway
     const eyeW = doom ? 2.3 * u : 1.1 * u;           // eyes go WIDE when scared
 
@@ -1244,16 +1415,36 @@ function draw() {
       ctx.fillRect(p.x + 1 * u, p.y - 2 * u - step, 2 * u, 5 * u + step);
       ctx.fillStyle = p.shirt;                       // shirt
       rrect(p.x - 4 * u, p.y - 10 * u, 8 * u, 9 * u, 1.6 * u); ctx.fill();
-      // ARMS: straight up in a panic, swinging along when all is well
+      // ARMS: straight up in a panic, hammering when fixing, else swinging
       ctx.strokeStyle = '#f2c79b'; ctx.lineWidth = 1.8 * u;
       ctx.beginPath();
       if (doom) {
         ctx.moveTo(p.x - 4 * u, p.y - 9 * u); ctx.lineTo(p.x - 6.5 * u, p.y - 15 * u);
         ctx.moveTo(p.x + 4 * u, p.y - 9 * u); ctx.lineTo(p.x + 6.5 * u, p.y - 15 * u);
+      } else if (p.fixing) {
+        const sw = Math.abs(Math.sin(p.hammer || 0));  // the swing, 0=down 1=up
+        const hy2 = p.y - 9 * u - sw * 7 * u;
+        ctx.moveTo(p.x + 4 * u, p.y - 9 * u); ctx.lineTo(p.x + 7 * u, hy2);
+        ctx.moveTo(p.x - 4 * u, p.y - 9 * u); ctx.lineTo(p.x - 6 * u, p.y - 6 * u);
+        ctx.stroke();
+        ctx.strokeStyle = '#6d5330'; ctx.lineWidth = 1.4 * u;   // hammer handle
+        ctx.beginPath();
+        ctx.moveTo(p.x + 7 * u, hy2); ctx.lineTo(p.x + 9.5 * u, hy2 - 3 * u);
+        ctx.stroke();
+        ctx.fillStyle = '#9aa3ad';                              // hammer head
+        ctx.fillRect(p.x + 8.6 * u, hy2 - 5 * u, 3.4 * u, 2.4 * u);
+        if (sw < 0.15) {                                        // CLANK! sparks
+          ctx.fillStyle = '#ffe9a8';
+          ctx.font = `bold ${Math.max(7, 8 * u)}px monospace`;
+          ctx.textAlign = 'left';
+          ctx.fillText('✦', p.x + 10 * u, hy2 - 5 * u);
+        }
+        ctx.beginPath();                             // (restart path for the stroke below)
       } else {
         ctx.moveTo(p.x - 4 * u, p.y - 9 * u); ctx.lineTo(p.x - 6 * u, p.y - 5 * u + step);
         ctx.moveTo(p.x + 4 * u, p.y - 9 * u); ctx.lineTo(p.x + 6 * u, p.y - 5 * u - step);
       }
+      ctx.strokeStyle = '#f2c79b'; ctx.lineWidth = 1.8 * u;
       ctx.stroke();
       const hy = p.y - 13.5 * u;                     // head
       ctx.fillStyle = '#f2c79b';
@@ -1534,11 +1725,12 @@ function draw() {
 
   // the destruction scoreboard, tucked top-left under the bar
   // (hidden while a drop-down is open so it can't show through the menu)
-  if ((destroyed > 0 || peopleLaunched > 0) && !openMenu) {
+  if ((destroyed > 0 || peopleLaunched > 0 || repaired > 0) && !openMenu) {
     ctx.fillStyle = 'rgba(255, 159, 67, 0.9)';
     ctx.font = 'bold 12px monospace';
     ctx.textAlign = 'left';
-    ctx.fillText(`💥 ${destroyed} smashed   🚀 ${peopleLaunched} launched`, 12, TOPBAR + 18);
+    ctx.fillText(`💥 ${destroyed} smashed   🚀 ${peopleLaunched} launched   🔧 ${repaired} fixed`,
+                 12, TOPBAR + 18);
   }
 }
 
