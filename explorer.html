@@ -56,6 +56,7 @@ let hasBeatSky = localStorage.getItem('explorer_beat_sky') === 'yes';   // Multi
 let hasChippy = localStorage.getItem('explorer_chippy') === 'yes';      // has Chippy joined you?
 let hasBeatJr = localStorage.getItem('explorer_beat_jr') === 'yes';     // is the revenge... avenged?
 let hasBeatGeckoMan = localStorage.getItem('explorer_beat_geckoman') === 'yes';
+let hasBeatReturn = localStorage.getItem('explorer_beat_return') === 'yes';
 let armorRegenTimer = 0;       // the infection slowly knitting your armor back
 
 // how many armor points can you have? best armor wins.
@@ -145,7 +146,15 @@ const LEVELS = [
     worldH: 2600,
     start: { x: 1300, y: 2450 }, // the gecko temple gates
   },
-  { name: 'Return of the Multi-Tasker', unlocked: false },   // Level 8 — it grew BACK?!
+  {
+    name: 'Return of the Multi-Tasker',
+    kind: 'dungeon',
+    unlocked: false,             // opens when Gecko Man is beaten
+    grass: '#26262e',            // near-black dungeon stone
+    worldW: 2600,
+    worldH: 2600,
+    start: { x: 1300, y: 2450 }, // the dungeon doors
+  },
 ];
 // prizes you earned on past visits keep their doors open
 LEVELS[1].unlocked = hasArmor;
@@ -175,6 +184,8 @@ let axeBoss = null;     // Chippy himself. he seems so nice.
 let chippyJr = null;    // the son. he is NOT pretending to be nice.
 let geckoMan = null;    // the leader of the uprising
 let angryGeckos = [];   // small geckos who are DONE running away
+let returnBoss = null;  // the Multi-Tasker, rebuilt. nine eyes now.
+let miniBlobs = [];     // small multi-taskers. it's been... multiplying.
 let miniAxes = [];      // his summoned mini axes
 let giantGeckos = [];   // his summoned VERY large geckos
 let emeralds = [];      // dropped treasure waiting to be grabbed
@@ -345,6 +356,20 @@ const GECKO_PATH = [
   { x: 1300, y: 380 },
 ];
 const geckoChamber = { x: 1300, y: 300 };   // where GECKO MAN stands
+
+// ---------------------------------------------------------------------
+// THE DARK DUNGEON — where the Multi-Tasker has been rebuilding itself.
+// ---------------------------------------------------------------------
+const DUNGEON_PATH = [
+  { x: 1300, y: 2450 }, { x: 1300, y: 2200 }, { x: 1100, y: 2120 },
+  { x: 950,  y: 1950 }, { x: 1000, y: 1750 }, { x: 1250, y: 1680 },
+  { x: 1500, y: 1730 }, { x: 1680, y: 1600 }, { x: 1650, y: 1380 },
+  { x: 1420, y: 1300 }, { x: 1180, y: 1350 }, { x: 980,  y: 1230 },
+  { x: 950,  y: 1010 }, { x: 1150, y: 900 },  { x: 1400, y: 950 },
+  { x: 1600, y: 860 },  { x: 1580, y: 640 },  { x: 1380, y: 560 },
+  { x: 1300, y: 440 },  { x: 1300, y: 380 },
+];
+const dgChamber = { x: 1300, y: 300 };   // where IT waits, dripping
 
 // smallest distance to ANY of a list of paths
 function distToAnyPath(x, y, paths) {
@@ -1220,6 +1245,105 @@ function buildGecko(lv) {
 }
 
 // ---------------------------------------------------------------------
+// BUILDING THE DARK DUNGEON — Return of the Multi-Tasker.
+// ---------------------------------------------------------------------
+function buildDungeon(lv) {
+  trees = [];
+
+  // sealed wall band in near-black slate
+  for (let gx = 40; gx < lv.worldW - 40; gx += 34) {
+    for (let gy = 40; gy < lv.worldH - 40; gy += 34) {
+      const d = distToPath(gx, gy, DUNGEON_PATH);
+      if (d < 100 || d > 140) continue;
+      if (Math.hypot(gx - dgChamber.x, gy - dgChamber.y) < 190) continue;
+      trees.push({
+        x: gx + (noise(gx * 1.3 + gy) - 0.5) * 8,
+        y: gy + (noise(gy * 2.7 + gx) - 0.5) * 8,
+        size: 1, wall: true, dg: true,
+      });
+    }
+  }
+  // the final chamber ring, one doorway south
+  for (let ang = 0; ang < Math.PI * 2; ang += 0.26) {
+    if (Math.abs(ang - Math.PI / 2) < 0.5) continue;
+    const wx = dgChamber.x + Math.cos(ang) * 200;
+    const wy = dgChamber.y + Math.sin(ang) * 200;
+    if (wx < 60 || wy < 60 || wx > lv.worldW - 60 || wy > lv.worldH - 60) continue;
+    trees.push({ x: wx, y: wy, size: 1, wall: true, dg: true });
+  }
+
+  // cold slate tiles
+  tiles = [];
+  let tn = 0;
+  for (let i = 0; i < DUNGEON_PATH.length - 1; i++) {
+    const a = DUNGEON_PATH[i], b = DUNGEON_PATH[i + 1];
+    const segLen = Math.hypot(b.x - a.x, b.y - a.y);
+    const ux = (b.x - a.x) / segLen, uy = (b.y - a.y) / segLen;
+    for (let d = 0; d < segLen; d += 24) {
+      tn++;
+      const off = (noise(tn * 3.7) - 0.5) * 130;
+      tiles.push({
+        x: a.x + ux * d + (-uy) * off,
+        y: a.y + uy * d + ux * off,
+        size: 15 + noise(tn * 5.1) * 13,
+        color: ['#33333d', '#2a2a33', '#3d3d49'][Math.floor(noise(tn * 7.7) * 3)],
+      });
+    }
+  }
+
+  // torches, barely holding back the dark
+  torches = [];
+  for (let i = 0; i < DUNGEON_PATH.length - 1; i++) {
+    const a = DUNGEON_PATH[i], b = DUNGEON_PATH[i + 1];
+    torches.push({ x: (a.x + b.x) / 2 + 70, y: (a.y + b.y) / 2, torch: true });
+    torches.push({ x: (a.x + b.x) / 2 - 70, y: (a.y + b.y) / 2, torch: true });
+  }
+
+  // cold blue sparks
+  fireflies = [];
+  for (let i = 0; i < 50; i++) {
+    fireflies.push({
+      x: noise(i * 21.3 + 9) * lv.worldW,
+      y: noise(i * 47.7 + 9) * lv.worldH,
+      phase: noise(i * 5.5) * 6.28,
+      speed: 0.5 + noise(i * 2.2),
+    });
+  }
+
+  // MINI MULTI-TASKERS — it has been... multiplying
+  miniBlobs = [];
+  for (let i = 0; i < 600 && miniBlobs.length < 14; i++) {
+    const x = noise(i * 57.7 + 47) * lv.worldW;
+    const y = noise(i * 25.9 + 47) * lv.worldH;
+    if (Math.hypot(x - lv.start.x, y - lv.start.y) < 350) continue;
+    if (distToPath(x, y, DUNGEON_PATH) > 60) continue;
+    if (Math.hypot(x - dgChamber.x, y - dgChamber.y) < 260) continue;
+    miniBlobs.push({ x, y, hp: 2, hurtFlash: 0, lastHitSwing: 0 });
+  }
+
+  // THE MULTI-TASKER, REBUILT — nine eyes, teeth, tentacles
+  returnBoss = {
+    x: dgChamber.x, y: dgChamber.y,
+    hp: 40,
+    active: false,
+    teleportTimer: 5,
+    spawnTimer: 7,
+    lastHitSwing: 0,
+    hurtFlash: 0,
+  };
+
+  pond = { x: -9999, y: -9999, rx: 1, ry: 1, hidden: true };
+  stumps = []; flowers = []; scorches = []; logs = []; webs = []; geckos = [];
+  zombies = []; skeletons = []; creepers = []; miniAxes = []; giantGeckos = [];
+
+  emeralds = [];
+  particles = [];
+  emeraldCount = 0;
+  player.hp = player.maxHp;
+  player.armor = armorMax();
+}
+
+// ---------------------------------------------------------------------
 // THE EXPLORER (you!)
 // ---------------------------------------------------------------------
 const player = {
@@ -1252,11 +1376,12 @@ function swingSword() {
 function startLevel(i) {
   current = LEVELS[i];
   logs = []; webs = []; geckos = [];   // only Chippy's dimension refills these
-  axeBoss = null; chippyJr = null; geckoMan = null;
-  miniAxes = []; giantGeckos = []; angryGeckos = [];
+  axeBoss = null; chippyJr = null; geckoMan = null; returnBoss = null;
+  miniAxes = []; giantGeckos = []; angryGeckos = []; miniBlobs = [];
   if (current.kind === 'chippy') buildChippy(current);
   else if (current.kind === 'jr') buildJr(current);
   else if (current.kind === 'gecko') buildGecko(current);
+  else if (current.kind === 'dungeon') buildDungeon(current);
   else if (current.kind === 'temple') buildTemple(current);
   else if (current.kind === 'castle') buildCastle(current);
   else if (current.kind === 'sky') buildSky(current);
@@ -1791,6 +1916,135 @@ function update(dt) {
     }
   }
 
+  // ---- MINI MULTI-TASKERS — small blobs, big appetite ----
+  for (const m of miniBlobs) {
+    if (m.hurtFlash > 0) m.hurtFlash -= dt;
+    const d = Math.hypot(player.x - m.x, player.y - m.y);
+    if (d < 340 && player.deathTimer <= 0) {
+      m.x += (player.x - m.x) / Math.max(1, d) * 120 * dt;
+      m.y += (player.y - m.y) / Math.max(1, d) * 120 * dt;
+    }
+    if (player.attackTime > 0 && m.lastHitSwing !== player.swingId &&
+        d < 55 && (m.x - player.x) * player.facing > -8) {
+      m.lastHitSwing = player.swingId;
+      m.hp -= hasChippy ? 3 : hasGoldSword ? 2 : 1;
+      m.hurtFlash = 0.15;
+      if (m.hp <= 0) {
+        for (let p = 0; p < 10; p++) {
+          particles.push({ x: m.x, y: m.y - 6,
+            vx: (noise(p * 3.7 + elapsed) - 0.5) * 240,
+            vy: (noise(p * 6.1 + elapsed) - 0.8) * 200,
+            life: 0.5, color: p % 2 ? '#1a1a20' : '#b06cff' });
+        }
+        emeralds.push({ x: m.x, y: m.y, born: elapsed });
+      }
+    }
+    if (m.hp > 0 && d < 22 && player.hurtTimer <= 0 && player.deathTimer <= 0) {
+      if (player.armor > 0) player.armor -= 1;
+      else player.hp -= 1;
+      player.hurtTimer = 1;
+      if (player.hp <= 0) player.deathTimer = 2.5;
+    }
+  }
+  miniBlobs = miniBlobs.filter(m => m.hp > 0);
+
+  // ---- THE MULTI-TASKER, RETURNED — nine eyes and very bad intentions ----
+  if (returnBoss) {
+    const b = returnBoss;
+    if (b.hurtFlash > 0) b.hurtFlash -= dt;
+    const distToYou = Math.hypot(player.x - b.x, player.y - b.y);
+
+    if (!b.active && distToYou < 300) b.active = true;
+
+    if (b.active && player.deathTimer <= 0) {
+      // it oozes toward you, tentacles first
+      const ooze = 95 + Math.sin(elapsed * 2) * 40;
+      const bdx = (player.x - b.x) / Math.max(1, distToYou);
+      const bdy = (player.y - b.y) / Math.max(1, distToYou);
+      if (!blocked(b.x + bdx * ooze * dt, b.y, 16)) b.x += bdx * ooze * dt;
+      if (!blocked(b.x, b.y + bdy * ooze * dt, 16)) b.y += bdy * ooze * dt;
+
+      // THE TELEPORT — it learned from Chippy Jr. purple burst, gone.
+      b.teleportTimer -= dt;
+      if (b.teleportTimer <= 0) {
+        b.teleportTimer = 5;
+        for (let p = 0; p < 14; p++) {
+          particles.push({ x: b.x, y: b.y - 16,
+            vx: (noise(p * 3.1 + elapsed) - 0.5) * 280,
+            vy: (noise(p * 7.3 + elapsed) - 0.8) * 240,
+            life: 0.5, color: '#b06cff' });
+        }
+        for (let attempt = 0; attempt < 10; attempt++) {
+          const ang = noise(elapsed * 7.7 + attempt) * 6.28;
+          const nx = player.x + Math.cos(ang) * 200;
+          const ny = player.y + Math.sin(ang) * 200;
+          if (!blocked(nx, ny, 16)) { b.x = nx; b.y = ny; break; }
+        }
+        for (let p = 0; p < 14; p++) {
+          particles.push({ x: b.x, y: b.y - 16,
+            vx: (noise(p * 4.7 + elapsed) - 0.5) * 280,
+            vy: (noise(p * 9.1 + elapsed) - 0.8) * 240,
+            life: 0.5, color: '#b06cff' });
+        }
+      }
+
+      // THE SPAWN — it squeezes off a new mini multi-tasker from its goo
+      b.spawnTimer -= dt;
+      if (b.spawnTimer <= 0) {
+        b.spawnTimer = 7;
+        if (miniBlobs.length < 5) {
+          miniBlobs.push({
+            x: b.x + (noise(elapsed) - 0.5) * 120,
+            y: b.y + (noise(elapsed * 2.2) - 0.5) * 120,
+            hp: 2, hurtFlash: 0, lastHitSwing: 0,
+          });
+        }
+      }
+
+      // tentacle grab — it reaches FAR, and those teeth cost double
+      if (distToYou < 65 && player.hurtTimer <= 0) {
+        for (let h = 0; h < 2; h++) {
+          if (player.armor > 0) player.armor -= 1;
+          else player.hp -= 1;
+        }
+        player.hurtTimer = 1;
+        const push = 90 / Math.max(1, distToYou);
+        const nx2 = player.x + (player.x - b.x) * push;
+        const ny2 = player.y + (player.y - b.y) * push;
+        if (!blocked(nx2, player.y)) player.x = nx2;
+        if (!blocked(player.x, ny2)) player.y = ny2;
+        if (player.hp <= 0) player.deathTimer = 2.5;
+      }
+    }
+
+    // your swing — end this. again.
+    if (b.active && player.attackTime > 0 && b.lastHitSwing !== player.swingId &&
+        distToYou < 85 && (b.x - player.x) * player.facing > -8) {
+      b.lastHitSwing = player.swingId;
+      b.hp -= hasChippy ? 3 : hasGoldSword ? 2 : 1;
+      b.hurtFlash = 0.15;
+
+      if (b.hp <= 0) {
+        // NINE EYES CLOSED
+        for (let i = 0; i < 44; i++) {
+          particles.push({ x: b.x, y: b.y - 14,
+            vx: (noise(i * 3.3 + elapsed) - 0.5) * 400,
+            vy: (noise(i * 7.7 + elapsed) - 0.9) * 360,
+            life: 0.9, color: i % 2 ? '#1a1a20' : '#b06cff' });
+        }
+        for (let e = 0; e < 10; e++) {
+          emeralds.push({ x: b.x + (e - 5) * 14, y: b.y, born: elapsed });
+        }
+        returnBoss = null;
+        victoryNew = true;
+        victoryLevel = 8;
+        victoryTimer = 6;
+        hasBeatReturn = true;
+        localStorage.setItem('explorer_beat_return', 'yes');
+      }
+    }
+  }
+
   // ---- ZOMBIES ----
   for (const z of zombies) {
     if (z.hurtFlash > 0) z.hurtFlash -= dt;
@@ -2090,6 +2344,13 @@ function update(dt) {
         geckoMan.active = false;
         geckoMan.hp = 32;
       }
+      // and the returned Multi-Tasker re-forms in its chamber
+      if (returnBoss) {
+        returnBoss.x = dgChamber.x;
+        returnBoss.y = dgChamber.y;
+        returnBoss.active = false;
+        returnBoss.hp = 40;
+      }
     }
   }
 
@@ -2257,11 +2518,13 @@ function drawGame() {
   // the walkway floors: sand base in the temple, cracked stone halls in
   // the castle (every branching passage gets floor), then the tiles/carpet
   if (current.kind === 'temple' || current.kind === 'castle' ||
-      current.kind === 'sky' || current.kind === 'jr' || current.kind === 'gecko') {
+      current.kind === 'sky' || current.kind === 'jr' ||
+      current.kind === 'gecko' || current.kind === 'dungeon') {
     const walkways = current.kind === 'temple' ? [TEMPLE_PATH]
                    : current.kind === 'castle' ? CASTLE_PATHS
                    : current.kind === 'jr'     ? [JR_PATH]
                    : current.kind === 'gecko'  ? [GECKO_PATH]
+                   : current.kind === 'dungeon' ? [DUNGEON_PATH]
                    : SKY_PATHS;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
@@ -2273,9 +2536,20 @@ function drawGame() {
                       : current.kind === 'castle' ? '#46474d'
                       : current.kind === 'jr'     ? '#3d3649'
                       : current.kind === 'gecko'  ? '#2f4634'
+                      : current.kind === 'dungeon' ? '#33333d'
                       : '#4e5259';
       ctx.lineWidth = 175;
       ctx.stroke();
+    }
+    if (current.kind === 'dungeon') {
+      // the final chamber floor
+      const jx = dgChamber.x - cam.x, jy = dgChamber.y - cam.y;
+      ctx.fillStyle = '#33333d';
+      ctx.beginPath(); ctx.arc(jx, jy, 195, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = '#4a4a58';
+      ctx.lineWidth = 5;
+      ctx.beginPath(); ctx.arc(jx, jy, 170, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(jx, jy, 90, 0, Math.PI * 2); ctx.stroke();
     }
     if (current.kind === 'gecko') {
       // the gecko boss chamber floor
@@ -2494,6 +2768,105 @@ function drawGame() {
     ctx.restore();
   }
 
+  // mini multi-taskers — small wobbling blobs with one hungry eye each
+  for (const m of miniBlobs) {
+    const mx = m.x - cam.x, my = m.y - cam.y;
+    if (mx < -40 || my < -40 || mx > canvas.width + 40 || my > canvas.height + 40) continue;
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    ctx.beginPath(); ctx.ellipse(mx, my + 10, 14, 5, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = m.hurtFlash > 0 ? '#ffffff' : '#1a1a20';
+    ctx.beginPath();
+    for (let k = 0; k <= 12; k++) {
+      const ang = (k / 12) * Math.PI * 2;
+      const r = 14 + Math.sin(elapsed * 4 + k * 2.1 + m.x) * 2.5;
+      const px2 = mx + Math.cos(ang) * r;
+      const py2 = my + Math.sin(ang) * r * 0.85;
+      if (k === 0) ctx.moveTo(px2, py2); else ctx.lineTo(px2, py2);
+    }
+    ctx.closePath();
+    ctx.fill();
+    // its one eye, watching you specifically
+    const lk = Math.hypot(player.x - m.x, player.y - m.y) || 1;
+    const ex2 = (player.x - m.x) / lk * 2.5, ey2 = (player.y - m.y) / lk * 2.5;
+    ctx.fillStyle = '#f4f0e8';
+    ctx.beginPath(); ctx.arc(mx, my - 2, 6, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#b06cff';
+    ctx.beginPath(); ctx.arc(mx + ex2, my - 2 + ey2, 3.5, 0, Math.PI * 2); ctx.fill();
+  }
+
+  // THE MULTI-TASKER, RETURNED — tentacles, teeth, and nine eyes
+  if (returnBoss) {
+    const b = returnBoss;
+    const bx = b.x - cam.x, by = b.y - cam.y;
+    const rFlash = b.hurtFlash > 0;
+    const wob = elapsed * 2.2;
+
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.beginPath(); ctx.ellipse(bx, by + 40, 66, 18, 0, 0, Math.PI * 2); ctx.fill();
+
+    // SEVEN black tentacles, writhing out from underneath
+    ctx.strokeStyle = rFlash ? '#ffffff' : '#0e0e14';
+    ctx.lineWidth = 6;
+    ctx.lineCap = 'round';
+    for (let t = 0; t < 7; t++) {
+      const baseAng = (t / 7) * Math.PI * 2 + Math.sin(wob + t) * 0.15;
+      ctx.beginPath();
+      ctx.moveTo(bx + Math.cos(baseAng) * 30, by + Math.sin(baseAng) * 24);
+      let tx2 = bx + Math.cos(baseAng) * 30, ty2 = by + Math.sin(baseAng) * 24;
+      for (let seg = 1; seg <= 3; seg++) {
+        tx2 += Math.cos(baseAng + Math.sin(wob * 1.6 + t + seg) * 0.5) * 26;
+        ty2 += Math.sin(baseAng + Math.cos(wob * 1.4 + t + seg) * 0.5) * 22;
+        ctx.lineTo(tx2, ty2);
+      }
+      ctx.stroke();
+    }
+
+    // the blob, bigger than ever, edges rippling
+    ctx.fillStyle = rFlash ? '#ffffff' : '#1a1a20';
+    ctx.beginPath();
+    for (let k = 0; k <= 22; k++) {
+      const ang = (k / 22) * Math.PI * 2;
+      const r = 56 + Math.sin(wob * 1.4 + k * 1.9) * 7;
+      const px2 = bx + Math.cos(ang) * r;
+      const py2 = by + Math.sin(ang) * r * 0.85;
+      if (k === 0) ctx.moveTo(px2, py2); else ctx.lineTo(px2, py2);
+    }
+    ctx.closePath();
+    ctx.fill();
+
+    // NINE eyes in a 3x3 grid, every pupil tracking you
+    const lk = Math.hypot(player.x - b.x, player.y - b.y) || 1;
+    const ex2 = (player.x - b.x) / lk * 2.5, ey2 = (player.y - b.y) / lk * 2.5;
+    for (let row = 0; row < 3; row++) {
+      for (let col = 0; col < 3; col++) {
+        const ox = bx - 24 + col * 24, oy = by - 34 + row * 14;
+        ctx.fillStyle = '#f4f0e8';
+        ctx.beginPath(); ctx.arc(ox, oy, 6.5, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#b06cff';
+        ctx.beginPath(); ctx.arc(ox + ex2, oy + ey2, 3.5, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+
+    // THE MOUTH — wide, dark, and full of sharp teeth
+    ctx.fillStyle = '#0a0a0e';
+    ctx.beginPath();
+    ctx.ellipse(bx, by + 18, 30, 12 + Math.sin(wob * 2) * 3, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#f4f0e8';
+    for (let tt = 0; tt < 6; tt++) {                     // top teeth point down
+      const tx3 = bx - 25 + tt * 10;
+      ctx.beginPath();
+      ctx.moveTo(tx3, by + 10); ctx.lineTo(tx3 + 8, by + 10); ctx.lineTo(tx3 + 4, by + 18);
+      ctx.closePath(); ctx.fill();
+    }
+    for (let tt = 0; tt < 5; tt++) {                     // bottom teeth point up
+      const tx3 = bx - 20 + tt * 10;
+      ctx.beginPath();
+      ctx.moveTo(tx3, by + 27); ctx.lineTo(tx3 + 8, by + 27); ctx.lineTo(tx3 + 4, by + 19);
+      ctx.closePath(); ctx.fill();
+    }
+  }
+
   // the angry gecko swarm — small, fast, and coming right at you
   for (const a of angryGeckos) {
     const ax2 = a.x - cam.x, ay2 = a.y - cam.y;
@@ -2635,12 +3008,14 @@ function drawGame() {
                 : current.kind === 'sky'    ? '170, 200, 255'
                 : current.kind === 'chippy' ? '255, 150, 220'
                 : current.kind === 'jr'     ? '255, 110, 100'
+                : current.kind === 'dungeon' ? '150, 150, 255'
                 : '190, 255, 130';
     const glowB = current.kind === 'temple' ? '255, 210, 140'
                 : current.kind === 'castle' ? '220, 190, 255'
                 : current.kind === 'sky'    ? '225, 240, 255'
                 : current.kind === 'chippy' ? '255, 215, 245'
                 : current.kind === 'jr'     ? '255, 190, 185'
+                : current.kind === 'dungeon' ? '210, 210, 255'
                 : '220, 255, 170';
     ctx.fillStyle = `rgba(${glowA}, ${0.15 + 0.25 * twinkle})`;
     ctx.beginPath(); ctx.arc(fx, fy, 5, 0, Math.PI * 2); ctx.fill();
@@ -2837,6 +3212,23 @@ function drawGame() {
     }
   }
 
+  // BOSS BAR for the returned Multi-Tasker
+  if (current.kind === 'dungeon' && returnBoss && returnBoss.active) {
+    const bw = Math.min(500, canvas.width - 80);
+    const bx = canvas.width / 2 - bw / 2, by = 30;
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#d8c2ff';
+    ctx.font = 'bold 16px monospace';
+    ctx.fillText('THE MULTI-TASKER, RETURNED', canvas.width / 2, by - 8);
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(bx, by, bw, 14);
+    ctx.fillStyle = '#b06cff';
+    ctx.fillRect(bx + 2, by + 2, (bw - 4) * (returnBoss.hp / 40), 10);
+    ctx.strokeStyle = '#d8c2ff';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(bx, by, bw, 14);
+  }
+
   // BOSS BAR for Gecko Man
   if (current.kind === 'gecko' && geckoMan && geckoMan.active) {
     const bw = Math.min(500, canvas.width - 80);
@@ -2930,6 +3322,7 @@ function drawGame() {
                : current.kind === 'chippy' ? 'Chippy got you! (He was evil the WHOLE time!)'
                : current.kind === 'jr'     ? 'Chippy Jr got his revenge!'
                : current.kind === 'gecko'  ? 'The geckos rose. You fell!'
+               : current.kind === 'dungeon' ? 'The Multi-Tasker multi-tasked you!'
                : 'The zombies got you!',
                  canvas.width / 2, canvas.height / 2 - 10);
     ctx.font = '18px monospace';
@@ -2963,7 +3356,27 @@ function drawGame() {
     ctx.fillStyle = '#ffd23f';
     ctx.font = 'bold 40px monospace';
     ctx.fillText(`LEVEL ${victoryLevel} COMPLETE!`, canvas.width / 2, canvas.height / 2 - 60);
-    if (victoryLevel === 7) {
+    if (victoryLevel === 8) {
+      // nine eyes, all closed
+      for (let row = 0; row < 3; row++) {
+        for (let col = 0; col < 3; col++) {
+          const ox = canvas.width / 2 - 26 + col * 26;
+          const oy = canvas.height / 2 - 10 + row * 16;
+          ctx.fillStyle = '#f4f0e8';
+          ctx.beginPath(); ctx.arc(ox, oy, 8, 0, Math.PI * 2); ctx.fill();
+          ctx.strokeStyle = '#555';                    // closed-eye line
+          ctx.lineWidth = 2.5;
+          ctx.beginPath(); ctx.moveTo(ox - 5, oy); ctx.lineTo(ox + 5, oy); ctx.stroke();
+        }
+      }
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 22px monospace';
+      ctx.fillText('THE MULTI-TASKER IS DEFEATED... AGAIN!', canvas.width / 2, canvas.height / 2 + 72);
+      ctx.fillStyle = '#d8c2ff';
+      ctx.font = '16px monospace';
+      ctx.fillText('Nine eyes closed forever. Probably. Maybe.',
+                   canvas.width / 2, canvas.height / 2 + 100);
+    } else if (victoryLevel === 7) {
       // Gecko Man's horned silhouette, head bowed
       const vx = canvas.width / 2, vy = canvas.height / 2 + 8;
       ctx.fillStyle = '#3f8a3f';
@@ -3597,10 +4010,11 @@ function drawWall(w, cam) {
   ctx.ellipse(x + 5, y + 5, 23, 8, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // sandstone temple, gray castle, purple Jr temple, mossy gecko temple
-  const base = w.gt ? '#22331f' : w.jr ? '#332c40' : w.castle ? '#4a4b50' : '#6d6250';
-  const face = w.gt ? '#3c5442' : w.jr ? '#453e54' : w.castle ? '#5d5f66' : '#8a7c5e';
-  const top  = w.gt ? '#527a5c' : w.jr ? '#5d5470' : w.castle ? '#787a82' : '#9c8e6e';
+  // sandstone temple, gray castle, purple Jr temple, mossy gecko temple,
+  // near-black dungeon
+  const base = w.dg ? '#17171d' : w.gt ? '#22331f' : w.jr ? '#332c40' : w.castle ? '#4a4b50' : '#6d6250';
+  const face = w.dg ? '#2a2a33' : w.gt ? '#3c5442' : w.jr ? '#453e54' : w.castle ? '#5d5f66' : '#8a7c5e';
+  const top  = w.dg ? '#40404d' : w.gt ? '#527a5c' : w.jr ? '#5d5470' : w.castle ? '#787a82' : '#9c8e6e';
 
   if (w.broken) {
     // a crumbled stub — smashed down to knee height, jagged on top
