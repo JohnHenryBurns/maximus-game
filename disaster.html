@@ -539,11 +539,12 @@ function draw() {
                  TOPBAR + 8 + 4 * 50 + 14);
   }
 
-  // THE BANK BALANCE — front and center, because MONEYS matter now
+  // THE BANK BALANCE — parked right next to THE MACHINE, so you can
+  // see exactly what doom you can afford
   ctx.fillStyle = '#ffd23f';
   ctx.font = 'bold 20px monospace';
-  ctx.textAlign = 'center';
-  ctx.fillText(`💰 ${moneys} MONEYS`, canvas.width / 2, 40);
+  ctx.textAlign = 'right';
+  ctx.fillText(`💰 ${moneys} MONEYS`, canvas.width - 245, 40);
 
   // tried to buy doom you can't afford
   if (brokeFlash > 0) {
