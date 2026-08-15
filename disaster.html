@@ -7,10 +7,24 @@
 <style>
   html, body { margin: 0; background: #1a2530; height: 100%; overflow: hidden; }
   canvas { display: block; }
+  /* Back-to-arcade pill, the same look the other games use. */
+  #back {
+    position: fixed; top: 10px; left: 10px; z-index: 10;
+    color: #ffe0c4; background: rgba(24, 14, 28, 0.6);
+    border: 1px solid rgba(255, 200, 150, 0.4);
+    font-family: system-ui, sans-serif; font-size: 13px; font-weight: 600; letter-spacing: 0.3px;
+    padding: 7px 12px; border-radius: 999px; text-decoration: none; cursor: pointer;
+    -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px);
+    transition: transform 0.12s, border-color 0.12s, background 0.12s;
+  }
+  #back:hover, #back:active {
+    transform: scale(1.05); border-color: rgba(255, 200, 150, 0.85); background: rgba(40, 22, 44, 0.75);
+  }
 </style>
 </head>
 <body>
 <canvas id="game"></canvas>
+<a id="back" href="index.html">&larr; Arcade</a>
 <script>
 // =====================================================================
 // AMOS'S DISASTER BUILDER
@@ -37,7 +51,10 @@ addEventListener('resize', fitCanvas);
 // ---------------------------------------------------------------------
 const COLS = 44, ROWS = 26;
 let cell = 34;                      // pixel size of one grid square
-const TOPBAR = 64;                  // room at the top for the buttons
+// Room at the top for the toolbar. It's two tiers now (money + THE MACHINE
+// on top, the build palette in a full-width row below) so everything fits on
+// a phone instead of running off the side.
+const TOPBAR = 92;
 
 // make the grid: ROWS rows, each row is COLS zeros (all empty land)
 const grid = [];
@@ -165,27 +182,34 @@ function placeAt(px, py) {
 // ---------------------------------------------------------------------
 // THE BUTTONS along the top (palette + THE MACHINE)
 // ---------------------------------------------------------------------
+// the build PALETTE (THE MACHINE is its own button, laid out separately)
 const buttons = [
-  { label: '🏠 House',  type: HOUSE },
-  { label: '🏢 Apt',    type: APT },
-  { label: '🌳 Tree',   type: TREE },
-  { label: '🪨 Stone',  type: STONE },
-  { label: '🛡 Bunker', type: BUNKER },
-  { label: '❌ Erase',  type: EMPTY },
-  { label: '🌪 THE MACHINE', machine: true },
+  { icon: '🏠', short: 'House',  type: HOUSE },
+  { icon: '🏢', short: 'Apt',    type: APT },
+  { icon: '🌳', short: 'Tree',   type: TREE },
+  { icon: '🪨', short: 'Stone',  type: STONE },
+  { icon: '🛡', short: 'Bunker', type: BUNKER },
+  { icon: '❌', short: 'Erase',  type: EMPTY },
 ];
 
-function buttonRects() {
-  // lay the buttons out across the top bar, machine pushed to the right
-  const rects = [];
-  let x = 10;
-  for (const b of buttons) {
-    const w = b.machine ? 220 : 98;
-    const bx = b.machine ? canvas.width - w - 10 : x;
-    rects.push({ ...b, x: bx, y: 10, w, h: TOPBAR - 20 });
-    if (!b.machine) x += w + 8;
-  }
-  return rects;
+// A narrow phone can't fit big buttons and their text, so the palette buttons
+// shrink and drop to just an icon + tiny label when there isn't room.
+function paletteRects() {
+  const n = buttons.length, gap = 6, pad = 8;
+  const w = Math.min(150, (canvas.width - pad * 2 - gap * (n - 1)) / n);
+  const total = w * n + gap * (n - 1);
+  const startX = (canvas.width - total) / 2;
+  const y = 46, h = TOPBAR - y - 6;                 // the lower tier
+  const compact = w < 118;                          // no room for the full "🏠 House"
+  return buttons.map((b, i) => ({ ...b, x: startX + i * (w + gap), y, w, h, compact }));
+}
+
+// THE MACHINE lives in the top tier, top-right. It shrinks on a phone.
+function machineBtnRect() {
+  const narrow = canvas.width < 620;
+  const w = narrow ? 138 : 200;
+  return { x: canvas.width - w - 8, y: 8, w, h: 30,
+           machine: true, label: narrow ? '🌪 MACHINE' : '🌪 THE MACHINE' };
 }
 
 // the machine's dial of doom
@@ -199,10 +223,10 @@ const MACHINE_MENU = [
 
 function machineRects() {
   const rects = [];
-  const w = 220, h = 44;
+  const w = Math.min(220, canvas.width - 16), h = 44;
   for (let i = 0; i < MACHINE_MENU.length; i++) {
     rects.push({ ...MACHINE_MENU[i],
-      x: canvas.width - w - 10, y: TOPBAR + 8 + i * (h + 6), w, h });
+      x: canvas.width - w - 8, y: TOPBAR + 8 + i * (h + 6), w, h });
   }
   return rects;
 }
@@ -224,10 +248,16 @@ function pressAt(px, py) {
     return true;
   }
   if (py > TOPBAR) { machineOpen = false; return false; }   // clicked the world
-  for (const r of buttonRects()) {
+  // THE MACHINE button opens/closes its menu of doom
+  const mb = machineBtnRect();
+  if (px > mb.x && px < mb.x + mb.w && py > mb.y && py < mb.y + mb.h) {
+    machineOpen = !machineOpen;
+    return true;
+  }
+  // a palette button picks what you paint
+  for (const r of paletteRects()) {
     if (px > r.x && px < r.x + r.w && py > r.y && py < r.y + r.h) {
-      if (r.machine) machineOpen = !machineOpen;   // the machine opens its menu
-      else { selected = r.type; machineOpen = false; }
+      selected = r.type; machineOpen = false;
       return true;
     }
   }
@@ -238,13 +268,17 @@ function pressAt(px, py) {
 // INPUT — mouse and touch both paint blocks while held down
 // ---------------------------------------------------------------------
 let painting = false;
+// Taps on the Arcade link are left alone so the link actually navigates.
+function onBackButton(e) { return e.target && e.target.closest && e.target.closest('#back'); }
 addEventListener('mousedown', e => {
+  if (onBackButton(e)) return;
   if (!pressAt(e.clientX, e.clientY)) { painting = true; placeAt(e.clientX, e.clientY); }
 });
 addEventListener('mousemove', e => { if (painting) placeAt(e.clientX, e.clientY); });
 addEventListener('mouseup', () => { painting = false; });
 
 addEventListener('touchstart', e => {
+  if (onBackButton(e)) return;                 // don't preventDefault - let the link work
   e.preventDefault();
   const t = e.changedTouches[0];
   if (!pressAt(t.clientX, t.clientY)) { painting = true; placeAt(t.clientX, t.clientY); }
@@ -834,21 +868,41 @@ function draw() {
 
   ctx.restore();   // stop shaking for the buttons — the UI stays calm
 
-  // the top bar
+  // the top bar background (two tiers)
   ctx.fillStyle = '#10161d';
   ctx.fillRect(0, 0, canvas.width, TOPBAR);
-  for (const r of buttonRects()) {
-    const active = !r.machine && selected === r.type;
-    ctx.fillStyle = r.machine ? '#7a1f2b' : active ? '#3d6b30' : '#26303b';
+
+  // --- lower tier: the build PALETTE, spread across the full width ---
+  for (const r of paletteRects()) {
+    const active = selected === r.type;
+    ctx.fillStyle = active ? '#3d6b30' : '#26303b';
     ctx.fillRect(r.x, r.y, r.w, r.h);
-    ctx.strokeStyle = r.machine ? '#ff6b5e' : active ? '#7ddf8f' : '#3a4654';
+    ctx.strokeStyle = active ? '#7ddf8f' : '#3a4654';
     ctx.lineWidth = 2;
     ctx.strokeRect(r.x, r.y, r.w, r.h);
     ctx.fillStyle = '#ffffff';
-    ctx.font = `bold ${r.machine ? 18 : 15}px monospace`;
     ctx.textAlign = 'center';
-    ctx.fillText(r.label, r.x + r.w / 2, r.y + r.h / 2 + 6);
+    if (r.compact) {                       // tight: icon on top, tiny label under
+      ctx.font = '20px monospace';
+      ctx.fillText(r.icon, r.x + r.w / 2, r.y + r.h / 2 - 1);
+      ctx.font = 'bold 10px monospace';
+      ctx.fillText(r.short, r.x + r.w / 2, r.y + r.h - 6);
+    } else {                               // roomy: icon and word side by side
+      ctx.font = 'bold 15px monospace';
+      ctx.fillText(r.icon + ' ' + r.short, r.x + r.w / 2, r.y + r.h / 2 + 6);
+    }
   }
+
+  // --- top tier: THE MACHINE button, top-right ---
+  const mb = machineBtnRect();
+  ctx.fillStyle = '#7a1f2b';
+  ctx.fillRect(mb.x, mb.y, mb.w, mb.h);
+  ctx.strokeStyle = '#ff6b5e'; ctx.lineWidth = 2;
+  ctx.strokeRect(mb.x, mb.y, mb.w, mb.h);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 16px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(mb.label, mb.x + mb.w / 2, mb.y + mb.h / 2 + 6);
 
   // THE MACHINE's menu of doom, when open
   if (machineOpen) {
@@ -864,18 +918,22 @@ function draw() {
       ctx.textAlign = 'center';
       ctx.fillText(`${r.label} — ${r.cost}💰`, r.x + r.w / 2, r.y + r.h / 2 + 6);
     }
+    // left-align the hint to the menu column so it never runs off a phone edge
+    const menu0 = machineRects()[0];
     ctx.fillStyle = '#ffb3ab';
-    ctx.font = '13px monospace';
-    ctx.fillText('(stack as many as you can afford)', canvas.width - 120,
-                 TOPBAR + 8 + MACHINE_MENU.length * 50 + 14);
+    ctx.font = '12px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText('(stack all you can afford)', menu0.x,
+                 TOPBAR + 8 + MACHINE_MENU.length * (44 + 6) + 12);
   }
 
-  // THE BANK BALANCE — parked right next to THE MACHINE, so you can
-  // see exactly what doom you can afford
-  ctx.fillStyle = '#ffd23f';
-  ctx.font = 'bold 20px monospace';
+  // THE BANK BALANCE — parked in the top tier just left of THE MACHINE,
+  // so you can see exactly what doom you can afford. On a narrow phone we
+  // drop the word "MONEYS" so the number never crashes into the button.
+  ctx.fillStyle = brokeFlash > 0 && Math.sin(brokeFlash * 30) > 0 ? '#ff5046' : '#ffd23f';
+  ctx.font = 'bold 17px monospace';
   ctx.textAlign = 'right';
-  ctx.fillText(`💰 ${moneys} MONEYS`, canvas.width - 245, 40);
+  ctx.fillText(canvas.width < 620 ? `💰 ${moneys}` : `💰 ${moneys} MONEYS`, mb.x - 12, 29);
 
   // tried to buy doom you can't afford
   if (brokeFlash > 0) {
