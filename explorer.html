@@ -89,10 +89,19 @@ const LEVELS = [
     worldH: 2600,
     start: { x: 1300, y: 2500 }, // the temple entrance, at the bottom
   },
-  { name: 'The Abandoned Castle', unlocked: false },   // Level 3 — Max named it, still being designed!
+  {
+    name: 'The Abandoned Castle',
+    kind: 'castle',
+    unlocked: false,             // opens when you beat Level 2
+    grass: '#3a3b40',            // cold ruined stone
+    worldW: 2400,
+    worldH: 2400,
+    start: { x: 1200, y: 2300 }, // the shattered front gates
+  },
 ];
-// if you earned the armor on a past visit, the temple is already open
+// prizes you earned on past visits keep their doors open
 LEVELS[1].unlocked = hasArmor;
+LEVELS[2].unlocked = hasGoldSword;
 
 // Things that live in the current level (filled in by buildForest)
 let trees = [];
@@ -155,6 +164,42 @@ const TEMPLE_PATH = [
   { x: 900,  y: 360 },  { x: 1060, y: 260 },  { x: 1300, y: 220 },
 ];
 const altar = { x: 1300, y: 200 };   // the golden altar. the prize.
+
+// ---------------------------------------------------------------------
+// THE CASTLE HALLWAYS — this level BRANCHES. The first path is the main
+// hall (with the red carpet); the others are side passages that split
+// off and rejoin. Multiple ways through!
+// ---------------------------------------------------------------------
+const CASTLE_PATHS = [
+  [ // the main hall — carpet runs along this one
+    { x: 1200, y: 2300 }, { x: 1200, y: 2050 }, { x: 1000, y: 1950 },
+    { x: 950,  y: 1750 }, { x: 1100, y: 1600 }, { x: 1350, y: 1650 },
+    { x: 1550, y: 1550 }, { x: 1550, y: 1330 }, { x: 1350, y: 1230 },
+    { x: 1100, y: 1280 }, { x: 900,  y: 1180 }, { x: 850,  y: 980 },
+    { x: 1000, y: 850 },  { x: 1250, y: 900 },  { x: 1450, y: 820 },
+    { x: 1500, y: 620 },  { x: 1350, y: 480 },  { x: 1150, y: 520 },
+    { x: 1000, y: 420 },  { x: 1050, y: 280 },  { x: 1200, y: 220 },
+  ],
+  [ // west passage — a long sneaky detour
+    { x: 1000, y: 1950 }, { x: 720, y: 1850 }, { x: 620, y: 1560 },
+    { x: 700,  y: 1240 }, { x: 850, y: 980 },
+  ],
+  [ // east passage — loops around the far side
+    { x: 1550, y: 1330 }, { x: 1800, y: 1250 }, { x: 1850, y: 950 },
+    { x: 1600, y: 750 },  { x: 1500, y: 620 },
+  ],
+  [ // a short secret cut through the middle
+    { x: 1100, y: 1280 }, { x: 1050, y: 1000 }, { x: 1000, y: 850 },
+  ],
+];
+const throne = { x: 1200, y: 200 };   // the broken throne. reach it, win.
+
+// smallest distance to ANY of a list of paths
+function distToAnyPath(x, y, paths) {
+  let best = 999999;
+  for (const p of paths) best = Math.min(best, distToPath(x, y, p));
+  return best;
+}
 
 // ---------------------------------------------------------------------
 // BUILDING THE FOREST — scatter trees around the open world.
@@ -434,6 +479,118 @@ function buildTemple(lv) {
 }
 
 // ---------------------------------------------------------------------
+// BUILDING THE ABANDONED CASTLE — ruined halls, a shredded red carpet,
+// broken walls, branching passages... and six-eyed things in the dark.
+// ---------------------------------------------------------------------
+function buildCastle(lv) {
+  trees = [];
+
+  // collapsed towers and rubble scattered beyond the walls (scenery)
+  let n = 0;
+  for (let gx = 150; gx < lv.worldW - 100; gx += 200) {
+    for (let gy = 150; gy < lv.worldH - 100; gy += 200) {
+      n++;
+      if (noise(n * 4.9) < 0.5) continue;
+      const x = gx + (noise(n * 3.3) - 0.5) * 80;
+      const y = gy + (noise(n * 6.1) - 0.5) * 80;
+      if (distToAnyPath(x, y, CASTLE_PATHS) < 170) continue;
+      trees.push({ x, y, size: 0.8 + noise(n * 8.7) * 0.4, pillar: true });
+    }
+  }
+
+  // the BROKEN castle walls — same wall-band trick as the temple, but
+  // painted around ALL the passages at once, and ruined: some blocks
+  // stand tall, some are crumbled stubs. (Every block still blocks you —
+  // the castle is broken, not escapable.)
+  for (let gx = 40; gx < lv.worldW - 40; gx += 34) {
+    for (let gy = 40; gy < lv.worldH - 40; gy += 34) {
+      const d = distToAnyPath(gx, gy, CASTLE_PATHS);
+      if (d < 100 || d > 140) continue;
+      trees.push({
+        x: gx + (noise(gx * 1.3 + gy) - 0.5) * 8,
+        y: gy + (noise(gy * 2.7 + gx) - 0.5) * 8,
+        size: 1, wall: true, castle: true,
+        broken: noise(gx * 3.1 + gy * 1.7) < 0.4,   // 4 in 10 blocks are crumbled stubs
+      });
+    }
+  }
+
+  // the torn red carpet — pieces of it, anyway — down the MAIN hall only
+  tiles = [];
+  const main = CASTLE_PATHS[0];
+  let tn = 0;
+  for (let i = 0; i < main.length - 1; i++) {
+    const a = main[i], b = main[i + 1];
+    const segLen = Math.hypot(b.x - a.x, b.y - a.y);
+    const ux = (b.x - a.x) / segLen, uy = (b.y - a.y) / segLen;
+    for (let d = 0; d < segLen; d += 20) {
+      tn++;
+      const off = (noise(tn * 3.7) - 0.5) * 56;
+      const worn = noise(tn * 9.1) < 0.22;          // holes worn right through
+      tiles.push({
+        x: a.x + ux * d + (-uy) * off,
+        y: a.y + uy * d + ux * off,
+        size: 12 + noise(tn * 5.3) * 14,
+        color: worn ? '#3f3f45'
+             : ['#8a2230', '#6e1a24', '#a02a38'][Math.floor(noise(tn * 7.7) * 3)],
+      });
+    }
+  }
+
+  // torches still burning along the main hall (who keeps lighting them?)
+  torches = [];
+  for (let i = 0; i < main.length - 1; i++) {
+    const a = main[i], b = main[i + 1];
+    torches.push({ x: (a.x + b.x) / 2 + 70, y: (a.y + b.y) / 2, torch: true });
+    torches.push({ x: (a.x + b.x) / 2 - 70, y: (a.y + b.y) / 2, torch: true });
+  }
+
+  // spooky purple dust motes drifting in the dark
+  fireflies = [];
+  for (let i = 0; i < 50; i++) {
+    fireflies.push({
+      x: noise(i * 21.3 + 9) * lv.worldW,
+      y: noise(i * 47.7 + 9) * lv.worldH,
+      phase: noise(i * 5.5) * 6.28,
+      speed: 0.5 + noise(i * 2.2),
+    });
+  }
+
+  pond = { x: -9999, y: -9999, rx: 1, ry: 1, hidden: true };   // no pool here
+  stumps = [];
+  flowers = [];
+  scorches = [];
+  creepers = [];
+  skeletons = [];
+
+  // BLACK ZOMBIES — six glowing purple eyes, fast, and they take 3 bonks
+  zombies = [];
+  for (let i = 0; i < 600 && zombies.length < 14; i++) {
+    const x = noise(i * 47.3 + 11) * lv.worldW;
+    const y = noise(i * 19.7 + 11) * lv.worldH;
+    if (Math.hypot(x - lv.start.x, y - lv.start.y) < 350) continue;
+    if (distToAnyPath(x, y, CASTLE_PATHS) > 70) continue;
+    if (Math.hypot(x - throne.x, y - throne.y) < 180) continue;
+    zombies.push({
+      x, y,
+      zombie: true,
+      black: true,          // shadow-dark, six purple eyes
+      hp: 3,
+      speed: 95,            // faster than any zombie you've met
+      wanderAngle: noise(i) * 6.28,
+      lastHitSwing: 0,
+      hurtFlash: 0,
+    });
+  }
+
+  emeralds = [];
+  particles = [];
+  emeraldCount = 0;
+  player.hp = player.maxHp;
+  player.armor = hasArmor ? 3 : 0;
+}
+
+// ---------------------------------------------------------------------
 // THE EXPLORER (you!)
 // ---------------------------------------------------------------------
 const player = {
@@ -466,6 +623,7 @@ function swingSword() {
 function startLevel(i) {
   current = LEVELS[i];
   if (current.kind === 'temple') buildTemple(current);
+  else if (current.kind === 'castle') buildCastle(current);
   else buildForest(current);
   player.x = current.start.x;
   player.y = current.start.y;
@@ -569,8 +727,8 @@ function update(dt) {
   if (inventoryOpen) return;   // bag's open — the whole world holds still
   if (victoryTimer > 0) {
     victoryTimer -= dt;                                   // celebrating! world waits
-    // beating the temple sends you back to the level menu, mission complete
-    if (victoryTimer <= 0 && victoryLevel === 2) screen = 'menu';
+    // beating the temple or castle sends you back to the menu, mission complete
+    if (victoryTimer <= 0 && victoryLevel >= 2) screen = 'menu';
     return;
   }
 
@@ -635,7 +793,7 @@ function update(dt) {
     if (distToYou < 240 && player.deathTimer <= 0) {
       zdx = (player.x - z.x) / distToYou;      // an arrow pointing at YOU
       zdy = (player.y - z.y) / distToYou;
-      zombieSpeed = 75;                        // slower than you. barely.
+      zombieSpeed = z.speed || 75;             // black zombies override this — they're QUICK
     } else {
       z.wanderAngle += (noise(Math.floor(elapsed) + z.x) - 0.5) * dt * 4;
       zdx = Math.cos(z.wanderAngle);
@@ -876,19 +1034,27 @@ function update(dt) {
     }
   }
 
-  // ---- THE ALTAR (temple only) ----
-  // Reach the golden altar = Level 2 beaten, EVERY time. The Golden
-  // Sword is only handed out on your first win, though.
-  if (current.kind === 'temple' && !altarDone && player.deathTimer <= 0 &&
-      Math.hypot(player.x - altar.x, player.y - altar.y) < 70) {
+  // ---- THE GOAL: the gold altar (temple) or the broken throne (castle) ----
+  // Reach it = level beaten, every time. Prizes only come the first time.
+  const goal = current.kind === 'temple' ? altar
+             : current.kind === 'castle' ? throne
+             : null;
+  if (goal && !altarDone && player.deathTimer <= 0 &&
+      Math.hypot(player.x - goal.x, player.y - goal.y) < 70) {
     altarDone = true;
-    victoryNew = !hasGoldSword;
-    if (!hasGoldSword) {
-      hasGoldSword = true;
-      localStorage.setItem('explorer_gold_sword', 'yes');
+    if (current.kind === 'temple') {
+      victoryNew = !hasGoldSword;
+      if (!hasGoldSword) {
+        hasGoldSword = true;
+        localStorage.setItem('explorer_gold_sword', 'yes');
+        LEVELS[2].unlocked = true;               // the castle opens!
+      }
+      victoryLevel = 2;
+    } else {
+      victoryNew = false;
+      victoryLevel = 3;
     }
     victoryTimer = 5;
-    victoryLevel = 2;
   }
 
   // walk near an emerald and it hops into your pocket
@@ -976,21 +1142,34 @@ function drawGame() {
     ctx.restore();
   }
 
-  // the sand-and-stone walkway (temple only): a packed-sand base first,
-  // then the patchwork of paving tiles on top
-  if (current.kind === 'temple') {
+  // the walkway floors: sand base in the temple, cracked stone halls in
+  // the castle (every branching passage gets floor), then the tiles/carpet
+  if (current.kind === 'temple' || current.kind === 'castle') {
+    const walkways = current.kind === 'temple' ? [TEMPLE_PATH] : CASTLE_PATHS;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    ctx.beginPath();
-    ctx.moveTo(TEMPLE_PATH[0].x - cam.x, TEMPLE_PATH[0].y - cam.y);
-    for (const p of TEMPLE_PATH) ctx.lineTo(p.x - cam.x, p.y - cam.y);
-    ctx.strokeStyle = '#6e6248';
-    ctx.lineWidth = 175;
-    ctx.stroke();
+    for (const wp of walkways) {
+      ctx.beginPath();
+      ctx.moveTo(wp[0].x - cam.x, wp[0].y - cam.y);
+      for (const p of wp) ctx.lineTo(p.x - cam.x, p.y - cam.y);
+      ctx.strokeStyle = current.kind === 'temple' ? '#6e6248' : '#46474d';
+      ctx.lineWidth = 175;
+      ctx.stroke();
+    }
+    if (current.kind === 'castle') {
+      // the long red carpet down the main hall (what's left of it)
+      const mainHall = CASTLE_PATHS[0];
+      ctx.beginPath();
+      ctx.moveTo(mainHall[0].x - cam.x, mainHall[0].y - cam.y);
+      for (const p of mainHall) ctx.lineTo(p.x - cam.x, p.y - cam.y);
+      ctx.strokeStyle = '#4f1119';
+      ctx.lineWidth = 64;
+      ctx.stroke();
+    }
     for (const t2 of tiles) {
       const tx = t2.x - cam.x, ty = t2.y - cam.y;
       if (tx < -40 || ty < -40 || tx > canvas.width + 40 || ty > canvas.height + 40) continue;
-      ctx.fillStyle = t2.sand ? '#8f7c54' : '#71736a';
+      ctx.fillStyle = t2.color || (t2.sand ? '#8f7c54' : '#71736a');
       ctx.fillRect(tx - t2.size / 2, ty - t2.size / 2, t2.size, t2.size);
     }
   }
@@ -1004,6 +1183,7 @@ function drawGame() {
   }
 
   // the pool — cold dark water in the forest... bubbling LAVA in the temple
+  if (!pond.hidden) {
   ctx.fillStyle = pond.lava ? '#8a2f0e' : '#1d3a55';
   ctx.beginPath();
   ctx.ellipse(pond.x - cam.x, pond.y - cam.y, pond.rx, pond.ry, 0, 0, Math.PI * 2);
@@ -1021,6 +1201,7 @@ function drawGame() {
       ctx.fillRect(bx - 5, by - 4, 10, 8);
     }
   }
+  }   // (end of the "is there even a pool here?" check)
 
   // the golden altar at the temple's heart
   if (current.kind === 'temple') {
@@ -1033,6 +1214,24 @@ function drawGame() {
     ctx.fillRect(ax - 18, ay - 42, 36, 9);
     ctx.fillStyle = '#a8801a';                     // shadow at the base
     ctx.fillRect(ax - 18, ay - 10, 36, 6);
+  }
+
+  // the broken throne at the end of the castle's main hall
+  if (current.kind === 'castle') {
+    const tx = throne.x - cam.x, ty = throne.y - cam.y;
+    ctx.fillStyle = '#55565c';                     // the dais it sits on
+    ctx.fillRect(tx - 50, ty - 4, 100, 20);
+    ctx.fillStyle = '#6e7077';                     // tall stone back...
+    ctx.fillRect(tx - 22, ty - 58, 44, 54);
+    ctx.fillStyle = current.grass;                 // ...with a chunk smashed off
+    ctx.fillRect(tx + 6, ty - 58, 16, 14);
+    ctx.fillStyle = '#8a8c93';
+    ctx.fillRect(tx - 22, ty - 58, 8, 54);         // edge catching the light
+    ctx.fillStyle = '#7a1f2b';                     // the dusty royal cushion
+    ctx.fillRect(tx - 16, ty - 22, 32, 12);
+    ctx.fillStyle = '#4a4b50';                     // crumbled armrests
+    ctx.fillRect(tx - 28, ty - 8, 8, 10);
+    ctx.fillRect(tx + 20, ty - 8, 8, 10);
   }
 
   // flowers (flat on the ground, so they go before trees and you)
@@ -1093,13 +1292,17 @@ function drawGame() {
     const fy = f.y + Math.cos(elapsed * f.speed * 0.7 + f.phase * 2) * 26 - cam.y;
     if (fx < -10 || fy < -10 || fx > canvas.width + 10 || fy > canvas.height + 10) continue;
     const twinkle = 0.5 + 0.5 * Math.sin(elapsed * 3 + f.phase * 7);
-    // green fireflies in the forest, orange embers in the temple
-    const ember = current.kind === 'temple';
-    ctx.fillStyle = ember ? `rgba(255, 150, 70, ${0.15 + 0.25 * twinkle})`
-                          : `rgba(190, 255, 130, ${0.15 + 0.25 * twinkle})`;
+    // green fireflies in the forest, orange embers in the temple,
+    // eerie purple dust in the castle
+    const glowA = current.kind === 'temple' ? '255, 150, 70'
+                : current.kind === 'castle' ? '190, 140, 255'
+                : '190, 255, 130';
+    const glowB = current.kind === 'temple' ? '255, 210, 140'
+                : current.kind === 'castle' ? '220, 190, 255'
+                : '220, 255, 170';
+    ctx.fillStyle = `rgba(${glowA}, ${0.15 + 0.25 * twinkle})`;
     ctx.beginPath(); ctx.arc(fx, fy, 5, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = ember ? `rgba(255, 210, 140, ${0.4 + 0.5 * twinkle})`
-                          : `rgba(220, 255, 170, ${0.4 + 0.5 * twinkle})`;
+    ctx.fillStyle = `rgba(${glowB}, ${0.4 + 0.5 * twinkle})`;
     ctx.beginPath(); ctx.arc(fx, fy, 2, 0, Math.PI * 2); ctx.fill();
   }
 
@@ -1109,9 +1312,18 @@ function drawGame() {
     if (z.buried) continue;
     const zx = z.x - cam.x, zy = z.y - cam.y;
     if (zx < -20 || zy < -20 || zx > canvas.width + 20 || zy > canvas.height + 20) continue;
-    ctx.fillStyle = 'rgba(150, 255, 150, 0.5)';
-    ctx.fillRect(zx - 5, zy - 26, 3, 3);
-    ctx.fillRect(zx + 2, zy - 26, 3, 3);
+    if (z.black) {
+      // six purple pinpricks floating in the dark. good luck sleeping.
+      ctx.fillStyle = 'rgba(176, 108, 255, 0.75)';
+      for (let e = 0; e < 3; e++) {
+        ctx.fillRect(zx - 5 + e * 4, zy - 27, 2, 2);
+        ctx.fillRect(zx - 5 + e * 4, zy - 23, 2, 2);
+      }
+    } else {
+      ctx.fillStyle = 'rgba(150, 255, 150, 0.5)';
+      ctx.fillRect(zx - 5, zy - 26, 3, 3);
+      ctx.fillRect(zx + 2, zy - 26, 3, 3);
+    }
   }
 
   if (current.kind === 'forest') {
@@ -1143,17 +1355,18 @@ function drawGame() {
     }
   }
 
+  // torchlight pushes back the dark along the walkway (temple AND castle)
+  for (const t of torches) {
+    const tx = t.x - cam.x, ty = t.y - cam.y - 28;
+    if (tx < -120 || ty < -120 || tx > canvas.width + 120 || ty > canvas.height + 120) continue;
+    const tg = ctx.createRadialGradient(tx, ty, 3, tx, ty, 95);
+    tg.addColorStop(0, 'rgba(255, 170, 80, 0.30)');
+    tg.addColorStop(1, 'rgba(255, 170, 80, 0)');
+    ctx.fillStyle = tg;
+    ctx.fillRect(tx - 95, ty - 95, 190, 190);
+  }
+
   if (current.kind === 'temple') {
-    // torchlight pushes back the dark along the walkway
-    for (const t of torches) {
-      const tx = t.x - cam.x, ty = t.y - cam.y - 28;
-      if (tx < -120 || ty < -120 || tx > canvas.width + 120 || ty > canvas.height + 120) continue;
-      const tg = ctx.createRadialGradient(tx, ty, 3, tx, ty, 95);
-      tg.addColorStop(0, 'rgba(255, 170, 80, 0.30)');
-      tg.addColorStop(1, 'rgba(255, 170, 80, 0)');
-      ctx.fillStyle = tg;
-      ctx.fillRect(tx - 95, ty - 95, 190, 190);
-    }
     // the lava glows from below
     const lx = pond.x - cam.x, ly = pond.y - cam.y;
     const lg = ctx.createRadialGradient(lx, ly, 10, lx, ly, pond.rx * 1.7);
@@ -1168,6 +1381,16 @@ function drawGame() {
     ag.addColorStop(1, 'rgba(255, 215, 90, 0)');
     ctx.fillStyle = ag;
     ctx.fillRect(ax - 130, ay - 130, 260, 260);
+  }
+
+  if (current.kind === 'castle') {
+    // a cold purple shimmer hangs over the broken throne
+    const thx = throne.x - cam.x, thy = throne.y - cam.y - 25;
+    const thg = ctx.createRadialGradient(thx, thy, 5, thx, thy, 130);
+    thg.addColorStop(0, 'rgba(190, 140, 255, 0.28)');
+    thg.addColorStop(1, 'rgba(190, 140, 255, 0)');
+    ctx.fillStyle = thg;
+    ctx.fillRect(thx - 130, thy - 130, 260, 260);
   }
 
   // sword button, only on touch screens (phones/tablets)
@@ -1221,7 +1444,8 @@ function drawGame() {
     ctx.fillStyle = '#ffdddd';
     ctx.font = 'bold 34px monospace';
     ctx.fillText(current.kind === 'temple' ? 'The temple got you!'
-                                           : 'The zombies got you!',
+               : current.kind === 'castle' ? 'The castle got you!'
+               : 'The zombies got you!',
                  canvas.width / 2, canvas.height / 2 - 10);
     ctx.font = '18px monospace';
     ctx.fillText('Respawning at camp...', canvas.width / 2, canvas.height / 2 + 24);
@@ -1254,7 +1478,15 @@ function drawGame() {
     ctx.fillStyle = '#ffd23f';
     ctx.font = 'bold 40px monospace';
     ctx.fillText(`LEVEL ${victoryLevel} COMPLETE!`, canvas.width / 2, canvas.height / 2 - 60);
-    if (victoryLevel === 1) {
+    if (victoryLevel === 3) {
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 22px monospace';
+      ctx.fillText('THE ABANDONED CASTLE IS CONQUERED!', canvas.width / 2, canvas.height / 2 + 10);
+      ctx.fillStyle = '#d8c2ff';
+      ctx.font = '16px monospace';
+      ctx.fillText("The prize? You haven't invented it yet — tell me what you win!",
+                   canvas.width / 2, canvas.height / 2 + 42);
+    } else if (victoryLevel === 1) {
       drawChestplate(canvas.width / 2, canvas.height / 2 + 4, 2.4);
       ctx.fillStyle = '#ffffff';
       ctx.font = 'bold 22px monospace';
@@ -1488,17 +1720,27 @@ function drawZombie(z, cam) {
 
   // when bonked, the whole zombie flashes white for a blink
   const flash = z.hurtFlash > 0;
-  // sand zombies wear desert colors; forest zombies keep the classics
-  const shirt = z.sand ? '#a3854a' : '#2e6e8e';
-  const skin  = z.sand ? '#cbb06a' : '#4a9e4a';
+  // black zombies are shadow-dark; sand zombies wear desert colors;
+  // forest zombies keep the classics
+  const shirt = z.black ? '#26262e' : z.sand ? '#a3854a' : '#2e6e8e';
+  const skin  = z.black ? '#1c1c22' : z.sand ? '#cbb06a' : '#4a9e4a';
 
   ctx.fillStyle = flash ? '#ffffff' : shirt;       // ragged shirt
   ctx.fillRect(x - 8, y - 14 - stomp, 16, 16);
   ctx.fillStyle = flash ? '#ffffff' : skin;        // square head
   ctx.fillRect(x - 7, y - 30 - stomp, 14, 14);
-  ctx.fillStyle = z.sand ? '#4a3b1c' : '#1c3b1c';  // those eyes...
-  ctx.fillRect(x - 5, y - 25 - stomp, 3, 3);
-  ctx.fillRect(x + 2, y - 25 - stomp, 3, 3);
+  if (z.black) {
+    // SIX glowing purple eyes, two rows of three
+    ctx.fillStyle = '#b06cff';
+    for (let e = 0; e < 3; e++) {
+      ctx.fillRect(x - 5 + e * 4, y - 27 - stomp, 2, 2);
+      ctx.fillRect(x - 5 + e * 4, y - 23 - stomp, 2, 2);
+    }
+  } else {
+    ctx.fillStyle = z.sand ? '#4a3b1c' : '#1c3b1c';  // those eyes...
+    ctx.fillRect(x - 5, y - 25 - stomp, 3, 3);
+    ctx.fillRect(x + 2, y - 25 - stomp, 3, 3);
+  }
   ctx.fillStyle = flash ? '#ffffff' : skin;        // grabby arms, reaching for YOU
   ctx.fillRect(x - 12, y - 12 - stomp, 4, 9);
   ctx.fillRect(x + 8, y - 12 - stomp, 4, 9);
@@ -1610,9 +1852,24 @@ function drawWall(w, cam) {
   ctx.ellipse(x + 5, y + 5, 23, 8, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  ctx.fillStyle = '#6d6250'; ctx.fillRect(x - 22, y - 10, 44, 14);   // base
-  ctx.fillStyle = '#8a7c5e'; ctx.fillRect(x - 22, y - 52, 44, 44);   // sandstone face
-  ctx.fillStyle = '#9c8e6e'; ctx.fillRect(x - 22, y - 52, 44, 10);   // sunlit(ish) top
+  // sandstone in the temple, cold gray stone in the castle
+  const base = w.castle ? '#4a4b50' : '#6d6250';
+  const face = w.castle ? '#5d5f66' : '#8a7c5e';
+  const top  = w.castle ? '#787a82' : '#9c8e6e';
+
+  if (w.broken) {
+    // a crumbled stub — smashed down to knee height, jagged on top
+    ctx.fillStyle = base; ctx.fillRect(x - 22, y - 8, 44, 12);
+    ctx.fillStyle = face; ctx.fillRect(x - 22, y - 26, 44, 20);
+    ctx.fillStyle = top;  ctx.fillRect(x - 22, y - 26, 14, 5);
+    ctx.fillStyle = face; ctx.fillRect(x + 2, y - 34, 12, 10);    // one taller jag
+    ctx.fillStyle = top;  ctx.fillRect(x + 2, y - 34, 12, 4);
+    return;
+  }
+
+  ctx.fillStyle = base; ctx.fillRect(x - 22, y - 10, 44, 14);   // base
+  ctx.fillStyle = face; ctx.fillRect(x - 22, y - 52, 44, 44);   // the wall itself
+  ctx.fillStyle = top;  ctx.fillRect(x - 22, y - 52, 44, 10);   // top edge
   // brick cracks — noise() gives each block its own crack pattern
   ctx.fillStyle = 'rgba(40, 32, 20, 0.35)';
   ctx.fillRect(x - 22, y - 31, 44, 2);
