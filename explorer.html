@@ -109,7 +109,7 @@ const LEVELS = [
     name: 'The Dungeon in the Sky',
     kind: 'sky',
     unlocked: false,             // opens when you beat Level 3
-    grass: '#2b2e38',            // storm-dark sky
+    grass: '#191b24',            // properly NIGHT-dark storm sky
     worldW: 2800,
     worldH: 2800,
     start: { x: 1400, y: 2650 }, // the bottom of the first sky-bridge
@@ -243,6 +243,27 @@ const SKY_PATHS = [
   ],
   [ // a short middle shortcut
     { x: 1300, y: 1500 }, { x: 1300, y: 1250 }, { x: 1200, y: 1000 },
+  ],
+  [ // west-mid connector into the center
+    { x: 850, y: 1600 }, { x: 1050, y: 1520 }, { x: 1300, y: 1500 },
+  ],
+  [ // the long outer loop around the west side
+    { x: 800, y: 1900 }, { x: 620, y: 1500 }, { x: 700, y: 1000 }, { x: 750, y: 750 },
+  ],
+  [ // east outer vertical
+    { x: 2100, y: 1550 }, { x: 2050, y: 1150 }, { x: 1900, y: 1000 },
+  ],
+  [ // east link inward
+    { x: 1950, y: 1300 }, { x: 1700, y: 1200 },
+  ],
+  [ // top-west connector
+    { x: 950, y: 600 }, { x: 1150, y: 450 }, { x: 1400, y: 420 },
+  ],
+  [ // top-east connector
+    { x: 1750, y: 800 }, { x: 1650, y: 550 }, { x: 1450, y: 550 },
+  ],
+  [ // one more crisscross through the middle
+    { x: 1300, y: 1250 }, { x: 1550, y: 1450 },
   ],
 ];
 const arena = { x: 1400, y: 300 };   // the round sky-arena. HE lives there.
@@ -726,15 +747,15 @@ function buildSky(lv) {
     if (distToAnyPath(x, y, SKY_PATHS) > 70) continue;
     if (Math.hypot(x - arena.x, y - arena.y) < 320) continue;
     // deal out one of each kind in turn until every quota is full
-    if (forestZ < 4) {
+    if (forestZ < 5) {
       forestZ++;
       zombies.push({ x, y, zombie: true, hp: 2,
                      wanderAngle: noise(i) * 6.28, lastHitSwing: 0, hurtFlash: 0 });
-    } else if (sandZ < 4) {
+    } else if (sandZ < 5) {
       sandZ++;
       zombies.push({ x, y, zombie: true, sand: true, buried: false, hp: 3,
                      wanderAngle: noise(i) * 6.28, lastHitSwing: 0, hurtFlash: 0 });
-    } else if (blackZ < 5) {
+    } else if (blackZ < 6) {
       blackZ++;
       zombies.push({ x, y, zombie: true, black: true, hp: 3, speed: 95,
                      wanderAngle: noise(i) * 6.28, lastHitSwing: 0, hurtFlash: 0 });
@@ -742,7 +763,7 @@ function buildSky(lv) {
       giantZ++;
       zombies.push({ x, y, zombie: true, black: true, giant: true, hp: 6, speed: 60,
                      wanderAngle: noise(i) * 6.28, lastHitSwing: 0, hurtFlash: 0 });
-    } else if (forestZ + sandZ + blackZ >= 13 && giantZ >= 2) {
+    } else if (forestZ + sandZ + blackZ >= 16 && giantZ >= 2) {
       break;
     }
   }
@@ -760,7 +781,7 @@ function buildSky(lv) {
 
   // skeletons on the bridges
   skeletons = [];
-  for (let i = 0; i < 600 && skeletons.length < 5; i++) {
+  for (let i = 0; i < 600 && skeletons.length < 7; i++) {
     const x = noise(i * 71.9 + 23) * lv.worldW;
     const y = noise(i * 23.1 + 23) * lv.worldH;
     if (Math.hypot(x - lv.start.x, y - lv.start.y) < 350) continue;
@@ -772,7 +793,7 @@ function buildSky(lv) {
 
   // and creepers. on NARROW BRIDGES. you're welcome.
   creepers = [];
-  for (let i = 0; i < 600 && creepers.length < 8; i++) {
+  for (let i = 0; i < 600 && creepers.length < 10; i++) {
     const x = noise(i * 57.1 + 25) * lv.worldW;
     const y = noise(i * 33.7 + 25) * lv.worldH;
     if (Math.hypot(x - lv.start.x, y - lv.start.y) < 350) continue;
@@ -1340,7 +1361,7 @@ function drawGame() {
     // storm clouds drifting far BELOW the bridges. They scroll slower
     // than the ground when you walk — that trick is called PARALLAX,
     // and it's what makes your brain believe in the height.
-    ctx.fillStyle = 'rgba(18, 20, 28, 0.55)';
+    ctx.fillStyle = 'rgba(9, 10, 16, 0.6)';
     for (let i = 0; i < 14; i++) {
       const drift = elapsed * (6 + noise(i) * 12);
       const cxp = ((noise(i * 9.1) * (current.worldW + 800) + drift) % (current.worldW + 800)) - 400 - cam.x * 0.6;
@@ -1689,11 +1710,11 @@ function drawGame() {
   }
 
   if (current.kind === 'sky') {
-    // RAIN — streaks slashing down the screen
-    ctx.strokeStyle = 'rgba(180, 200, 255, 0.30)';
+    // RAIN — sheets of it slashing down the screen
+    ctx.strokeStyle = 'rgba(180, 200, 255, 0.35)';
     ctx.lineWidth = 1.5;
     ctx.beginPath();
-    for (let i = 0; i < 90; i++) {
+    for (let i = 0; i < 140; i++) {
       const speed = 700 + noise(i) * 400;
       const ry = (noise(i * 3.3) * 3000 + elapsed * speed) % (canvas.height + 60) - 30;
       const rx = (noise(i * 7.7) * canvas.width + ry * 0.3) % canvas.width;
@@ -1702,11 +1723,33 @@ function drawGame() {
     }
     ctx.stroke();
 
-    // LIGHTNING — a double-flash rolls through every 7 seconds
+    // LIGHTNING — a double-flash every 7 seconds, and during the flash
+    // you can see the actual BOLTS tearing down the sky
     const cycle = elapsed % 7;
     if (cycle < 0.12 || (cycle > 0.22 && cycle < 0.30)) {
-      ctx.fillStyle = 'rgba(230, 240, 255, 0.22)';
+      ctx.fillStyle = 'rgba(230, 240, 255, 0.30)';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // each storm cycle gets its own bolt shapes (same seed = same bolt
+      // for the whole flash, so it doesn't wiggle like spaghetti)
+      const storm = Math.floor(elapsed / 7);
+      for (let b = 0; b < 2; b++) {
+        let bx = noise(storm * 13.7 + b * 5.1) * canvas.width;
+        let by = -10;
+        ctx.strokeStyle = 'rgba(200, 220, 255, 0.25)';   // the wide glow
+        ctx.lineWidth = 9;
+        ctx.beginPath();
+        ctx.moveTo(bx, by);
+        for (let seg = 0; seg < 9; seg++) {
+          bx += (noise(storm * 3.1 + b * 7.7 + seg) - 0.5) * 90;
+          by += 50 + noise(storm + b + seg * 2.2) * 60;
+          ctx.lineTo(bx, by);
+        }
+        ctx.stroke();
+        ctx.strokeStyle = '#eaf2ff';                     // the bright core
+        ctx.lineWidth = 3;
+        ctx.stroke();                                    // same bolt, drawn again
+      }
     }
 
     // BOSS BAR — appears when the Storm King has noticed you
