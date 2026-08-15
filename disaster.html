@@ -440,6 +440,18 @@ function update(dt) {
   // ---- THE LITTLE PEOPLE — wandering, panicking, or HIDING ----
   const panicking = disasters.length > 0;
   const cs = cellSize();
+
+  // how many people are inside (or racing toward) each building? MAX 3.
+  // a house is not a clown car.
+  const occupancy = {};
+  for (const p of people) {
+    const spot = p.sheltering || p.shelterTarget;
+    if (spot) {
+      const k = spot.gx + ',' + spot.gy;
+      occupancy[k] = (occupancy[k] || 0) + 1;
+    }
+  }
+
   for (const p of people) {
 
     // already hiding inside a building?
@@ -478,20 +490,36 @@ function update(dt) {
           for (let gx = 0; gx < COLS; gx++) {
             const kind = grid[gy][gx];
             if (kind !== HOUSE && kind !== APT && kind !== BUNKER) continue;
+            if ((occupancy[gx + ',' + gy] || 0) >= 3) continue;   // that one's FULL
             const bx = gx * cs + cs / 2, by = TOPBAR + gy * cs + cs / 2;
             const d2 = Math.hypot(bx - p.x, by - p.y);
             if (d2 < best) { best = d2; target = { gx, gy, x: bx, y: by }; }
           }
         }
         p.shelterTarget = target;
+        if (target) {
+          // claim a spot so the next runner picks somewhere else
+          const k = target.gx + ',' + target.gy;
+          occupancy[k] = (occupancy[k] || 0) + 1;
+        }
       }
       if (target) {
         if (Math.hypot(target.x - p.x, target.y - p.y) < 12) {
-          p.sheltering = { gx: target.gx, gy: target.gy };   // made it! safe! (maybe)
-          p.shelterTarget = null;
-          continue;
+          // one last headcount at the door...
+          let inside = 0;
+          for (const q of people) {
+            if (q.sheltering && q.sheltering.gx === target.gx &&
+                q.sheltering.gy === target.gy) inside++;
+          }
+          if (inside < 3) {
+            p.sheltering = { gx: target.gx, gy: target.gy };   // squeezed in!
+            p.shelterTarget = null;
+            continue;
+          }
+          p.shelterTarget = null;      // full! no room! run somewhere else!!
+        } else {
+          p.angle = Math.atan2(target.y - p.y, target.x - p.x) + (Math.random() - 0.5) * 0.3;
         }
-        p.angle = Math.atan2(target.y - p.y, target.x - p.x) + (Math.random() - 0.5) * 0.3;
       } else {
         p.angle += (Math.random() - 0.5) * dt * 22;   // no shelter?! headless-chicken mode
       }
@@ -643,6 +671,25 @@ function draw() {
         ctx.fillStyle = '#2c332b';                      // the sealed door
         ctx.fillRect(x + s * 0.4, y + s * 0.6, s * 0.2, s * 0.32);
       }
+    }
+  }
+
+  // tiny heads peeking out of every occupied shelter
+  const peek = {};
+  for (const p of people) {
+    if (p.sheltering) {
+      const k = p.sheltering.gx + ',' + p.sheltering.gy;
+      peek[k] = (peek[k] || 0) + 1;
+    }
+  }
+  for (const k in peek) {
+    const parts = k.split(',');
+    const px2 = parts[0] * s, py2 = TOPBAR + parts[1] * s;
+    for (let i = 0; i < Math.min(3, peek[k]); i++) {
+      ctx.fillStyle = '#f2c79b';
+      ctx.beginPath();
+      ctx.arc(px2 + s * (0.3 + i * 0.2), py2 + s * 0.88, 2.5, 0, Math.PI * 2);
+      ctx.fill();
     }
   }
 
