@@ -58,6 +58,7 @@ let hasBeatJr = localStorage.getItem('explorer_beat_jr') === 'yes';     // is th
 let hasBeatGeckoMan = localStorage.getItem('explorer_beat_geckoman') === 'yes';
 let hasGeckoArmor = localStorage.getItem('explorer_gecko_armor') === 'yes';
 let hasBeatReturn = localStorage.getItem('explorer_beat_return') === 'yes';
+let hasBeatAbyss = localStorage.getItem('explorer_beat_abyss') === 'yes';
 let armorRegenTimer = 0;       // the infection slowly knitting your armor back
 
 // how many armor points can you have? best armor wins.
@@ -156,7 +157,15 @@ const LEVELS = [
     worldH: 2600,
     start: { x: 1300, y: 2450 }, // the dungeon doors
   },
-  { name: 'The Abyss', unlocked: false },   // Level 9 — the deepest dark
+  {
+    name: 'The Abyss',
+    kind: 'abyss',
+    unlocked: false,             // opens when the returned Multi-Tasker falls
+    grass: '#0a0a10',            // the void. there is no floor color. this IS the void.
+    worldW: 2800,
+    worldH: 2800,
+    start: { x: 1400, y: 2500 }, // the first floating chunk
+  },
 ];
 // prizes you earned on past visits keep their doors open
 LEVELS[1].unlocked = hasArmor;
@@ -189,6 +198,7 @@ let geckoMan = null;    // the leader of the uprising
 let angryGeckos = [];   // small geckos who are DONE running away
 let returnBoss = null;  // the Multi-Tasker, rebuilt. nine eyes now.
 let miniBlobs = [];     // small multi-taskers. it's been... multiplying.
+let abyssBoss = null;   // half Multi-Tasker, half zombie. all trouble.
 let miniAxes = [];      // his summoned mini axes
 let giantGeckos = [];   // his summoned VERY large geckos
 let emeralds = [];      // dropped treasure waiting to be grabbed
@@ -373,6 +383,34 @@ const DUNGEON_PATH = [
   { x: 1300, y: 440 },  { x: 1300, y: 380 },
 ];
 const dgChamber = { x: 1300, y: 300 };   // where IT waits, dripping
+
+// ---------------------------------------------------------------------
+// THE ABYSS — broken chunks of every world, floating over bottomless
+// black, joined by stone bridges. The bottom of everything.
+// ---------------------------------------------------------------------
+const ABYSS_CHUNKS = [
+  { x: 1400, y: 2500, r: 220, theme: 'temple' },   // where you arrive
+  { x: 800,  y: 1950, r: 240, theme: 'castle' },
+  { x: 2000, y: 1900, r: 240, theme: 'dungeon' },
+  { x: 1400, y: 1500, r: 200, theme: 'temple' },
+  { x: 700,  y: 1000, r: 230, theme: 'dungeon' },
+  { x: 2100, y: 1000, r: 230, theme: 'castle' },
+  { x: 1400, y: 600,  r: 200, theme: 'dungeon' },
+  { x: 1400, y: 250,  r: 260, theme: 'boss' },     // the final arena
+];
+const ABYSS_PATHS = [
+  [{ x: 1400, y: 2500 }, { x: 800,  y: 1950 }],
+  [{ x: 1400, y: 2500 }, { x: 2000, y: 1900 }],
+  [{ x: 800,  y: 1950 }, { x: 1400, y: 1500 }],
+  [{ x: 2000, y: 1900 }, { x: 1400, y: 1500 }],
+  [{ x: 1400, y: 1500 }, { x: 700,  y: 1000 }],
+  [{ x: 1400, y: 1500 }, { x: 2100, y: 1000 }],
+  [{ x: 700,  y: 1000 }, { x: 1400, y: 600 }],
+  [{ x: 2100, y: 1000 }, { x: 1400, y: 600 }],
+  [{ x: 800,  y: 1950 }, { x: 700,  y: 1000 }],
+  [{ x: 2000, y: 1900 }, { x: 2100, y: 1000 }],
+  [{ x: 1400, y: 600 },  { x: 1400, y: 250 }],
+];
 
 // smallest distance to ANY of a list of paths
 function distToAnyPath(x, y, paths) {
@@ -1347,6 +1385,145 @@ function buildDungeon(lv) {
 }
 
 // ---------------------------------------------------------------------
+// BUILDING THE ABYSS — the bottom of everything. Every monster. One
+// last boss, stitched together from the worst of them.
+// ---------------------------------------------------------------------
+function buildAbyss(lv) {
+  trees = [];   // no walls down here. the void does the walls' job.
+
+  // a spot somewhere on a middle chunk (never the start or boss chunk)
+  function spot(seed) {
+    const c = ABYSS_CHUNKS[1 + Math.floor(noise(seed) * 6)];
+    const ang = noise(seed * 3.3) * 6.28;
+    const rr = noise(seed * 7.7) * (c.r - 60);
+    return { x: c.x + Math.cos(ang) * rr, y: c.y + Math.sin(ang) * rr };
+  }
+
+  // themed rubble tiles on every chunk
+  tiles = [];
+  let tn = 0;
+  for (const c of ABYSS_CHUNKS) {
+    for (let i = 0; i < 30; i++) {
+      tn++;
+      const ang = noise(tn * 3.3) * 6.28;
+      const rr = noise(tn * 7.7) * (c.r - 30);
+      const palette = c.theme === 'temple' ? ['#8f7c54', '#71736a']
+                    : c.theme === 'castle' ? ['#5d5f66', '#8a2230']
+                    : c.theme === 'boss'   ? ['#4c4059', '#3a3345']
+                    : ['#33333d', '#2a2a33'];
+      tiles.push({
+        x: c.x + Math.cos(ang) * rr,
+        y: c.y + Math.sin(ang) * rr,
+        size: 13 + noise(tn * 5.1) * 13,
+        color: palette[Math.floor(noise(tn * 9.3) * 2)],
+      });
+    }
+  }
+
+  // a few torches per chunk, still burning after the fall
+  torches = [];
+  let tc = 0;
+  for (const c of ABYSS_CHUNKS) {
+    for (let i = 0; i < 3; i++) {
+      tc++;
+      const ang = noise(tc * 11.7) * 6.28;
+      torches.push({
+        x: c.x + Math.cos(ang) * (c.r - 45),
+        y: c.y + Math.sin(ang) * (c.r - 45),
+        torch: true,
+      });
+    }
+  }
+
+  // void motes
+  fireflies = [];
+  for (let i = 0; i < 60; i++) {
+    fireflies.push({
+      x: noise(i * 21.3 + 9) * lv.worldW,
+      y: noise(i * 47.7 + 9) * lv.worldH,
+      phase: noise(i * 5.5) * 6.28,
+      speed: 0.5 + noise(i * 2.2),
+    });
+  }
+
+  // ---- EVERY CREATURE FROM THE WHOLE SAGA ----
+  zombies = [];
+  for (let i = 0; i < 3; i++) {
+    const p = spot(i * 13.1 + 101);
+    zombies.push({ x: p.x, y: p.y, zombie: true, hp: 2,
+                   wanderAngle: noise(i) * 6.28, lastHitSwing: 0, hurtFlash: 0 });
+  }
+  for (let i = 0; i < 3; i++) {
+    const p = spot(i * 17.3 + 111);
+    zombies.push({ x: p.x, y: p.y, zombie: true, sand: true, buried: false, hp: 3,
+                   wanderAngle: noise(i) * 6.28, lastHitSwing: 0, hurtFlash: 0 });
+  }
+  for (let i = 0; i < 3; i++) {
+    const p = spot(i * 19.7 + 121);
+    zombies.push({ x: p.x, y: p.y, zombie: true, black: true, hp: 3, speed: 95,
+                   wanderAngle: noise(i) * 6.28, lastHitSwing: 0, hurtFlash: 0 });
+  }
+  for (let i = 0; i < 2; i++) {
+    const p = spot(i * 23.9 + 131);
+    zombies.push({ x: p.x, y: p.y, zombie: true, black: true, giant: true, hp: 6, speed: 60,
+                   wanderAngle: noise(i) * 6.28, lastHitSwing: 0, hurtFlash: 0 });
+  }
+  skeletons = [];
+  for (let i = 0; i < 4; i++) {
+    const p = spot(i * 29.3 + 141);
+    skeletons.push({ x: p.x, y: p.y, skeleton: true, hp: 2, facing: 1,
+                     wanderAngle: noise(i * 1.7) * 6.28, lastHitSwing: 0, hurtFlash: 0 });
+  }
+  creepers = [];
+  for (let i = 0; i < 5; i++) {
+    const p = spot(i * 31.7 + 151);
+    creepers.push({ x: p.x, y: p.y, creeper: true, hp: 2, fuse: 0,
+                    wanderAngle: noise(i) * 6.28, lastHitSwing: 0, hurtFlash: 0 });
+  }
+  angryGeckos = [];
+  for (let i = 0; i < 6; i++) {
+    const p = spot(i * 37.1 + 161);
+    angryGeckos.push({ x: p.x, y: p.y,
+      color: ['#3f8a3f', '#b8862e', '#37a0a6'][Math.floor(noise(i * 5.5) * 3)] });
+  }
+  giantGeckos = [];
+  for (let i = 0; i < 3; i++) {
+    const p = spot(i * 41.3 + 171);
+    giantGeckos.push({ x: p.x, y: p.y, hp: 3, hurtFlash: 0, lastHitSwing: 0,
+      color: ['#5fbf5f', '#e0a23c', '#4cc3c9'][Math.floor(noise(i * 5.5) * 3)] });
+  }
+  miniAxes = [];
+  for (let i = 0; i < 4; i++) {
+    const p = spot(i * 43.9 + 181);
+    miniAxes.push({ x: p.x, y: p.y, spin: noise(i) * 6 });
+  }
+  miniBlobs = [];
+  for (let i = 0; i < 4; i++) {
+    const p = spot(i * 47.7 + 191);
+    miniBlobs.push({ x: p.x, y: p.y, hp: 2, hurtFlash: 0, lastHitSwing: 0 });
+  }
+
+  // THE LAST BOSS — half Multi-Tasker, half zombie Multi-Tasker
+  abyssBoss = {
+    x: ABYSS_CHUNKS[7].x, y: ABYSS_CHUNKS[7].y,
+    hp: 45,
+    active: false,
+    summonTimer: 6,
+    lastHitSwing: 0,
+    hurtFlash: 0,
+  };
+
+  pond = { x: -9999, y: -9999, rx: 1, ry: 1, hidden: true };
+  stumps = []; flowers = []; scorches = []; logs = []; webs = []; geckos = [];
+
+  emeralds = [];
+  particles = [];
+  emeraldCount = 0;
+  player.hp = player.maxHp;
+  player.armor = armorMax();
+}
+
+// ---------------------------------------------------------------------
 // THE EXPLORER (you!)
 // ---------------------------------------------------------------------
 const player = {
@@ -1379,12 +1556,13 @@ function swingSword() {
 function startLevel(i) {
   current = LEVELS[i];
   logs = []; webs = []; geckos = [];   // only Chippy's dimension refills these
-  axeBoss = null; chippyJr = null; geckoMan = null; returnBoss = null;
+  axeBoss = null; chippyJr = null; geckoMan = null; returnBoss = null; abyssBoss = null;
   miniAxes = []; giantGeckos = []; angryGeckos = []; miniBlobs = [];
   if (current.kind === 'chippy') buildChippy(current);
   else if (current.kind === 'jr') buildJr(current);
   else if (current.kind === 'gecko') buildGecko(current);
   else if (current.kind === 'dungeon') buildDungeon(current);
+  else if (current.kind === 'abyss') buildAbyss(current);
   else if (current.kind === 'temple') buildTemple(current);
   else if (current.kind === 'castle') buildCastle(current);
   else if (current.kind === 'sky') buildSky(current);
@@ -1407,6 +1585,17 @@ function blocked(x, y, r = player.radius) {
   if (current.kind === 'sky') {
     if (distToAnyPath(x, y, SKY_PATHS) > 92 &&
         Math.hypot(x - arena.x, y - arena.y) > 250) return true;
+  }
+  // in the Abyss you can stand on chunks and bridges. That's it. The
+  // rest is bottomless black, and bottomless black is not a floor.
+  if (current.kind === 'abyss') {
+    let safe = distToAnyPath(x, y, ABYSS_PATHS) < 70;
+    if (!safe) {
+      for (const c of ABYSS_CHUNKS) {
+        if (Math.hypot(x - c.x, y - c.y) < c.r - 12) { safe = true; break; }
+      }
+    }
+    if (!safe) return true;
   }
   // the pond (explorers hate wet socks; zombies can't swim either)
   if (((x - pond.x) / (pond.rx + r)) ** 2 +
@@ -2053,6 +2242,105 @@ function update(dt) {
     }
   }
 
+  // ---- THE LAST BOSS — half goo, half zombie, all summons ----
+  if (abyssBoss) {
+    const b = abyssBoss;
+    if (b.hurtFlash > 0) b.hurtFlash -= dt;
+    const distToYou = Math.hypot(player.x - b.x, player.y - b.y);
+
+    if (!b.active && distToYou < 320) b.active = true;
+
+    if (b.active && player.deathTimer <= 0) {
+      // it lurches toward you, half oozing, half shambling
+      const lurch = 90 + Math.sin(elapsed * 2.6) * 45;
+      const bdx = (player.x - b.x) / Math.max(1, distToYou);
+      const bdy = (player.y - b.y) / Math.max(1, distToYou);
+      if (!blocked(b.x + bdx * lurch * dt, b.y, 16)) b.x += bdx * lurch * dt;
+      if (!blocked(b.x, b.y + bdy * lurch * dt, 16)) b.y += bdy * lurch * dt;
+
+      // SUMMON ANYTHING — it reaches into every world it has ever touched
+      // and pulls something out. You never know what's next.
+      b.summonTimer -= dt;
+      if (b.summonTimer <= 0) {
+        b.summonTimer = 6;
+        const pick = Math.floor(noise(elapsed * 9.9) * 9);
+        const sx2 = b.x + (noise(elapsed) - 0.5) * 200;
+        const sy2 = b.y + (noise(elapsed * 2.2) - 0.5) * 200;
+        for (let p = 0; p < 8; p++) {
+          particles.push({ x: sx2, y: sy2 - 8,
+            vx: (noise(p * 3.1 + elapsed) - 0.5) * 200,
+            vy: (noise(p * 7.3 + elapsed) - 0.8) * 180,
+            life: 0.5, color: pick < 3 ? '#4a9e4a' : '#b06cff' });
+        }
+        if (pick === 0 && zombies.length < 8) {
+          zombies.push({ x: sx2, y: sy2, zombie: true, hp: 2,
+                         wanderAngle: 0, lastHitSwing: 0, hurtFlash: 0 });
+        } else if (pick === 1 && zombies.length < 8) {
+          zombies.push({ x: sx2, y: sy2, zombie: true, sand: true, buried: false, hp: 3,
+                         wanderAngle: 0, lastHitSwing: 0, hurtFlash: 0 });
+        } else if (pick === 2 && zombies.length < 8) {
+          zombies.push({ x: sx2, y: sy2, zombie: true, black: true, hp: 3, speed: 95,
+                         wanderAngle: 0, lastHitSwing: 0, hurtFlash: 0 });
+        } else if (pick === 3 && skeletons.length < 6) {
+          skeletons.push({ x: sx2, y: sy2, skeleton: true, hp: 2, facing: 1,
+                           wanderAngle: 0, lastHitSwing: 0, hurtFlash: 0 });
+        } else if (pick === 4 && creepers.length < 6) {
+          creepers.push({ x: sx2, y: sy2, creeper: true, hp: 2, fuse: 0,
+                          wanderAngle: 0, lastHitSwing: 0, hurtFlash: 0 });
+        } else if (pick === 5 && angryGeckos.length < 8) {
+          angryGeckos.push({ x: sx2, y: sy2, color: '#3f8a3f' });
+        } else if (pick === 6 && giantGeckos.length < 5) {
+          giantGeckos.push({ x: sx2, y: sy2, hp: 3, hurtFlash: 0, lastHitSwing: 0,
+                             color: '#5fbf5f' });
+        } else if (pick === 7 && miniAxes.length < 5) {
+          miniAxes.push({ x: sx2, y: sy2, spin: 0 });
+        } else if (miniBlobs.length < 5) {
+          miniBlobs.push({ x: sx2, y: sy2, hp: 2, hurtFlash: 0, lastHitSwing: 0 });
+        }
+      }
+
+      // its grab — 1 heart, as the designer decreed
+      if (distToYou < 60 && player.hurtTimer <= 0) {
+        if (player.armor > 0) player.armor -= 1;
+        else player.hp -= 1;
+        player.hurtTimer = 1;
+        const push = 85 / Math.max(1, distToYou);
+        const nx2 = player.x + (player.x - b.x) * push;
+        const ny2 = player.y + (player.y - b.y) * push;
+        if (!blocked(nx2, player.y)) player.x = nx2;
+        if (!blocked(player.x, ny2)) player.y = ny2;
+        if (player.hp <= 0) player.deathTimer = 2.5;
+      }
+    }
+
+    // the last swings of the whole saga
+    if (b.active && player.attackTime > 0 && b.lastHitSwing !== player.swingId &&
+        distToYou < 85 && (b.x - player.x) * player.facing > -8) {
+      b.lastHitSwing = player.swingId;
+      b.hp -= hasChippy ? 3 : hasGoldSword ? 2 : 1;
+      b.hurtFlash = 0.15;
+
+      if (b.hp <= 0) {
+        // THE BOTTOM OF EVERYTHING IS BEATEN
+        for (let i = 0; i < 50; i++) {
+          particles.push({ x: b.x, y: b.y - 14,
+            vx: (noise(i * 3.3 + elapsed) - 0.5) * 420,
+            vy: (noise(i * 7.7 + elapsed) - 0.9) * 380,
+            life: 1, color: i % 3 === 0 ? '#4a9e4a' : i % 3 === 1 ? '#1a1a20' : '#b06cff' });
+        }
+        for (let e = 0; e < 12; e++) {
+          emeralds.push({ x: b.x + (e - 6) * 13, y: b.y, born: elapsed });
+        }
+        abyssBoss = null;
+        victoryNew = true;
+        victoryLevel = 9;
+        victoryTimer = 7;
+        hasBeatAbyss = true;
+        localStorage.setItem('explorer_beat_abyss', 'yes');
+      }
+    }
+  }
+
   // ---- ZOMBIES ----
   for (const z of zombies) {
     if (z.hurtFlash > 0) z.hurtFlash -= dt;
@@ -2357,6 +2645,13 @@ function update(dt) {
         returnBoss.active = false;
         returnBoss.hp = 40;
       }
+      // the half-and-half horror re-forms on its arena chunk
+      if (abyssBoss) {
+        abyssBoss.x = ABYSS_CHUNKS[7].x;
+        abyssBoss.y = ABYSS_CHUNKS[7].y;
+        abyssBoss.active = false;
+        abyssBoss.hp = 45;
+      }
     }
   }
 
@@ -2519,6 +2814,48 @@ function drawGame() {
     ctx.lineWidth = 1.5;
     ctx.strokeRect(-6, -6, 12, 12);
     ctx.restore();
+  }
+
+  // THE ABYSS — floating chunks of old worlds over bottomless black
+  if (current.kind === 'abyss') {
+    // faint void motes drifting far below (parallax = they feel deep)
+    ctx.fillStyle = 'rgba(90, 70, 140, 0.3)';
+    for (let i = 0; i < 40; i++) {
+      const vx2 = ((noise(i * 9.1) * (current.worldW + 600) + elapsed * (4 + noise(i) * 8)) % (current.worldW + 600)) - 300 - cam.x * 0.5;
+      const vy2 = noise(i * 4.3) * current.worldH - cam.y * 0.5;
+      ctx.fillRect(vx2, vy2, 3, 3);
+    }
+    // stone bridges between the chunks
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = '#33333d';
+    ctx.lineWidth = 130;
+    for (const wp of ABYSS_PATHS) {
+      ctx.beginPath();
+      ctx.moveTo(wp[0].x - cam.x, wp[0].y - cam.y);
+      ctx.lineTo(wp[1].x - cam.x, wp[1].y - cam.y);
+      ctx.stroke();
+    }
+    // the chunks — each still wearing the colors of the world it broke off
+    for (const c of ABYSS_CHUNKS) {
+      const cx2 = c.x - cam.x, cy2 = c.y - cam.y;
+      if (cx2 < -c.r - 60 || cy2 < -c.r - 60 ||
+          cx2 > canvas.width + c.r + 60 || cy2 > canvas.height + c.r + 60) continue;
+      ctx.fillStyle = c.theme === 'temple' ? '#6e6248'
+                    : c.theme === 'castle' ? '#46474d'
+                    : c.theme === 'boss'   ? '#2e2836'
+                    : '#33333d';
+      ctx.beginPath(); ctx.arc(cx2, cy2, c.r, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+      ctx.lineWidth = 5;
+      ctx.beginPath(); ctx.arc(cx2, cy2, c.r - 10, 0, Math.PI * 2); ctx.stroke();
+    }
+    // rubble tiles on the chunks
+    for (const t2 of tiles) {
+      const tx = t2.x - cam.x, ty = t2.y - cam.y;
+      if (tx < -40 || ty < -40 || tx > canvas.width + 40 || ty > canvas.height + 40) continue;
+      ctx.fillStyle = t2.color;
+      ctx.fillRect(tx - t2.size / 2, ty - t2.size / 2, t2.size, t2.size);
+    }
   }
 
   // the walkway floors: sand base in the temple, cracked stone halls in
@@ -2873,6 +3210,97 @@ function drawGame() {
     }
   }
 
+  // THE LAST BOSS — stitched down the middle: goo on one side, rot on the other
+  if (abyssBoss) {
+    const b = abyssBoss;
+    const bx = b.x - cam.x, by = b.y - cam.y;
+    const aFlash = b.hurtFlash > 0;
+    const wob = elapsed * 2.2;
+
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.beginPath(); ctx.ellipse(bx, by + 40, 66, 18, 0, 0, Math.PI * 2); ctx.fill();
+
+    // tentacles on the LEFT (the Multi-Tasker half)
+    ctx.strokeStyle = aFlash ? '#ffffff' : '#0e0e14';
+    ctx.lineWidth = 6;
+    ctx.lineCap = 'round';
+    for (let t = 0; t < 4; t++) {
+      const baseAng = Math.PI * 0.6 + t * 0.55 + Math.sin(wob + t) * 0.12;
+      ctx.beginPath();
+      let tx2 = bx + Math.cos(baseAng) * 30, ty2 = by + Math.sin(baseAng) * 24;
+      ctx.moveTo(tx2, ty2);
+      for (let seg = 1; seg <= 3; seg++) {
+        tx2 += Math.cos(baseAng + Math.sin(wob * 1.6 + t + seg) * 0.5) * 26;
+        ty2 += Math.sin(baseAng + Math.cos(wob * 1.4 + t + seg) * 0.5) * 22;
+        ctx.lineTo(tx2, ty2);
+      }
+      ctx.stroke();
+    }
+    // grabby zombie arms on the RIGHT (the zombie half)
+    ctx.fillStyle = aFlash ? '#ffffff' : '#4a9e4a';
+    ctx.fillRect(bx + 44, by - 20 + Math.sin(wob * 2) * 4, 22, 8);
+    ctx.fillRect(bx + 40, by + 4 + Math.cos(wob * 2) * 4, 24, 8);
+
+    // the blob body, drawn TWICE with a clip: left half goo, right half rot
+    const blobPath = () => {
+      ctx.beginPath();
+      for (let k = 0; k <= 22; k++) {
+        const ang = (k / 22) * Math.PI * 2;
+        const r = 54 + Math.sin(wob * 1.4 + k * 1.9) * 6;
+        const px2 = bx + Math.cos(ang) * r;
+        const py2 = by + Math.sin(ang) * r * 0.85;
+        if (k === 0) ctx.moveTo(px2, py2); else ctx.lineTo(px2, py2);
+      }
+      ctx.closePath();
+    };
+    ctx.save();
+    ctx.beginPath(); ctx.rect(bx - 70, by - 70, 70, 140); ctx.clip();
+    blobPath();
+    ctx.fillStyle = aFlash ? '#ffffff' : '#1a1a20';   // the goo half
+    ctx.fill();
+    ctx.restore();
+    ctx.save();
+    ctx.beginPath(); ctx.rect(bx, by - 70, 70, 140); ctx.clip();
+    blobPath();
+    ctx.fillStyle = aFlash ? '#ffffff' : '#3a5a3a';   // the zombie half
+    ctx.fill();
+    ctx.restore();
+    // the stitched seam down the middle
+    ctx.strokeStyle = '#0a0a0e';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    for (let s2 = 0; s2 <= 6; s2++) {
+      const sy2 = by - 45 + s2 * 15;
+      const sx2 = bx + (s2 % 2 ? 4 : -4);
+      if (s2 === 0) ctx.moveTo(sx2, sy2); else ctx.lineTo(sx2, sy2);
+    }
+    ctx.stroke();
+
+    // LEFT: one big purple eye, tracking you. RIGHT: two square zombie eyes.
+    const lk = Math.hypot(player.x - b.x, player.y - b.y) || 1;
+    const ex2 = (player.x - b.x) / lk * 3, ey2 = (player.y - b.y) / lk * 3;
+    ctx.fillStyle = '#f4f0e8';
+    ctx.beginPath(); ctx.arc(bx - 26, by - 16, 12, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#b06cff';
+    ctx.beginPath(); ctx.arc(bx - 26 + ex2, by - 16 + ey2, 6.5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#1c3b1c';
+    ctx.fillRect(bx + 14, by - 22, 6, 6);
+    ctx.fillRect(bx + 30, by - 22, 6, 6);
+
+    // one shared mouth of teeth, spanning both halves
+    ctx.fillStyle = '#0a0a0e';
+    ctx.beginPath();
+    ctx.ellipse(bx, by + 16, 28, 11 + Math.sin(wob * 2) * 3, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#f4f0e8';
+    for (let tt = 0; tt < 6; tt++) {
+      const tx3 = bx - 23 + tt * 9;
+      ctx.beginPath();
+      ctx.moveTo(tx3, by + 9); ctx.lineTo(tx3 + 7, by + 9); ctx.lineTo(tx3 + 3.5, by + 16);
+      ctx.closePath(); ctx.fill();
+    }
+  }
+
   // the angry gecko swarm — small, fast, and coming right at you
   for (const a of angryGeckos) {
     const ax2 = a.x - cam.x, ay2 = a.y - cam.y;
@@ -3015,6 +3443,7 @@ function drawGame() {
                 : current.kind === 'chippy' ? '255, 150, 220'
                 : current.kind === 'jr'     ? '255, 110, 100'
                 : current.kind === 'dungeon' ? '150, 150, 255'
+                : current.kind === 'abyss'  ? '190, 160, 255'
                 : '190, 255, 130';
     const glowB = current.kind === 'temple' ? '255, 210, 140'
                 : current.kind === 'castle' ? '220, 190, 255'
@@ -3022,6 +3451,7 @@ function drawGame() {
                 : current.kind === 'chippy' ? '255, 215, 245'
                 : current.kind === 'jr'     ? '255, 190, 185'
                 : current.kind === 'dungeon' ? '210, 210, 255'
+                : current.kind === 'abyss'  ? '235, 225, 255'
                 : '220, 255, 170';
     ctx.fillStyle = `rgba(${glowA}, ${0.15 + 0.25 * twinkle})`;
     ctx.beginPath(); ctx.arc(fx, fy, 5, 0, Math.PI * 2); ctx.fill();
@@ -3218,6 +3648,27 @@ function drawGame() {
     }
   }
 
+  // BOSS BAR for the last boss
+  if (current.kind === 'abyss' && abyssBoss && abyssBoss.active) {
+    const bw = Math.min(500, canvas.width - 80);
+    const bx = canvas.width / 2 - bw / 2, by = 30;
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#cfe8cf';
+    ctx.font = 'bold 16px monospace';
+    ctx.fillText('THE ZOMBIE MULTI-TASKER', canvas.width / 2, by - 8);
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(bx, by, bw, 14);
+    // half purple, half zombie green — like its owner
+    const fill = (bw - 4) * (abyssBoss.hp / 45);
+    ctx.fillStyle = '#b06cff';
+    ctx.fillRect(bx + 2, by + 2, fill / 2, 10);
+    ctx.fillStyle = '#4a9e4a';
+    ctx.fillRect(bx + 2 + fill / 2, by + 2, fill / 2, 10);
+    ctx.strokeStyle = '#cfe8cf';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(bx, by, bw, 14);
+  }
+
   // BOSS BAR for the returned Multi-Tasker
   if (current.kind === 'dungeon' && returnBoss && returnBoss.active) {
     const bw = Math.min(500, canvas.width - 80);
@@ -3329,6 +3780,7 @@ function drawGame() {
                : current.kind === 'jr'     ? 'Chippy Jr got his revenge!'
                : current.kind === 'gecko'  ? 'The geckos rose. You fell!'
                : current.kind === 'dungeon' ? 'The Multi-Tasker multi-tasked you!'
+               : current.kind === 'abyss'  ? 'The Abyss swallowed you!'
                : 'The zombies got you!',
                  canvas.width / 2, canvas.height / 2 - 10);
     ctx.font = '18px monospace';
@@ -3362,7 +3814,31 @@ function drawGame() {
     ctx.fillStyle = '#ffd23f';
     ctx.font = 'bold 40px monospace';
     ctx.fillText(`LEVEL ${victoryLevel} COMPLETE!`, canvas.width / 2, canvas.height / 2 - 60);
-    if (victoryLevel === 8) {
+    if (victoryLevel === 9) {
+      // the half-and-half eye, finally closed
+      ctx.fillStyle = '#b06cff';
+      ctx.beginPath();
+      ctx.arc(canvas.width / 2, canvas.height / 2 + 4, 22, Math.PI / 2, Math.PI * 1.5);
+      ctx.fill();
+      ctx.fillStyle = '#4a9e4a';
+      ctx.beginPath();
+      ctx.arc(canvas.width / 2, canvas.height / 2 + 4, 22, Math.PI * 1.5, Math.PI / 2);
+      ctx.fill();
+      ctx.strokeStyle = '#f4f0e8';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(canvas.width / 2 - 12, canvas.height / 2 + 4);
+      ctx.lineTo(canvas.width / 2 + 12, canvas.height / 2 + 4);
+      ctx.stroke();
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 24px monospace';
+      ctx.fillText('THE ABYSS IS CONQUERED!', canvas.width / 2, canvas.height / 2 + 66);
+      ctx.fillStyle = '#e0d4ff';
+      ctx.font = '16px monospace';
+      ctx.fillText('You reached the bottom of everything... and beat what lives there.',
+                   canvas.width / 2, canvas.height / 2 + 94);
+      ctx.fillText('THE END............ ?', canvas.width / 2, canvas.height / 2 + 120);
+    } else if (victoryLevel === 8) {
       // nine eyes, all closed
       for (let row = 0; row < 3; row++) {
         for (let col = 0; col < 3; col++) {
