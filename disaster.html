@@ -501,6 +501,7 @@ let litter = [];
 let tidied = 0;
 let footprints = [];       // the brown trail of somebody's worst afternoon
 let piesSteppedIn = 0;     // the town keeps count. the town never forgets.
+let poopPeople = [];       // born when a pie gets stepped on. they mean no harm.
 const CLEAN_TIME = 1.5;       // seconds of sweeping per piece of mess
 const MAX_LITTER = 260;       // stop the whole town turning into a landfill
 
@@ -1972,7 +1973,12 @@ function update(dt) {
           p.ick = 1.2;                        // the full-body EWWW
           p.ickCool = elapsed + 5;            // one catastrophe per shoe, please
           p.trackT = 2.6;                     // and now they're tracking it around
-          if (piesSteppedIn % 3 === 1) {
+          // ...and from the squished pie, SOMETHING RISES
+          if (poopPeople.length < 12) {
+            poopPeople.push({ x: L.x, y: L.y, angle: Math.random() * 6.28,
+                              walk: Math.random() * 6.28, born: elapsed });
+            setStatus('THE PIE GOT UP. A poop person is born!! (' + (poopPeople.length) + ' in town)', '#c98a3d');
+          } else if (piesSteppedIn % 3 === 1) {
             setStatus('EWWW — somebody stepped in a cow pie! (' + piesSteppedIn + ' so far)', '#c98a3d');
           }
           break;
@@ -2143,6 +2149,27 @@ function update(dt) {
   blasts = blasts.filter(b => b.t < b.life);
   litter = litter.filter(L => !L.gone);         // swept-up mess is gone for good
   footprints = footprints.filter(f => elapsed - f.born < 5);   // tracks fade away
+
+  // ---- POOP PEOPLE — they waddle. they smile. they are avoided. ----
+  for (const pp of poopPeople) {
+    pp.walk += dt * 7;
+    if (Math.random() < dt * 0.9) pp.angle = Math.random() * 6.28;
+    const nx = pp.x + Math.cos(pp.angle) * 26 * dt;
+    const ny = pp.y + Math.sin(pp.angle) * 26 * dt;
+    if (!blockedAt(nx, pp.y)) pp.x = nx; else pp.angle += 2;
+    if (!blockedAt(pp.x, ny)) pp.y = ny;
+    pp.x = Math.max(8, Math.min(gridW() - 8, pp.x));
+    pp.y = Math.max(TOPBAR + 8, Math.min(TOPBAR + gridH() - 8, pp.y));
+    // anyone who wanders too close is instantly, deeply grossed out
+    for (const p of people) {
+      if (p.kind !== 'person' || p.sheltering || p.gone) continue;
+      if (!(p.ick > 0) && elapsed > (p.ickCool || 0) &&
+          Math.hypot(p.x - pp.x, p.y - pp.y) < 20) {
+        p.ick = 1.0;
+        p.ickCool = elapsed + 4;
+      }
+    }
+  }
 
   // airborne folk tumble gracefully out of frame
   for (const f of launchedFolk) {
@@ -2995,6 +3022,37 @@ function draw() {
     ctx.fillStyle = '#6d4a26';
     ctx.beginPath(); ctx.arc(13, -0.2, 4, 0, Math.PI * 2); ctx.fill();
     ctx.restore();
+  }
+
+  // ---- THE POOP PEOPLE — waddling, smiling, hoping for friendship ----
+  for (const pp of poopPeople) {
+    const step = Math.sin(pp.walk) * 1.5;
+    ctx.fillStyle = 'rgba(0,0,0,0.18)';
+    ctx.beginPath(); ctx.ellipse(pp.x, pp.y + 3, 6, 2.4, 0, 0, Math.PI * 2); ctx.fill();
+    // the classic swirl: three blobs, smaller going up
+    ctx.fillStyle = '#6b4a24';
+    ctx.beginPath(); ctx.ellipse(pp.x, pp.y - 3 + step * 0.3, 7, 4.4, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#7d5a2c';
+    ctx.beginPath(); ctx.ellipse(pp.x, pp.y - 8 + step * 0.5, 5.2, 3.6, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#8d6733';
+    ctx.beginPath(); ctx.ellipse(pp.x - 0.5, pp.y - 12 + step * 0.7, 3.2, 2.6, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(pp.x + 1.5, pp.y - 14.5 + step * 0.7, 1.4, 0, Math.PI * 2); ctx.fill();  // the curl
+    // big hopeful eyes
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath(); ctx.arc(pp.x - 2.4, pp.y - 8 + step * 0.5, 1.8, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(pp.x + 2.4, pp.y - 8 + step * 0.5, 1.8, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#222';
+    ctx.beginPath(); ctx.arc(pp.x - 2, pp.y - 8 + step * 0.5, 0.9, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(pp.x + 2.8, pp.y - 8 + step * 0.5, 0.9, 0, Math.PI * 2); ctx.fill();
+    // a big friendly smile that has never once worked
+    ctx.strokeStyle = '#3a2812'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(pp.x, pp.y - 6 + step * 0.5, 2.4, 0.3, Math.PI - 0.3); ctx.stroke();
+    // the personal fly. every poop person gets one. it's the rules.
+    ctx.fillStyle = '#22242a';
+    const fa = elapsed * 4 + pp.born;
+    ctx.beginPath();
+    ctx.arc(pp.x + Math.cos(fa) * 9, pp.y - 12 + Math.sin(fa * 1.6) * 4, 0.8, 0, Math.PI * 2);
+    ctx.fill();
   }
 
   // the full-body EWWW of somebody who just stepped in it
