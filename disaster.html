@@ -609,6 +609,7 @@ function beginDisaster(type) {
 // they scatter off the edges of the map.
 // ---------------------------------------------------------------------
 let badGuys = [];
+let badGuysDefeated = 0;   // the knights keep score
 
 // SOMETHING HIT A BUILDING. It doesn't just vanish any more — it takes
 // damage and gets uglier: pristine -> lightly damaged -> heavily damaged ->
@@ -814,9 +815,10 @@ const buttons = [
 
 // the critters you can drop into town — these fill the People drop-down
 const CRITTER_MENU = [
-  { label: '🧍 People', kind: 'person' },
-  { label: '🐄 Cows',   kind: 'cow' },
-  { label: '🐕 Dogs',   kind: 'dog' },
+  { label: '🧍 People',  kind: 'person' },
+  { label: '🐄 Cows',    kind: 'cow' },
+  { label: '🐕 Dogs',    kind: 'dog' },
+  { label: '⚔ Knights',  kind: 'knight' },
 ];
 
 // everything you can UNLEASH — these fill the Disaster drop-down
@@ -1535,6 +1537,64 @@ function update(dt) {
   }
 
   for (const p of people) {
+
+    // ---- KNIGHTS don't panic and don't hide. Knights CHARGE. ----
+    if (p.kind === 'knight') {
+      p.walk += dt * 8;
+      p.bob += dt * 5;
+      if (p.clash > 0) p.clash -= dt;
+
+      // any bad guys about?
+      let foe = null, fBest = 999999;
+      for (const b of badGuys) {
+        if (b.gone) continue;
+        const d2 = Math.hypot(b.x - p.x, b.y - p.y);
+        if (d2 < fBest) { fBest = d2; foe = b; }
+      }
+
+      let spd = 45;   // patrol pace
+      if (foe) {
+        if (fBest > 18) {
+          // CHARGE — faster than a bandit can run
+          p.angle = Math.atan2(foe.y - p.y, foe.x - p.x);
+          spd = 170;
+        } else {
+          spd = 0;
+          if (!(p.clash > 0)) {
+            // CLANG! a sword blow lands, sparks fly, the bandit staggers
+            p.clash = 0.6;
+            foe.hp = (foe.hp == null ? 2 : foe.hp) - 1;
+            for (let i = 0; i < 6; i++) {
+              debris.push({ x: foe.x, y: foe.y - 10,
+                vx: (Math.random() - 0.5) * 320, vy: -Math.random() * 260 - 40,
+                spin: Math.random() * 10, life: 0.5,
+                color: i % 2 ? '#ffd23f' : '#e8ecf2' });
+            }
+            foe.x += (foe.x - p.x) * 2.5;   // knocked backwards
+            foe.y += (foe.y - p.y) * 2.5;
+            if (foe.hp <= 0) {
+              // DEFEATED — launched off the map like his victims
+              foe.gone = true;
+              badGuysDefeated++;
+              launchedFolk.push({ x: foe.x, y: foe.y,
+                vx: (Math.random() - 0.5) * 600, vy: -400 - Math.random() * 300,
+                spin: 0, life: 1.4, shirt: '#2c2c38' });
+              setStatus('A knight defeated a bad guy! (' + badGuysDefeated + ' total)', '#7ddf8f');
+            }
+          }
+        }
+      } else if (Math.random() < dt * 0.6) {
+        p.angle = Math.random() * 6.28;      // calm patrol, new heading sometimes
+      }
+
+      const nx = p.x + Math.cos(p.angle) * spd * dt;
+      const ny = p.y + Math.sin(p.angle) * spd * dt;
+      if (!blockedAt(nx, p.y)) p.x = nx;
+      if (!blockedAt(p.x, ny)) p.y = ny;
+      p.x = Math.max(10, Math.min(gridW() - 10, p.x));
+      p.y = Math.max(TOPBAR + 10, Math.min(TOPBAR + gridH() - 10, p.y));
+      continue;                              // knights skip the civilian brain
+    }
 
     // already hiding inside a building?
     if (p.sheltering) {
@@ -2294,7 +2354,32 @@ function draw() {
     ctx.save();
     ctx.translate(0, -hop);                          // bounce the whole critter
 
-    if (p.kind === 'cow') {
+    if (p.kind === 'knight') {
+      ctx.fillStyle = '#3a3f4a';                     // sturdy armored legs
+      ctx.fillRect(p.x - 3.4 * u, p.y - 2 * u + step, 2.6 * u, 6 * u - step);
+      ctx.fillRect(p.x + 0.8 * u, p.y - 2 * u - step, 2.6 * u, 6 * u + step);
+      ctx.fillStyle = '#b8c4d0';                     // shining breastplate
+      rrect(p.x - 5 * u, p.y - 12 * u, 10 * u, 10 * u, 2 * u); ctx.fill();
+      ctx.fillStyle = '#dde6ee';                     // shoulder shine
+      ctx.fillRect(p.x - 5 * u, p.y - 12 * u, 10 * u, 3 * u);
+      ctx.fillStyle = '#b8c4d0';                     // helmet
+      ctx.beginPath(); ctx.arc(p.x, p.y - 15 * u, 4.5 * u, Math.PI, 0); ctx.fill();
+      ctx.fillRect(p.x - 4.5 * u, p.y - 15 * u, 9 * u, 3.2 * u);
+      ctx.fillStyle = '#1e2630';                     // visor slit
+      ctx.fillRect(p.x - 3 * u, p.y - 14.6 * u, 6 * u, 1.6 * u);
+      ctx.fillStyle = '#e8453c';                     // proud red plume
+      ctx.fillRect(p.x - 1 * u, p.y - 20.5 * u, 2 * u, 5.5 * u);
+      // the sword — at the ready on patrol, THRUSTING mid-clash
+      ctx.save();
+      ctx.translate(p.x + 5 * u * facing, p.y - 8 * u);
+      if (facing === -1) ctx.scale(-1, 1);
+      ctx.rotate(p.clash > 0.3 ? -0.9 : p.clash > 0 ? 0.25 : -0.5);
+      ctx.fillStyle = '#5b3b1e'; ctx.fillRect(0, -1 * u, 3 * u, 2 * u);
+      ctx.fillStyle = '#c9a83c'; ctx.fillRect(3 * u, -2.5 * u, 1.4 * u, 5 * u);
+      ctx.fillStyle = '#e8ecf2'; ctx.fillRect(4.4 * u, -1 * u, 8 * u, 2 * u);
+      ctx.fillStyle = '#ffffff'; ctx.fillRect(4.4 * u, -1 * u, 8 * u, 0.8 * u);
+      ctx.restore();
+    } else if (p.kind === 'cow') {
       ctx.fillStyle = '#3b2f2a';                     // stumpy legs
       ctx.fillRect(p.x - 7 * u, p.y - 1 * u + step, 2.4 * u, 6 * u - step);
       ctx.fillRect(p.x + 4.6 * u, p.y - 1 * u - step, 2.4 * u, 6 * u + step);
