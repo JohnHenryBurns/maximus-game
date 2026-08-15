@@ -183,9 +183,9 @@ function freeSpot() {
 
 function spawnCritters(kind) {
   let made = 0;
-  // ten per press, as many presses as you like — 500 is where the
-  // computer starts sweating, so that's the only ceiling
-  for (let i = 0; i < 10 && people.length < 500; i++) {
+  // five per press times the amount dial — up to 50 at once at x10.
+  // 500 total is where the computer starts sweating, the only ceiling.
+  for (let i = 0; i < 5 * qty && people.length < 500; i++) {
     const spot = freeSpot();
     if (!spot) break;
     people.push({
@@ -529,16 +529,20 @@ function setStatus(text, color, sticky) {
 // Pick a disaster from the menu: pay for it, close the menu, and start the
 // tension countdown. The actual mayhem begins later, in update().
 function pickDisaster(item) {
-  if (moneys < item.cost) {          // can't afford this one — say so, leave the menu open
+  const total = item.cost * qty;     // the amount dial multiplies the bill
+  if (moneys < total) {              // can't afford this one — say so, leave the menu open
     brokeFlash = 1.5;
     setStatus('Not enough MONEYS — smashed blocks pay you back!', '#ff6b5e');
     return;
   }
-  moneys -= item.cost;
+  moneys -= total;
   openMenu = null;                   // CLOSE the menu before the disaster begins
   selected = null;                   // and stop building — you'll want to watch this
-  pendings.push({ type: item.type, label: item.label, timer: TENSION });
-  setStatus(item.label + ' incoming…', '#ffb454');
+  // one pending per copy, each arriving a moment after the last (drama)
+  for (let i = 0; i < qty; i++) {
+    pendings.push({ type: item.type, label: item.label, timer: TENSION + i * 0.6 });
+  }
+  setStatus(item.label + (qty > 1 ? ' x' + qty : '') + ' incoming…', '#ffb454');
 }
 
 // BUZZ THE PHONE. Each disaster gets its own rumble pattern (in milliseconds:
@@ -560,7 +564,7 @@ function buzz(type) {
 // Actually unleash the disaster (called once its tension timer runs out).
 // No money changes hands here — that already happened in pickDisaster.
 function beginDisaster(type) {
-  if (disasters.length >= 8) return;   // even chaos has a fire code
+  if (disasters.length >= 12) return;   // even chaos has a fire code
   if (type === 'tornado') {
     disasters.push({ type, x: -60, y: TOPBAR + Math.random() * gridH(),
                      life: 12, wobble: Math.random() * 6.28 });
@@ -907,18 +911,27 @@ function toggleFullscreen() {
   } catch (e) {}          // some browsers say no. that's fine, carry on.
 }
 
-// ROW 2 (below): the three big buttons across the full width, with room to
-// breathe — Build, People, then Disasters last (it's the dangerous one).
+// THE AMOUNT DIAL — how many of a thing you get per tap. Cycles
+// x1 -> x2 -> x5 -> x10 and applies to people AND disasters.
+const QTY_STEPS = [1, 2, 5, 10];
+let qty = 1;
+
+// ROW 2 (below): three big drop-down buttons plus the little amount dial —
+// Build, People, Disasters, then xN at the end.
 function topButtons() {
   const gap = 10, pad = 10, y = 58, h = 38;
+  const qw = 58;                                   // the compact xN dial
   const x0 = pad, x1 = canvas.width - pad;
-  const w = (x1 - x0 - gap * 2) / 3;
+  const w = (x1 - x0 - gap * 3 - qw) / 3;
   const defs = [
     { key: 'build',     icon: buildIcon(), word: 'Build',    menu: true },
     { key: 'people',    icon: '🧍',        word: 'People',   menu: true },
     { key: 'disasters', icon: '🌪',        word: 'Disaster', menu: true },
   ];
-  return defs.map((d, i) => ({ ...d, x: x0 + i * (w + gap), y, w, h }));
+  const out = defs.map((d, i) => ({ ...d, x: x0 + i * (w + gap), y, w, h }));
+  out.push({ key: 'qty', icon: '', word: 'x' + qty, menu: false,
+             x: x1 - qw, y, w: qw, h });
+  return out;
 }
 
 // The "Stop Building" button, parked at the BOTTOM CENTRE and shown only
@@ -946,8 +959,14 @@ function menuRects(kind) {
   return items.map((it, i) => ({ ...it, x, y: TOPBAR + 6 + i * (h + gap), w, h }));
 }
 
-// tapping a top button: open or close its drop-down
+// tapping a top button: open or close its drop-down — or spin the dial
 function handleTopButton(b) {
+  if (b.key === 'qty') {
+    qty = QTY_STEPS[(QTY_STEPS.indexOf(qty) + 1) % QTY_STEPS.length];
+    setStatus('Amount set to x' + qty + ' — everything comes in ' +
+              (qty === 1 ? 'ones!' : qty + 's!'), '#7dd3ff');
+    return;
+  }
   openMenu = (openMenu === b.key) ? null : b.key;
 }
 
@@ -2702,6 +2721,7 @@ function draw() {
     build:     { bg: '#24343a', border: '#4f9d6b' },
     disasters: { bg: '#7a1f2b', border: '#ff6b5e' },
     people:    { bg: '#26473b', border: '#7ddf8f' },
+    qty:       { bg: '#1d3a4a', border: '#7dd3ff' },
   };
   for (const b of topButtons()) {
     const col = palette[b.key];
@@ -2727,7 +2747,7 @@ function draw() {
   if (openMenu) {
     const costly = openMenu === 'disasters';         // only disasters have a price
     for (const r of menuRects(openMenu)) {
-      const canAfford = !costly || moneys >= r.cost;
+      const canAfford = !costly || moneys >= r.cost * qty;
       const chosen = openMenu === 'build' && selected === r.type;
       ctx.fillStyle = chosen ? '#3d6b30' : canAfford ? '#24343a' : '#2c2126';
       rrect(r.x, r.y, r.w, r.h, 8); ctx.fill();
@@ -2741,7 +2761,7 @@ function draw() {
       if (costly) {                         // disasters show their price on the right
         ctx.textAlign = 'right';
         ctx.fillStyle = canAfford ? '#ffd23f' : '#8a7a7e';
-        ctx.fillText(`${r.cost}💰`, r.x + r.w - 12, r.y + r.h / 2 + 5);
+        ctx.fillText(`${r.cost * qty}💰`, r.x + r.w - 12, r.y + r.h / 2 + 5);
       }
     }
   }
