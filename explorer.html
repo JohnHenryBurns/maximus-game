@@ -768,7 +768,7 @@ function buildSky(lv) {
     }
   }
 
-  // THE STORM KING. He does not wander. He waits.
+  // THE MULTI-TASKER. It does not wander. It waits. And it watches.
   zombies.push({
     x: arena.x, y: arena.y - 20,
     zombie: true, black: true, giant: true, boss: true,
@@ -1075,8 +1075,8 @@ function update(dt) {
 
     // Did it get YOU? (hurtTimer = a moment of safety after each hit,
     // so one zombie can't eat all five hearts in one second)
-    if (distToYou < (z.boss ? 60 : z.giant ? 42 : 26) && z.hp > 0 && player.hurtTimer <= 0 && player.deathTimer <= 0) {
-      const hits = z.boss ? 2 : 1;               // the Storm King hits HARD
+    if (distToYou < (z.boss ? 70 : z.giant ? 42 : 26) && z.hp > 0 && player.hurtTimer <= 0 && player.deathTimer <= 0) {
+      const hits = z.boss ? 2 : 1;               // sixteen arms hit HARD
       for (let h = 0; h < hits; h++) {
         if (player.armor > 0) player.armor -= 1; // CLANK — the armor takes it!
         else player.hp -= 1;
@@ -1604,14 +1604,20 @@ function drawGame() {
     if (z.buried) continue;
     const zx = z.x - cam.x, zy = z.y - cam.y;
     if (zx < -20 || zy < -20 || zx > canvas.width + 20 || zy > canvas.height + 20) continue;
-    if (z.giant) {
+    if (z.boss) {
+      // ONE giant purple eye, glowing through the storm. it sees you.
+      ctx.fillStyle = 'rgba(176, 108, 255, 0.9)';
+      ctx.beginPath(); ctx.arc(zx, zy - 2, 9, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = 'rgba(176, 108, 255, 0.35)';
+      ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.arc(zx, zy - 2, 14, 0, Math.PI * 2); ctx.stroke();
+    } else if (z.giant) {
       // a 3x3 grid of purple lights drifting toward you in the dark.
-      // when you see NINE eyes... that's a giant. when they're BIG... run.
-      const gs = z.boss ? 1.7 : 1;
+      // when you see NINE eyes... that's a giant.
       ctx.fillStyle = 'rgba(176, 108, 255, 0.85)';
       for (let row = 0; row < 3; row++) {
         for (let col = 0; col < 3; col++) {
-          ctx.fillRect(zx + (-8 + col * 7) * gs, zy + (-47 + row * 7) * gs, 3 * gs, 3 * gs);
+          ctx.fillRect(zx - 8 + col * 7, zy - 47 + row * 7, 3, 3);
         }
       }
     } else if (z.black) {
@@ -1760,7 +1766,7 @@ function drawGame() {
       ctx.textAlign = 'center';
       ctx.fillStyle = '#d8c2ff';
       ctx.font = 'bold 16px monospace';
-      ctx.fillText('THE STORM KING', canvas.width / 2, by - 8);
+      ctx.fillText('THE MULTI-TASKER', canvas.width / 2, by - 8);
       ctx.fillStyle = 'rgba(0,0,0,0.5)';
       ctx.fillRect(bx, by, bw, 14);
       ctx.fillStyle = '#b06cff';
@@ -1844,14 +1850,16 @@ function drawGame() {
     ctx.font = 'bold 40px monospace';
     ctx.fillText(`LEVEL ${victoryLevel} COMPLETE!`, canvas.width / 2, canvas.height / 2 - 60);
     if (victoryLevel === 4) {
-      ctx.fillStyle = '#ffd23f';                       // his crown, your trophy
-      ctx.fillRect(canvas.width / 2 - 30, canvas.height / 2 + 6, 60, 14);
-      ctx.fillRect(canvas.width / 2 - 30, canvas.height / 2 - 8, 10, 14);
-      ctx.fillRect(canvas.width / 2 - 5, canvas.height / 2 - 12, 10, 18);
-      ctx.fillRect(canvas.width / 2 + 20, canvas.height / 2 - 8, 10, 14);
+      // its giant eye — closed forever. your trophy.
+      ctx.fillStyle = '#f4f0e8';
+      ctx.beginPath(); ctx.arc(canvas.width / 2, canvas.height / 2 + 2, 24, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#b06cff';
+      ctx.beginPath(); ctx.arc(canvas.width / 2, canvas.height / 2 + 2, 14, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#111';
+      ctx.beginPath(); ctx.arc(canvas.width / 2, canvas.height / 2 + 2, 6, 0, Math.PI * 2); ctx.fill();
       ctx.fillStyle = '#ffffff';
       ctx.font = 'bold 22px monospace';
-      ctx.fillText('THE STORM KING IS DEFEATED!', canvas.width / 2, canvas.height / 2 + 62);
+      ctx.fillText('THE MULTI-TASKER IS DEFEATED!', canvas.width / 2, canvas.height / 2 + 62);
       ctx.fillStyle = '#d8c2ff';
       ctx.font = '16px monospace';
       ctx.fillText('You beat every level of THE EXPLORER. What a run.',
@@ -2100,17 +2108,80 @@ function drawZombie(z, cam) {
     return;
   }
 
+  // ---- THE MULTI-TASKER: a giant blob, one huge eye, 16 arms ----
+  if (z.boss) {
+    const flash = z.hurtFlash > 0;
+    const wob = elapsed * 2.5;
+
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.beginPath();
+    ctx.ellipse(x, y + 34, 60, 16, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 16 ARMS first, so they reach out from UNDER the blob. Every third
+    // arm is a zombie arm or a skeleton arm — parts of everyone it's
+    // ever absorbed. It multi-tasks.
+    for (let a = 0; a < 16; a++) {
+      const ang = (a / 16) * Math.PI * 2 + Math.sin(wob + a) * 0.1;
+      const reach = 46 + Math.sin(elapsed * 4 + a * 2.3) * 8;   // grasping in and out
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(ang);
+      ctx.fillStyle = flash ? '#ffffff'
+                    : a % 3 === 0 ? '#4a9e4a'      // a stolen zombie arm
+                    : a % 3 === 1 ? '#e8e8e2'      // a stolen skeleton arm
+                    : '#26262e';                   // its own goo arm
+      ctx.fillRect(30, -3, reach - 24, 6);
+      ctx.fillRect(reach + 4, -5, 8, 10);          // the grabby hand
+      ctx.restore();
+    }
+
+    // THE BLOB — a ring of points whose radius ripples, so the edge wobbles
+    ctx.fillStyle = flash ? '#ffffff' : '#1a1a20';
+    ctx.beginPath();
+    for (let k = 0; k <= 20; k++) {
+      const ang = (k / 20) * Math.PI * 2;
+      const r = 48 + Math.sin(wob * 1.4 + k * 1.9) * 6;
+      const px2 = x + Math.cos(ang) * r;
+      const py2 = y + Math.sin(ang) * r * 0.85;
+      if (k === 0) ctx.moveTo(px2, py2);
+      else ctx.lineTo(px2, py2);
+    }
+    ctx.closePath();
+    ctx.fill();
+
+    // absorbed PARTS poking out of the goo
+    ctx.fillStyle = '#e8e8e2';                     // a skull, half sunk
+    ctx.fillRect(x - 38, y - 18 + Math.sin(wob) * 3, 12, 12);
+    ctx.fillStyle = '#222';
+    ctx.fillRect(x - 36, y - 14 + Math.sin(wob) * 3, 3, 3);
+    ctx.fillRect(x - 31, y - 14 + Math.sin(wob) * 3, 3, 3);
+    ctx.fillStyle = '#4a9e4a';                     // a zombie head, still frowning
+    ctx.fillRect(x + 26, y - 24 + Math.cos(wob) * 3, 13, 13);
+    ctx.fillStyle = '#1c3b1c';
+    ctx.fillRect(x + 29, y - 20 + Math.cos(wob) * 3, 3, 3);
+    ctx.fillRect(x + 34, y - 20 + Math.cos(wob) * 3, 3, 3);
+    ctx.fillStyle = '#e8e8e2';                     // one bony leg going nowhere
+    ctx.fillRect(x - 6, y + 26, 5, 14);
+
+    // THE EYE — one giant eye in the middle... and it WATCHES you.
+    // The pupil slides toward wherever the player is standing.
+    const look = Math.hypot(player.x - z.x, player.y - z.y) || 1;
+    const lx = (player.x - z.x) / look * 5;
+    const ly = (player.y - z.y) / look * 5;
+    ctx.fillStyle = '#f4f0e8';
+    ctx.beginPath(); ctx.arc(x, y - 2, 17, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#b06cff';
+    ctx.beginPath(); ctx.arc(x + lx, y - 2 + ly, 10, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#111';
+    ctx.beginPath(); ctx.arc(x + lx, y - 2 + ly, 4.5, 0, Math.PI * 2); ctx.fill();
+    return;
+  }
+
   // ---- THE GIANT: nine eyes, spider legs, zero manners ----
   if (z.giant) {
     const stomp = Math.abs(Math.sin(elapsed * 4 + z.x)) * 4;   // heavy stomps
     const flash = z.hurtFlash > 0;
-
-    // the Storm King is EXTRA giant — scale the whole drawing up around him
-    const g = z.boss ? 1.7 : 1;
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.scale(g, g);
-    ctx.translate(-x, -y);
 
     // spider legs FIRST, so they come out from BEHIND the body
     ctx.strokeStyle = '#141418';
@@ -2148,16 +2219,6 @@ function drawZombie(z, cam) {
     ctx.fillStyle = flash ? '#ffffff' : '#1c1c22';   // massive grabby arms
     ctx.fillRect(x - 20, y - 22 - stomp, 6, 16);
     ctx.fillRect(x + 14, y - 22 - stomp, 6, 16);
-
-    if (z.boss) {
-      // the crown. HIS crown.
-      ctx.fillStyle = '#ffd23f';
-      ctx.fillRect(x - 12, y - 58 - stomp, 24, 6);
-      ctx.fillRect(x - 12, y - 64 - stomp, 4, 6);
-      ctx.fillRect(x - 2, y - 66 - stomp, 4, 8);
-      ctx.fillRect(x + 8, y - 64 - stomp, 4, 6);
-    }
-    ctx.restore();
     return;
   }
 
