@@ -56,12 +56,13 @@ let hasBeatSky = localStorage.getItem('explorer_beat_sky') === 'yes';   // Multi
 let hasChippy = localStorage.getItem('explorer_chippy') === 'yes';      // has Chippy joined you?
 let hasBeatJr = localStorage.getItem('explorer_beat_jr') === 'yes';     // is the revenge... avenged?
 let hasBeatGeckoMan = localStorage.getItem('explorer_beat_geckoman') === 'yes';
+let hasGeckoArmor = localStorage.getItem('explorer_gecko_armor') === 'yes';
 let hasBeatReturn = localStorage.getItem('explorer_beat_return') === 'yes';
 let armorRegenTimer = 0;       // the infection slowly knitting your armor back
 
 // how many armor points can you have? best armor wins.
 function armorMax() {
-  return hasInfectedArmor ? 4 : hasArmor ? 3 : 0;
+  return hasGeckoArmor ? 5 : hasInfectedArmor ? 4 : hasArmor ? 3 : 0;
 }
 let victoryTimer = 0;          // counts down the LEVEL COMPLETE celebration
 let victoryLevel = 1;          // which level we're celebrating
@@ -1533,8 +1534,10 @@ function update(dt) {
     for (const w of webs) {
       if (Math.hypot(player.x - w.x, player.y - w.y) < w.r) { sticky = 0.45; break; }
     }
-    const newX = player.x + dx * player.speed * sticky * dt;
-    const newY = player.y + dy * player.speed * sticky * dt;
+    // gecko skin armor makes you scurry — 15% faster, gecko style
+    const zoom = hasGeckoArmor ? 1.15 : 1;
+    const newX = player.x + dx * player.speed * zoom * sticky * dt;
+    const newY = player.y + dy * player.speed * zoom * sticky * dt;
     // try x and y separately so you slide around trees instead of sticking
     if (!blocked(newX, player.y)) player.x = newX;
     if (!blocked(player.x, newY)) player.y = newY;
@@ -1907,7 +1910,12 @@ function update(dt) {
           emeralds.push({ x: b.x + (e - 3) * 15, y: b.y, born: elapsed });
         }
         geckoMan = null;
-        victoryNew = true;
+        victoryNew = !hasGeckoArmor;
+        if (!hasGeckoArmor) {
+          hasGeckoArmor = true;                  // he drops his scales for you
+          localStorage.setItem('explorer_gecko_armor', 'yes');
+        }
+        player.armor = armorMax();               // suit up in fresh gecko skin
         victoryLevel = 7;
         victoryTimer = 6;
         hasBeatGeckoMan = true;
@@ -2301,11 +2309,12 @@ function update(dt) {
 
   if (player.hurtTimer > 0) player.hurtTimer -= dt;
 
-  // INFECTED ARMOR regrows itself: lose a plate, and about 8 seconds
-  // later the infection has knitted a new one. Ew. Also: awesome.
-  if (hasInfectedArmor && player.armor < armorMax() && player.deathTimer <= 0) {
+  // Living armor regrows itself. The infection knits a plate back in
+  // ~8 seconds; gecko skin does it in 6 — geckos regrow their TAILS,
+  // a few scales are nothing.
+  if ((hasInfectedArmor || hasGeckoArmor) && player.armor < armorMax() && player.deathTimer <= 0) {
     armorRegenTimer += dt;
-    if (armorRegenTimer >= 8) {
+    if (armorRegenTimer >= (hasGeckoArmor ? 6 : 8)) {
       armorRegenTimer = 0;
       player.armor += 1;
     }
@@ -3289,7 +3298,7 @@ function drawGame() {
   // purple once the infection has it
   for (let i = 0; i < armorMax(); i++) {
     drawHeart(22 + (player.maxHp + i) * 26, 14, i < player.armor,
-              hasInfectedArmor ? '#a86cf0' : '#b8c4d0');
+              hasGeckoArmor ? '#5fbf5f' : hasInfectedArmor ? '#a86cf0' : '#b8c4d0');
   }
   // emerald counter under the hearts
   ctx.save();
@@ -3376,6 +3385,16 @@ function drawGame() {
       ctx.font = '16px monospace';
       ctx.fillText('Nine eyes closed forever. Probably. Maybe.',
                    canvas.width / 2, canvas.height / 2 + 100);
+    } else if (victoryLevel === 7 && victoryNew) {
+      // his scales, now YOUR armor
+      drawChestplate(canvas.width / 2, canvas.height / 2 + 4, 2.4, 'gecko');
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 22px monospace';
+      ctx.fillText('You found: GECKO SKIN ARMOR', canvas.width / 2, canvas.height / 2 + 62);
+      ctx.fillStyle = '#b8e8b8';
+      ctx.font = '16px monospace';
+      ctx.fillText('5 points, regrows like a gecko tail — and you RUN faster',
+                   canvas.width / 2, canvas.height / 2 + 90);
     } else if (victoryLevel === 7) {
       // Gecko Man's horned silhouette, head bowed
       const vx = canvas.width / 2, vy = canvas.height / 2 + 8;
@@ -3566,13 +3585,15 @@ function drawInventory() {
   ctx.font = '13px monospace';
   ctx.fillText('Emeralds x ' + emeraldCount, ex, startY + slot + 16);
 
-  // SLOT 3: your armor — plate, or the infected upgrade
-  if (hasArmor || hasInfectedArmor) {
+  // SLOT 3: your armor — plate, infected, or gecko skin
+  if (hasArmor || hasInfectedArmor || hasGeckoArmor) {
     const ax = startX + 2 * (slot + gap) + slot / 2;
-    drawChestplate(ax, startY + slot / 2, 1.6, hasInfectedArmor);
+    drawChestplate(ax, startY + slot / 2, 1.6,
+                   hasGeckoArmor ? 'gecko' : hasInfectedArmor ? 'infected' : 'plate');
     ctx.fillStyle = '#cdd6f4';
     ctx.font = '13px monospace';
-    ctx.fillText(hasInfectedArmor ? 'Infected Armor' : 'Plate Armor', ax, startY + slot + 16);
+    ctx.fillText(hasGeckoArmor ? 'Gecko Skin Armor'
+               : hasInfectedArmor ? 'Infected Armor' : 'Plate Armor', ax, startY + slot + 16);
   }
 
   // SLOT 4: CHIPPY! (he insisted on a corner slot with a view)
@@ -3636,11 +3657,22 @@ function drawPlayer(cam) {
   ctx.ellipse(x, y + 8, 12, 5, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // body — regular shirt, gleaming plate armor... or the INFECTED armor,
-  // dark and veined with purple glow
-  ctx.fillStyle = hasInfectedArmor ? '#3a3345' : hasArmor ? '#b8c4d0' : '#c98a3d';
+  // body — regular shirt, plate armor, infected armor... or GECKO SKIN,
+  // green and scaly with a tiny tail (yes, really)
+  ctx.fillStyle = hasGeckoArmor ? '#3f8a3f'
+                : hasInfectedArmor ? '#3a3345'
+                : hasArmor ? '#b8c4d0' : '#c98a3d';
   ctx.fillRect(x - 8, y - 14 - bob, 16, 16);
-  if (hasInfectedArmor) {
+  if (hasGeckoArmor) {
+    ctx.fillStyle = '#8fce8f';                 // pale gecko belly stripe
+    ctx.fillRect(x - 3, y - 14 - bob, 6, 16);
+    ctx.fillStyle = '#2f6a2f';                 // scales
+    ctx.fillRect(x - 7, y - 11 - bob, 2, 2);
+    ctx.fillRect(x + 5, y - 8 - bob, 2, 2);
+    ctx.fillRect(x - 6, y - 4 - bob, 2, 2);
+    ctx.fillStyle = '#3f8a3f';                 // the tiny tail
+    ctx.fillRect(x - 13 * player.facing - 3, y - 4 - bob, 7, 3);
+  } else if (hasInfectedArmor) {
     ctx.fillStyle = '#7c5cc9';                 // glowing shoulder plate
     ctx.fillRect(x - 8, y - 14 - bob, 16, 3);
     ctx.fillStyle = '#b06cff';                 // the infection's veins
@@ -4054,21 +4086,29 @@ function drawTorch(t, cam) {
 // ---------------------------------------------------------------------
 // A blocky chestplate (for the victory screen and the inventory)
 // ---------------------------------------------------------------------
-function drawChestplate(cx, cy, s, infected = false) {
+function drawChestplate(cx, cy, s, kind = 'plate') {
+  const gecko = kind === 'gecko';
+  const infected = kind === true || kind === 'infected';
   ctx.save();
   ctx.translate(cx, cy);
   ctx.scale(s, s);
-  ctx.fillStyle = infected ? '#3a3345' : '#b8c4d0';
+  ctx.fillStyle = gecko ? '#3f8a3f' : infected ? '#3a3345' : '#b8c4d0';
   ctx.fillRect(-12, -10, 24, 20);    // chest
   ctx.fillRect(-16, -10, 4, 8);      // left shoulder
   ctx.fillRect(12, -10, 4, 8);       // right shoulder
-  ctx.fillStyle = infected ? '#7c5cc9' : '#dde6ee';
+  ctx.fillStyle = gecko ? '#8fce8f' : infected ? '#7c5cc9' : '#dde6ee';
   ctx.fillRect(-12, -10, 24, 4);     // shine across the top
-  ctx.fillStyle = infected ? '#b06cff' : '#8b98a8';
+  ctx.fillStyle = gecko ? '#2f6a2f' : infected ? '#b06cff' : '#8b98a8';
   ctx.fillRect(-2, -6, 4, 14);       // ridge down the middle
   if (infected) {
     ctx.fillRect(-9, -4, 2, 6);      // extra glowing veins
     ctx.fillRect(6, -2, 2, 6);
+  }
+  if (gecko) {                       // little scales
+    ctx.fillRect(-9, -4, 3, 3);
+    ctx.fillRect(6, -2, 3, 3);
+    ctx.fillRect(-8, 4, 3, 3);
+    ctx.fillRect(5, 5, 3, 3);
   }
   ctx.restore();
 }
