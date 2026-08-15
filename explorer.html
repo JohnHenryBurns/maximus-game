@@ -259,7 +259,7 @@ function buildTemple(lv) {
       if (noise(n * 7.3) < 0.3) continue;             // this one fell down long ago
       const x = gx + (noise(n * 3.1) - 0.5) * 50;
       const y = gy + (noise(n * 5.7) - 0.5) * 50;
-      if (distToPath(x, y, TEMPLE_PATH) < 95) continue;
+      if (distToPath(x, y, TEMPLE_PATH) < 170) continue;   // clear of the trail AND the wall band
       if (Math.hypot(x - altar.x, y - altar.y) < 140) continue;
       if (Math.hypot(x - lv.start.x, y - lv.start.y) < 110) continue;
       if (((x - 480) / 200) ** 2 + ((y - 520) / 150) ** 2 < 1) continue;   // lava zone
@@ -280,20 +280,19 @@ function buildTemple(lv) {
   // drop a sandstone block every few steps, one on each side. "Perpendicular"
   // means "sideways from the direction you're walking" — that's how we
   // know where "each side" even is.
-  // blocks every 38 steps, both sides, no gaps — this corridor is SEALED
-  for (let i = 0; i < TEMPLE_PATH.length - 1; i++) {
-    const a = TEMPLE_PATH[i], b = TEMPLE_PATH[i + 1];
-    const segLen = Math.hypot(b.x - a.x, b.y - a.y);
-    const ux = (b.x - a.x) / segLen, uy = (b.y - a.y) / segLen;   // walking direction
-    for (let d = 0; d <= segLen; d += 38) {
-      for (const side of [-1, 1]) {
-        const wx = a.x + ux * d + (-uy) * 105 * side;   // sideways from the path
-        const wy = a.y + uy * d + ux * 105 * side;
-        if (Math.hypot(wx - altar.x, wy - altar.y) < 150) continue;   // chamber has its own walls
-        // where two path pieces meet, don't stack blocks on top of each other
-        if (trees.some(t => t.wall && Math.hypot(t.x - wx, t.y - wy) < 26)) continue;
-        trees.push({ x: wx, y: wy, size: 1, wall: true });
-      }
+  // We check EVERY spot in the world and ask: "are you 100-140 steps from
+  // the trail?" If yes → wall block. That paints a solid band of wall that
+  // hugs every bend of the path — no corner gaps to slip through.
+  for (let gx = 40; gx < lv.worldW - 40; gx += 34) {
+    for (let gy = 40; gy < lv.worldH - 40; gy += 34) {
+      const d = distToPath(gx, gy, TEMPLE_PATH);
+      if (d < 100 || d > 140) continue;
+      if (Math.hypot(gx - altar.x, gy - altar.y) < 165) continue;   // chamber has its own walls
+      trees.push({
+        x: gx + (noise(gx * 1.3 + gy) - 0.5) * 8,   // tiny wobble so the wall
+        y: gy + (noise(gy * 2.7 + gx) - 0.5) * 8,   // doesn't look machine-made
+        size: 1, wall: true,
+      });
     }
   }
   // seal the corridor BEHIND the entrance too — "back" is never a way out
