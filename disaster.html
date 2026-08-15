@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Amos's Disaster Builder</title>
+<style>
+  html, body { margin: 0; background: #1a2530; height: 100%; overflow: hidden; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+// =====================================================================
+// AMOS'S DISASTER BUILDER
+//
+// Two great joys of being human:
+//   1. building a beautiful town
+//   2. pressing the button that summons a tornado to eat it
+// This game has both.
+// =====================================================================
+
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+function fitCanvas() {
+  canvas.width = innerWidth;
+  canvas.height = innerHeight;
+}
+fitCanvas();
+addEventListener('resize', fitCanvas);
+
+// ---------------------------------------------------------------------
+// THE WORLD — a grid of cells, like graph paper. Every cell holds one
+// thing: nothing (0), a house (1), a tree (2), or a stone block (3).
+// ---------------------------------------------------------------------
+const COLS = 44, ROWS = 26;
+let cell = 34;                      // pixel size of one grid square
+const TOPBAR = 64;                  // room at the top for the buttons
+
+// make the grid: ROWS rows, each row is COLS zeros (all empty land)
+const grid = [];
+for (let y = 0; y < ROWS; y++) grid.push(new Array(COLS).fill(0));
+
+const EMPTY = 0, HOUSE = 1, TREE = 2, STONE = 3;
+
+// what's selected in the palette right now
+let selected = HOUSE;
+
+// scoreboard of destruction
+let destroyed = 0;
+
+// ---------------------------------------------------------------------
+// THE TORNADO — when it exists, it wanders the town eating blocks.
+// null means the skies are calm. For now.
+// ---------------------------------------------------------------------
+let tornado = null;
+let debris = [];                    // flying bits of what used to be a town
+let shake = 0;                      // screen trembles while disaster reigns
+let elapsed = 0;
+
+function summonTornado() {
+  if (tornado) return;              // one apocalypse at a time, please
+  tornado = {
+    x: -60,                                        // enters from the left edge
+    y: TOPBAR + Math.random() * (canvas.height - TOPBAR),
+    life: 12,                                      // seconds of chaos
+    wobble: Math.random() * 6.28,
+  };
+}
+
+// ---------------------------------------------------------------------
+// PLACING BLOCKS — turn a screen position into a grid square
+// ---------------------------------------------------------------------
+function cellSize() {
+  // the grid stretches to fit whatever screen we're on
+  return Math.min(canvas.width / COLS, (canvas.height - TOPBAR) / ROWS);
+}
+
+function placeAt(px, py) {
+  const s = cellSize();
+  const gx = Math.floor(px / s);
+  const gy = Math.floor((py - TOPBAR) / s);
+  if (gx < 0 || gy < 0 || gx >= COLS || gy >= ROWS) return;
+  grid[gy][gx] = selected;          // EMPTY works as the eraser
+}
+
+// ---------------------------------------------------------------------
+// THE BUTTONS along the top (palette + THE MACHINE)
+// ---------------------------------------------------------------------
+const buttons = [
+  { label: '🏠 House', type: HOUSE },
+  { label: '🌳 Tree',  type: TREE },
+  { label: '🪨 Stone', type: STONE },
+  { label: '❌ Erase', type: EMPTY },
+  { label: '🌪 THE MACHINE', machine: true },
+];
+
+function buttonRects() {
+  // lay the buttons out across the top bar, machine pushed to the right
+  const rects = [];
+  let x = 10;
+  for (const b of buttons) {
+    const w = b.machine ? 220 : 110;
+    const bx = b.machine ? canvas.width - w - 10 : x;
+    rects.push({ ...b, x: bx, y: 10, w, h: TOPBAR - 20 });
+    if (!b.machine) x += w + 8;
+  }
+  return rects;
+}
+
+function pressAt(px, py) {
+  if (py > TOPBAR) return false;    // not on the bar
+  for (const r of buttonRects()) {
+    if (px > r.x && px < r.x + r.w && py > r.y && py < r.y + r.h) {
+      if (r.machine) summonTornado();
+      else selected = r.type;
+      return true;
+    }
+  }
+  return true;                      // clicked the bar but no button — do nothing
+}
+
+// ---------------------------------------------------------------------
+// INPUT — mouse and touch both paint blocks while held down
+// ---------------------------------------------------------------------
+let painting = false;
+addEventListener('mousedown', e => {
+  if (!pressAt(e.clientX, e.clientY)) { painting = true; placeAt(e.clientX, e.clientY); }
+});
+addEventListener('mousemove', e => { if (painting) placeAt(e.clientX, e.clientY); });
+addEventListener('mouseup', () => { painting = false; });
+
+addEventListener('touchstart', e => {
+  e.preventDefault();
+  const t = e.changedTouches[0];
+  if (!pressAt(t.clientX, t.clientY)) { painting = true; placeAt(t.clientX, t.clientY); }
+}, { passive: false });
+addEventListener('touchmove', e => {
+  e.preventDefault();
+  const t = e.changedTouches[0];
+  if (painting) placeAt(t.clientX, t.clientY);
+}, { passive: false });
+addEventListener('touchend', () => { painting = false; });
+
+// number keys pick from the palette too
+addEventListener('keydown', e => {
+  if (e.key === '1') selected = HOUSE;
+  if (e.key === '2') selected = TREE;
+  if (e.key === '3') selected = STONE;
+  if (e.key === '4') selected = EMPTY;
+  if (e.key.toLowerCase() === 'd') summonTornado();   // D for DISASTER
+});
+
+// ---------------------------------------------------------------------
+// UPDATE — the tornado wanders and EATS
+// ---------------------------------------------------------------------
+let lastTime = 0;
+function update(dt) {
+  elapsed += dt;
+  if (shake > 0) shake -= dt;
+
+  if (tornado) {
+    const t = tornado;
+    t.life -= dt;
+    // it drifts rightward while weaving up and down like it's dancing
+    t.wobble += dt * 1.7;
+    t.x += 95 * dt;
+    t.y += Math.sin(t.wobble) * 130 * dt;
+    t.y = Math.max(TOPBAR + 40, Math.min(canvas.height - 40, t.y));
+    shake = 0.2;
+
+    // any block near the funnel gets RIPPED UP and flung
+    const s = cellSize();
+    for (let gy = 0; gy < ROWS; gy++) {
+      for (let gx = 0; gx < COLS; gx++) {
+        if (grid[gy][gx] === EMPTY) continue;
+        const bx = gx * s + s / 2, by = TOPBAR + gy * s + s / 2;
+        if (Math.hypot(bx - t.x, by - t.y) < 70) {
+          const kind = grid[gy][gx];
+          grid[gy][gx] = EMPTY;
+          destroyed++;
+          for (let i = 0; i < 6; i++) {
+            debris.push({
+              x: bx, y: by,
+              vx: (Math.random() - 0.5) * 500,
+              vy: -Math.random() * 500 - 100,
+              spin: Math.random() * 10,
+              life: 1.2,
+              color: kind === TREE ? '#3f8a3f' : kind === STONE ? '#8a8d94' : '#b5563c',
+            });
+          }
+        }
+      }
+    }
+
+    if (t.life <= 0 || t.x > canvas.width + 80) tornado = null;   // calm returns
+  }
+
+  // debris tumbles through the air and fades
+  for (const d of debris) {
+    d.x += d.vx * dt;
+    d.y += d.vy * dt;
+    d.vy += 700 * dt;               // gravity brings it all back down
+    d.spin += dt * 10;
+    d.life -= dt;
+  }
+  debris = debris.filter(d => d.life > 0);
+}
+
+// ---------------------------------------------------------------------
+// DRAWING
+// ---------------------------------------------------------------------
+function draw() {
+  const shx = shake > 0 ? (Math.random() - 0.5) * 10 : 0;
+  const shy = shake > 0 ? (Math.random() - 0.5) * 10 : 0;
+  ctx.save();
+  ctx.translate(shx, shy);
+
+  // grass everywhere
+  ctx.fillStyle = '#4a7c3a';
+  ctx.fillRect(0, TOPBAR, canvas.width, canvas.height - TOPBAR);
+
+  const s = cellSize();
+
+  // faint grid lines so builders can aim
+  ctx.strokeStyle = 'rgba(0,0,0,0.08)';
+  ctx.lineWidth = 1;
+  for (let gx = 0; gx <= COLS; gx++) {
+    ctx.beginPath();
+    ctx.moveTo(gx * s, TOPBAR);
+    ctx.lineTo(gx * s, TOPBAR + ROWS * s);
+    ctx.stroke();
+  }
+  for (let gy = 0; gy <= ROWS; gy++) {
+    ctx.beginPath();
+    ctx.moveTo(0, TOPBAR + gy * s);
+    ctx.lineTo(COLS * s, TOPBAR + gy * s);
+    ctx.stroke();
+  }
+
+  // the blocks of the town
+  for (let gy = 0; gy < ROWS; gy++) {
+    for (let gx = 0; gx < COLS; gx++) {
+      const kind = grid[gy][gx];
+      if (kind === EMPTY) continue;
+      const x = gx * s, y = TOPBAR + gy * s;
+      if (kind === HOUSE) {
+        ctx.fillStyle = '#c9a06a';                      // walls
+        ctx.fillRect(x + s * 0.15, y + s * 0.4, s * 0.7, s * 0.5);
+        ctx.fillStyle = '#b5563c';                      // roof
+        ctx.beginPath();
+        ctx.moveTo(x + s * 0.08, y + s * 0.45);
+        ctx.lineTo(x + s * 0.5, y + s * 0.08);
+        ctx.lineTo(x + s * 0.92, y + s * 0.45);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = '#5b3b1e';                      // door
+        ctx.fillRect(x + s * 0.42, y + s * 0.62, s * 0.16, s * 0.28);
+      } else if (kind === TREE) {
+        ctx.fillStyle = '#6d5330';                      // trunk
+        ctx.fillRect(x + s * 0.42, y + s * 0.55, s * 0.16, s * 0.35);
+        ctx.fillStyle = '#3f8a3f';                      // leaves
+        ctx.beginPath();
+        ctx.arc(x + s * 0.5, y + s * 0.38, s * 0.32, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (kind === STONE) {
+        ctx.fillStyle = '#8a8d94';
+        ctx.fillRect(x + s * 0.08, y + s * 0.12, s * 0.84, s * 0.8);
+        ctx.fillStyle = '#a7aab2';
+        ctx.fillRect(x + s * 0.08, y + s * 0.12, s * 0.84, s * 0.2);
+      }
+    }
+  }
+
+  // flying debris (the fun part)
+  for (const d of debris) {
+    ctx.save();
+    ctx.translate(d.x, d.y);
+    ctx.rotate(d.spin);
+    ctx.globalAlpha = Math.max(0, d.life / 1.2);
+    ctx.fillStyle = d.color;
+    ctx.fillRect(-6, -6, 12, 12);
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+
+  // THE TORNADO — a stack of spinning gray rings, wide up top,
+  // narrow at the ground, always twisting
+  if (tornado) {
+    const t = tornado;
+    for (let ring = 0; ring < 7; ring++) {
+      const ry = t.y - ring * 22;
+      const rw = 14 + ring * 11 + Math.sin(elapsed * 9 + ring) * 5;
+      ctx.fillStyle = `rgba(180, 185, 195, ${0.5 - ring * 0.04})`;
+      ctx.beginPath();
+      ctx.ellipse(t.x + Math.sin(elapsed * 7 + ring * 1.3) * 7, ry, rw, 11, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  ctx.restore();   // stop shaking for the buttons — the UI stays calm
+
+  // the top bar
+  ctx.fillStyle = '#10161d';
+  ctx.fillRect(0, 0, canvas.width, TOPBAR);
+  for (const r of buttonRects()) {
+    const active = !r.machine && selected === r.type;
+    ctx.fillStyle = r.machine ? '#7a1f2b' : active ? '#3d6b30' : '#26303b';
+    ctx.fillRect(r.x, r.y, r.w, r.h);
+    ctx.strokeStyle = r.machine ? '#ff6b5e' : active ? '#7ddf8f' : '#3a4654';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(r.x, r.y, r.w, r.h);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `bold ${r.machine ? 18 : 15}px monospace`;
+    ctx.textAlign = 'center';
+    ctx.fillText(r.label, r.x + r.w / 2, r.y + r.h / 2 + 6);
+  }
+
+  // the destruction scoreboard
+  if (destroyed > 0) {
+    ctx.fillStyle = '#ff9f43';
+    ctx.font = 'bold 14px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(`blocks destroyed: ${destroyed}`, canvas.width / 2, TOPBAR + 22);
+  }
+}
+
+// ---------------------------------------------------------------------
+// THE GAME LOOP
+// ---------------------------------------------------------------------
+function loop(time) {
+  const dt = Math.min(0.05, (time - lastTime) / 1000);
+  lastTime = time;
+  update(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
