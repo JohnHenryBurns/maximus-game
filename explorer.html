@@ -87,7 +87,7 @@ const LEVELS = [
     worldH: 2600,
     start: { x: 1300, y: 2500 }, // the temple entrance, at the bottom
   },
-  { name: '???', unlocked: false },
+  { name: 'The Abandoned Castle', unlocked: false },   // Level 3 — Max named it, still being designed!
 ];
 // if you earned the armor on a past visit, the temple is already open
 LEVELS[1].unlocked = hasArmor;
@@ -384,8 +384,9 @@ function buildTemple(lv) {
   }
 
   zombies = [];
-  // SAND ZOMBIES — buried under the walkway, waiting for footsteps.
-  // All you'll see is a lump in the sand. Until it's too late.
+  // SAND ZOMBIES — desert-colored and extra tough, patrolling the
+  // walkway right out in the open. (They used to hide buried in the
+  // sand — flip buried to true to bring the ambushes back!)
   for (let i = 0; i < 500 && zombies.length < 8; i++) {
     const x = noise(i * 43.7 + 6) * lv.worldW;
     const y = noise(i * 29.3 + 6) * lv.worldH;
@@ -396,7 +397,7 @@ function buildTemple(lv) {
       x, y,
       zombie: true,
       sand: true,           // sandy colors, tougher
-      buried: true,         // hiding under the trail!
+      buried: false,        // walking in plain sight — no surprise attacks
       hp: 3,                // three bonks — they're packed with sand
       wanderAngle: noise(i) * 6.28,
       lastHitSwing: 0,
@@ -499,8 +500,7 @@ addEventListener('keydown', e => {
     if (n >= 0 && n < LEVELS.length) {
       if (LEVELS[n].unlocked) startLevel(n);
       else {
-        lockedText = n === 1 ? 'Beat Level 1 to open the Creeper Temple!'
-                             : "You haven't invented that level yet!";
+        lockedText = lockedMessageFor(n);
         lockedMessageTimer = 2;
       }
     }
@@ -1699,6 +1699,7 @@ function drawMenu() {
     ctx.font = `${ch * 0.11}px monospace`;
     ctx.fillText(lv.unlocked ? `press ${i + 1} or tap`
                : i === 1 ? 'beat Level 1 first'
+               : i === 2 ? 'beat Level 2 first'
                : 'locked', cx + cw / 2, cy + ch * 0.85);
   }
 
@@ -1709,14 +1710,22 @@ function drawMenu() {
   }
 }
 
+// the right "no you can't" message for each locked level
+function lockedMessageFor(i) {
+  if (i === 1) return 'Beat Level 1 to open the Creeper Temple!';
+  if (i === 2) return hasGoldSword
+    ? 'The Abandoned Castle is still being built — tell me what goes inside!'
+    : 'Beat Level 2 to reach the Abandoned Castle!';
+  return "You haven't invented that level yet!";
+}
+
 function tryPickLevel(px, py) {
   for (let i = 0; i < cards.length; i++) {
     const c = cards[i];
     if (px > c.x && px < c.x + c.w && py > c.y && py < c.y + c.h) {
       if (LEVELS[i].unlocked) startLevel(i);
       else {
-        lockedText = i === 1 ? 'Beat Level 1 to open the Creeper Temple!'
-                             : "You haven't invented that level yet!";
+        lockedText = lockedMessageFor(i);
         lockedMessageTimer = 2;
       }
     }
