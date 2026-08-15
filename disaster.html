@@ -48,8 +48,12 @@ addEventListener('resize', fitCanvas);
 // ---------------------------------------------------------------------
 // THE WORLD — a grid of cells, like graph paper. Every cell holds one
 // thing: nothing (0), a house (1), a tree (2), or a stone block (3).
+//
+// The grid is TALL (20 wide, 40 high) — a 1:2 shape that fills a phone held
+// upright almost perfectly, so the whole town shows at once with no wasted
+// space. Zoom in to build the little details.
 // ---------------------------------------------------------------------
-const COLS = 44, ROWS = 26;
+const COLS = 20, ROWS = 40;
 let cell = 34;                      // pixel size of one grid square
 // Room at the top for the toolbar. It's two tiers now (money + THE MACHINE
 // on top, the build palette in a full-width row below) so everything fits on
@@ -87,8 +91,8 @@ let peopleLaunched = 0;
 function spawnPeople() {
   for (let i = 0; i < 5 && people.length < 40; i++) {
     people.push({
-      x: 30 + Math.random() * (canvas.width - 60),
-      y: TOPBAR + 30 + Math.random() * (canvas.height - TOPBAR - 90),
+      x: 10 + Math.random() * (gridW() - 20),
+      y: TOPBAR + 10 + Math.random() * (gridH() - 20),
       angle: Math.random() * 6.28,
       walk: Math.random() * 6.28,
       shirt: ['#e74c3c', '#3498db', '#f1c40f', '#9b59b6', '#2ecc71', '#e67e22'][Math.floor(Math.random() * 6)],
@@ -166,14 +170,14 @@ function buzz(type) {
 function beginDisaster(type) {
   if (disasters.length >= 8) return;   // even chaos has a fire code
   if (type === 'tornado') {
-    disasters.push({ type, x: -60, y: TOPBAR + Math.random() * (canvas.height - TOPBAR),
+    disasters.push({ type, x: -60, y: TOPBAR + Math.random() * gridH(),
                      life: 12, wobble: Math.random() * 6.28 });
   } else if (type === 'meteors') {
     disasters.push({ type, life: 8, spawnTimer: 0, meteors: [] });
   } else if (type === 'quake') {
     disasters.push({ type, life: 6, seed: Math.random() * 100 });
   } else if (type === 'flood') {
-    disasters.push({ type, life: 10, waterY: canvas.height + 50 });
+    disasters.push({ type, life: 10, waterY: TOPBAR + gridH() + 50 });
   } else if (type === 'balls') {
     // 10 rubber balls, dropped from above, each with its own direction
     const balls = [];
@@ -181,7 +185,7 @@ function beginDisaster(type) {
                     '#eccc68', '#7bed9f', '#70a1ff', '#ff7f50', '#a29bfe'];
     for (let i = 0; i < 10; i++) {
       balls.push({
-        x: 60 + Math.random() * (canvas.width - 120),
+        x: 10 + Math.random() * (gridW() - 20),
         y: TOPBAR - 40 - Math.random() * 250,        // starting up in the sky
         vx: (Math.random() < 0.5 ? -1 : 1) * (220 + Math.random() * 220),
         vy: 250 + Math.random() * 200,
@@ -219,6 +223,10 @@ function cellSize() {
   // the grid stretches to fit whatever screen we're on
   return Math.min(canvas.width / COLS, (canvas.height - TOPBAR) / ROWS);
 }
+// the town's size in pixels (the grass rectangle). The world outside this is fog.
+function gridW() { return COLS * cellSize(); }
+function gridH() { return ROWS * cellSize(); }
+const FOG_PEEK = 70;                 // how far past the town edge you may pan into the fog
 
 // The camera slides and scales what we DRAW, so a finger tap on the glass
 // isn't the same spot in the town anymore. screenToWorld undoes the camera:
@@ -230,16 +238,22 @@ function screenToWorld(sx, sy) {
   };
 }
 
-// Keep the view glued to the town: never let a background gap show at the
-// edges. The more we're zoomed in, the further we're allowed to slide.
+// Keep the view sensible: if the whole town fits on screen, center it; if
+// it's bigger than the screen (zoomed in), let it slide — but only a little
+// way past the town edge, so you can peek into the fog without getting lost
+// in it. FOG_PEEK is how far past the edge you're allowed to go.
 function clampPan() {
   const PW = canvas.width, PH = canvas.height - TOPBAR;
-  panX = Math.min(0, Math.max(-(zoom - 1) * PW, panX));
-  panY = Math.min(0, Math.max(-(zoom - 1) * PH, panY));
+  const gw = gridW() * zoom, gh = gridH() * zoom;   // town size on screen right now
+  panX = gw <= PW ? (PW - gw) / 2
+                  : Math.min(FOG_PEEK, Math.max(PW - gw - FOG_PEEK, panX));
+  panY = gh <= PH ? (PH - gh) / 2
+                  : Math.min(FOG_PEEK, Math.max(PH - gh - FOG_PEEK, panY));
 }
 // after the window resizes (fitCanvas already ran), tidy the view back onto
 // the town so a rotate or resize can't leave a gap at the edge
 addEventListener('resize', clampPan);
+clampPan();   // center the town on first load
 
 // Change the zoom while keeping one spot of the town pinned under a finger
 // (or the mouse). worldPt is that spot; (sx, sy) is where it should stay on
@@ -306,6 +320,10 @@ function rrect(x, y, w, h, r) {
   ctx.closePath();
 }
 
+// a steady pseudo-random 0..1 from a number — same input, same output every
+// frame, so things placed with it (like fog clouds) hold still instead of flickering
+function hash(n) { const v = Math.sin(n * 127.1) * 43758.5453; return v - Math.floor(v); }
+
 // the emoji of whatever build item is currently picked
 function iconFor(type) {
   const b = buttons.find(b => b.type === type);
@@ -322,10 +340,12 @@ function setPanMode() {
   setStatus('✋ Pan mode — drag to move, pinch/scroll to zoom', '#7dd3ff');
 }
 
-// ROW 1 (top): the gold money chip, sitting right of the ← Arcade pill.
+// ROW 1 (top): the gold money chip, pinned to the RIGHT edge (the ← Arcade
+// pill sits on the left, so the money gets the opposite corner).
 function moneyChipRect() {
   const narrow = canvas.width < 480;
-  return { x: 104, y: 10, w: narrow ? 96 : 150, h: 28, narrow };
+  const w = narrow ? 96 : 150;
+  return { x: canvas.width - w - 10, y: 10, w, h: 28, narrow };
 }
 
 // ROW 2 (below): the three big buttons, spread across the FULL width so their
@@ -558,7 +578,7 @@ function update(dt) {
       } else {
         D.x += 150 * dt;   // no houses left — it spins away, satisfied
       }
-      D.y = Math.max(TOPBAR + 40, Math.min(canvas.height - 40, D.y));
+      D.y = Math.max(TOPBAR + 40, Math.min(TOPBAR + ROWS * s - 40, D.y));
       shake = 0.2;
       // it ONLY eats housing (houses AND apartments) — trees and stone
       // just get a wild hairdo
@@ -569,7 +589,7 @@ function update(dt) {
           if (Math.hypot(bx - D.x, by - D.y) < 70) smashBlock(gx, gy, bx, by);
         }
       }
-      if (D.life <= 0 || D.x > canvas.width + 80) D.done = true;
+      if (D.life <= 0 || D.x > COLS * s + 80) D.done = true;
     }
 
     if (D.type === 'meteors') {
@@ -577,11 +597,12 @@ function update(dt) {
       D.spawnTimer -= dt;
       if (D.spawnTimer <= 0) {
         D.spawnTimer = 0.45;                    // a new fireball every half second
-        D.meteors.push({
-          x: Math.random() * canvas.width + 120,
-          y: TOPBAR - 60,
-          ty: TOPBAR + 40 + Math.random() * (ROWS * s - 80),
-        });
+        // aim each fireball to land ON the town: pick a landing spot, then
+        // start it up-and-to-the-right so its slanted fall arrives there
+        const lx = Math.random() * (COLS * s);
+        const ty = TOPBAR + 40 + Math.random() * (ROWS * s - 80);
+        const fall = (ty - (TOPBAR - 60)) / 620;   // seconds it takes to fall
+        D.meteors.push({ x: lx + 260 * fall, y: TOPBAR - 60, ty });
       }
       for (const m of D.meteors) {
         m.x -= 260 * dt;                        // falling at a slant
@@ -646,7 +667,7 @@ function update(dt) {
       if (t2 < 4) frac = t2 / 4;
       else if (t2 < 6) frac = 1;
       else frac = Math.max(0, 1 - (t2 - 6) / 4);
-      D.waterY = canvas.height - frac * (canvas.height - TOPBAR) * 0.65;
+      D.waterY = (TOPBAR + ROWS * s) - frac * (ROWS * s) * 0.72;
       // anything underwater washes away... except STONE. stone doesn't care.
       for (let gy = 0; gy < ROWS; gy++) {
         for (let gx = 0; gx < COLS; gx++) {
@@ -666,9 +687,9 @@ function update(dt) {
         ball.y += ball.vy * dt;
         // BOING — bounce off every edge of the world
         if (ball.x < 16) { ball.x = 16; ball.vx = Math.abs(ball.vx); }
-        if (ball.x > canvas.width - 16) { ball.x = canvas.width - 16; ball.vx = -Math.abs(ball.vx); }
+        if (ball.x > COLS * s - 16) { ball.x = COLS * s - 16; ball.vx = -Math.abs(ball.vx); }
         if (ball.y < TOPBAR + 16) { ball.y = TOPBAR + 16; ball.vy = Math.abs(ball.vy); }
-        if (ball.y > canvas.height - 16) { ball.y = canvas.height - 16; ball.vy = -Math.abs(ball.vy); }
+        if (ball.y > TOPBAR + ROWS * s - 16) { ball.y = TOPBAR + ROWS * s - 16; ball.vy = -Math.abs(ball.vy); }
         // anything a ball touches gets bounced INTO OBLIVION (except bunkers)
         for (let gy = 0; gy < ROWS; gy++) {
           for (let gx = 0; gx < COLS; gx++) {
@@ -788,8 +809,8 @@ function update(dt) {
     const speed = panicking ? 150 : 30;
     p.x += Math.cos(p.angle) * speed * dt;
     p.y += Math.sin(p.angle) * speed * dt;
-    p.x = Math.max(14, Math.min(canvas.width - 14, p.x));
-    p.y = Math.max(TOPBAR + 14, Math.min(canvas.height - 14, p.y));
+    p.x = Math.max(14, Math.min(COLS * cs - 14, p.x));
+    p.y = Math.max(TOPBAR + 14, Math.min(TOPBAR + ROWS * cs - 14, p.y));
 
     // did something GET them on the way?
     let hit = false;
@@ -848,13 +869,37 @@ function draw() {
   ctx.beginPath();
   ctx.rect(0, TOPBAR, canvas.width, canvas.height - TOPBAR);
   ctx.clip();
+
+  // FOG OF WAR — a misty slate fills the whole play area behind everything.
+  // The green town gets drawn on top, so fog shows around the town's edges
+  // (and a little more as you pan past them). Drawn in SCREEN space, before
+  // the camera transform, so it's a steady backdrop the town floats over.
+  ctx.fillStyle = '#2b333d';
+  ctx.fillRect(0, TOPBAR, canvas.width, canvas.height - TOPBAR);
+  for (let i = 0; i < 12; i++) {                 // soft cloud blobs for a foggy look
+    const cxF = hash(i * 1.3) * canvas.width;
+    const cyF = TOPBAR + hash(i * 2.7) * (canvas.height - TOPBAR);
+    const rF = 50 + hash(i * 3.9) * 80;
+    ctx.fillStyle = `rgba(210, 220, 235, ${0.04 + hash(i * 5.1) * 0.05})`;
+    ctx.beginPath();
+    ctx.ellipse(cxF, cyF, rF, rF * 0.6, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
   ctx.translate(panX, TOPBAR + panY);
   ctx.scale(zoom, zoom);
   ctx.translate(0, -TOPBAR);
 
-  // grass everywhere
+  // the town's grass — ONLY the grid area now (the rest stays fog), with a
+  // dark earth border and a bright rim so the town has clear, crisp edges.
+  const gw = gridW(), gh = gridH();
+  ctx.fillStyle = '#243318';
+  ctx.fillRect(-6, TOPBAR - 6, gw + 12, gh + 12);
   ctx.fillStyle = '#4a7c3a';
-  ctx.fillRect(0, TOPBAR, canvas.width, canvas.height - TOPBAR);
+  ctx.fillRect(0, TOPBAR, gw, gh);
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.14)';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(1, TOPBAR + 1, gw - 2, gh - 2);
 
   // meteor craters, scarred into the lawn forever
   for (const c of craters) {
@@ -1047,8 +1092,8 @@ function draw() {
       ctx.strokeStyle = 'rgba(20, 14, 8, 0.6)';
       ctx.lineWidth = 4;
       for (let c = 0; c < 6; c++) {
-        let cx2 = rnd(c * 3.3) * canvas.width;
-        let cy2 = TOPBAR + rnd(c * 7.7) * (canvas.height - TOPBAR) * 0.3;
+        let cx2 = rnd(c * 3.3) * gridW();
+        let cy2 = TOPBAR + rnd(c * 7.7) * gridH() * 0.3;
         ctx.beginPath();
         ctx.moveTo(cx2, cy2);
         for (let seg = 0; seg < 8; seg++) {
@@ -1061,21 +1106,22 @@ function draw() {
     }
 
     if (D.type === 'flood') {
-      // the rising water, with a wavy crest
+      // the rising water, with a wavy crest — only over the town
+      const fw = gridW(), fb = TOPBAR + gridH();
       ctx.fillStyle = 'rgba(60, 130, 200, 0.55)';
       ctx.beginPath();
       ctx.moveTo(0, D.waterY);
-      for (let wx2 = 0; wx2 <= canvas.width; wx2 += 30) {
+      for (let wx2 = 0; wx2 <= fw; wx2 += 30) {
         ctx.lineTo(wx2, D.waterY + Math.sin(elapsed * 3 + wx2 * 0.02) * 6);
       }
-      ctx.lineTo(canvas.width, canvas.height);
-      ctx.lineTo(0, canvas.height);
+      ctx.lineTo(fw, fb);
+      ctx.lineTo(0, fb);
       ctx.closePath();
       ctx.fill();
       ctx.strokeStyle = 'rgba(200, 230, 255, 0.6)';
       ctx.lineWidth = 3;
       ctx.beginPath();
-      for (let wx2 = 0; wx2 <= canvas.width; wx2 += 30) {
+      for (let wx2 = 0; wx2 <= fw; wx2 += 30) {
         const wy2 = D.waterY + Math.sin(elapsed * 3 + wx2 * 0.02) * 6;
         if (wx2 === 0) ctx.moveTo(wx2, wy2); else ctx.lineTo(wx2, wy2);
       }
