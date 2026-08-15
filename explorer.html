@@ -147,6 +147,9 @@ let tiles = [];         // sand + stone paving squares on the temple walkway
 let logs = [];          // fallen logs (Chippy's dimension)
 let webs = [];          // sticky spider webs (Chippy's dimension)
 let geckos = [];        // harmless, dramatic (Chippy's dimension)
+let axeBoss = null;     // Chippy himself. he seems so nice.
+let miniAxes = [];      // his summoned mini axes
+let giantGeckos = [];   // his summoned VERY large geckos
 let emeralds = [];      // dropped treasure waiting to be grabbed
 let particles = [];     // flying bits when a monster goes POOF
 let emeraldCount = 0;   // your treasure so far
@@ -905,7 +908,19 @@ function buildChippy(lv) {
     });
   }
 
-  // no monsters live here. the geckos would like to keep it that way.
+  // no ordinary monsters live here. the only monster in this dimension
+  // is the one smiling at you from the stump...
+  axeBoss = {
+    x: chippyStump.x, y: chippyStump.y - 20,
+    hp: 20,
+    active: false,       // false = still pretending to be nice
+    summonTimer: 3,      // counts down to the next pair of mini axes
+    geckoTimer: 6,       // counts down to the next giant gecko
+    lastHitSwing: 0,
+    hurtFlash: 0,
+  };
+  miniAxes = [];
+  giantGeckos = [];
   pond = { x: -9999, y: -9999, rx: 1, ry: 1, hidden: true };
   stumps = []; scorches = []; tiles = []; torches = [];
   zombies = []; skeletons = []; creepers = [];
@@ -950,6 +965,7 @@ function swingSword() {
 function startLevel(i) {
   current = LEVELS[i];
   logs = []; webs = []; geckos = [];   // only Chippy's dimension refills these
+  axeBoss = null; miniAxes = []; giantGeckos = [];
   if (current.kind === 'chippy') buildChippy(current);
   else if (current.kind === 'temple') buildTemple(current);
   else if (current.kind === 'castle') buildCastle(current);
@@ -1125,6 +1141,160 @@ function update(dt) {
     if (!blocked(nx, g.y, 4)) g.x = nx; else g.angle += 2.5;
     if (!blocked(g.x, ny, 4)) g.y = ny;
   }
+
+  // ---- CHIPPY HIMSELF (he was evil the WHOLE TIME) ----
+  if (axeBoss) {
+    const b = axeBoss;
+    if (b.hurtFlash > 0) b.hurtFlash -= dt;
+    const distToYou = Math.hypot(player.x - b.x, player.y - b.y);
+
+    // the betrayal: get close to the stump and the nice act ENDS
+    if (!b.active && distToYou < 260) b.active = true;
+
+    if (b.active && player.deathTimer <= 0) {
+      // he comes at you flipping end-over-end, in lunges — fast, then
+      // slow, then fast. learn the rhythm and you can dodge him.
+      const lunge = 120 + Math.sin(elapsed * 3) * 90;
+      const bdx = (player.x - b.x) / Math.max(1, distToYou);
+      const bdy = (player.y - b.y) / Math.max(1, distToYou);
+      if (!blocked(b.x + bdx * lunge * dt, b.y, 12)) b.x += bdx * lunge * dt;
+      if (!blocked(b.x, b.y + bdy * lunge * dt, 12)) b.y += bdy * lunge * dt;
+
+      // SUMMON: mini axes, two at a time
+      b.summonTimer -= dt;
+      if (b.summonTimer <= 0) {
+        b.summonTimer = 5;
+        for (let i = 0; i < 2 && miniAxes.length < 6; i++) {
+          miniAxes.push({ x: b.x + (i ? 30 : -30), y: b.y, spin: 0 });
+          for (let p = 0; p < 6; p++) {
+            particles.push({ x: b.x, y: b.y - 10,
+              vx: (noise(p * 3.1 + elapsed) - 0.5) * 200,
+              vy: (noise(p * 7.3 + elapsed) - 0.8) * 180,
+              life: 0.4, color: '#c8ccd4' });
+          }
+        }
+      }
+      // SUMMON: a giant gecko
+      b.geckoTimer -= dt;
+      if (b.geckoTimer <= 0) {
+        b.geckoTimer = 9;
+        if (giantGeckos.length < 3) {
+          giantGeckos.push({
+            x: b.x + (noise(elapsed) - 0.5) * 200,
+            y: b.y + (noise(elapsed * 2.2) - 0.5) * 200,
+            hp: 3, hurtFlash: 0, lastHitSwing: 0,
+            color: ['#5fbf5f', '#e0a23c', '#4cc3c9'][Math.floor(noise(elapsed * 3.3) * 3)],
+          });
+        }
+      }
+
+      // his spinning edge catches you
+      if (distToYou < 34 && player.hurtTimer <= 0) {
+        if (player.armor > 0) player.armor -= 1;
+        else player.hp -= 1;
+        player.hurtTimer = 1;
+        const push = 60 / Math.max(1, distToYou);
+        const nx2 = player.x + (player.x - b.x) * push;
+        const ny2 = player.y + (player.y - b.y) * push;
+        if (!blocked(nx2, player.y)) player.x = nx2;
+        if (!blocked(player.x, ny2)) player.y = ny2;
+        if (player.hp <= 0) player.deathTimer = 2.5;
+      }
+    }
+
+    // bonk the axe with your sword. this game is incredible.
+    if (b.active && player.attackTime > 0 && b.lastHitSwing !== player.swingId &&
+        distToYou < 60 && (b.x - player.x) * player.facing > -8) {
+      b.lastHitSwing = player.swingId;
+      b.hp -= hasChippy ? 3 : hasGoldSword ? 2 : 1;
+      b.hurtFlash = 0.15;
+      const push = 30 / Math.max(1, distToYou);
+      if (!blocked(b.x + (b.x - player.x) * push, b.y, 12)) b.x += (b.x - player.x) * push;
+      if (!blocked(b.x, b.y + (b.y - player.y) * push, 12)) b.y += (b.y - player.y) * push;
+
+      if (b.hp <= 0) {
+        // BEATEN — and he instantly switches sides. classic Chippy.
+        for (let i = 0; i < 30; i++) {
+          particles.push({ x: b.x, y: b.y - 10,
+            vx: (noise(i * 3.3 + elapsed) - 0.5) * 320,
+            vy: (noise(i * 7.7 + elapsed) - 0.9) * 280,
+            life: 0.7, color: i % 2 ? '#c8ccd4' : '#8a6b3f' });
+        }
+        axeBoss = null;
+        miniAxes = [];
+        giantGeckos = [];
+        victoryNew = !hasChippy;
+        if (!hasChippy) {
+          hasChippy = true;
+          localStorage.setItem('explorer_chippy', 'yes');
+        }
+        victoryLevel = 5;
+        victoryTimer = 6;
+      }
+    }
+  }
+
+  // ---- MINI AXES — they fly at you, and splinter when they arrive ----
+  miniAxes = miniAxes.filter(m => {
+    m.spin += dt * 12;
+    const d = Math.hypot(player.x - m.x, player.y - m.y);
+    m.x += (player.x - m.x) / Math.max(1, d) * 150 * dt;
+    m.y += (player.y - m.y) / Math.max(1, d) * 150 * dt;
+
+    // one swat knocks it out of the air
+    if (player.attackTime > 0 && d < 50 && (m.x - player.x) * player.facing > -10) {
+      for (let p = 0; p < 6; p++) {
+        particles.push({ x: m.x, y: m.y,
+          vx: (noise(p * 3.7 + elapsed) - 0.5) * 240,
+          vy: (noise(p * 6.1 + elapsed) - 0.8) * 200,
+          life: 0.4, color: '#c8ccd4' });
+      }
+      return false;
+    }
+    // it reached you — costs a heart, splinters on impact
+    if (d < 20 && player.deathTimer <= 0) {
+      if (player.hurtTimer <= 0) {
+        if (player.armor > 0) player.armor -= 1;
+        else player.hp -= 1;
+        player.hurtTimer = 1;
+        if (player.hp <= 0) player.deathTimer = 2.5;
+      }
+      return false;
+    }
+    return true;
+  });
+
+  // ---- GIANT GECKOS — the little ones' very big, very rude cousins ----
+  for (const g of giantGeckos) {
+    if (g.hurtFlash > 0) g.hurtFlash -= dt;
+    const d = Math.hypot(player.x - g.x, player.y - g.y);
+    if (player.deathTimer <= 0) {
+      g.x += (player.x - g.x) / Math.max(1, d) * 130 * dt;
+      g.y += (player.y - g.y) / Math.max(1, d) * 130 * dt;
+    }
+    if (player.attackTime > 0 && g.lastHitSwing !== player.swingId &&
+        d < 60 && (g.x - player.x) * player.facing > -8) {
+      g.lastHitSwing = player.swingId;
+      g.hp -= hasChippy ? 3 : hasGoldSword ? 2 : 1;
+      g.hurtFlash = 0.15;
+      if (g.hp <= 0) {
+        for (let p = 0; p < 12; p++) {
+          particles.push({ x: g.x, y: g.y - 8,
+            vx: (noise(p * 3.3 + elapsed) - 0.5) * 240,
+            vy: (noise(p * 7.7 + elapsed) - 0.9) * 200,
+            life: 0.5, color: g.color });
+        }
+        emeralds.push({ x: g.x, y: g.y, born: elapsed });
+      }
+    }
+    if (d < 30 && g.hp > 0 && player.hurtTimer <= 0 && player.deathTimer <= 0) {
+      if (player.armor > 0) player.armor -= 1;
+      else player.hp -= 1;
+      player.hurtTimer = 1;
+      if (player.hp <= 0) player.deathTimer = 2.5;
+    }
+  }
+  giantGeckos = giantGeckos.filter(g => g.hp > 0);
 
   // ---- ZOMBIES ----
   for (const z of zombies) {
@@ -1402,6 +1572,15 @@ function update(dt) {
       player.y = current.start.y;
       player.hp = player.maxHp;
       player.armor = armorMax();   // fresh armor plates too
+      // if Chippy beat you, he goes back to his stump and plays innocent
+      if (axeBoss) {
+        axeBoss.x = chippyStump.x;
+        axeBoss.y = chippyStump.y - 20;
+        axeBoss.active = false;
+        axeBoss.hp = 20;
+        miniAxes = [];
+        giantGeckos = [];
+      }
     }
   }
 
@@ -1726,9 +1905,8 @@ function drawGame() {
     ctx.lineWidth = 2;
     ctx.beginPath(); ctx.ellipse(sx, sy - 4, 20, 12, 0, 0, Math.PI * 2); ctx.stroke();
 
-    // Chippy, wiggling happily in his stump. (Yes, he can also be in your
-    // hand at the same time. He's a living axe from another dimension.
-    // Don't worry about it.)
+    // Chippy, wiggling "happily" in his stump. Seems so nice. SEEMS.
+    if (axeBoss && !axeBoss.active) {
     ctx.save();
     ctx.translate(sx, sy - 26);
     ctx.rotate(-0.2 + Math.sin(elapsed * 2) * 0.08);
@@ -1741,6 +1919,7 @@ function drawGame() {
     ctx.fillStyle = '#222';
     ctx.fillRect(-7, -7, 1.5, 1.5); ctx.fillRect(2, -7, 1.5, 1.5);
     ctx.restore();
+    }
   }
 
   // ---- THE DRAW-ORDER TRICK ----
@@ -1758,6 +1937,53 @@ function drawGame() {
     else if (thing.wall) drawWall(thing, cam);
     else if (thing.pillar) drawPillar(thing, cam);
     else drawTree(thing, cam);
+  }
+
+  // CHIPPY mid-battle — a big flipping axe with RED eyes
+  if (axeBoss && axeBoss.active) {
+    const b = axeBoss;
+    const bx = b.x - cam.x, by = b.y - cam.y;
+    ctx.fillStyle = 'rgba(0,0,0,0.3)';
+    ctx.beginPath(); ctx.ellipse(bx, by + 14, 20, 7, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.save();
+    ctx.translate(bx, by - 14);
+    ctx.rotate(elapsed * 7);                     // flipping end over end
+    ctx.scale(2.1, 2.1);
+    const bFlash = b.hurtFlash > 0;
+    ctx.fillStyle = bFlash ? '#ffffff' : '#8a6b3f'; ctx.fillRect(-2, -11, 4, 22);   // handle
+    ctx.fillStyle = bFlash ? '#ffffff' : '#c8ccd4'; ctx.fillRect(-11, -12, 18, 9);  // head
+    ctx.fillStyle = bFlash ? '#ffffff' : '#e8ecf2'; ctx.fillRect(-11, -12, 18, 3);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(-8, -8, 3, 3); ctx.fillRect(1, -8, 3, 3);
+    ctx.fillStyle = '#d43a2f';                   // RED eyes. he LIED to us.
+    ctx.fillRect(-7.5, -7.5, 2, 2); ctx.fillRect(1.5, -7.5, 2, 2);
+    ctx.restore();
+  }
+
+  // mini axes, spinning through the air after you
+  for (const m of miniAxes) {
+    const mx = m.x - cam.x, my = m.y - cam.y;
+    ctx.save();
+    ctx.translate(mx, my);
+    ctx.rotate(m.spin);
+    ctx.fillStyle = '#8a6b3f'; ctx.fillRect(-1.5, -8, 3, 16);
+    ctx.fillStyle = '#c8ccd4'; ctx.fillRect(-8, -9, 13, 6);
+    ctx.restore();
+  }
+
+  // giant geckos — same little guys, way less little, way less friendly
+  for (const g of giantGeckos) {
+    const gx2 = g.x - cam.x, gy2 = g.y - cam.y;
+    if (gx2 < -80 || gy2 < -80 || gx2 > canvas.width + 80 || gy2 > canvas.height + 80) continue;
+    const flip = player.x < g.x ? -1 : 1;
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    ctx.beginPath(); ctx.ellipse(gx2, gy2 + 10, 22, 8, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = g.hurtFlash > 0 ? '#ffffff' : g.color;
+    ctx.fillRect(gx2 - 16, gy2 - 8, 32, 16);              // big body
+    ctx.fillRect(gx2 + 16 * flip - 6, gy2 - 11, 13, 13);  // big head
+    ctx.fillRect(gx2 - 26 * flip, gy2 - 4, 13, 6);        // big tail
+    ctx.fillStyle = '#222';
+    ctx.fillRect(gx2 + 20 * flip, gy2 - 8, 4, 4);         // big hungry eye
   }
 
   // flying zombie bits
@@ -1999,6 +2225,23 @@ function drawGame() {
     }
   }
 
+  // BOSS BAR for Chippy, once the nice act drops
+  if (current.kind === 'chippy' && axeBoss && axeBoss.active) {
+    const bw = Math.min(500, canvas.width - 80);
+    const bx = canvas.width / 2 - bw / 2, by = 30;
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#ffd8c2';
+    ctx.font = 'bold 16px monospace';
+    ctx.fillText('CHIPPY, THE LIVING AXE', canvas.width / 2, by - 8);
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(bx, by, bw, 14);
+    ctx.fillStyle = '#e05545';
+    ctx.fillRect(bx + 2, by + 2, (bw - 4) * (axeBoss.hp / 20), 10);
+    ctx.strokeStyle = '#ffd8c2';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(bx, by, bw, 14);
+  }
+
   // ---- HUD (the stuff glued to the screen, not the world) ----
   // hearts, top-left
   for (let i = 0; i < player.maxHp; i++) {
@@ -2038,6 +2281,7 @@ function drawGame() {
     ctx.fillText(current.kind === 'temple' ? 'The temple got you!'
                : current.kind === 'castle' ? 'The castle got you!'
                : current.kind === 'sky'    ? 'The storm got you!'
+               : current.kind === 'chippy' ? 'Chippy got you! (He was evil the WHOLE time!)'
                : 'The zombies got you!',
                  canvas.width / 2, canvas.height / 2 - 10);
     ctx.font = '18px monospace';
@@ -2085,12 +2329,12 @@ function drawGame() {
       ctx.restore();
       ctx.fillStyle = '#ffffff';
       ctx.font = 'bold 22px monospace';
-      ctx.fillText(victoryNew ? 'CHIPPY JOINS YOU!' : 'You visited Chippy!',
+      ctx.fillText(victoryNew ? 'CHIPPY SURRENDERS... AND JOINS YOU!' : 'CHIPPY DEFEATED AGAIN!',
                    canvas.width / 2, canvas.height / 2 + 62);
       ctx.fillStyle = '#bfffe0';
       ctx.font = '16px monospace';
-      ctx.fillText(victoryNew ? 'A living axe! One chop takes out almost anything.'
-                              : 'He is still very happy to see you.',
+      ctx.fillText(victoryNew ? 'Beaten fair and square — now he chops for YOU.'
+                              : 'He is still your axe. He is still a little salty about it.',
                    canvas.width / 2, canvas.height / 2 + 90);
     } else if (victoryLevel === 4) {
       // its giant eye — closed forever. your trophy.
