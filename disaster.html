@@ -592,6 +592,7 @@ const BUZZ = {
   balls:   [30, 50, 30, 50, 30, 50, 30],
   badguys: [80, 60, 80, 60, 80],
   dinos:   [260, 120, 260, 120, 420],     // great big footsteps, then a ROAR
+  virus:   [60, 40, 60, 40, 300],         // cough, cough... blegh
 };
 function buzz(type) {
   try { if (navigator.vibrate) navigator.vibrate(BUZZ[type] || 180); } catch (e) {}
@@ -600,6 +601,19 @@ function buzz(type) {
 // Actually unleash the disaster (called once its tension timer runs out).
 // No money changes hands here — that already happened in pickDisaster.
 function beginDisaster(type) {
+  if (type === 'virus') {
+    // no storm, no boom — just one unlucky citizen, chosen by fate
+    const healthy = people.filter(p => p.kind === 'person' && !p.gone &&
+                                       !(p.sick > 0) && (p.immune || 0) <= elapsed);
+    if (healthy.length === 0) {
+      setStatus('The virus fizzled — nobody around to catch it!', '#93bf49');
+      return;
+    }
+    const zero = healthy[Math.floor(Math.random() * healthy.length)];
+    zero.sick = 14;
+    setStatus('Patient zero is coughing... cover your mouths!!', '#93bf49');
+    return;
+  }
   if (disasters.length >= 12) return;   // even chaos has a fire code
   if (type === 'tornado') {
     disasters.push({ type, x: -60, y: TOPBAR + Math.random() * gridH(),
@@ -935,6 +949,7 @@ const MACHINE_MENU = [
   { label: '🔴 Rubber Balls', type: 'balls',   cost: 9 },
   { label: '🦹 Bad Guys',     type: 'badguys', cost: 10 },
   { label: '🦖 Dinosaurs',    type: 'dinos',   cost: 14 },
+  { label: '🦠 The Virus',    type: 'virus',   cost: 7 },
 ];
 
 // quick point-in-box test, used all over the input code
@@ -2331,6 +2346,55 @@ function update(dt) {
   litter = litter.filter(L => !L.gone);         // swept-up mess is gone for good
   footprints = footprints.filter(f => elapsed - f.born < 5);   // tracks fade away
 
+  // ---- THE VIRUS — coughing, spreading, and, er, the other thing ----
+  let sickCount = 0;
+  for (const p of people) {
+    if (!(p.sick > 0) || p.gone) continue;
+    sickCount++;
+    p.sick -= dt;
+    if (p.sick <= 0) {
+      p.immune = elapsed + 25;         // recovered! and immune... for a while
+      continue;
+    }
+    if (p.coughAnim > 0) p.coughAnim -= dt;
+    if (p.bleghAnim > 0) p.bleghAnim -= dt;
+
+    // COUGH — and everyone nearby rolls the dice. Being crammed into the
+    // same shelter as a cougher counts as VERY nearby.
+    p.coughT = (p.coughT || 0.8 + Math.random()) - dt;
+    if (p.coughT <= 0) {
+      p.coughT = 1 + Math.random() * 1.2;
+      p.coughAnim = 0.45;
+      for (const q of people) {
+        if (q === p || q.gone || q.kind !== 'person') continue;
+        if (q.sick > 0 || (q.immune || 0) > elapsed) continue;
+        const close = !p.sheltering && !q.sheltering &&
+                      Math.hypot(q.x - p.x, q.y - p.y) < 34;
+        const sameShelter = p.sheltering && q.sheltering &&
+          p.sheltering.gx === q.sheltering.gx && p.sheltering.gy === q.sheltering.gy;
+        if ((close || sameShelter) && Math.random() < 0.4) {
+          q.sick = 14;                 // caught it!
+        }
+      }
+    }
+
+    // BLEGH — every few seconds, a green souvenir for the pavement
+    p.pukeT = (p.pukeT || 3 + Math.random() * 3) - dt;
+    if (p.pukeT <= 0 && !p.sheltering) {
+      p.pukeT = 4 + Math.random() * 4;
+      p.bleghAnim = 0.7;
+      dropLitter(p.x + (Math.random() - 0.5) * 8, p.y + 4, 'puke');
+      for (let i = 0; i < 5; i++) {
+        debris.push({ x: p.x, y: p.y - 8,
+          vx: (Math.random() - 0.5) * 160, vy: -Math.random() * 120 - 30,
+          spin: Math.random() * 8, life: 0.5, color: '#93bf49' });
+      }
+    }
+  }
+  if (sickCount > 0 && Math.random() < dt * 0.25) {
+    setStatus('The virus is spreading — ' + sickCount + ' citizens are sick!', '#93bf49');
+  }
+
   // ---- POOP PEOPLE — they waddle. they smile. they are avoided. ----
   for (const pp of poopPeople) {
     pp.walk += dt * 7;
@@ -2882,6 +2946,15 @@ function draw() {
                 0.85 * u, 0, Math.PI * 2);
         ctx.fill();
       }
+    } else if (L.kind === 'puke') {
+      // a green splat. we all know what it is. BLEGH.
+      ctx.fillStyle = '#7aa33a';
+      ctx.beginPath(); ctx.ellipse(L.x, L.y, 5 * u, 2.6 * u, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#93bf49';
+      ctx.beginPath(); ctx.ellipse(L.x - 1 * u, L.y - 0.8 * u, 3 * u, 1.6 * u, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#b3d668';                   // mystery chunks. don't think about it.
+      ctx.fillRect(L.x - 2 * u, L.y - 1.2 * u, 1.2 * u, 1 * u);
+      ctx.fillRect(L.x + 1.4 * u, L.y - 0.6 * u, 1 * u, 0.9 * u);
     } else if (L.kind === 'pie') {
       // a splat, in three shades of... let's call it brown.
       // a STEPPED-IN pie is wider, flatter, and has seen things.
@@ -3429,6 +3502,29 @@ function draw() {
     ctx.fillStyle = '#6d4a26';
     ctx.beginPath(); ctx.arc(13, -0.2, 4, 0, Math.PI * 2); ctx.fill();
     ctx.restore();
+  }
+
+  // ---- SICK CITIZENS: green haze, cough clouds, and the BLEGH ----
+  for (const p of people) {
+    if (!(p.sick > 0) || p.gone || p.sheltering) continue;
+    ctx.fillStyle = 'rgba(147, 191, 73, 0.14)';      // the haze of contagion
+    ctx.beginPath(); ctx.arc(p.x, p.y - 10, 16, 0, Math.PI * 2); ctx.fill();
+    if (p.coughAnim > 0) {
+      // cough puffs escaping sideways
+      ctx.fillStyle = `rgba(150, 200, 90, ${p.coughAnim})`;
+      for (let i = 0; i < 3; i++) {
+        ctx.beginPath();
+        ctx.arc(p.x + 8 + i * 5 + (0.45 - p.coughAnim) * 26, p.y - 12 - i * 2,
+                2.4 + i, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    if (p.bleghAnim > 0) {
+      ctx.fillStyle = '#b3d668';
+      ctx.font = 'bold 11px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('BLEGH!!', p.x, p.y - 30 + Math.sin(elapsed * 20) * 2);
+    }
   }
 
   // ---- THE POOP PEOPLE — waddling, smiling, hoping for friendship ----
