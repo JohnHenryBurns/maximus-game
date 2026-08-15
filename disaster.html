@@ -101,6 +101,41 @@ for (let y = 0; y < ROWS; y++) hitCool.push(new Array(COLS).fill(0));
 const HIT_COOLDOWN = 0.55;
 
 // ---------------------------------------------------------------------
+// BIG BUILDINGS. An apartment block is a proper tower — it takes up FOUR
+// squares (2 across, 2 down) instead of one. All four squares hold APT,
+// but they all point back to the top-left one, the "root". The root is
+// where we draw the tower, keep its damage, and where the repair crew go.
+// ---------------------------------------------------------------------
+const SPAN = { [APT]: 2 };                     // how many squares wide/tall a kind is
+function spanOf(kind) { return SPAN[kind] || 1; }
+const rootAt = [];                             // {rx,ry} for every square of a big building
+for (let y = 0; y < ROWS; y++) rootAt.push(new Array(COLS).fill(null));
+
+// Where does this square's building really live? (itself, unless it's part
+// of something bigger)
+function rootOf(gx, gy) {
+  const r = rootAt[gy] && rootAt[gy][gx];
+  return r ? r : { rx: gx, ry: gy };
+}
+
+// Wipe a square — and if it belongs to a big building, take the whole
+// building with it, so we never leave half a tower standing.
+function clearCell(gx, gy) {
+  if (gx < 0 || gy < 0 || gx >= COLS || gy >= ROWS) return;
+  const r = rootOf(gx, gy);
+  const sp = spanOf(grid[r.ry] && grid[r.ry][r.rx]);
+  for (let oy = 0; oy < sp; oy++) {
+    for (let ox = 0; ox < sp; ox++) {
+      const cx = r.rx + ox, cy = r.ry + oy;
+      if (cx < 0 || cy < 0 || cx >= COLS || cy >= ROWS) continue;
+      grid[cy][cx] = EMPTY;
+      damage[cy][cx] = PRISTINE;
+      rootAt[cy][cx] = null;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------
 // LITTLE PEOPLE (and cows, and dogs) — they live in your town. no idea.
 // ---------------------------------------------------------------------
 let people = [];
@@ -345,17 +380,24 @@ function trySpawnCar() {
   });
 }
 
-// KABOOM. A car caught in a disaster bursts into bits and is gone for good.
+// KABOOM. A car caught in a disaster goes up in a FIREBALL and is gone for
+// good. The blast stays tight around the car — a hot little ball of flame
+// with a few bits pinging off it, rather than confetti across the street.
+let blasts = [];
 function popCar(car) {
+  if (car.gone) return;
   car.gone = true;
   carsPopped++;
-  for (let i = 0; i < 10; i++) {
+  const s = cellSize();
+  blasts.push({ x: car.x, y: car.y, t: 0, life: 0.55, r: s * 0.42 });
+  for (let i = 0; i < 8; i++) {
+    const a = Math.random() * Math.PI * 2, sp = 40 + Math.random() * 90;
     debris.push({
       x: car.x, y: car.y,
-      vx: (Math.random() - 0.5) * 520,
-      vy: -Math.random() * 460 - 90,
-      spin: Math.random() * 10, life: 1.1,
-      color: i % 3 === 0 ? '#ff9f43' : i % 3 === 1 ? '#ffd23f' : car.color,
+      vx: Math.cos(a) * sp,
+      vy: Math.sin(a) * sp - 60,       // a small hop, not a launch
+      spin: Math.random() * 10, life: 0.45 + Math.random() * 0.25,
+      color: i % 3 === 0 ? '#ff9f43' : i % 3 === 1 ? '#ffd23f' : '#3a3a40',
     });
   }
 }
@@ -471,6 +513,9 @@ function beginDisaster(type) {
 // and a direct meteor sometimes leaves a wall standing.
 function hitBlock(gx, gy, bx, by, force, splash) {
   if (grid[gy][gx] === EMPTY) return;
+  // a hit anywhere on a big building counts against the whole building
+  const r = rootOf(gx, gy);
+  gx = r.rx; gy = r.ry;
   if (hitCool[gy][gx] > 0) return;           // still reeling from the last hit
   hitCool[gy][gx] = HIT_COOLDOWN;
   const roll = 1 + Math.floor(Math.random() * (force || 1));   // 1 .. force
@@ -493,13 +538,14 @@ function hitBlock(gx, gy, bx, by, force, splash) {
 
 // one block, smashed: emptied from the grid, launched as flying bits
 function smashBlock(gx, gy, bx, by, splash) {
-  const kind = grid[gy][gx];
-  grid[gy][gx] = EMPTY;
-  damage[gy][gx] = PRISTINE;         // empty ground isn't "damaged"
+  const r = rootOf(gx, gy);
+  const kind = grid[r.ry][r.rx];
+  const sp = spanOf(kind);
+  clearCell(r.rx, r.ry);             // takes every square of a big building
   roadsDirty = true;                 // a road may have just been wiped out
   destroyed++;
   moneys += kind === APT ? 3 : 1;    // apartments pay TRIPLE. big building, big payout.
-  for (let i = 0; i < 6; i++) {
+  for (let i = 0; i < 6 * sp; i++) { // a bigger building makes a bigger mess
     debris.push({
       x: bx, y: by,
       vx: (Math.random() - 0.5) * 500,
@@ -569,8 +615,26 @@ function placeAt(px, py) {
   const gx = Math.floor(w.x / s);
   const gy = Math.floor((w.y - TOPBAR) / s);
   if (gx < 0 || gy < 0 || gx >= COLS || gy >= ROWS) return;
-  grid[gy][gx] = selected;          // EMPTY works as the eraser
-  damage[gy][gx] = PRISTINE;        // fresh out of the box
+  const sp = spanOf(selected);
+  if (sp > 1) {
+    // A BIG BUILDING. Nudge it back on to the map if you aimed at the very
+    // edge, clear everything it's about to sit on, then plant all its squares.
+    const rx = Math.min(gx, COLS - sp), ry = Math.min(gy, ROWS - sp);
+    if (rx < 0 || ry < 0) return;                     // town too small — can't fit
+    for (let oy = 0; oy < sp; oy++)
+      for (let ox = 0; ox < sp; ox++) clearCell(rx + ox, ry + oy);
+    for (let oy = 0; oy < sp; oy++) {
+      for (let ox = 0; ox < sp; ox++) {
+        grid[ry + oy][rx + ox] = selected;
+        damage[ry + oy][rx + ox] = PRISTINE;
+        rootAt[ry + oy][rx + ox] = { rx, ry };
+      }
+    }
+  } else {
+    clearCell(gx, gy);              // takes a whole big building if you hit one
+    grid[gy][gx] = selected;        // EMPTY works as the eraser
+    damage[gy][gx] = PRISTINE;      // fresh out of the box
+  }
   roadsDirty = true;                // the road map may have changed shape
 }
 
@@ -1200,7 +1264,7 @@ function update(dt) {
   const claimed = new Set();
   for (const p of people) {
     if (p.job) {
-      if (panicking) { p.job = null; p.jobT = 0; p.fixing = false; }   // drop tools and RUN
+      if (panicking) { p.job = null; p.jobT = 0; p.fixing = false; p.stand = null; }  // drop tools and RUN
       else claimed.add(p.job.gx + ',' + p.job.gy);
     }
   }
@@ -1298,7 +1362,7 @@ function update(dt) {
         // is the job we picked still a job? (it may have been finished or flattened)
         if (p.job && (grid[p.job.gy][p.job.gx] === EMPTY ||
                       damage[p.job.gy][p.job.gx] === PRISTINE)) {
-          p.job = null; p.jobT = 0;
+          p.job = null; p.jobT = 0; p.stand = null;
         }
         if (!p.job) {                       // look for the nearest broken thing
           let best = 999999, found = null;
@@ -1311,14 +1375,40 @@ function update(dt) {
               if (d2 < best) { best = d2; found = { gx, gy, x: bx, y: by }; }
             }
           }
-          if (found) { p.job = found; p.jobT = 0; claimed.add(found.gx + ',' + found.gy); }
+          if (found) {
+            p.job = found; p.jobT = 0; claimed.add(found.gx + ',' + found.gy);
+            p.stand = null;
+          }
         }
         if (p.job) {
-          const reach = Math.hypot(p.job.x - p.x, p.job.y - p.y);
-          if (reach > cs * 0.75) {          // still walking over, toolbox in hand
-            p.angle = Math.atan2(p.job.y - p.y, p.job.x - p.x);
+          // WHICH SIDE DO WE WORK FROM? Stand on the open square to the
+          // building's left or right — whichever is free and nearer to us.
+          // (If both sides are walled in, above or below will do.)
+          if (!p.stand) {
+            const sp2 = spanOf(grid[p.job.gy][p.job.gx]);
+            const sides = [ { dx: -1, dy: 0 }, { dx: sp2, dy: 0 },
+                            { dx: 0, dy: -1 }, { dx: 0, dy: sp2 } ];
+            let bestSide = null, bestD = 1e9;
+            for (const sd of sides) {
+              const cx = p.job.gx + (sd.dx === sp2 ? sp2 : sd.dx === -1 ? -1 : 0);
+              const cy = p.job.gy + (sd.dy === sp2 ? sp2 : sd.dy === -1 ? -1 : 0);
+              const tx = sd.dx !== 0 ? cx : p.job.gx;
+              const ty = sd.dy !== 0 ? cy : p.job.gy;
+              if (blocked(tx, ty)) continue;                 // can't stand in a wall
+              const wx = tx * cs + cs / 2, wy = TOPBAR + ty * cs + cs / 2;
+              const d3 = Math.hypot(wx - p.x, wy - p.y) + (sd.dy !== 0 ? cs * 0.6 : 0);
+              if (d3 < bestD) { bestD = d3; bestSide = { x: wx, y: wy }; }
+            }
+            // nowhere free to stand? just walk up to it and make do
+            p.stand = bestSide || { x: p.job.x, y: p.job.y };
+          }
+          const reach = Math.hypot(p.stand.x - p.x, p.stand.y - p.y);
+          if (reach > cs * 0.45) {          // still walking over, toolbox in hand
+            p.angle = Math.atan2(p.stand.y - p.y, p.stand.x - p.x);
             p.fixing = false;
           } else {                          // ON SITE — start hammering
+            // face the building: hammer on our left or our right to suit
+            p.workSide = p.job.x >= p.x ? 1 : -1;
             p.fixing = true;
             p.jobT += dt;
             p.hammer = (p.hammer || 0) + dt * 9;         // swing the hammer
@@ -1328,7 +1418,7 @@ function update(dt) {
               repaired++;
               if (damage[p.job.gy][p.job.gx] <= PRISTINE) {
                 claimed.delete(p.job.gx + ',' + p.job.gy);
-                p.job = null; p.fixing = false;
+                p.job = null; p.fixing = false; p.stand = null;
               }
             }
           }
@@ -1501,6 +1591,8 @@ function update(dt) {
     }
   }
   cars = cars.filter(c => !c.gone);
+  for (const b of blasts) b.t += dt;            // fireballs bloom then fade
+  blasts = blasts.filter(b => b.t < b.life);
 
   // airborne folk tumble gracefully out of frame
   for (const f of launchedFolk) {
@@ -1607,7 +1699,13 @@ function draw() {
     for (let gx = 0; gx < COLS; gx++) {
       const kind = grid[gy][gx];
       if (kind === EMPTY) continue;
+      // A big building is drawn ONCE, by its top-left square. The other
+      // squares it covers skip their turn.
+      const rt = rootAt[gy][gx];
+      if (rt && (rt.rx !== gx || rt.ry !== gy)) continue;
+      const sp = spanOf(kind);
       const x = gx * s, y = TOPBAR + gy * s;
+      const s2 = s * sp;                       // how big this building really is
       // every block gets its own little quirk from its position, so the town
       // looks hand-made instead of stamped out
       const q = hash(gx * 7.3 + gy * 3.1);
@@ -1616,7 +1714,7 @@ function draw() {
       if (!isWay(kind)) {
         ctx.fillStyle = 'rgba(0, 0, 0, 0.16)';
         ctx.beginPath();
-        ctx.ellipse(x + s * 0.5, y + s * 0.92, s * 0.36, s * 0.09, 0, 0, Math.PI * 2);
+        ctx.ellipse(x + s2 * 0.5, y + s2 * 0.94, s2 * 0.36, s2 * 0.06, 0, 0, Math.PI * 2);
         ctx.fill();
       }
 
@@ -1680,23 +1778,31 @@ function draw() {
         ctx.fillRect(x + s * 0.3, y + s * 0.58, s * 0.09, s * 0.07);
         ctx.fillRect(x + s * 0.62, y + s * 0.68, s * 0.07, s * 0.06);
       } else if (kind === APT) {
+        // A PROPER TOWER BLOCK, four squares of it. Drawn against s2 (the
+        // whole 2x2 footprint) rather than one square.
         ctx.fillStyle = '#5a6a7a';                      // the tall tower
-        ctx.fillRect(x + s * 0.12, y + s * 0.06, s * 0.76, s * 0.86);
+        ctx.fillRect(x + s2 * 0.1, y + s2 * 0.08, s2 * 0.8, s2 * 0.84);
+        ctx.fillStyle = '#4c5a68';                      // a shaded side, for depth
+        ctx.fillRect(x + s2 * 0.72, y + s2 * 0.08, s2 * 0.18, s2 * 0.84);
         ctx.fillStyle = '#7a8a9a';                      // roof ledge
-        ctx.fillRect(x + s * 0.08, y + s * 0.06, s * 0.84, s * 0.1);
+        ctx.fillRect(x + s2 * 0.06, y + s2 * 0.08, s2 * 0.88, s2 * 0.07);
         ctx.fillStyle = '#93a3b3';                      // rooftop water tank
-        ctx.fillRect(x + s * 0.6, y - s * 0.02, s * 0.14, s * 0.09);
-        // windows — a few are dark, because some people are out
-        for (let wy2 = 0; wy2 < 3; wy2++) {
-          for (let wx2 = 0; wx2 < 2; wx2++) {
-            const lit = hash(gx * 11 + gy * 5 + wy2 * 3 + wx2) > 0.28;
+        ctx.fillRect(x + s2 * 0.62, y + s2 * 0.005, s2 * 0.13, s2 * 0.075);
+        ctx.fillStyle = '#6a7a8a';                      // and a little aerial
+        ctx.fillRect(x + s2 * 0.26, y - s2 * 0.03, s2 * 0.02, s2 * 0.11);
+        // six floors of windows — a few dark, because some people are out
+        for (let wy2 = 0; wy2 < 6; wy2++) {
+          for (let wx2 = 0; wx2 < 3; wx2++) {
+            const lit = hash(gx * 11 + gy * 5 + wy2 * 3.3 + wx2 * 1.7) > 0.3;
             ctx.fillStyle = lit ? '#ffd23f' : '#33414e';
-            ctx.fillRect(x + s * (0.24 + wx2 * 0.3), y + s * (0.26 + wy2 * 0.21),
-                         s * 0.16, s * 0.13);
+            ctx.fillRect(x + s2 * (0.17 + wx2 * 0.21), y + s2 * (0.2 + wy2 * 0.115),
+                         s2 * 0.13, s2 * 0.075);
           }
         }
-        ctx.fillStyle = '#33414e';                      // front door
-        ctx.fillRect(x + s * 0.42, y + s * 0.78, s * 0.16, s * 0.14);
+        ctx.fillStyle = '#33414e';                      // front doors
+        ctx.fillRect(x + s2 * 0.42, y + s2 * 0.8, s2 * 0.16, s2 * 0.12);
+        ctx.fillStyle = '#ffd23f';                      // a light over the door
+        ctx.fillRect(x + s2 * 0.46, y + s2 * 0.76, s2 * 0.08, s2 * 0.025);
       } else if (kind === BUNKER) {
         ctx.fillStyle = '#4a5548';                      // squat armored dome
         ctx.beginPath();
@@ -1724,34 +1830,34 @@ function draw() {
       const dmg = damage[gy][gx];
       if (dmg > PRISTINE) {
         ctx.strokeStyle = dmg === HEAVY ? 'rgba(20,14,10,0.75)' : 'rgba(30,22,16,0.5)';
-        ctx.lineWidth = Math.max(1, s * (dmg === HEAVY ? 0.05 : 0.035));
+        ctx.lineWidth = Math.max(1, s2 * (dmg === HEAVY ? 0.05 : 0.035));
         ctx.beginPath();                                 // a jagged crack
-        ctx.moveTo(x + s * 0.32, y + s * 0.9);
-        ctx.lineTo(x + s * 0.42, y + s * 0.62);
-        ctx.lineTo(x + s * 0.34, y + s * 0.5);
+        ctx.moveTo(x + s2 * 0.32, y + s2 * 0.9);
+        ctx.lineTo(x + s2 * 0.42, y + s2 * 0.62);
+        ctx.lineTo(x + s2 * 0.34, y + s2 * 0.5);
         ctx.stroke();
         if (dmg === HEAVY) {
           ctx.beginPath();                               // a second, worse one
-          ctx.moveTo(x + s * 0.72, y + s * 0.9);
-          ctx.lineTo(x + s * 0.62, y + s * 0.58);
-          ctx.lineTo(x + s * 0.74, y + s * 0.38);
+          ctx.moveTo(x + s2 * 0.72, y + s2 * 0.9);
+          ctx.lineTo(x + s2 * 0.62, y + s2 * 0.58);
+          ctx.lineTo(x + s2 * 0.74, y + s2 * 0.38);
           ctx.stroke();
           ctx.fillStyle = '#4a7c3a';                     // a chunk missing off the top
           ctx.beginPath();
-          ctx.moveTo(x + s * 0.5, y + s * 0.06);
-          ctx.lineTo(x + s * 0.95, y + s * 0.1);
-          ctx.lineTo(x + s * 0.95, y + s * 0.34);
+          ctx.moveTo(x + s2 * 0.5, y + s2 * 0.06);
+          ctx.lineTo(x + s2 * 0.95, y + s2 * 0.1);
+          ctx.lineTo(x + s2 * 0.95, y + s2 * 0.34);
           ctx.closePath(); ctx.fill();
           // a lazy wisp of smoke
           ctx.fillStyle = 'rgba(60, 60, 66, 0.35)';
           ctx.beginPath();
-          ctx.arc(x + s * (0.7 + Math.sin(elapsed * 1.7 + gx) * 0.06),
-                  y + s * (0.16 - (elapsed * 0.15 + gy * 0.3) % 0.3),
-                  s * 0.09, 0, Math.PI * 2);
+          ctx.arc(x + s2 * (0.7 + Math.sin(elapsed * 1.7 + gx) * 0.06),
+                  y + s2 * (0.16 - (elapsed * 0.15 + gy * 0.3) % 0.3),
+                  s2 * 0.09, 0, Math.PI * 2);
           ctx.fill();
         }
         ctx.fillStyle = dmg === HEAVY ? 'rgba(0,0,0,0.22)' : 'rgba(0,0,0,0.1)';
-        ctx.fillRect(x, y, s, s);                        // soot over the whole square
+        ctx.fillRect(x, y, s2, s2);                      // soot over the whole building
       }
     }
   }
@@ -1799,20 +1905,38 @@ function draw() {
     else       ctx.fillRect(car.x - cw / 2 + 1 * u, car.y + car.dy * (L / 2 - 1.4 * u) - 0.7 * u, cw - 2 * u, 1.6 * u);
   }
 
+  // ---- CAR FIREBALLS: a hot core, a flame ring, then a puff of smoke ----
+  for (const b of blasts) {
+    const f = b.t / b.life;                      // 0 at the bang, 1 at the end
+    const r = b.r * (0.45 + f * 0.85);
+    ctx.globalAlpha = 1 - f;
+    ctx.fillStyle = '#ff7a1a';                   // orange flame ball
+    ctx.beginPath(); ctx.arc(b.x, b.y, r, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#ffd23f';                   // white-hot centre
+    ctx.beginPath(); ctx.arc(b.x, b.y, r * 0.55, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#fff3c4';
+    ctx.beginPath(); ctx.arc(b.x, b.y, r * 0.24, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = (1 - f) * 0.5;             // smoke curling off the top
+    ctx.fillStyle = '#5a5a62';
+    ctx.beginPath(); ctx.arc(b.x, b.y - r * 0.8 - f * b.r, r * 0.5, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
   // A little green progress bar over whatever building is being repaired,
   // so you can see the work happening.
   for (const p of people) {
     if (!p.fixing || !p.job) continue;
+    const bs = s * spanOf(grid[p.job.gy][p.job.gx]);   // span the whole building
     const bx2 = p.job.gx * s, by2 = TOPBAR + p.job.gy * s;
     const frac = Math.max(0, Math.min(1, p.jobT / REPAIR_TIME));
     ctx.fillStyle = 'rgba(10, 14, 20, 0.75)';
-    ctx.fillRect(bx2 + s * 0.12, by2 - s * 0.16, s * 0.76, s * 0.1);
+    ctx.fillRect(bx2 + bs * 0.12, by2 - s * 0.16, bs * 0.76, s * 0.1);
     ctx.fillStyle = '#7ddf8f';
-    ctx.fillRect(bx2 + s * 0.13, by2 - s * 0.15, s * 0.74 * frac, s * 0.08);
+    ctx.fillRect(bx2 + bs * 0.13, by2 - s * 0.15, bs * 0.74 * frac, s * 0.08);
     ctx.fillStyle = '#ffe9a8';                       // a tiny wrench, to say "under repair"
     ctx.font = `bold ${Math.max(7, s * 0.3)}px monospace`;
     ctx.textAlign = 'center';
-    ctx.fillText('🔧', bx2 + s * 0.5, by2 - s * 0.22);
+    ctx.fillText('🔧', bx2 + bs * 0.5, by2 - s * 0.22);
   }
 
   // tiny heads peeking out of every occupied shelter
@@ -1929,22 +2053,25 @@ function draw() {
         ctx.moveTo(p.x - 4 * u, p.y - 9 * u); ctx.lineTo(p.x - 6.5 * u, p.y - 15 * u);
         ctx.moveTo(p.x + 4 * u, p.y - 9 * u); ctx.lineTo(p.x + 6.5 * u, p.y - 15 * u);
       } else if (p.fixing) {
+        // Hammer on whichever side the building is — so a worker on the
+        // right of a house swings to their LEFT, and vice versa.
+        const k = p.workSide || 1;
         const sw = Math.abs(Math.sin(p.hammer || 0));  // the swing, 0=down 1=up
         const hy2 = p.y - 9 * u - sw * 7 * u;
-        ctx.moveTo(p.x + 4 * u, p.y - 9 * u); ctx.lineTo(p.x + 7 * u, hy2);
-        ctx.moveTo(p.x - 4 * u, p.y - 9 * u); ctx.lineTo(p.x - 6 * u, p.y - 6 * u);
+        ctx.moveTo(p.x + k * 4 * u, p.y - 9 * u); ctx.lineTo(p.x + k * 7 * u, hy2);
+        ctx.moveTo(p.x - k * 4 * u, p.y - 9 * u); ctx.lineTo(p.x - k * 6 * u, p.y - 6 * u);
         ctx.stroke();
         ctx.strokeStyle = '#6d5330'; ctx.lineWidth = 1.4 * u;   // hammer handle
         ctx.beginPath();
-        ctx.moveTo(p.x + 7 * u, hy2); ctx.lineTo(p.x + 9.5 * u, hy2 - 3 * u);
+        ctx.moveTo(p.x + k * 7 * u, hy2); ctx.lineTo(p.x + k * 9.5 * u, hy2 - 3 * u);
         ctx.stroke();
         ctx.fillStyle = '#9aa3ad';                              // hammer head
-        ctx.fillRect(p.x + 8.6 * u, hy2 - 5 * u, 3.4 * u, 2.4 * u);
+        ctx.fillRect(p.x + k * 8.6 * u - (k < 0 ? 3.4 * u : 0), hy2 - 5 * u, 3.4 * u, 2.4 * u);
         if (sw < 0.15) {                                        // CLANK! sparks
           ctx.fillStyle = '#ffe9a8';
           ctx.font = `bold ${Math.max(7, 8 * u)}px monospace`;
-          ctx.textAlign = 'left';
-          ctx.fillText('✦', p.x + 10 * u, hy2 - 5 * u);
+          ctx.textAlign = k > 0 ? 'left' : 'right';
+          ctx.fillText('✦', p.x + k * 10 * u, hy2 - 5 * u);
         }
         ctx.beginPath();                             // (restart path for the stroke below)
       } else {
