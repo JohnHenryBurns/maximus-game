@@ -583,6 +583,27 @@ function buildCastle(lv) {
     });
   }
 
+  // GIANT BLACK ZOMBIES — nine eyes, spider legs out of the back, huge.
+  // Only three exist, lurking deep in the castle. You'll know.
+  let giants = 0;
+  for (let i = 0; i < 400 && giants < 3; i++) {
+    const x = noise(i * 83.9 + 13) * lv.worldW;
+    const y = noise(i * 17.3 + 13) * lv.worldH;
+    if (Math.hypot(x - lv.start.x, y - lv.start.y) < 700) continue;   // deep in the castle only
+    if (distToAnyPath(x, y, CASTLE_PATHS) > 70) continue;
+    if (Math.hypot(x - throne.x, y - throne.y) < 220) continue;
+    giants++;
+    zombies.push({
+      x, y,
+      zombie: true, black: true, giant: true,
+      hp: 6,               // six bonks. three with the Golden Sword.
+      speed: 60,           // slow. inevitable.
+      wanderAngle: noise(i * 2.3) * 6.28,
+      lastHitSwing: 0,
+      hurtFlash: 0,
+    });
+  }
+
   emeralds = [];
   particles = [];
   emeraldCount = 0;
@@ -802,14 +823,15 @@ function update(dt) {
     }
     const zx = z.x + zdx * zombieSpeed * dt;
     const zy = z.y + zdy * zombieSpeed * dt;
-    if (!blocked(zx, z.y, 10)) z.x = zx;
-    if (!blocked(z.x, zy, 10)) z.y = zy;
+    const zr = z.giant ? 16 : 10;            // giants are chunkier
+    if (!blocked(zx, z.y, zr)) z.x = zx;
+    if (!blocked(z.x, zy, zr)) z.y = zy;
 
     // Did your sword catch it? Must be mid-swing, in reach, on the side
     // you're FACING (no cheating hits behind your back), and not already
     // hit by this same swing.
     if (player.attackTime > 0 && z.lastHitSwing !== player.swingId &&
-        distToYou < 55 && (z.x - player.x) * player.facing > -8) {
+        distToYou < (z.giant ? 68 : 55) && (z.x - player.x) * player.facing > -8) {
       z.lastHitSwing = player.swingId;
       z.hp -= hasGoldSword ? 2 : 1;    // golden sword = one-bonk wonders
       z.hurtFlash = 0.15;
@@ -820,22 +842,29 @@ function update(dt) {
 
       if (z.hp <= 0) {
         // POOF! burst into blocky bits and drop the goods
-        for (let i = 0; i < 14; i++) {
+        const bits = z.giant ? 30 : 14;
+        for (let i = 0; i < bits; i++) {
           particles.push({
             x: z.x, y: z.y - 14,
-            vx: (noise(i * 3.3 + elapsed) - 0.5) * 240,
-            vy: (noise(i * 7.7 + elapsed) - 0.9) * 220,
+            vx: (noise(i * 3.3 + elapsed) - 0.5) * (z.giant ? 340 : 240),
+            vy: (noise(i * 7.7 + elapsed) - 0.9) * (z.giant ? 300 : 220),
             life: 0.6,
-            color: i % 2 ? '#4a9e4a' : '#2e6e8e',
+            color: z.black ? (i % 2 ? '#26262e' : '#b06cff')
+                 : z.sand  ? (i % 2 ? '#cbb06a' : '#a3854a')
+                 : (i % 2 ? '#4a9e4a' : '#2e6e8e'),
           });
         }
-        emeralds.push({ x: z.x, y: z.y, born: elapsed });
+        // giants guard a whole pile of treasure
+        const loot = z.giant ? 3 : 1;
+        for (let e = 0; e < loot; e++) {
+          emeralds.push({ x: z.x + (e - 1) * 14, y: z.y, born: elapsed });
+        }
       }
     }
 
     // Did it get YOU? (hurtTimer = a moment of safety after each hit,
     // so one zombie can't eat all five hearts in one second)
-    if (distToYou < 26 && z.hp > 0 && player.hurtTimer <= 0 && player.deathTimer <= 0) {
+    if (distToYou < (z.giant ? 42 : 26) && z.hp > 0 && player.hurtTimer <= 0 && player.deathTimer <= 0) {
       if (player.armor > 0) player.armor -= 1;   // CLANK — the armor takes it!
       else player.hp -= 1;
       player.hurtTimer = 1;
@@ -1312,7 +1341,16 @@ function drawGame() {
     if (z.buried) continue;
     const zx = z.x - cam.x, zy = z.y - cam.y;
     if (zx < -20 || zy < -20 || zx > canvas.width + 20 || zy > canvas.height + 20) continue;
-    if (z.black) {
+    if (z.giant) {
+      // a 3x3 grid of purple lights drifting toward you in the dark.
+      // when you see NINE eyes... that's a giant.
+      ctx.fillStyle = 'rgba(176, 108, 255, 0.85)';
+      for (let row = 0; row < 3; row++) {
+        for (let col = 0; col < 3; col++) {
+          ctx.fillRect(zx - 8 + col * 7, zy - 47 + row * 7, 3, 3);
+        }
+      }
+    } else if (z.black) {
       // six purple pinpricks floating in the dark. good luck sleeping.
       ctx.fillStyle = 'rgba(176, 108, 255, 0.75)';
       for (let e = 0; e < 3; e++) {
@@ -1708,6 +1746,50 @@ function drawZombie(z, cam) {
     ctx.beginPath();
     ctx.ellipse(x - 2, y - 2, 8, 3, 0, 0, Math.PI * 2);
     ctx.fill();
+    return;
+  }
+
+  // ---- THE GIANT: nine eyes, spider legs, zero manners ----
+  if (z.giant) {
+    const stomp = Math.abs(Math.sin(elapsed * 4 + z.x)) * 4;   // heavy stomps
+    const flash = z.hurtFlash > 0;
+
+    // spider legs FIRST, so they come out from BEHIND the body
+    ctx.strokeStyle = '#141418';
+    ctx.lineWidth = 3;
+    for (let leg = 0; leg < 4; leg++) {
+      for (const side of [-1, 1]) {
+        const wiggle = Math.sin(elapsed * 6 + leg * 1.7 + z.x) * 4;   // skitter skitter
+        const spread = 14 + leg * 9;
+        ctx.beginPath();
+        ctx.moveTo(x + 6 * side, y - 38 - stomp);                   // out of the back
+        ctx.lineTo(x + spread * side, y - 52 - leg * 3 + wiggle);   // up to the knee
+        ctx.lineTo(x + (spread + 12) * side, y - 20 + wiggle);      // down to a point
+        ctx.stroke();
+      }
+    }
+
+    ctx.fillStyle = 'rgba(0,0,0,0.3)';
+    ctx.beginPath();
+    ctx.ellipse(x, y + 10, 20, 8, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = flash ? '#ffffff' : '#26262e';   // huge ragged body
+    ctx.fillRect(x - 14, y - 26 - stomp, 28, 30);
+    ctx.fillStyle = flash ? '#ffffff' : '#1c1c22';   // big square head
+    ctx.fillRect(x - 12, y - 52 - stomp, 24, 26);
+
+    // NINE glowing purple eyes — three rows of three
+    ctx.fillStyle = '#b06cff';
+    for (let row = 0; row < 3; row++) {
+      for (let col = 0; col < 3; col++) {
+        ctx.fillRect(x - 8 + col * 7, y - 47 + row * 7 - stomp, 3, 3);
+      }
+    }
+
+    ctx.fillStyle = flash ? '#ffffff' : '#1c1c22';   // massive grabby arms
+    ctx.fillRect(x - 20, y - 22 - stomp, 6, 16);
+    ctx.fillRect(x + 14, y - 22 - stomp, 6, 16);
     return;
   }
 
