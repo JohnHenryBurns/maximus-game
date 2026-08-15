@@ -52,22 +52,47 @@ let selected = HOUSE;
 let destroyed = 0;
 
 // ---------------------------------------------------------------------
-// THE TORNADO — when it exists, it wanders the town eating blocks.
-// null means the skies are calm. For now.
+// THE DISASTERS — one at a time, chosen from THE MACHINE's menu.
+// null means the world is at peace. For now.
 // ---------------------------------------------------------------------
-let tornado = null;
+let disaster = null;
 let debris = [];                    // flying bits of what used to be a town
+let craters = [];                   // meteor scars. they never heal.
 let shake = 0;                      // screen trembles while disaster reigns
 let elapsed = 0;
+let machineOpen = false;            // is the disaster menu showing?
 
-function summonTornado() {
-  if (tornado) return;              // one apocalypse at a time, please
-  tornado = {
-    x: -60,                                        // enters from the left edge
-    y: TOPBAR + Math.random() * (canvas.height - TOPBAR),
-    life: 12,                                      // seconds of chaos
-    wobble: Math.random() * 6.28,
-  };
+function summonDisaster(type) {
+  if (disaster) return;             // one apocalypse at a time, please
+  machineOpen = false;
+  if (type === 'tornado') {
+    disaster = { type, x: -60, y: TOPBAR + Math.random() * (canvas.height - TOPBAR),
+                 life: 12, wobble: Math.random() * 6.28 };
+  } else if (type === 'meteors') {
+    disaster = { type, life: 8, spawnTimer: 0, meteors: [] };
+  } else if (type === 'quake') {
+    disaster = { type, life: 6, seed: Math.random() * 100 };
+  } else if (type === 'flood') {
+    disaster = { type, life: 10, waterY: canvas.height + 50 };
+  }
+}
+
+// one block, smashed: emptied from the grid, launched as flying bits
+function smashBlock(gx, gy, bx, by, splash) {
+  const kind = grid[gy][gx];
+  grid[gy][gx] = EMPTY;
+  destroyed++;
+  for (let i = 0; i < 6; i++) {
+    debris.push({
+      x: bx, y: by,
+      vx: (Math.random() - 0.5) * 500,
+      vy: -Math.random() * 500 - 100,
+      spin: Math.random() * 10,
+      life: 1.2,
+      color: splash ? '#5da3e0'
+           : kind === TREE ? '#3f8a3f' : kind === STONE ? '#8a8d94' : '#b5563c',
+    });
+  }
 }
 
 // ---------------------------------------------------------------------
@@ -110,12 +135,39 @@ function buttonRects() {
   return rects;
 }
 
+// the machine's dial of doom
+const MACHINE_MENU = [
+  { label: '🌪 Tornado',    type: 'tornado' },
+  { label: '☄ Meteors',     type: 'meteors' },
+  { label: '💥 Earthquake', type: 'quake' },
+  { label: '🌊 Flood',      type: 'flood' },
+];
+
+function machineRects() {
+  const rects = [];
+  const w = 220, h = 44;
+  for (let i = 0; i < MACHINE_MENU.length; i++) {
+    rects.push({ ...MACHINE_MENU[i],
+      x: canvas.width - w - 10, y: TOPBAR + 8 + i * (h + 6), w, h });
+  }
+  return rects;
+}
+
 function pressAt(px, py) {
-  if (py > TOPBAR) return false;    // not on the bar
+  // if the machine menu is open, its buttons get first dibs
+  if (machineOpen) {
+    for (const r of machineRects()) {
+      if (px > r.x && px < r.x + r.w && py > r.y && py < r.y + r.h) {
+        summonDisaster(r.type);
+        return true;
+      }
+    }
+  }
+  if (py > TOPBAR) { machineOpen = false; return false; }   // clicked the world
   for (const r of buttonRects()) {
     if (px > r.x && px < r.x + r.w && py > r.y && py < r.y + r.h) {
-      if (r.machine) summonTornado();
-      else selected = r.type;
+      if (r.machine) machineOpen = !machineOpen;   // the machine opens its menu
+      else { selected = r.type; machineOpen = false; }
       return true;
     }
   }
@@ -150,7 +202,7 @@ addEventListener('keydown', e => {
   if (e.key === '2') selected = TREE;
   if (e.key === '3') selected = STONE;
   if (e.key === '4') selected = EMPTY;
-  if (e.key.toLowerCase() === 'd') summonTornado();   // D for DISASTER
+  if (e.key.toLowerCase() === 'd') machineOpen = !machineOpen;   // D for DISASTER menu
 });
 
 // ---------------------------------------------------------------------
@@ -161,41 +213,102 @@ function update(dt) {
   elapsed += dt;
   if (shake > 0) shake -= dt;
 
-  if (tornado) {
-    const t = tornado;
-    t.life -= dt;
-    // it drifts rightward while weaving up and down like it's dancing
-    t.wobble += dt * 1.7;
-    t.x += 95 * dt;
-    t.y += Math.sin(t.wobble) * 130 * dt;
-    t.y = Math.max(TOPBAR + 40, Math.min(canvas.height - 40, t.y));
-    shake = 0.2;
-
-    // any block near the funnel gets RIPPED UP and flung
+  if (disaster) {
+    const D = disaster;
+    D.life -= dt;
     const s = cellSize();
-    for (let gy = 0; gy < ROWS; gy++) {
-      for (let gx = 0; gx < COLS; gx++) {
-        if (grid[gy][gx] === EMPTY) continue;
-        const bx = gx * s + s / 2, by = TOPBAR + gy * s + s / 2;
-        if (Math.hypot(bx - t.x, by - t.y) < 70) {
-          const kind = grid[gy][gx];
-          grid[gy][gx] = EMPTY;
-          destroyed++;
-          for (let i = 0; i < 6; i++) {
-            debris.push({
-              x: bx, y: by,
-              vx: (Math.random() - 0.5) * 500,
-              vy: -Math.random() * 500 - 100,
-              spin: Math.random() * 10,
-              life: 1.2,
-              color: kind === TREE ? '#3f8a3f' : kind === STONE ? '#8a8d94' : '#b5563c',
-            });
+
+    if (D.type === 'tornado') {
+      // it drifts rightward while weaving up and down like it's dancing
+      D.wobble += dt * 1.7;
+      D.x += 95 * dt;
+      D.y += Math.sin(D.wobble) * 130 * dt;
+      D.y = Math.max(TOPBAR + 40, Math.min(canvas.height - 40, D.y));
+      shake = 0.2;
+      // any block near the funnel gets RIPPED UP and flung
+      for (let gy = 0; gy < ROWS; gy++) {
+        for (let gx = 0; gx < COLS; gx++) {
+          if (grid[gy][gx] === EMPTY) continue;
+          const bx = gx * s + s / 2, by = TOPBAR + gy * s + s / 2;
+          if (Math.hypot(bx - D.x, by - D.y) < 70) smashBlock(gx, gy, bx, by);
+        }
+      }
+      if (D.life <= 0 || D.x > canvas.width + 80) disaster = null;
+    }
+
+    if (D.type === 'meteors') {
+      shake = Math.max(shake, 0.1);
+      D.spawnTimer -= dt;
+      if (D.spawnTimer <= 0) {
+        D.spawnTimer = 0.45;                    // a new fireball every half second
+        D.meteors.push({
+          x: Math.random() * canvas.width + 120,
+          y: TOPBAR - 60,
+          ty: TOPBAR + 40 + Math.random() * (ROWS * s - 80),
+        });
+      }
+      for (const m of D.meteors) {
+        m.x -= 260 * dt;                        // falling at a slant
+        m.y += 620 * dt;
+        if (m.y >= m.ty) {
+          m.hit = true;
+          shake = 0.35;
+          craters.push({ x: m.x, y: m.y, r: 26 + Math.random() * 14 });
+          // BOOM — everything near the impact is gone, even stone
+          for (let gy = 0; gy < ROWS; gy++) {
+            for (let gx = 0; gx < COLS; gx++) {
+              if (grid[gy][gx] === EMPTY) continue;
+              const bx = gx * s + s / 2, by = TOPBAR + gy * s + s / 2;
+              if (Math.hypot(bx - m.x, by - m.y) < 60) smashBlock(gx, gy, bx, by);
+            }
+          }
+          for (let i = 0; i < 14; i++) {
+            debris.push({ x: m.x, y: m.y,
+              vx: (Math.random() - 0.5) * 600, vy: -Math.random() * 500,
+              spin: Math.random() * 10, life: 0.8,
+              color: i % 2 ? '#ff9f43' : '#ffd23f' });
           }
         }
       }
+      D.meteors = D.meteors.filter(m => !m.hit);
+      if (D.life <= 0 && D.meteors.length === 0) disaster = null;
     }
 
-    if (t.life <= 0 || t.x > canvas.width + 80) tornado = null;   // calm returns
+    if (D.type === 'quake') {
+      shake = 0.3;                              // the ground never stops moving
+      // blocks randomly crumble — houses are fragile, stone is tough
+      for (let gy = 0; gy < ROWS; gy++) {
+        for (let gx = 0; gx < COLS; gx++) {
+          const kind = grid[gy][gx];
+          if (kind === EMPTY) continue;
+          const fragile = kind === HOUSE ? 0.9 : kind === TREE ? 0.35 : 0.15;
+          if (Math.random() < fragile * dt) {
+            smashBlock(gx, gy, gx * s + s / 2, TOPBAR + gy * s + s / 2);
+          }
+        }
+      }
+      if (D.life <= 0) disaster = null;
+    }
+
+    if (D.type === 'flood') {
+      // the water rises for 4s, holds for 2s, drains for 4s
+      const t2 = 10 - D.life;
+      let frac;
+      if (t2 < 4) frac = t2 / 4;
+      else if (t2 < 6) frac = 1;
+      else frac = Math.max(0, 1 - (t2 - 6) / 4);
+      D.waterY = canvas.height - frac * (canvas.height - TOPBAR) * 0.65;
+      // anything underwater washes away... except STONE. stone doesn't care.
+      for (let gy = 0; gy < ROWS; gy++) {
+        for (let gx = 0; gx < COLS; gx++) {
+          const kind = grid[gy][gx];
+          if (kind === EMPTY || kind === STONE) continue;
+          const by = TOPBAR + gy * s + s / 2;
+          if (by > D.waterY) smashBlock(gx, gy, gx * s + s / 2, by, true);
+        }
+      }
+      if (D.life <= 0) disaster = null;
+    }
   }
 
   // debris tumbles through the air and fades
@@ -221,6 +334,18 @@ function draw() {
   // grass everywhere
   ctx.fillStyle = '#4a7c3a';
   ctx.fillRect(0, TOPBAR, canvas.width, canvas.height - TOPBAR);
+
+  // meteor craters, scarred into the lawn forever
+  for (const c of craters) {
+    ctx.fillStyle = 'rgba(30, 22, 14, 0.5)';
+    ctx.beginPath();
+    ctx.ellipse(c.x, c.y, c.r, c.r * 0.65, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(60, 45, 28, 0.5)';
+    ctx.beginPath();
+    ctx.ellipse(c.x, c.y, c.r * 0.55, c.r * 0.36, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
 
   const s = cellSize();
 
@@ -286,17 +411,81 @@ function draw() {
   }
   ctx.globalAlpha = 1;
 
-  // THE TORNADO — a stack of spinning gray rings, wide up top,
-  // narrow at the ground, always twisting
-  if (tornado) {
-    const t = tornado;
-    for (let ring = 0; ring < 7; ring++) {
-      const ry = t.y - ring * 22;
-      const rw = 14 + ring * 11 + Math.sin(elapsed * 9 + ring) * 5;
-      ctx.fillStyle = `rgba(180, 185, 195, ${0.5 - ring * 0.04})`;
+  // ---- DRAWING WHATEVER DOOM IS CURRENTLY HAPPENING ----
+  if (disaster) {
+    const D = disaster;
+
+    if (D.type === 'tornado') {
+      // a stack of spinning gray rings, wide up top, narrow at the ground
+      for (let ring = 0; ring < 7; ring++) {
+        const ry = D.y - ring * 22;
+        const rw = 14 + ring * 11 + Math.sin(elapsed * 9 + ring) * 5;
+        ctx.fillStyle = `rgba(180, 185, 195, ${0.5 - ring * 0.04})`;
+        ctx.beginPath();
+        ctx.ellipse(D.x + Math.sin(elapsed * 7 + ring * 1.3) * 7, ry, rw, 11, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    if (D.type === 'meteors') {
+      for (const m of D.meteors) {
+        // the fiery trail behind it
+        ctx.strokeStyle = 'rgba(255, 159, 67, 0.5)';
+        ctx.lineWidth = 6;
+        ctx.beginPath();
+        ctx.moveTo(m.x + 55, m.y - 130);
+        ctx.lineTo(m.x, m.y);
+        ctx.stroke();
+        // the fireball itself
+        ctx.fillStyle = '#ff9f43';
+        ctx.beginPath(); ctx.arc(m.x, m.y, 13, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#ffd23f';
+        ctx.beginPath(); ctx.arc(m.x + 3, m.y - 3, 7, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+
+    if (D.type === 'quake') {
+      // jagged cracks tearing across the ground (seeded so they hold still)
+      const rnd = n => {
+        const v = Math.sin((D.seed + n) * 127.1) * 43758.55;
+        return v - Math.floor(v);
+      };
+      ctx.strokeStyle = 'rgba(20, 14, 8, 0.6)';
+      ctx.lineWidth = 4;
+      for (let c = 0; c < 6; c++) {
+        let cx2 = rnd(c * 3.3) * canvas.width;
+        let cy2 = TOPBAR + rnd(c * 7.7) * (canvas.height - TOPBAR) * 0.3;
+        ctx.beginPath();
+        ctx.moveTo(cx2, cy2);
+        for (let seg = 0; seg < 8; seg++) {
+          cx2 += (rnd(c * 11 + seg) - 0.5) * 120;
+          cy2 += 40 + rnd(c * 13 + seg) * 60;
+          ctx.lineTo(cx2, cy2);
+        }
+        ctx.stroke();
+      }
+    }
+
+    if (D.type === 'flood') {
+      // the rising water, with a wavy crest
+      ctx.fillStyle = 'rgba(60, 130, 200, 0.55)';
       ctx.beginPath();
-      ctx.ellipse(t.x + Math.sin(elapsed * 7 + ring * 1.3) * 7, ry, rw, 11, 0, 0, Math.PI * 2);
+      ctx.moveTo(0, D.waterY);
+      for (let wx2 = 0; wx2 <= canvas.width; wx2 += 30) {
+        ctx.lineTo(wx2, D.waterY + Math.sin(elapsed * 3 + wx2 * 0.02) * 6);
+      }
+      ctx.lineTo(canvas.width, canvas.height);
+      ctx.lineTo(0, canvas.height);
+      ctx.closePath();
       ctx.fill();
+      ctx.strokeStyle = 'rgba(200, 230, 255, 0.6)';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      for (let wx2 = 0; wx2 <= canvas.width; wx2 += 30) {
+        const wy2 = D.waterY + Math.sin(elapsed * 3 + wx2 * 0.02) * 6;
+        if (wx2 === 0) ctx.moveTo(wx2, wy2); else ctx.lineTo(wx2, wy2);
+      }
+      ctx.stroke();
     }
   }
 
@@ -316,6 +505,27 @@ function draw() {
     ctx.font = `bold ${r.machine ? 18 : 15}px monospace`;
     ctx.textAlign = 'center';
     ctx.fillText(r.label, r.x + r.w / 2, r.y + r.h / 2 + 6);
+  }
+
+  // THE MACHINE's menu of doom, when open
+  if (machineOpen) {
+    for (const r of machineRects()) {
+      ctx.fillStyle = disaster ? '#3a2026' : '#7a1f2b';
+      ctx.fillRect(r.x, r.y, r.w, r.h);
+      ctx.strokeStyle = '#ff6b5e';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(r.x, r.y, r.w, r.h);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 16px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(r.label, r.x + r.w / 2, r.y + r.h / 2 + 6);
+    }
+    if (disaster) {
+      ctx.fillStyle = '#ffb3ab';
+      ctx.font = '13px monospace';
+      ctx.fillText('(one disaster at a time!)', canvas.width - 120,
+                   TOPBAR + 8 + 4 * 50 + 14);
+    }
   }
 
   // the destruction scoreboard
