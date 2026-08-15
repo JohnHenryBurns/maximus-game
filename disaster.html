@@ -231,16 +231,31 @@ function update(dt) {
     const s = cellSize();
 
     if (D.type === 'tornado') {
-      // it drifts rightward while weaving up and down like it's dancing
-      D.wobble += dt * 1.7;
-      D.x += 95 * dt;
-      D.y += Math.sin(D.wobble) * 130 * dt;
-      D.y = Math.max(TOPBAR + 40, Math.min(canvas.height - 40, D.y));
-      shake = 0.2;
-      // any block near the funnel gets RIPPED UP and flung
+      // tornadoes HUNT HOUSES. Find the nearest one still standing...
+      let target = null, best = 999999;
       for (let gy = 0; gy < ROWS; gy++) {
         for (let gx = 0; gx < COLS; gx++) {
-          if (grid[gy][gx] === EMPTY) continue;
+          if (grid[gy][gx] !== HOUSE) continue;
+          const bx = gx * s + s / 2, by = TOPBAR + gy * s + s / 2;
+          const d2 = Math.hypot(bx - D.x, by - D.y);
+          if (d2 < best) { best = d2; target = { x: bx, y: by }; }
+        }
+      }
+      D.wobble += dt * 1.7;
+      if (target) {
+        // ...and weave drunkenly toward its doom
+        const ang = Math.atan2(target.y - D.y, target.x - D.x);
+        D.x += Math.cos(ang) * 115 * dt + Math.sin(D.wobble) * 45 * dt;
+        D.y += Math.sin(ang) * 115 * dt + Math.cos(D.wobble) * 45 * dt;
+      } else {
+        D.x += 150 * dt;   // no houses left — it spins away, satisfied
+      }
+      D.y = Math.max(TOPBAR + 40, Math.min(canvas.height - 40, D.y));
+      shake = 0.2;
+      // it ONLY eats houses — trees and stone just get a wild hairdo
+      for (let gy = 0; gy < ROWS; gy++) {
+        for (let gx = 0; gx < COLS; gx++) {
+          if (grid[gy][gx] !== HOUSE) continue;
           const bx = gx * s + s / 2, by = TOPBAR + gy * s + s / 2;
           if (Math.hypot(bx - D.x, by - D.y) < 70) smashBlock(gx, gy, bx, by);
         }
