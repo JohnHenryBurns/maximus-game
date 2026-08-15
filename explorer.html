@@ -82,6 +82,53 @@ function noise(n) {
 }
 
 // ---------------------------------------------------------------------
+// SOUND — the browser has a built-in synthesizer (WebAudio). No sound
+// files needed: we build noises out of raw math. Browsers only allow
+// sound after the player has clicked or pressed something, so we switch
+// it on at the first input.
+// ---------------------------------------------------------------------
+let audioCtx = null;
+function ensureAudio() {
+  if (!audioCtx && window.AudioContext) audioCtx = new AudioContext();
+  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+}
+
+// the ROAR from the bottom of the Abyss: two deep growling tones that
+// slide downward together, muffled through a low-pass filter
+function abyssRoar() {
+  if (!audioCtx) return;
+  const t = audioCtx.currentTime;
+  const growl1 = audioCtx.createOscillator();
+  const growl2 = audioCtx.createOscillator();
+  const muffle = audioCtx.createBiquadFilter();
+  const volume = audioCtx.createGain();
+
+  growl1.type = 'sawtooth';
+  growl1.frequency.setValueAtTime(75, t);
+  growl1.frequency.exponentialRampToValueAtTime(32, t + 1.6);
+  growl2.type = 'square';
+  growl2.frequency.setValueAtTime(52, t);
+  growl2.frequency.exponentialRampToValueAtTime(24, t + 1.6);
+
+  muffle.type = 'lowpass';
+  muffle.frequency.value = 220;
+
+  volume.gain.setValueAtTime(0.0001, t);
+  volume.gain.exponentialRampToValueAtTime(0.22, t + 0.15);   // swells up...
+  volume.gain.exponentialRampToValueAtTime(0.0001, t + 1.8);  // ...and fades away
+
+  growl1.connect(muffle);
+  growl2.connect(muffle);
+  muffle.connect(volume);
+  volume.connect(audioCtx.destination);
+  growl1.start(t); growl2.start(t);
+  growl1.stop(t + 1.9); growl2.stop(t + 1.9);
+}
+
+let roarTimer = 8;    // counts down to the next roar
+let roarShake = 0;    // the screen trembles while the roar rolls
+
+// ---------------------------------------------------------------------
 // THE LEVELS
 // ---------------------------------------------------------------------
 const LEVELS = [
@@ -1516,6 +1563,9 @@ function buildAbyss(lv) {
   pond = { x: -9999, y: -9999, rx: 1, ry: 1, hidden: true };
   stumps = []; flowers = []; scorches = []; logs = []; webs = []; geckos = [];
 
+  roarTimer = 4;   // the Abyss says hello soon after you arrive
+  roarShake = 0;
+
   emeralds = [];
   particles = [];
   emeraldCount = 0;
@@ -1618,6 +1668,7 @@ function blocked(x, y, r = player.radius) {
 // ---------------------------------------------------------------------
 const keys = {};
 addEventListener('keydown', e => {
+  ensureAudio();   // browsers allow sound only after real input — this is it
   keys[e.key.toLowerCase()] = true;
   if (screen === 'menu') {
     const n = parseInt(e.key) - 1;
@@ -1646,6 +1697,7 @@ addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
 let stick = null;
 addEventListener('touchstart', e => {
   e.preventDefault();
+  ensureAudio();
   if (screen === 'menu') {
     const t = e.changedTouches[0];
     tryPickLevel(t.clientX, t.clientY);
@@ -2242,6 +2294,24 @@ function update(dt) {
     }
   }
 
+  // ---- THE ABYSS BREATHES — wind and roars ----
+  if (current.kind === 'abyss') {
+    // gusting wind shoves you sideways while you're out on the bridges
+    if (player.deathTimer <= 0) {
+      const gust = 22 + Math.sin(elapsed * 0.7) * 16;
+      const windX = player.x + gust * dt;
+      if (!blocked(windX, player.y)) player.x = windX;
+    }
+    // and every 6-11 seconds, something far below ROARS
+    if (roarShake > 0) roarShake -= dt;
+    roarTimer -= dt;
+    if (roarTimer <= 0) {
+      roarTimer = 6 + noise(elapsed * 3.7) * 5;
+      roarShake = 0.8;
+      abyssRoar();
+    }
+  }
+
   // ---- THE LAST BOSS — half goo, half zombie, all summons ----
   if (abyssBoss) {
     const b = abyssBoss;
@@ -2740,8 +2810,13 @@ function update(dt) {
 // It follows you, but stops at the world's edges (no peeking outside).
 // ---------------------------------------------------------------------
 function getCamera() {
-  const cx = Math.max(0, Math.min(current.worldW - canvas.width,  player.x - canvas.width / 2));
-  const cy = Math.max(0, Math.min(current.worldH - canvas.height, player.y - canvas.height / 2));
+  let cx = Math.max(0, Math.min(current.worldW - canvas.width,  player.x - canvas.width / 2));
+  let cy = Math.max(0, Math.min(current.worldH - canvas.height, player.y - canvas.height / 2));
+  // when the Abyss roars, the whole world trembles
+  if (roarShake > 0) {
+    cx += (noise(elapsed * 47.1) - 0.5) * 16 * roarShake;
+    cy += (noise(elapsed * 61.7) - 0.5) * 16 * roarShake;
+  }
   return { x: cx, y: cy };
 }
 
@@ -3645,6 +3720,32 @@ function drawGame() {
       ctx.strokeStyle = '#d8c2ff';
       ctx.lineWidth = 2;
       ctx.strokeRect(bx, by, bw, 14);
+    }
+  }
+
+  if (current.kind === 'abyss') {
+    // WIND — pale streaks tearing across the void
+    const slope = Math.sin(elapsed * 0.3) * 10;
+    ctx.strokeStyle = 'rgba(200, 190, 255, 0.20)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (let i = 0; i < 60; i++) {
+      const speed = 480 + noise(i) * 320;
+      const wx2 = (noise(i * 3.3) * 4000 + elapsed * speed) % (canvas.width + 80) - 40;
+      const wy2 = noise(i * 7.7) * canvas.height + Math.sin(elapsed * 2 + i) * 7;
+      ctx.moveTo(wx2, wy2);
+      ctx.lineTo(wx2 + 32, wy2 + slope);
+    }
+    ctx.stroke();
+
+    // the ROAR, rising from below in trembling letters
+    if (roarShake > 0.25) {
+      ctx.textAlign = 'center';
+      ctx.fillStyle = `rgba(220, 200, 255, ${roarShake * 0.8})`;
+      ctx.font = 'bold 26px monospace';
+      ctx.fillText('R R R A A A A W R R R R . . .',
+                   canvas.width / 2 + (noise(elapsed * 53.3) - 0.5) * 10,
+                   canvas.height - 40 + (noise(elapsed * 71.9) - 0.5) * 8);
     }
   }
 
@@ -4695,6 +4796,7 @@ function tryPickLevel(px, py) {
 }
 
 addEventListener('click', e => {
+  ensureAudio();
   if (screen === 'menu') tryPickLevel(e.clientX, e.clientY);
   else swingSword();           // clicking anywhere in the game swings too
 });
