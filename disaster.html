@@ -217,11 +217,13 @@ const roadConn = [];      // {N,S,E,W} — which sides join on
 const roadDual = [];      // 'v' / 'h' if this is one lane of a two-lane road
 const roadOne  = [];      // {dx,dy} one-way direction, for plain one-lane road
 const roadJunc = [];      // true if 3+ roads meet here — needs a traffic light
+const roadTurn = [];      // the bend a two-lane road makes, if this square is in one
 for (let y = 0; y < ROWS; y++) {
   roadConn.push(new Array(COLS).fill(null));
   roadDual.push(new Array(COLS).fill(null));
   roadOne.push(new Array(COLS).fill(null));
   roadJunc.push(new Array(COLS).fill(false));
+  roadTurn.push(new Array(COLS).fill(null));
 }
 
 function isRoad(gx, gy) {
@@ -267,12 +269,42 @@ function ensureRoads() {
       }
     }
   }
+  // pass 2a: CORNERS OF TWO-LANE ROADS. Where a two-lane road turns, four
+  // squares form a solid 2x2 block with the road arriving on one side and
+  // leaving on another. That's a BEND, not a crossroads — no traffic light,
+  // and the lanes sweep round it.
+  for (let gy = 0; gy < ROWS; gy++) roadTurn[gy].fill(null);
+  for (let by = 0; by < ROWS - 1; by++) {
+    for (let bx = 0; bx < COLS - 1; bx++) {
+      // is this whole 2x2 solid road?
+      if (!(isRoad(bx, by) && isRoad(bx + 1, by) &&
+            isRoad(bx, by + 1) && isRoad(bx + 1, by + 1))) continue;
+      // which sides does the road carry on out of the block, two squares wide?
+      const arms = [];
+      if (isRoad(bx, by - 1)     && isRoad(bx + 1, by - 1))     arms.push({ dx: 0, dy: -1 });
+      if (isRoad(bx, by + 2)     && isRoad(bx + 1, by + 2))     arms.push({ dx: 0, dy: 1 });
+      if (isRoad(bx - 1, by)     && isRoad(bx - 1, by + 1))     arms.push({ dx: -1, dy: 0 });
+      if (isRoad(bx + 2, by)     && isRoad(bx + 2, by + 1))     arms.push({ dx: 1, dy: 0 });
+      // exactly two arms, at right angles to each other = a corner
+      if (arms.length !== 2) continue;
+      const [a1, a2] = arms;
+      if (a1.dx * a2.dx + a1.dy * a2.dy !== 0) continue;   // opposite, not a corner
+      // The INSIDE of the bend is the block square nearest both arms; the
+      // OUTSIDE is the one diagonally opposite it.
+      const ax = a1.dx !== 0 ? a1 : a2, ay = a1.dy !== 0 ? a1 : a2;
+      const ix = bx + (ax.dx > 0 ? 1 : 0), iy = by + (ay.dy > 0 ? 1 : 0);
+      const ox = bx + (bx + 1 - ix), oy = by + (by + 1 - iy);
+      const turn = { bx, by, arms, ix, iy, ox, oy };
+      for (let dy = 0; dy < 2; dy++)
+        for (let dx = 0; dx < 2; dx++) roadTurn[by + dy][bx + dx] = turn;
+    }
+  }
   // pass 2b: JUNCTIONS — where three or more roads genuinely meet. A square
-  // that's simply part of a two-lane road doesn't count.
+  // that's simply part of a two-lane road, or of its bend, doesn't count.
   for (let gy = 0; gy < ROWS; gy++) {
     for (let gx = 0; gx < COLS; gx++) {
       const c = roadConn[gy][gx];
-      roadJunc[gy][gx] = !!c && c.n >= 3 && !roadDual[gy][gx];
+      roadJunc[gy][gx] = !!c && c.n >= 3 && !roadDual[gy][gx] && !roadTurn[gy][gx];
     }
   }
   // pass 3: ONE-WAY directions. Every straight one-lane run gets a single
@@ -340,18 +372,55 @@ const MIN_ROAD_RUN = 4;         // a road needs to be this long before cars both
 // Which way should a car on this square be pointed? A one-lane road has a
 // one-way direction; on a two-lane road you drive on the right, which means
 // the lane you're in decides your direction.
+// KEEP RIGHT. On a two-lane road you drive on the side that keeps the edge
+// of the road on your right — so on a road running up and down, the left-hand
+// lane goes down and the right-hand lane goes up. Ask which headings have
+// nothing but grass to their right; on a proper two-lane road exactly one
+// does, and that's the way this lane flows. (This also works perfectly well
+// on the squares of a bend.)
+function keepRight(gx, gy) {
+  const out = [];
+  for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    if (!isRoad(gx - dy, gy + dx)) out.push({ dx, dy });   // "right" of (dx,dy)
+  }
+  return out;
+}
+// On the outside corner of a bend, two headings can both keep the edge on
+// their right — but only one of them has road to drive on to. That's the way
+// the lane actually goes.
+function laneFrom(gx, gy) {
+  let kr = keepRight(gx, gy);
+  if (kr.length > 1) {
+    const onward = kr.filter(d => isRoad(gx + d.dx, gy + d.dy));
+    if (onward.length) kr = onward;
+  }
+  return kr.length === 1 ? kr[0] : null;
+}
+
 function laneDir(gx, gy) {
   const c = roadConn[gy] && roadConn[gy][gx];
   if (!c) return null;
-  const dual = roadDual[gy][gx];
-  if (dual === 'v') {
-    // the lane with its twin on the LEFT is the right-hand lane going down
-    return isRoad(gx - 1, gy) && roadDual[gy][gx - 1] === 'v' ? { dx: 0, dy: 1 }
-                                                              : { dx: 0, dy: -1 };
+
+  // A BEND in a two-lane road. Three of its four squares work out fine from
+  // the keep-right rule; the square on the INSIDE of the bend is hemmed in by
+  // road on all sides, so we give it the one direction that's left: whichever
+  // arm the outside of the bend does NOT leave by.
+  const t = roadTurn[gy][gx];
+  if (t) {
+    if (gx === t.ix && gy === t.iy) {
+      const outer = keepRight(t.ox, t.oy)
+        .find(d => t.arms.some(a => a.dx === d.dx && a.dy === d.dy));
+      const other = outer ? t.arms.find(a => a.dx !== outer.dx || a.dy !== outer.dy)
+                          : t.arms[0];
+      return other ? { dx: other.dx, dy: other.dy } : null;
+    }
+    const d = laneFrom(gx, gy);
+    if (d) return d;
   }
-  if (dual === 'h') {
-    return isRoad(gx, gy - 1) && roadDual[gy - 1][gx] === 'h' ? { dx: -1, dy: 0 }
-                                                              : { dx: 1, dy: 0 };
+
+  if (roadDual[gy][gx]) {
+    const d = laneFrom(gx, gy);
+    if (d) return d;
   }
   return roadOne[gy][gx];        // plain one-lane road: its one-way direction
 }
@@ -985,11 +1054,24 @@ function drawWay(gx, gy, x, y, s, kind) {
     // and we draw it across the FULL square so it meets the line from the
     // next square along, which is what makes bends and junctions join up.
     const dual = roadDual[gy][gx];
+    const turn = roadTurn[gy][gx];
     ctx.strokeStyle = '#f2d24b';
     ctx.lineWidth = Math.max(1, s * 0.05);
     ctx.setLineDash([s * 0.16, s * 0.14]);
     ctx.beginPath();
-    if (dual === 'v' && isRoad(gx + 1, gy) && roadDual[gy][gx + 1] === 'v') {
+    if (turn) {
+      // ROUND THE BEND. The centre line of a two-lane corner passes through
+      // the middle of the 2x2 block and reaches out to each arm — so it
+      // makes a tidy L that meets the lines of the straights either side.
+      // Drawn once, by the block's top-left square.
+      if (gx === turn.bx && gy === turn.by) {
+        const mx = (turn.bx + 1) * s, my = TOPBAR + (turn.by + 1) * s;
+        for (const a of turn.arms) {
+          ctx.moveTo(mx, my);
+          ctx.lineTo(mx + a.dx * s, my + a.dy * s);
+        }
+      }
+    } else if (dual === 'v' && isRoad(gx + 1, gy) && roadDual[gy][gx + 1] === 'v') {
       ctx.moveTo(x + s, y); ctx.lineTo(x + s, y + s);       // left lane of the pair
     } else if (dual === 'h' && isRoad(gx, gy + 1) && roadDual[gy + 1][gx] === 'h') {
       ctx.moveTo(x, y + s); ctx.lineTo(x + s, y + s);       // top lane of the pair
@@ -1537,6 +1619,17 @@ function update(dt) {
     const nx2 = Math.floor(car.x / cs), ny2 = Math.floor((car.y - TOPBAR) / cs);
     if (nx2 !== gx || ny2 !== gy) {
       if (nx2 < 0 || ny2 < 0 || nx2 >= COLS || ny2 >= ROWS) { car.gone = true; continue; }
+      // FOLLOW YOUR LANE. If the square we've rolled into is part of a bend,
+      // the lane itself tells us which way to go — so cars sweep round a
+      // two-lane corner in their own lane instead of ploughing straight on.
+      if (roadTurn[ny2][nx2]) {
+        const ld = laneDir(nx2, ny2);
+        if (ld && (ld.dx !== car.dx || ld.dy !== car.dy)) {
+          car.x = nx2 * cs + cs / 2; car.y = TOPBAR + ny2 * cs + cs / 2;
+          car.dx = ld.dx; car.dy = ld.dy;
+          continue;
+        }
+      }
       // NO DRIVING THE WRONG WAY. If the square we just rolled into is a
       // one-way going the other way, take a legal turn instead — and if
       // there isn't one, this car's journey quietly ends here.
