@@ -333,9 +333,9 @@ function update(dt) {
           m.hit = true;
           shake = 0.35;
           craters.push({ x: m.x, y: m.y, r: 26 + Math.random() * 14 });
-          // anyone standing near the impact gets LAUNCHED
+          // anyone standing OUTSIDE near the impact gets LAUNCHED
           for (const p of people) {
-            if (!p.gone && Math.hypot(p.x - m.x, p.y - m.y) < 85) {
+            if (!p.gone && !p.sheltering && Math.hypot(p.x - m.x, p.y - m.y) < 85) {
               p.gone = true;
               peopleLaunched++;
               launchedFolk.push({ x: p.x, y: p.y, vx: (Math.random() - 0.5) * 600,
@@ -437,40 +437,76 @@ function update(dt) {
   }
   disasters = disasters.filter(D => !D.done);   // sweep up the finished ones
 
-  // ---- THE LITTLE PEOPLE — wandering, or screaming, depending ----
+  // ---- THE LITTLE PEOPLE — wandering, panicking, or HIDING ----
   const panicking = disasters.length > 0;
+  const cs = cellSize();
   for (const p of people) {
+
+    // already hiding inside a building?
+    if (p.sheltering) {
+      const kind = grid[p.sheltering.gy][p.sheltering.gx];
+      if (kind !== HOUSE && kind !== APT && kind !== BUNKER) {
+        // their shelter was DESTROYED with them inside it. out they go!
+        p.gone = true;
+        peopleLaunched++;
+        launchedFolk.push({
+          x: p.sheltering.gx * cs + cs / 2,
+          y: TOPBAR + p.sheltering.gy * cs + cs / 2,
+          vx: (Math.random() - 0.5) * 600, vy: -400 - Math.random() * 300,
+          spin: 0, life: 1.4, shirt: p.shirt });
+      } else if (!panicking) {
+        // all clear! everyone shuffles back outside
+        p.x = p.sheltering.gx * cs + cs / 2 + (Math.random() - 0.5) * 20;
+        p.y = TOPBAR + p.sheltering.gy * cs + cs + 6;
+        p.sheltering = null;
+      }
+      continue;                     // hiding people don't walk around
+    }
+
     p.walk += dt * (panicking ? 16 : 6);
 
-    // find the nearest scary thing to run away from
-    let threat = null, tBest = 999999;
-    for (const D of disasters) {
-      if (D.type === 'tornado') {
-        const d2 = Math.hypot(D.x - p.x, D.y - p.y);
-        if (d2 < tBest) { tBest = d2; threat = D; }
-      }
-      if (D.type === 'balls') {
-        for (const ball of D.balls) {
-          const d2 = Math.hypot(ball.x - p.x, ball.y - p.y);
-          if (d2 < tBest) { tBest = d2; threat = ball; }
+    if (panicking) {
+      // RUN FOR SHELTER — find the nearest building with a roof.
+      // (Whether it's a GOOD shelter is... not their department.)
+      let target = p.shelterTarget;
+      if (!target || (grid[target.gy][target.gx] !== HOUSE &&
+                      grid[target.gy][target.gx] !== APT &&
+                      grid[target.gy][target.gx] !== BUNKER)) {
+        target = null;
+        let best = 999999;
+        for (let gy = 0; gy < ROWS; gy++) {
+          for (let gx = 0; gx < COLS; gx++) {
+            const kind = grid[gy][gx];
+            if (kind !== HOUSE && kind !== APT && kind !== BUNKER) continue;
+            const bx = gx * cs + cs / 2, by = TOPBAR + gy * cs + cs / 2;
+            const d2 = Math.hypot(bx - p.x, by - p.y);
+            if (d2 < best) { best = d2; target = { gx, gy, x: bx, y: by }; }
+          }
         }
+        p.shelterTarget = target;
       }
+      if (target) {
+        if (Math.hypot(target.x - p.x, target.y - p.y) < 12) {
+          p.sheltering = { gx: target.gx, gy: target.gy };   // made it! safe! (maybe)
+          p.shelterTarget = null;
+          continue;
+        }
+        p.angle = Math.atan2(target.y - p.y, target.x - p.x) + (Math.random() - 0.5) * 0.3;
+      } else {
+        p.angle += (Math.random() - 0.5) * dt * 22;   // no shelter?! headless-chicken mode
+      }
+    } else {
+      p.shelterTarget = null;
+      if (Math.random() < dt * 0.8) p.angle = Math.random() * 6.28;   // calm amble
     }
-    if (threat) {
-      // run AWAY, with panic wobble
-      p.angle = Math.atan2(p.y - threat.y, p.x - threat.x) + (Math.random() - 0.5) * 0.6;
-    } else if (panicking) {
-      p.angle += (Math.random() - 0.5) * dt * 22;   // headless-chicken mode
-    } else if (Math.random() < dt * 0.8) {
-      p.angle = Math.random() * 6.28;               // calm amble, new direction sometimes
-    }
+
     const speed = panicking ? 150 : 30;
     p.x += Math.cos(p.angle) * speed * dt;
     p.y += Math.sin(p.angle) * speed * dt;
     p.x = Math.max(14, Math.min(canvas.width - 14, p.x));
     p.y = Math.max(TOPBAR + 14, Math.min(canvas.height - 14, p.y));
 
-    // did something GET them?
+    // did something GET them on the way?
     let hit = false;
     for (const D of disasters) {
       if (D.type === 'tornado' && Math.hypot(D.x - p.x, D.y - p.y) < 45) hit = true;
@@ -610,8 +646,9 @@ function draw() {
     }
   }
 
-  // the little people, bless them
+  // the little people, bless them (the hiding ones are indoors, unseen)
   for (const p of people) {
+    if (p.sheltering) continue;
     const step = Math.sin(p.walk) * 2;
     ctx.fillStyle = '#333';                          // busy little legs
     ctx.fillRect(p.x - 3, p.y - 2 + step, 2, 5 - step);
