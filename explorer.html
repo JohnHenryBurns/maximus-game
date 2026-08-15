@@ -586,11 +586,9 @@ function update(dt) {
         c.hp = 0;
         c.exploded = true;             // exploded creepers destroy their own loot
         if (distToYou < 100 && player.deathTimer <= 0) {
-          // an explosion hits TWICE — armor takes the hits first
-          for (let i = 0; i < 2; i++) {
-            if (player.armor > 0) player.armor -= 1;
-            else player.hp -= 1;
-          }
+          // an explosion costs 1 heart — armor takes the hit first
+          if (player.armor > 0) player.armor -= 1;
+          else player.hp -= 1;
           player.hurtTimer = 1;
           // and it LAUNCHES you
           const push = 130 / Math.max(20, distToYou);
