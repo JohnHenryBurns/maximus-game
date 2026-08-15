@@ -85,6 +85,21 @@ function summonDisaster(type) {
     disasters.push({ type, life: 6, seed: Math.random() * 100 });
   } else if (type === 'flood') {
     disasters.push({ type, life: 10, waterY: canvas.height + 50 });
+  } else if (type === 'balls') {
+    // 10 rubber balls, dropped from above, each with its own direction
+    const balls = [];
+    const colors = ['#ff4757', '#ffa502', '#2ed573', '#1e90ff', '#ff6b81',
+                    '#eccc68', '#7bed9f', '#70a1ff', '#ff7f50', '#a29bfe'];
+    for (let i = 0; i < 10; i++) {
+      balls.push({
+        x: 60 + Math.random() * (canvas.width - 120),
+        y: TOPBAR - 40 - Math.random() * 250,        // starting up in the sky
+        vx: (Math.random() < 0.5 ? -1 : 1) * (220 + Math.random() * 220),
+        vy: 250 + Math.random() * 200,
+        color: colors[i],
+      });
+    }
+    disasters.push({ type, life: 3.8, balls });
   }
 }
 
@@ -152,10 +167,11 @@ function buttonRects() {
 
 // the machine's dial of doom
 const MACHINE_MENU = [
-  { label: '🌪 Tornado',    type: 'tornado', cost: 10 },
-  { label: '☄ Meteors',     type: 'meteors', cost: 15 },
-  { label: '💥 Earthquake', type: 'quake',   cost: 8 },
-  { label: '🌊 Flood',      type: 'flood',   cost: 12 },
+  { label: '🌪 Tornado',      type: 'tornado', cost: 10 },
+  { label: '☄ Meteors',       type: 'meteors', cost: 15 },
+  { label: '💥 Earthquake',   type: 'quake',   cost: 8 },
+  { label: '🌊 Flood',        type: 'flood',   cost: 12 },
+  { label: '🔴 Rubber Balls', type: 'balls',   cost: 9 },
 ];
 
 function machineRects() {
@@ -345,6 +361,39 @@ function update(dt) {
         }
       }
       if (D.life <= 0) D.done = true;
+    }
+
+    if (D.type === 'balls') {
+      shake = Math.max(shake, 0.08);
+      for (const ball of D.balls) {
+        ball.x += ball.vx * dt;
+        ball.y += ball.vy * dt;
+        // BOING — bounce off every edge of the world
+        if (ball.x < 16) { ball.x = 16; ball.vx = Math.abs(ball.vx); }
+        if (ball.x > canvas.width - 16) { ball.x = canvas.width - 16; ball.vx = -Math.abs(ball.vx); }
+        if (ball.y < TOPBAR + 16) { ball.y = TOPBAR + 16; ball.vy = Math.abs(ball.vy); }
+        if (ball.y > canvas.height - 16) { ball.y = canvas.height - 16; ball.vy = -Math.abs(ball.vy); }
+        // anything a ball touches gets bounced INTO OBLIVION (except bunkers)
+        for (let gy = 0; gy < ROWS; gy++) {
+          for (let gx = 0; gx < COLS; gx++) {
+            const kind = grid[gy][gx];
+            if (kind === EMPTY || kind === BUNKER) continue;
+            const bx = gx * s + s / 2, by = TOPBAR + gy * s + s / 2;
+            if (Math.hypot(bx - ball.x, by - ball.y) < 34) smashBlock(gx, gy, bx, by);
+          }
+        }
+      }
+      if (D.life <= 0) {
+        // time's up — every ball POPS in a burst of its own color
+        for (const ball of D.balls) {
+          for (let i = 0; i < 8; i++) {
+            debris.push({ x: ball.x, y: ball.y,
+              vx: (Math.random() - 0.5) * 400, vy: -Math.random() * 350,
+              spin: Math.random() * 10, life: 0.6, color: ball.color });
+          }
+        }
+        D.done = true;
+      }
     }
   }
   disasters = disasters.filter(D => !D.done);   // sweep up the finished ones
@@ -546,6 +595,23 @@ function draw() {
       }
       ctx.stroke();
     }
+
+    if (D.type === 'balls') {
+      for (const ball of D.balls) {
+        // a little motion trail behind each ball
+        ctx.strokeStyle = ball.color + '66';
+        ctx.lineWidth = 8;
+        ctx.beginPath();
+        ctx.moveTo(ball.x - ball.vx * 0.06, ball.y - ball.vy * 0.06);
+        ctx.lineTo(ball.x, ball.y);
+        ctx.stroke();
+        // the ball itself, with a shiny spot
+        ctx.fillStyle = ball.color;
+        ctx.beginPath(); ctx.arc(ball.x, ball.y, 15, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = 'rgba(255,255,255,0.7)';
+        ctx.beginPath(); ctx.arc(ball.x - 5, ball.y - 5, 4.5, 0, Math.PI * 2); ctx.fill();
+      }
+    }
   }
 
   ctx.restore();   // stop shaking for the buttons — the UI stays calm
@@ -583,7 +649,7 @@ function draw() {
     ctx.fillStyle = '#ffb3ab';
     ctx.font = '13px monospace';
     ctx.fillText('(stack as many as you can afford)', canvas.width - 120,
-                 TOPBAR + 8 + 4 * 50 + 14);
+                 TOPBAR + 8 + MACHINE_MENU.length * 50 + 14);
   }
 
   // THE BANK BALANCE — parked right next to THE MACHINE, so you can
