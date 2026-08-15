@@ -102,6 +102,7 @@ let zombies = [];
 let creepers = [];      // sssssss...
 let torches = [];       // flickering lights along the temple walkway
 let scorches = [];      // burn marks left by creeper explosions
+let tiles = [];         // sand + stone paving squares on the temple walkway
 let emeralds = [];      // dropped treasure waiting to be grabbed
 let particles = [];     // flying bits when a monster goes POOF
 let emeraldCount = 0;   // your treasure so far
@@ -235,6 +236,7 @@ function buildForest(lv) {
   creepers = [];
   torches = [];
   scorches = [];
+  tiles = [];
   emeralds = [];
   particles = [];
   emeraldCount = 0;
@@ -272,6 +274,50 @@ function buildTemple(lv) {
   for (let y = 40; y < lv.worldH; y += 60) {
     trees.push({ x: 35, y, size: 1.1, pillar: true });
     trees.push({ x: lv.worldW - 35, y, size: 1.1, pillar: true });
+  }
+
+  // WALLS on both sides of the walkway — we march along the path and
+  // drop a sandstone block every few steps, one on each side. "Perpendicular"
+  // means "sideways from the direction you're walking" — that's how we
+  // know where "each side" even is.
+  let wn = 0;
+  for (let i = 0; i < TEMPLE_PATH.length - 1; i++) {
+    const a = TEMPLE_PATH[i], b = TEMPLE_PATH[i + 1];
+    const segLen = Math.hypot(b.x - a.x, b.y - a.y);
+    const ux = (b.x - a.x) / segLen, uy = (b.y - a.y) / segLen;   // walking direction
+    for (let d = 0; d < segLen; d += 44) {
+      for (const side of [-1, 1]) {
+        wn++;
+        if (noise(wn * 6.1) < 0.15) continue;   // crumbled away — a peek-through gap
+        const wx = a.x + ux * d + (-uy) * 105 * side;   // sideways from the path
+        const wy = a.y + uy * d + ux * 105 * side;
+        if (Math.hypot(wx - altar.x, wy - altar.y) < 150) continue;
+        if (Math.hypot(wx - lv.start.x, wy - lv.start.y) < 90) continue;
+        // where two path pieces meet, don't stack blocks on top of each other
+        if (trees.some(t => t.wall && Math.hypot(t.x - wx, t.y - wy) < 30)) continue;
+        trees.push({ x: wx, y: wy, size: 1, wall: true });
+      }
+    }
+  }
+
+  // the SAND-AND-STONE PAVING — scatter little square tiles all along
+  // the walkway, some sandy, some gray stone, like an old patchwork road
+  tiles = [];
+  let tn = 0;
+  for (let i = 0; i < TEMPLE_PATH.length - 1; i++) {
+    const a = TEMPLE_PATH[i], b = TEMPLE_PATH[i + 1];
+    const segLen = Math.hypot(b.x - a.x, b.y - a.y);
+    const ux = (b.x - a.x) / segLen, uy = (b.y - a.y) / segLen;
+    for (let d = 0; d < segLen; d += 24) {
+      tn++;
+      const off = (noise(tn * 3.7) - 0.5) * 130;      // scatter across the width
+      tiles.push({
+        x: a.x + ux * d + (-uy) * off,
+        y: a.y + uy * d + ux * off,
+        size: 16 + noise(tn * 5.1) * 14,
+        sand: noise(tn * 8.3) < 0.55,                 // sandy tile or stone tile?
+      });
+    }
   }
 
   pond = { x: 480, y: 520, rx: 130, ry: 85, lava: true };   // not water. NOT water.
@@ -375,9 +421,9 @@ function blocked(x, y, r = player.radius) {
   // the pond (explorers hate wet socks; zombies can't swim either)
   if (((x - pond.x) / (pond.rx + r)) ** 2 +
       ((y - pond.y) / (pond.ry + r)) ** 2 < 1) return true;
-  // tree trunks and stone pillars — pillars are fatter than trunks
+  // tree trunks, stone pillars, and temple walls — each blocks differently
   for (const t of trees) {
-    const chunk = t.pillar ? 18 : 13;
+    const chunk = t.wall ? 21 : t.pillar ? 18 : 13;
     if (Math.hypot(x - t.x, y - t.y) < r + chunk * t.size) return true;
   }
   return false;
@@ -779,6 +825,25 @@ function drawGame() {
     ctx.restore();
   }
 
+  // the sand-and-stone walkway (temple only): a packed-sand base first,
+  // then the patchwork of paving tiles on top
+  if (current.kind === 'temple') {
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(TEMPLE_PATH[0].x - cam.x, TEMPLE_PATH[0].y - cam.y);
+    for (const p of TEMPLE_PATH) ctx.lineTo(p.x - cam.x, p.y - cam.y);
+    ctx.strokeStyle = '#6e6248';
+    ctx.lineWidth = 175;
+    ctx.stroke();
+    for (const t2 of tiles) {
+      const tx = t2.x - cam.x, ty = t2.y - cam.y;
+      if (tx < -40 || ty < -40 || tx > canvas.width + 40 || ty > canvas.height + 40) continue;
+      ctx.fillStyle = t2.sand ? '#8f7c54' : '#71736a';
+      ctx.fillRect(tx - t2.size / 2, ty - t2.size / 2, t2.size, t2.size);
+    }
+  }
+
   // scorch marks from creeper explosions (they never wash off)
   for (const s of scorches) {
     ctx.fillStyle = 'rgba(20, 15, 10, 0.55)';
@@ -839,6 +904,7 @@ function drawGame() {
     else if (thing.zombie) drawZombie(thing, cam);
     else if (thing.creeper) drawCreeper(thing, cam);
     else if (thing.torch) drawTorch(thing, cam);
+    else if (thing.wall) drawWall(thing, cam);
     else if (thing.pillar) drawPillar(thing, cam);
     else drawTree(thing, cam);
   }
@@ -1317,6 +1383,28 @@ function drawPillar(p, cam) {
   if (noise(p.x * 1.7) > 0.4) ctx.fillRect(x - 13 * s, y - 30 * s, 10 * s, 12 * s);
   if (noise(p.y * 2.3) > 0.5) ctx.fillRect(x + 2 * s, y - 52 * s, 9 * s, 10 * s);
   ctx.fillStyle = '#63655c'; ctx.fillRect(x - 17 * s, y - 70 * s, 34 * s, 10 * s);  // cap
+}
+
+// ---------------------------------------------------------------------
+// A WALL BLOCK — big sandstone bricks lining the walkway
+// ---------------------------------------------------------------------
+function drawWall(w, cam) {
+  const x = w.x - cam.x, y = w.y - cam.y;
+  if (x < -60 || y < -90 || x > canvas.width + 60 || y > canvas.height + 90) return;
+
+  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  ctx.beginPath();
+  ctx.ellipse(x + 5, y + 5, 23, 8, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#6d6250'; ctx.fillRect(x - 22, y - 10, 44, 14);   // base
+  ctx.fillStyle = '#8a7c5e'; ctx.fillRect(x - 22, y - 52, 44, 44);   // sandstone face
+  ctx.fillStyle = '#9c8e6e'; ctx.fillRect(x - 22, y - 52, 44, 10);   // sunlit(ish) top
+  // brick cracks — noise() gives each block its own crack pattern
+  ctx.fillStyle = 'rgba(40, 32, 20, 0.35)';
+  ctx.fillRect(x - 22, y - 31, 44, 2);
+  ctx.fillRect(x - 4 + noise(w.x) * 8, y - 52, 2, 21);
+  ctx.fillRect(x - 14 + noise(w.y) * 8, y - 29, 2, 19);
 }
 
 // ---------------------------------------------------------------------
