@@ -104,25 +104,26 @@ function abyssRoar() {
   const volume = audioCtx.createGain();
 
   growl1.type = 'sawtooth';
-  growl1.frequency.setValueAtTime(75, t);
-  growl1.frequency.exponentialRampToValueAtTime(32, t + 1.6);
+  growl1.frequency.setValueAtTime(80, t);
+  growl1.frequency.exponentialRampToValueAtTime(26, t + 3.6);   // loooong slide down
   growl2.type = 'square';
-  growl2.frequency.setValueAtTime(52, t);
-  growl2.frequency.exponentialRampToValueAtTime(24, t + 1.6);
+  growl2.frequency.setValueAtTime(55, t);
+  growl2.frequency.exponentialRampToValueAtTime(20, t + 3.6);
 
   muffle.type = 'lowpass';
-  muffle.frequency.value = 220;
+  muffle.frequency.value = 240;
 
   volume.gain.setValueAtTime(0.0001, t);
-  volume.gain.exponentialRampToValueAtTime(0.22, t + 0.15);   // swells up...
-  volume.gain.exponentialRampToValueAtTime(0.0001, t + 1.8);  // ...and fades away
+  volume.gain.exponentialRampToValueAtTime(0.45, t + 0.2);    // BIG swell...
+  volume.gain.exponentialRampToValueAtTime(0.3, t + 2.4);     // ...held, rolling...
+  volume.gain.exponentialRampToValueAtTime(0.0001, t + 4.3);  // ...dying away slow
 
   growl1.connect(muffle);
   growl2.connect(muffle);
   muffle.connect(volume);
   volume.connect(audioCtx.destination);
   growl1.start(t); growl2.start(t);
-  growl1.stop(t + 1.9); growl2.stop(t + 1.9);
+  growl1.stop(t + 4.5); growl2.stop(t + 4.5);
 }
 
 let roarTimer = 8;    // counts down to the next roar
@@ -2306,8 +2307,8 @@ function update(dt) {
     if (roarShake > 0) roarShake -= dt;
     roarTimer -= dt;
     if (roarTimer <= 0) {
-      roarTimer = 6 + noise(elapsed * 3.7) * 5;
-      roarShake = 0.8;
+      roarTimer = 9 + noise(elapsed * 3.7) * 6;   // room to breathe between roars
+      roarShake = 3.5;                            // the shake rolls as long as the roar
       abyssRoar();
     }
   }
@@ -2812,10 +2813,12 @@ function update(dt) {
 function getCamera() {
   let cx = Math.max(0, Math.min(current.worldW - canvas.width,  player.x - canvas.width / 2));
   let cy = Math.max(0, Math.min(current.worldH - canvas.height, player.y - canvas.height / 2));
-  // when the Abyss roars, the whole world trembles
+  // when the Abyss roars, the whole world trembles (capped so a long
+  // roar shakes steadily instead of launching the camera into orbit)
   if (roarShake > 0) {
-    cx += (noise(elapsed * 47.1) - 0.5) * 16 * roarShake;
-    cy += (noise(elapsed * 61.7) - 0.5) * 16 * roarShake;
+    const tremble = Math.min(1, roarShake);
+    cx += (noise(elapsed * 47.1) - 0.5) * 16 * tremble;
+    cy += (noise(elapsed * 61.7) - 0.5) * 16 * tremble;
   }
   return { x: cx, y: cy };
 }
