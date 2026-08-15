@@ -82,22 +82,49 @@ const EMPTY = 0, HOUSE = 1, TREE = 2, STONE = 3, APT = 4, BUNKER = 5;
 let selected = HOUSE;
 
 // ---------------------------------------------------------------------
-// LITTLE PEOPLE — they live in your town. they have no idea.
+// LITTLE PEOPLE (and cows, and dogs) — they live in your town. no idea.
 // ---------------------------------------------------------------------
 let people = [];
-let launchedFolk = [];     // people currently flying through the air (they're fine)
+let launchedFolk = [];     // folk currently flying through the air (they're fine)
 let peopleLaunched = 0;
 
-function spawnPeople() {
-  for (let i = 0; i < 5 && people.length < 40; i++) {
+// A square you can't walk into: anything built except an OPEN square.
+// (Trees and stone block you too — you can't stroll through a boulder.)
+function blocked(gx, gy) {
+  if (gx < 0 || gy < 0 || gx >= COLS || gy >= ROWS) return true;   // off the map
+  return grid[gy][gx] !== EMPTY;
+}
+// same question, but in pixels
+function blockedAt(x, y) {
+  const s = cellSize();
+  return blocked(Math.floor(x / s), Math.floor((y - TOPBAR) / s));
+}
+
+// find an open square to drop a new critter on (never inside a building)
+function freeSpot() {
+  const s = cellSize();
+  for (let tries = 0; tries < 60; tries++) {
+    const gx = Math.floor(Math.random() * COLS), gy = Math.floor(Math.random() * ROWS);
+    if (!blocked(gx, gy)) return { x: gx * s + s / 2, y: TOPBAR + gy * s + s / 2 };
+  }
+  return null;                     // town completely full — nowhere to stand
+}
+
+function spawnCritters(kind) {
+  let made = 0;
+  for (let i = 0; i < 5 && people.length < 60; i++) {
+    const spot = freeSpot();
+    if (!spot) break;
     people.push({
-      x: 10 + Math.random() * (gridW() - 20),
-      y: TOPBAR + 10 + Math.random() * (gridH() - 20),
+      kind,                        // 'person', 'cow' or 'dog'
+      x: spot.x, y: spot.y,
       angle: Math.random() * 6.28,
       walk: Math.random() * 6.28,
       shirt: ['#e74c3c', '#3498db', '#f1c40f', '#9b59b6', '#2ecc71', '#e67e22'][Math.floor(Math.random() * 6)],
     });
+    made++;
   }
+  return made;
 }
 
 // scoreboard of destruction
@@ -296,7 +323,14 @@ const buttons = [
   { icon: '❌', short: 'Erase',  type: EMPTY },
 ];
 
-// everything you can UNLEASH — these fill the Disasters drop-down
+// the critters you can drop into town — these fill the People drop-down
+const CRITTER_MENU = [
+  { label: '🧍 People', kind: 'person' },
+  { label: '🐄 Cows',   kind: 'cow' },
+  { label: '🐕 Dogs',   kind: 'dog' },
+];
+
+// everything you can UNLEASH — these fill the Disaster drop-down
 const MACHINE_MENU = [
   { label: '🌪 Tornado',      type: 'tornado', cost: 10 },
   { label: '☄ Meteors',       type: 'meteors', cost: 15 },
@@ -369,9 +403,9 @@ function topButtons() {
   const x0 = pad, x1 = canvas.width - pad;
   const w = (x1 - x0 - gap * 2) / 3;
   const defs = [
-    { key: 'build',     icon: buildIcon(), word: 'Build',     menu: true },
-    { key: 'people',    icon: '🧍',        word: 'People',    menu: false },
-    { key: 'disasters', icon: '🌪',        word: 'Disasters', menu: true },
+    { key: 'build',     icon: buildIcon(), word: 'Build',    menu: true },
+    { key: 'people',    icon: '🧍',        word: 'People',   menu: true },
+    { key: 'disasters', icon: '🌪',        word: 'Disaster', menu: true },
   ];
   return defs.map((d, i) => ({ ...d, x: x0 + i * (w + gap), y, w, h }));
 }
@@ -390,6 +424,8 @@ function menuRects(kind) {
   const btn = topButtons().find(b => b.key === kind);
   const items = kind === 'build'
     ? buttons.map(b => ({ label: b.icon + ' ' + b.short, type: b.type, cost: 0 }))
+    : kind === 'people'
+    ? CRITTER_MENU.map(c => ({ ...c }))
     : MACHINE_MENU.map(m => ({ ...m }));
   // disasters need extra room so the name never crowds its price tag
   const minW = kind === 'disasters' ? 214 : 172;
@@ -399,15 +435,9 @@ function menuRects(kind) {
   return items.map((it, i) => ({ ...it, x, y: TOPBAR + 6 + i * (h + gap), w, h }));
 }
 
-// tapping a top button: open/close its menu, or (People) just spawn folk
+// tapping a top button: open or close its drop-down
 function handleTopButton(b) {
-  if (b.key === 'people') {
-    spawnPeople();
-    setStatus('🧍 New folk wander in!', '#7ddf8f');
-    openMenu = null;
-  } else {
-    openMenu = (openMenu === b.key) ? null : b.key;   // toggle the drop-down
-  }
+  openMenu = (openMenu === b.key) ? null : b.key;
 }
 
 // tapping a row inside an open menu
@@ -415,6 +445,11 @@ function chooseFromMenu(kind, r) {
   if (kind === 'build') {
     selected = r.type;
     setStatus('Now placing ' + r.label, '#7ddf8f');
+    openMenu = null;
+  } else if (kind === 'people') {
+    const made = spawnCritters(r.kind);
+    setStatus(made ? r.label + ' wander in!' : 'No open ground left to stand on!',
+              made ? '#7ddf8f' : '#ff6b5e');
     openMenu = null;
   } else {
     pickDisaster(r);      // pays, closes the menu, and starts the tension countdown
@@ -532,7 +567,9 @@ addEventListener('keydown', e => {
   }
   if (e.key.toLowerCase() === 'd') openMenu = openMenu === 'disasters' ? null : 'disasters';  // D for Disasters menu
   if (e.key.toLowerCase() === 'b') openMenu = openMenu === 'build' ? null : 'build';          // B for Build menu
-  if (e.key.toLowerCase() === 'p') { spawnPeople(); setStatus('🧍 New folk wander in!', '#7ddf8f'); }
+  if (e.key.toLowerCase() === 'p') { spawnCritters('person'); setStatus('🧍 People wander in!', '#7ddf8f'); }
+  if (e.key.toLowerCase() === 'c') { spawnCritters('cow');    setStatus('🐄 Cows wander in!', '#7ddf8f'); }
+  if (e.key.toLowerCase() === 'g') { spawnCritters('dog');    setStatus('🐕 Dogs wander in!', '#7ddf8f'); }
   if (e.key === 'Escape') stopBuilding();                        // Esc stops building
   if (e.key === '0') { zoom = 1; panX = 0; panY = 0; }           // 0 zooms back out to the whole town
 });
@@ -817,11 +854,28 @@ function update(dt) {
       if (Math.random() < dt * 0.8) p.angle = Math.random() * 6.28;   // calm amble
     }
 
-    const speed = panicking ? 150 : 30;
-    p.x += Math.cos(p.angle) * speed * dt;
-    p.y += Math.sin(p.angle) * speed * dt;
-    p.x = Math.max(14, Math.min(COLS * cs - 14, p.x));
-    p.y = Math.max(TOPBAR + 14, Math.min(TOPBAR + ROWS * cs - 14, p.y));
+    // dogs scamper, cows plod, people are in between
+    const pace = p.kind === 'dog' ? 1.35 : p.kind === 'cow' ? 0.6 : 1;
+    const speed = (panicking ? 150 : 30) * pace;
+    const nx = p.x + Math.cos(p.angle) * speed * dt;
+    const ny = p.y + Math.sin(p.angle) * speed * dt;
+
+    // WALLS ARE SOLID. Try each direction on its own so they slide along a
+    // wall instead of sticking to it. The one square they ARE allowed into
+    // is the shelter they're running for — that's the door.
+    const goal = p.shelterTarget;
+    const okAt = (x, y) => {
+      const gx = Math.floor(x / cs), gy = Math.floor((y - TOPBAR) / cs);
+      if (goal && goal.gx === gx && goal.gy === gy) return true;   // their doorway
+      return !blocked(gx, gy);
+    };
+    if (okAt(nx, p.y)) p.x = nx;
+    else p.angle = Math.PI - p.angle;              // bounced off a wall sideways
+    if (okAt(p.x, ny)) p.y = ny;
+    else p.angle = -p.angle;                       // bounced off a wall up/down
+
+    p.x = Math.max(4, Math.min(COLS * cs - 4, p.x));
+    p.y = Math.max(TOPBAR + 4, Math.min(TOPBAR + ROWS * cs - 4, p.y));
 
     // did something GET them on the way?
     let hit = false;
@@ -1012,40 +1066,77 @@ function draw() {
     for (let i = 0; i < Math.min(3, peek[k]); i++) {
       ctx.fillStyle = '#f2c79b';
       ctx.beginPath();
-      ctx.arc(px2 + s * (0.3 + i * 0.2), py2 + s * 0.88, 2.5, 0, Math.PI * 2);
+      ctx.arc(px2 + s * (0.3 + i * 0.2), py2 + s * 0.88, s * 0.08, 0, Math.PI * 2);
       ctx.fill();
     }
   }
 
-  // the little people, bless them (the hiding ones are indoors, unseen)
+  // The critters, bless them (the hiding ones are indoors, unseen).
+  // Everyone is drawn relative to `u` — one grid square — so they stay the
+  // right size next to the houses however big the squares are.
   for (const p of people) {
     if (p.sheltering) continue;
-    const step = Math.sin(p.walk) * 2;
-    ctx.fillStyle = '#333';                          // busy little legs
-    ctx.fillRect(p.x - 3, p.y - 2 + step, 2, 5 - step);
-    ctx.fillRect(p.x + 1, p.y - 2 - step, 2, 5 + step);
-    ctx.fillStyle = p.shirt;                         // shirt
-    ctx.fillRect(p.x - 4, p.y - 10, 8, 9);
-    ctx.fillStyle = '#f2c79b';                       // head
-    ctx.beginPath(); ctx.arc(p.x, p.y - 13, 3.5, 0, Math.PI * 2); ctx.fill();
+    const u = s / 26;                                // one "unit" scaled to the square
+    const step = Math.sin(p.walk) * 2 * u;
+    const facing = Math.cos(p.angle) < 0 ? -1 : 1;   // which way are they pointed?
+
+    if (p.kind === 'cow') {
+      ctx.fillStyle = '#3b2f2a';                     // four stumpy legs
+      ctx.fillRect(p.x - 7 * u, p.y - 1 * u + step, 2.4 * u, 6 * u - step);
+      ctx.fillRect(p.x + 4.6 * u, p.y - 1 * u - step, 2.4 * u, 6 * u + step);
+      ctx.fillStyle = '#f4f4f2';                     // big white body
+      ctx.fillRect(p.x - 9 * u, p.y - 10 * u, 18 * u, 10 * u);
+      ctx.fillStyle = '#2f2a28';                     // cow patches
+      ctx.beginPath(); ctx.ellipse(p.x - 4 * u, p.y - 7 * u, 3.2 * u, 2.4 * u, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(p.x + 3 * u, p.y - 4.5 * u, 2.6 * u, 2 * u, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#f4f4f2';                     // head out front
+      ctx.fillRect(p.x + facing * 8 * u - 3 * u, p.y - 13 * u, 6 * u, 6 * u);
+      ctx.fillStyle = '#f0a5b8';                     // pink snout
+      ctx.fillRect(p.x + facing * 9.5 * u - 2 * u, p.y - 9.5 * u, 4 * u, 2.4 * u);
+    } else if (p.kind === 'dog') {
+      ctx.fillStyle = '#6b4b2a';                     // little legs
+      ctx.fillRect(p.x - 5 * u, p.y - 1 * u + step, 2 * u, 5 * u - step);
+      ctx.fillRect(p.x + 3 * u, p.y - 1 * u - step, 2 * u, 5 * u + step);
+      ctx.fillStyle = '#8a5c33';                     // body
+      ctx.fillRect(p.x - 6.5 * u, p.y - 8 * u, 13 * u, 7 * u);
+      ctx.fillStyle = '#8a5c33';                     // head
+      ctx.beginPath(); ctx.arc(p.x + facing * 7 * u, p.y - 10 * u, 3.6 * u, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#5e3d20';                     // floppy ear
+      ctx.beginPath(); ctx.ellipse(p.x + facing * 5.5 * u, p.y - 12 * u, 1.6 * u, 2.8 * u, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = '#8a5c33'; ctx.lineWidth = 2 * u;   // wagging tail
+      ctx.beginPath();
+      ctx.moveTo(p.x - facing * 6.5 * u, p.y - 7 * u);
+      ctx.lineTo(p.x - facing * 10 * u, p.y - 11 * u + Math.sin(p.walk * 2) * 2 * u);
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = '#333';                        // busy little legs
+      ctx.fillRect(p.x - 3 * u, p.y - 2 * u + step, 2 * u, 5 * u - step);
+      ctx.fillRect(p.x + 1 * u, p.y - 2 * u - step, 2 * u, 5 * u + step);
+      ctx.fillStyle = p.shirt;                       // shirt
+      ctx.fillRect(p.x - 4 * u, p.y - 10 * u, 8 * u, 9 * u);
+      ctx.fillStyle = '#f2c79b';                     // head
+      ctx.beginPath(); ctx.arc(p.x, p.y - 13 * u, 3.5 * u, 0, Math.PI * 2); ctx.fill();
+    }
+
     if (disasters.length > 0) {                      // screaming, obviously
       ctx.fillStyle = '#ff4757';
-      ctx.font = 'bold 10px monospace';
+      ctx.font = `bold ${Math.max(8, 10 * u)}px monospace`;
       ctx.textAlign = 'center';
-      ctx.fillText('!!', p.x, p.y - 20);
+      ctx.fillText('!!', p.x, p.y - 18 * u);
     }
   }
 
-  // people currently airborne (they're fine. probably.)
+  // folk currently airborne (they're fine. probably.) — same scale as on foot
   for (const f of launchedFolk) {
+    const u = s / 26;
     ctx.save();
     ctx.translate(f.x, f.y);
     ctx.rotate(f.spin);
     ctx.globalAlpha = Math.max(0, Math.min(1, f.life));
     ctx.fillStyle = f.shirt;
-    ctx.fillRect(-4, -6, 8, 9);
+    ctx.fillRect(-4 * u, -6 * u, 8 * u, 9 * u);
     ctx.fillStyle = '#f2c79b';
-    ctx.beginPath(); ctx.arc(0, -9, 3.5, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(0, -9 * u, 3.5 * u, 0, Math.PI * 2); ctx.fill();
     ctx.restore();
   }
   ctx.globalAlpha = 1;
@@ -1203,10 +1294,10 @@ function draw() {
 
   // --- the open drop-down list, if any ---
   if (openMenu) {
+    const costly = openMenu === 'disasters';         // only disasters have a price
     for (const r of menuRects(openMenu)) {
-      const isBuild = openMenu === 'build';
-      const canAfford = isBuild || moneys >= r.cost;
-      const chosen = isBuild && selected === r.type;   // also lights up "Move" in pan mode
+      const canAfford = !costly || moneys >= r.cost;
+      const chosen = openMenu === 'build' && selected === r.type;
       ctx.fillStyle = chosen ? '#3d6b30' : canAfford ? '#24343a' : '#2c2126';
       rrect(r.x, r.y, r.w, r.h, 8); ctx.fill();
       ctx.strokeStyle = chosen ? '#7ddf8f' : canAfford ? '#3a4654' : '#5a4a4e';
@@ -1216,7 +1307,7 @@ function draw() {
       ctx.font = 'bold 15px monospace';
       ctx.textAlign = 'left';
       ctx.fillText(r.label, r.x + 12, r.y + r.h / 2 + 5);
-      if (!isBuild) {                       // disasters show their price on the right
+      if (costly) {                         // disasters show their price on the right
         ctx.textAlign = 'right';
         ctx.fillStyle = canAfford ? '#ffd23f' : '#8a7a7e';
         ctx.fillText(`${r.cost}💰`, r.x + r.w - 12, r.y + r.h / 2 + 5);
