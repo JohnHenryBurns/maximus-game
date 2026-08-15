@@ -53,6 +53,8 @@ let hasArmor = localStorage.getItem('explorer_plate_armor') === 'yes';
 let hasGoldSword = localStorage.getItem('explorer_gold_sword') === 'yes';
 let victoryTimer = 0;          // counts down the LEVEL COMPLETE celebration
 let victoryLevel = 1;          // which level we're celebrating
+let victoryNew = false;        // did this win come with a brand-new prize?
+let altarDone = false;         // already beaten the altar THIS visit?
 let gateArmed = false;         // you must step AWAY from the gate before it teleports you
 
 // ---------------------------------------------------------------------
@@ -468,6 +470,7 @@ function startLevel(i) {
   player.x = current.start.x;
   player.y = current.start.y;
   gateArmed = false;
+  altarDone = false;
   screen = 'playing';
 }
 
@@ -564,7 +567,12 @@ function update(dt) {
   if (lockedMessageTimer > 0) lockedMessageTimer -= dt;
   if (screen !== 'playing') return;
   if (inventoryOpen) return;   // bag's open — the whole world holds still
-  if (victoryTimer > 0) { victoryTimer -= dt; return; }   // celebrating! world waits
+  if (victoryTimer > 0) {
+    victoryTimer -= dt;                                   // celebrating! world waits
+    // beating the temple sends you back to the level menu, mission complete
+    if (victoryTimer <= 0 && victoryLevel === 2) screen = 'menu';
+    return;
+  }
 
   if (player.attackTime > 0) player.attackTime -= dt;   // swing winds down
 
@@ -869,11 +877,16 @@ function update(dt) {
   }
 
   // ---- THE ALTAR (temple only) ----
-  // Reach the golden altar = Level 2 complete → THE GOLDEN SWORD!
-  if (current.kind === 'temple' && !hasGoldSword && player.deathTimer <= 0 &&
+  // Reach the golden altar = Level 2 beaten, EVERY time. The Golden
+  // Sword is only handed out on your first win, though.
+  if (current.kind === 'temple' && !altarDone && player.deathTimer <= 0 &&
       Math.hypot(player.x - altar.x, player.y - altar.y) < 70) {
-    hasGoldSword = true;
-    localStorage.setItem('explorer_gold_sword', 'yes');
+    altarDone = true;
+    victoryNew = !hasGoldSword;
+    if (!hasGoldSword) {
+      hasGoldSword = true;
+      localStorage.setItem('explorer_gold_sword', 'yes');
+    }
     victoryTimer = 5;
     victoryLevel = 2;
   }
@@ -1263,10 +1276,12 @@ function drawGame() {
       ctx.restore();
       ctx.fillStyle = '#ffffff';
       ctx.font = 'bold 22px monospace';
-      ctx.fillText('You found: THE GOLDEN SWORD', canvas.width / 2, canvas.height / 2 + 62);
+      ctx.fillText(victoryNew ? 'You found: THE GOLDEN SWORD' : 'TEMPLE CONQUERED!',
+                   canvas.width / 2, canvas.height / 2 + 62);
       ctx.fillStyle = '#bfd4e8';
       ctx.font = '16px monospace';
-      ctx.fillText('One bonk and monsters go POOF',
+      ctx.fillText(victoryNew ? 'One bonk and monsters go POOF'
+                              : 'The Golden Sword is already yours — back to the menu!',
                    canvas.width / 2, canvas.height / 2 + 90);
     }
   }
