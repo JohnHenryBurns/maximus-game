@@ -145,6 +145,7 @@ const LEVELS = [
     worldH: 2600,
     start: { x: 1300, y: 2450 }, // the gecko temple gates
   },
+  { name: 'Return of the Multi-Tasker', unlocked: false },   // Level 8 — it grew BACK?!
 ];
 // prizes you earned on past visits keep their doors open
 LEVELS[1].unlocked = hasArmor;
@@ -153,6 +154,7 @@ LEVELS[3].unlocked = hasInfectedArmor;
 LEVELS[4].unlocked = hasBeatSky;
 LEVELS[5].unlocked = hasChippy;      // beat Chippy once → face his revenge
 LEVELS[6].unlocked = hasBeatJr;      // beat Chippy Jr → the geckos rise
+LEVELS[7].unlocked = hasBeatGeckoMan;   // beat Gecko Man → IT comes back
 
 // Things that live in the current level (filled in by buildForest)
 let trees = [];
@@ -3725,6 +3727,7 @@ function drawMenu() {
                : i === 4 ? 'beat Level 4 first'
                : i === 5 ? 'beat Level 5 first'
                : i === 6 ? 'beat Level 6 first'
+               : i === 7 ? 'beat Level 7 first'
                : 'locked', cx + cw / 2, cy + ch * 0.85);
   }
 
@@ -3742,9 +3745,10 @@ function lockedMessageFor(i) {
   if (i === 3) return 'Beat Level 3 to reach the Dungeon in the Sky!';
   if (i === 4) return 'Defeat the Multi-Tasker to reach the Dimension of Chippy!';
   if (i === 5) return 'Defeat Chippy in his dimension first!';
-  if (i === 6) return hasBeatJr
-    ? 'Rise of the Geckos is still being built — tell me how they rise!'
-    : 'Defeat Chippy Jr to witness the Rise of the Geckos!';
+  if (i === 6) return 'Defeat Chippy Jr to witness the Rise of the Geckos!';
+  if (i === 7) return hasBeatGeckoMan
+    ? 'Return of the Multi-Tasker is still being built — tell me how it returns!'
+    : 'Defeat Gecko Man first... then IT comes back.';
   return "You haven't invented that level yet!";
 }
 
