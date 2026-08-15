@@ -81,6 +81,13 @@ const EMPTY = 0, HOUSE = 1, TREE = 2, STONE = 3, APT = 4, BUNKER = 5;
 // in fact everyone would rather walk on a path than through the grass.
 const ROAD = 6, PATH = 7;
 function isWay(k) { return k === ROAD || k === PATH; }   // "is this a road or a path?"
+// the BIG blocks: a 3x3 skyscraper and a 2x2 castle tower
+const SKY = 8, TOWER = 9;
+// which blocks can people hide inside? (capacity is 3 per SQUARE, so a
+// 2x2 building holds 12 and the mighty skyscraper holds 27!)
+function isShelter(k) {
+  return k === HOUSE || k === APT || k === BUNKER || k === SKY || k === TOWER;
+}
 
 // What you're placing right now. Starts as null — the game opens in
 // look-around mode, so you can drag and zoom before you build anything.
@@ -106,7 +113,7 @@ const HIT_COOLDOWN = 0.55;
 // but they all point back to the top-left one, the "root". The root is
 // where we draw the tower, keep its damage, and where the repair crew go.
 // ---------------------------------------------------------------------
-const SPAN = { [APT]: 2 };                     // how many squares wide/tall a kind is
+const SPAN = { [APT]: 2, [SKY]: 3, [TOWER]: 2 };   // how many squares wide/tall a kind is
 function spanOf(kind) { return SPAN[kind] || 1; }
 const rootAt = [];                             // {rx,ry} for every square of a big building
 for (let y = 0; y < ROWS; y++) rootAt.push(new Array(COLS).fill(null));
@@ -172,7 +179,9 @@ function freeSpot() {
 
 function spawnCritters(kind) {
   let made = 0;
-  for (let i = 0; i < 5 && people.length < 60; i++) {
+  // ten per press, as many presses as you like — 500 is where the
+  // computer starts sweating, so that's the only ceiling
+  for (let i = 0; i < 10 && people.length < 500; i++) {
     const spot = freeSpot();
     if (!spot) break;
     people.push({
@@ -544,7 +553,8 @@ function smashBlock(gx, gy, bx, by, splash) {
   clearCell(r.rx, r.ry);             // takes every square of a big building
   roadsDirty = true;                 // a road may have just been wiped out
   destroyed++;
-  moneys += kind === APT ? 3 : 1;    // apartments pay TRIPLE. big building, big payout.
+  // bigger building, bigger payout: skyscraper 8, apartment 3, tower 3
+  moneys += kind === SKY ? 8 : kind === APT ? 3 : kind === TOWER ? 3 : 1;
   for (let i = 0; i < 6 * sp; i++) { // a bigger building makes a bigger mess
     debris.push({
       x: bx, y: by,
@@ -554,7 +564,8 @@ function smashBlock(gx, gy, bx, by, splash) {
       life: 1.2,
       color: splash ? '#5da3e0'
            : kind === TREE ? '#3f8a3f' : kind === STONE ? '#8a8d94'
-           : kind === APT ? '#5a6a7a' : '#b5563c',
+           : kind === APT ? '#5a6a7a' : kind === SKY ? '#4a7a9a'
+           : kind === TOWER ? '#9aa0a8' : '#b5563c',
     });
   }
 }
@@ -653,6 +664,8 @@ function doPan(dx, dy) { panX += dx; panY += dy; clampPan(); }
 const buttons = [
   { icon: '🏠', short: 'House',  type: HOUSE },
   { icon: '🏢', short: 'Apt',    type: APT },
+  { icon: '🏙', short: 'Sky',    type: SKY },
+  { icon: '🏰', short: 'Tower',  type: TOWER },
   { icon: '🌳', short: 'Tree',   type: TREE },
   { icon: '🪨', short: 'Stone',  type: STONE },
   { icon: '🛡', short: 'Bunker', type: BUNKER },
@@ -1094,7 +1107,7 @@ function update(dt) {
       let target = null, best = 999999;
       for (let gy = 0; gy < ROWS; gy++) {
         for (let gx = 0; gx < COLS; gx++) {
-          if (grid[gy][gx] !== HOUSE && grid[gy][gx] !== APT) continue;
+          if (grid[gy][gx] !== HOUSE && grid[gy][gx] !== APT && grid[gy][gx] !== SKY) continue;
           const bx = gx * s + s / 2, by = TOPBAR + gy * s + s / 2;
           const d2 = Math.hypot(bx - D.x, by - D.y);
           if (d2 < best) { best = d2; target = { x: bx, y: by }; }
@@ -1115,7 +1128,7 @@ function update(dt) {
       // just get a wild hairdo
       for (let gy = 0; gy < ROWS; gy++) {
         for (let gx = 0; gx < COLS; gx++) {
-          if (grid[gy][gx] !== HOUSE && grid[gy][gx] !== APT) continue;
+          if (grid[gy][gx] !== HOUSE && grid[gy][gx] !== APT && grid[gy][gx] !== SKY) continue;
           const bx = gx * s + s / 2, by = TOPBAR + gy * s + s / 2;
           // a tornado CHEWS — usually takes a house out in one go
           if (Math.hypot(bx - D.x, by - D.y) < 70) hitBlock(gx, gy, bx, by, 3);
@@ -1186,9 +1199,12 @@ function update(dt) {
           const kind = grid[gy][gx];
           if (kind === EMPTY) continue;
           if (kind === BUNKER) continue;             // bunkers do not care
-          const fragile = kind === HOUSE ? 0.9
+          const fragile = kind === SKY ? 1.1         // the tallest fall hardest
+                        : kind === HOUSE ? 0.9
                         : kind === APT ? 0.7         // tall = topply
-                        : kind === TREE ? 0.35 : 0.15;
+                        : kind === TREE ? 0.35
+                        : kind === TOWER ? 0.08      // castle-grade stonework
+                        : 0.15;
           if (Math.random() < fragile * dt) {
             // a quake rattles things loose a crack at a time
             hitBlock(gx, gy, gx * s + s / 2, TOPBAR + gy * s + s / 2, 2);
@@ -1210,7 +1226,7 @@ function update(dt) {
       for (let gy = 0; gy < ROWS; gy++) {
         for (let gx = 0; gx < COLS; gx++) {
           const kind = grid[gy][gx];
-          if (kind === EMPTY || kind === STONE || kind === BUNKER) continue;   // waterproof
+          if (kind === EMPTY || kind === STONE || kind === BUNKER || kind === TOWER) continue;   // waterproof
           const by = TOPBAR + gy * s + s / 2;
           // underwater: the damp works away at it
           if (by > D.waterY && Math.random() < dt * 2.5)
@@ -1285,7 +1301,7 @@ function update(dt) {
     // already hiding inside a building?
     if (p.sheltering) {
       const kind = grid[p.sheltering.gy][p.sheltering.gx];
-      if (kind !== HOUSE && kind !== APT && kind !== BUNKER) {
+      if (!isShelter(kind)) {
         // their shelter was DESTROYED with them inside it. out they go!
         p.gone = true;
         peopleLaunched++;
@@ -1310,15 +1326,13 @@ function update(dt) {
       // RUN FOR SHELTER — find the nearest building with a roof.
       // (Whether it's a GOOD shelter is... not their department.)
       let target = p.shelterTarget;
-      if (!target || (grid[target.gy][target.gx] !== HOUSE &&
-                      grid[target.gy][target.gx] !== APT &&
-                      grid[target.gy][target.gx] !== BUNKER)) {
+      if (!target || !isShelter(grid[target.gy][target.gx])) {
         target = null;
         let best = 999999;
         for (let gy = 0; gy < ROWS; gy++) {
           for (let gx = 0; gx < COLS; gx++) {
             const kind = grid[gy][gx];
-            if (kind !== HOUSE && kind !== APT && kind !== BUNKER) continue;
+            if (!isShelter(kind)) continue;
             if ((occupancy[gx + ',' + gy] || 0) >= 3) continue;   // that one's FULL
             const bx = gx * cs + cs / 2, by = TOPBAR + gy * cs + cs / 2;
             const d2 = Math.hypot(bx - p.x, by - p.y);
@@ -1803,6 +1817,54 @@ function draw() {
         ctx.fillRect(x + s2 * 0.42, y + s2 * 0.8, s2 * 0.16, s2 * 0.12);
         ctx.fillStyle = '#ffd23f';                      // a light over the door
         ctx.fillRect(x + s2 * 0.46, y + s2 * 0.76, s2 * 0.08, s2 * 0.025);
+      } else if (kind === SKY) {
+        // THE SKYSCRAPER — nine squares of pure downtown. Drawn against
+        // s2 (the whole 3x3 footprint), it towers over everything.
+        ctx.fillStyle = '#4a7a9a';                      // the glass giant
+        ctx.fillRect(x + s2 * 0.14, y + s2 * 0.04, s2 * 0.72, s2 * 0.88);
+        ctx.fillStyle = '#3d6884';                      // shaded side
+        ctx.fillRect(x + s2 * 0.7, y + s2 * 0.04, s2 * 0.16, s2 * 0.88);
+        ctx.fillStyle = '#6a9aba';                      // rooftop ledge
+        ctx.fillRect(x + s2 * 0.1, y + s2 * 0.04, s2 * 0.8, s2 * 0.05);
+        ctx.fillStyle = '#93a3b3';                      // spire on top
+        ctx.fillRect(x + s2 * 0.48, y - s2 * 0.06, s2 * 0.04, s2 * 0.12);
+        ctx.fillStyle = '#ff4757';                      // blinking beacon
+        if (Math.sin(elapsed * 3 + q * 6) > 0) {
+          ctx.fillRect(x + s2 * 0.47, y - s2 * 0.08, s2 * 0.06, s2 * 0.03);
+        }
+        // eight floors of windows, some lit, some out
+        for (let wy2 = 0; wy2 < 8; wy2++) {
+          for (let wx2 = 0; wx2 < 4; wx2++) {
+            const lit = hash(gx * 13 + gy * 7 + wy2 * 3.1 + wx2 * 1.9) > 0.35;
+            ctx.fillStyle = lit ? '#ffd23f' : '#2c4256';
+            ctx.fillRect(x + s2 * (0.2 + wx2 * 0.13), y + s2 * (0.12 + wy2 * 0.095),
+                         s2 * 0.085, s2 * 0.06);
+          }
+        }
+        ctx.fillStyle = '#2c4256';                      // grand lobby doors
+        ctx.fillRect(x + s2 * 0.4, y + s2 * 0.82, s2 * 0.2, s2 * 0.1);
+      } else if (kind === TOWER) {
+        // THE CASTLE TOWER — four squares of stone, flood-proof and proud
+        ctx.fillStyle = '#9aa0a8';                      // the keep
+        ctx.fillRect(x + s2 * 0.16, y + s2 * 0.1, s2 * 0.68, s2 * 0.82);
+        ctx.fillStyle = '#868c94';                      // shaded edge
+        ctx.fillRect(x + s2 * 0.68, y + s2 * 0.1, s2 * 0.16, s2 * 0.82);
+        ctx.fillStyle = '#b8bec6';                      // battlements
+        for (let b2 = 0; b2 < 4; b2++) {
+          ctx.fillRect(x + s2 * (0.14 + b2 * 0.19), y + s2 * 0.02, s2 * 0.13, s2 * 0.12);
+        }
+        ctx.fillStyle = 'rgba(60, 62, 68, 0.4)';        // stone brick lines
+        for (let l2 = 0; l2 < 3; l2++) {
+          ctx.fillRect(x + s2 * 0.16, y + s2 * (0.3 + l2 * 0.18), s2 * 0.68, s2 * 0.02);
+        }
+        ctx.fillStyle = '#5a6068';                      // arrow-slit windows
+        ctx.fillRect(x + s2 * 0.34, y + s2 * 0.3, s2 * 0.07, s2 * 0.2);
+        ctx.fillRect(x + s2 * 0.58, y + s2 * 0.3, s2 * 0.07, s2 * 0.2);
+        ctx.fillStyle = '#5b3b1e';                      // heavy wooden gate
+        ctx.beginPath();
+        ctx.arc(x + s2 * 0.5, y + s2 * 0.92, s2 * 0.14, Math.PI, 0);
+        ctx.fill();
+        ctx.fillRect(x + s2 * 0.36, y + s2 * 0.92, s2 * 0.28, s2 * 0.001);
       } else if (kind === BUNKER) {
         ctx.fillStyle = '#4a5548';                      // squat armored dome
         ctx.beginPath();
