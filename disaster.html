@@ -55,7 +55,7 @@ let destroyed = 0;
 // THE DISASTERS — one at a time, chosen from THE MACHINE's menu.
 // null means the world is at peace. For now.
 // ---------------------------------------------------------------------
-let disaster = null;
+let disasters = [];                 // ALL currently-active catastrophes. yes, plural.
 let debris = [];                    // flying bits of what used to be a town
 let craters = [];                   // meteor scars. they never heal.
 let shake = 0;                      // screen trembles while disaster reigns
@@ -63,17 +63,16 @@ let elapsed = 0;
 let machineOpen = false;            // is the disaster menu showing?
 
 function summonDisaster(type) {
-  if (disaster) return;             // one apocalypse at a time, please
-  machineOpen = false;
+  if (disasters.length >= 8) return;   // even chaos has a fire code
   if (type === 'tornado') {
-    disaster = { type, x: -60, y: TOPBAR + Math.random() * (canvas.height - TOPBAR),
-                 life: 12, wobble: Math.random() * 6.28 };
+    disasters.push({ type, x: -60, y: TOPBAR + Math.random() * (canvas.height - TOPBAR),
+                     life: 12, wobble: Math.random() * 6.28 });
   } else if (type === 'meteors') {
-    disaster = { type, life: 8, spawnTimer: 0, meteors: [] };
+    disasters.push({ type, life: 8, spawnTimer: 0, meteors: [] });
   } else if (type === 'quake') {
-    disaster = { type, life: 6, seed: Math.random() * 100 };
+    disasters.push({ type, life: 6, seed: Math.random() * 100 });
   } else if (type === 'flood') {
-    disaster = { type, life: 10, waterY: canvas.height + 50 };
+    disasters.push({ type, life: 10, waterY: canvas.height + 50 });
   }
 }
 
@@ -213,8 +212,7 @@ function update(dt) {
   elapsed += dt;
   if (shake > 0) shake -= dt;
 
-  if (disaster) {
-    const D = disaster;
+  for (const D of disasters) {      // every active disaster does its thing
     D.life -= dt;
     const s = cellSize();
 
@@ -233,7 +231,7 @@ function update(dt) {
           if (Math.hypot(bx - D.x, by - D.y) < 70) smashBlock(gx, gy, bx, by);
         }
       }
-      if (D.life <= 0 || D.x > canvas.width + 80) disaster = null;
+      if (D.life <= 0 || D.x > canvas.width + 80) D.done = true;
     }
 
     if (D.type === 'meteors') {
@@ -271,7 +269,7 @@ function update(dt) {
         }
       }
       D.meteors = D.meteors.filter(m => !m.hit);
-      if (D.life <= 0 && D.meteors.length === 0) disaster = null;
+      if (D.life <= 0 && D.meteors.length === 0) D.done = true;
     }
 
     if (D.type === 'quake') {
@@ -287,7 +285,7 @@ function update(dt) {
           }
         }
       }
-      if (D.life <= 0) disaster = null;
+      if (D.life <= 0) D.done = true;
     }
 
     if (D.type === 'flood') {
@@ -307,9 +305,10 @@ function update(dt) {
           if (by > D.waterY) smashBlock(gx, gy, gx * s + s / 2, by, true);
         }
       }
-      if (D.life <= 0) disaster = null;
+      if (D.life <= 0) D.done = true;
     }
   }
+  disasters = disasters.filter(D => !D.done);   // sweep up the finished ones
 
   // debris tumbles through the air and fades
   for (const d of debris) {
@@ -411,9 +410,8 @@ function draw() {
   }
   ctx.globalAlpha = 1;
 
-  // ---- DRAWING WHATEVER DOOM IS CURRENTLY HAPPENING ----
-  if (disaster) {
-    const D = disaster;
+  // ---- DRAWING ALL THE DOOM CURRENTLY HAPPENING ----
+  for (const D of disasters) {
 
     if (D.type === 'tornado') {
       // a stack of spinning gray rings, wide up top, narrow at the ground
@@ -510,7 +508,7 @@ function draw() {
   // THE MACHINE's menu of doom, when open
   if (machineOpen) {
     for (const r of machineRects()) {
-      ctx.fillStyle = disaster ? '#3a2026' : '#7a1f2b';
+      ctx.fillStyle = '#7a1f2b';
       ctx.fillRect(r.x, r.y, r.w, r.h);
       ctx.strokeStyle = '#ff6b5e';
       ctx.lineWidth = 2;
@@ -520,12 +518,10 @@ function draw() {
       ctx.textAlign = 'center';
       ctx.fillText(r.label, r.x + r.w / 2, r.y + r.h / 2 + 6);
     }
-    if (disaster) {
-      ctx.fillStyle = '#ffb3ab';
-      ctx.font = '13px monospace';
-      ctx.fillText('(one disaster at a time!)', canvas.width - 120,
-                   TOPBAR + 8 + 4 * 50 + 14);
-    }
+    ctx.fillStyle = '#ffb3ab';
+    ctx.font = '13px monospace';
+    ctx.fillText('(stack as many as you dare)', canvas.width - 120,
+                 TOPBAR + 8 + 4 * 50 + 14);
   }
 
   // the destruction scoreboard
