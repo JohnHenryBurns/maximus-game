@@ -503,12 +503,14 @@ const CLEAN_TIME = 1.5;       // seconds of sweeping per piece of mess
 const MAX_LITTER = 260;       // stop the whole town turning into a landfill
 
 function dropLitter(x, y, kind) {
-  if (litter.length >= MAX_LITTER) return;
-  litter.push({
+  if (litter.length >= MAX_LITTER) return null;
+  const L = {
     x, y, kind,
     seed: Math.random() * 100,          // so each one looks a bit different
     born: elapsed,
-  });
+  };
+  litter.push(L);
+  return L;
 }
 
 // scatter a few piles of rubble around where something just got flattened
@@ -1330,6 +1332,13 @@ function update(dt) {
       }
       D.y = Math.max(TOPBAR + 40, Math.min(TOPBAR + ROWS * s - 40, D.y));
       shake = 0.2;
+      // it keeps dropping splintered bits of whatever it just ate
+      D.messTimer = (D.messTimer || 0.5) - dt;
+      if (D.messTimer <= 0) {
+        D.messTimer = 0.45 + Math.random() * 0.5;
+        dropLitter(D.x + (Math.random() - 0.5) * 60,
+                   D.y + (Math.random() - 0.5) * 40, 'splinter');
+      }
       // it ONLY eats housing (houses AND apartments) — trees and stone
       // just get a wild hairdo
       for (let gy = 0; gy < ROWS; gy++) {
@@ -1362,6 +1371,9 @@ function update(dt) {
           m.hit = true;
           shake = 0.35;
           craters.push({ x: m.x, y: m.y, r: 26 + Math.random() * 14 });
+          // a lump of the meteor is left sitting in its own crater
+          dropLitter(m.x + (Math.random() - 0.5) * 14,
+                     m.y + (Math.random() - 0.5) * 10, 'ember');
           // any car parked in the blast is instantly scrap
           for (const car of cars) {
             if (!car.gone && Math.hypot(car.x - m.x, car.y - m.y) < 60) popCar(car);
@@ -1417,6 +1429,13 @@ function update(dt) {
           }
         }
       }
+      // slabs of ground heave up out of the cracks
+      D.messTimer = (D.messTimer || 0.4) - dt;
+      if (D.messTimer <= 0) {
+        D.messTimer = 0.35 + Math.random() * 0.4;
+        dropLitter(10 + Math.random() * (COLS * s - 20),
+                   TOPBAR + 10 + Math.random() * (ROWS * s - 20), 'slab');
+      }
       if (D.life <= 0) D.done = true;
     }
 
@@ -1427,7 +1446,20 @@ function update(dt) {
       if (t2 < 4) frac = t2 / 4;
       else if (t2 < 6) frac = 1;
       else frac = Math.max(0, 1 - (t2 - 6) / 4);
+      const wasY = D.waterY;
       D.waterY = (TOPBAR + ROWS * s) - frac * (ROWS * s) * 0.72;
+      // AS IT DRAINS, the water leaves puddles on the ground it uncovers —
+      // somebody's going to have to mop all that up.
+      if (t2 > 6 && D.waterY > wasY) {
+        D.wetTimer = (D.wetTimer || 0) - dt;
+        if (D.wetTimer <= 0) {
+          D.wetTimer = 0.1;
+          for (let i = 0; i < 2; i++) {
+            dropLitter(10 + Math.random() * (COLS * s - 20),
+                       wasY + Math.random() * (D.waterY - wasY), 'puddle');
+          }
+        }
+      }
       // anything underwater washes away... except STONE. stone doesn't care.
       for (let gy = 0; gy < ROWS; gy++) {
         for (let gx = 0; gx < COLS; gx++) {
@@ -1470,6 +1502,11 @@ function update(dt) {
             debris.push({ x: ball.x, y: ball.y,
               vx: (Math.random() - 0.5) * 400, vy: -Math.random() * 350,
               spin: Math.random() * 10, life: 0.6, color: ball.color });
+          }
+          // about half of them don't pop — they just roll to a stop and stay
+          if (Math.random() < 0.5) {
+            const L = dropLitter(ball.x, ball.y, 'ball');
+            if (L) L.color = ball.color;
           }
         }
         D.done = true;
@@ -1572,7 +1609,7 @@ function update(dt) {
   // when doom arrives, everybody drops the broom and abandons their mess
   if (panicking) {
     for (const L of litter) L.by = null;
-    for (const p of people) { p.mess = null; p.messT = 0; p.sweeping = false; }
+    for (const p of people) { p.mess = null; p.messT = 0; p.sweeping = false; p.mopping = false; }
   }
   const claimed = new Set();
   for (const p of people) {
@@ -1803,7 +1840,8 @@ function update(dt) {
               const d4 = Math.hypot(L.x - p.x, L.y - p.y);
               if (d4 < best) { best = d4; found = L; }
             }
-            if (found) { found.by = p; p.mess = found; p.messT = 0; }
+            if (found) { found.by = p; p.mess = found; p.messT = 0;
+                         p.mopping = found.kind === 'puddle'; }   // water needs a MOP
           }
           if (p.mess) {
             const near = Math.hypot(p.mess.x - p.x, p.mess.y - p.y);
@@ -1818,7 +1856,7 @@ function update(dt) {
               if (p.messT >= CLEAN_TIME) {  // all gone!
                 p.mess.gone = true;
                 tidied++;
-                p.mess = null; p.messT = 0; p.sweeping = false;
+                p.mess = null; p.messT = 0; p.sweeping = false; p.mopping = false;
               }
             }
           } else {
@@ -2419,7 +2457,69 @@ function draw() {
     ctx.beginPath();
     ctx.ellipse(L.x, L.y + 1.5 * u, 6 * u, 2.2 * u, 0, 0, Math.PI * 2);
     ctx.fill();
-    if (L.kind === 'pie') {
+    if (L.kind === 'puddle') {
+      // a shallow pool of floodwater, with a shine that shifts about
+      ctx.fillStyle = 'rgba(70, 140, 205, 0.55)';
+      ctx.beginPath();
+      ctx.ellipse(L.x, L.y, 7.5 * u, 3.4 * u, h1 * 3, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = 'rgba(150, 210, 255, 0.45)';
+      ctx.beginPath();
+      ctx.ellipse(L.x - 1.6 * u, L.y - 0.8 * u, 3 * u, 1.3 * u, h2 * 3, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = 'rgba(215, 240, 255, 0.5)';
+      ctx.lineWidth = 0.7 * u;
+      ctx.beginPath();
+      ctx.ellipse(L.x, L.y, (6.5 + Math.sin(elapsed * 2 + L.seed) * 0.7) * u, 2.9 * u,
+                  h1 * 3, 0, Math.PI * 2);
+      ctx.stroke();
+    } else if (L.kind === 'ember') {
+      // a chunk of the meteor, still glowing, still smoking
+      const glow = 0.45 + Math.sin(elapsed * 3 + L.seed) * 0.2;
+      ctx.fillStyle = `rgba(255, 130, 40, ${glow * 0.5})`;
+      ctx.beginPath(); ctx.arc(L.x, L.y, 7 * u, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#3a3232';
+      ctx.beginPath();
+      ctx.moveTo(L.x - 4.5 * u, L.y + 2 * u); ctx.lineTo(L.x - 3 * u, L.y - 3 * u);
+      ctx.lineTo(L.x + 1.5 * u, L.y - 4 * u); ctx.lineTo(L.x + 4.5 * u, L.y + 2 * u);
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle = `rgba(255, 160, 60, ${glow})`;     // hot cracks in the rock
+      ctx.fillRect(L.x - 2 * u, L.y - 1.6 * u, 2.6 * u, 0.9 * u);
+      ctx.fillRect(L.x + 0.6 * u, L.y - 0.2 * u, 1.8 * u, 0.8 * u);
+      ctx.fillStyle = 'rgba(90, 90, 96, 0.3)';            // a thread of smoke
+      ctx.beginPath();
+      ctx.arc(L.x + Math.sin(elapsed * 1.3 + L.seed) * 1.6 * u,
+              L.y - 6 * u - ((elapsed * 5 + L.seed * 9) % 7) * u, 1.6 * u, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (L.kind === 'splinter') {
+      // torn planks the tornado dropped
+      ctx.fillStyle = '#9a7444';
+      for (let i = 0; i < 3; i++) {
+        ctx.save();
+        ctx.translate(L.x + (hash(L.seed + i) - 0.5) * 5 * u,
+                      L.y + (hash(L.seed + i * 2.3) - 0.5) * 3 * u);
+        ctx.rotate(hash(L.seed + i * 3.7) * Math.PI);
+        ctx.fillStyle = ['#9a7444', '#b08a55', '#7d5c33'][i];
+        ctx.fillRect(-4 * u, -0.9 * u, 8 * u, 1.8 * u);
+        ctx.restore();
+      }
+    } else if (L.kind === 'slab') {
+      // a paving slab heaved up out of the ground by the quake
+      ctx.fillStyle = '#6b6a63';
+      ctx.beginPath();
+      ctx.moveTo(L.x - 6 * u, L.y + 2 * u); ctx.lineTo(L.x - 4 * u, L.y - 3.5 * u);
+      ctx.lineTo(L.x + 5 * u, L.y - 2 * u); ctx.lineTo(L.x + 6 * u, L.y + 2.4 * u);
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#87867e';
+      ctx.beginPath();
+      ctx.moveTo(L.x - 4 * u, L.y - 3.5 * u); ctx.lineTo(L.x + 5 * u, L.y - 2 * u);
+      ctx.lineTo(L.x + 2 * u, L.y - 0.6 * u); ctx.lineTo(L.x - 3 * u, L.y - 1.8 * u);
+      ctx.closePath(); ctx.fill();
+    } else if (L.kind === 'ball') {
+      // a rubber ball that never popped, just sitting there
+      ctx.fillStyle = L.color || '#ff4757';
+      ctx.beginPath(); ctx.arc(L.x, L.y - 1 * u, 4.6 * u, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.65)';
+      ctx.beginPath(); ctx.arc(L.x - 1.5 * u, L.y - 2.5 * u, 1.4 * u, 0, Math.PI * 2); ctx.fill();
+    } else if (L.kind === 'pie') {
       // a splat, in three shades of... let's call it brown
       ctx.fillStyle = '#6b4a24';
       ctx.beginPath(); ctx.ellipse(L.x, L.y, 5.4 * u, 2.9 * u, 0, 0, Math.PI * 2); ctx.fill();
@@ -2597,16 +2697,32 @@ function draw() {
         ctx.moveTo(p.x + k * 3 * u, p.y - 9 * u); ctx.lineTo(hx, hy);
         ctx.moveTo(p.x - k * 3 * u, p.y - 9 * u); ctx.lineTo(hx - k * 1.5 * u, hy + 1.5 * u);
         ctx.stroke();
-        ctx.strokeStyle = '#8a6a3a'; ctx.lineWidth = 1.3 * u;      // broom handle
+        // a MOP for water, a broom for everything else
+        ctx.strokeStyle = p.mopping ? '#b9c4cc' : '#8a6a3a';        // handle
+        ctx.lineWidth = 1.3 * u;
         ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(bx3, by3); ctx.stroke();
-        ctx.fillStyle = '#d8b45c';                                  // bristles
         ctx.save();
         ctx.translate(bx3, by3);
         ctx.rotate(Math.atan2(by3 - hy, bx3 - hx));
-        ctx.fillRect(0, -2.2 * u, 3.4 * u, 4.4 * u);
+        if (p.mopping) {
+          ctx.fillStyle = '#e6e2d6';                                 // stringy mop head
+          ctx.beginPath();
+          ctx.ellipse(1.5 * u, 0, 2.6 * u, 3.2 * u, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = '#cfcabb'; ctx.lineWidth = 0.5 * u;
+          for (let i = -2; i <= 2; i++) {
+            ctx.beginPath();
+            ctx.moveTo(0.6 * u, i * 1.1 * u); ctx.lineTo(4 * u, i * 1.4 * u);
+            ctx.stroke();
+          }
+        } else {
+          ctx.fillStyle = '#d8b45c';                                 // bristles
+          ctx.fillRect(0, -2.2 * u, 3.4 * u, 4.4 * u);
+        }
         ctx.restore();
-        if (push > 0.6) {                                           // puff of dust
-          ctx.fillStyle = 'rgba(210, 200, 180, 0.45)';
+        if (push > 0.6) {                        // a puff of dust, or a splash
+          ctx.fillStyle = p.mopping ? 'rgba(150, 205, 255, 0.5)'
+                                    : 'rgba(210, 200, 180, 0.45)';
           ctx.beginPath();
           ctx.arc(bx3 + k * 3 * u, by3 - 1 * u, 2.2 * u, 0, Math.PI * 2);
           ctx.fill();
