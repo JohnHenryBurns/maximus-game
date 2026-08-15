@@ -2009,12 +2009,10 @@ function update(dt) {
         }
       }
 
-      // tentacle grab — it reaches FAR, and those teeth cost double
+      // tentacle grab — it reaches FAR, but costs 1 heart (armor first)
       if (distToYou < 65 && player.hurtTimer <= 0) {
-        for (let h = 0; h < 2; h++) {
-          if (player.armor > 0) player.armor -= 1;
-          else player.hp -= 1;
-        }
+        if (player.armor > 0) player.armor -= 1;
+        else player.hp -= 1;
         player.hurtTimer = 1;
         const push = 90 / Math.max(1, distToYou);
         const nx2 = player.x + (player.x - b.x) * push;
@@ -2142,11 +2140,8 @@ function update(dt) {
     // Did it get YOU? (hurtTimer = a moment of safety after each hit,
     // so one zombie can't eat all five hearts in one second)
     if (distToYou < (z.boss ? 70 : z.giant ? 42 : 26) && z.hp > 0 && player.hurtTimer <= 0 && player.deathTimer <= 0) {
-      const hits = z.boss ? 2 : 1;               // sixteen arms hit HARD
-      for (let h = 0; h < hits; h++) {
-        if (player.armor > 0) player.armor -= 1; // CLANK — the armor takes it!
-        else player.hp -= 1;
-      }
+      if (player.armor > 0) player.armor -= 1;   // CLANK — the armor takes it!
+      else player.hp -= 1;
       player.hurtTimer = 1;
       // shove you away from it
       const push = 50 / Math.max(1, distToYou);
