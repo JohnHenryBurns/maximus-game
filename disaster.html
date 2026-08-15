@@ -43,7 +43,17 @@ const TOPBAR = 64;                  // room at the top for the buttons
 const grid = [];
 for (let y = 0; y < ROWS; y++) grid.push(new Array(COLS).fill(0));
 
-const EMPTY = 0, HOUSE = 1, TREE = 2, STONE = 3, APT = 4, BUNKER = 5;
+const EMPTY = 0, HOUSE = 1, TREE = 2, STONE = 3, APT = 4, BUNKER = 5, SKY = 6, TOWER = 7;
+
+// which blocks can people hide inside, and how many fit?
+function isShelter(kind) {
+  return kind === HOUSE || kind === APT || kind === BUNKER ||
+         kind === SKY || kind === TOWER;
+}
+function shelterCap(kind) {
+  return kind === SKY ? 12 : kind === APT ? 6 : kind === TOWER ? 6
+       : kind === BUNKER ? 4 : 3;
+}
 
 // what's selected in the palette right now
 let selected = HOUSE;
@@ -56,7 +66,9 @@ let launchedFolk = [];     // people currently flying through the air (they're f
 let peopleLaunched = 0;
 
 function spawnPeople() {
-  for (let i = 0; i < 5 && people.length < 40; i++) {
+  // ten per press, as many presses as you like (500 is where the
+  // computer starts sweating, so that's the only ceiling)
+  for (let i = 0; i < 10 && people.length < 500; i++) {
     people.push({
       x: 30 + Math.random() * (canvas.width - 60),
       y: TOPBAR + 30 + Math.random() * (canvas.height - TOPBAR - 90),
@@ -131,7 +143,8 @@ function smashBlock(gx, gy, bx, by, splash) {
   const kind = grid[gy][gx];
   grid[gy][gx] = EMPTY;
   destroyed++;
-  moneys += kind === APT ? 3 : 1;    // apartments pay TRIPLE. big building, big payout.
+  // bigger building, bigger payout: skyscraper 6, apartment 3, tower 2
+  moneys += kind === SKY ? 6 : kind === APT ? 3 : kind === TOWER ? 2 : 1;
   for (let i = 0; i < 6; i++) {
     debris.push({
       x: bx, y: by,
@@ -141,7 +154,8 @@ function smashBlock(gx, gy, bx, by, splash) {
       life: 1.2,
       color: splash ? '#5da3e0'
            : kind === TREE ? '#3f8a3f' : kind === STONE ? '#8a8d94'
-           : kind === APT ? '#5a6a7a' : '#b5563c',
+           : kind === APT ? '#5a6a7a' : kind === SKY ? '#4a7a9a'
+           : kind === TOWER ? '#9aa0a8' : '#b5563c',
     });
   }
 }
@@ -168,8 +182,10 @@ function placeAt(px, py) {
 const buttons = [
   { label: '🏠 House',  type: HOUSE },
   { label: '🏢 Apt',    type: APT },
+  { label: '🏙 Sky',    type: SKY },
   { label: '🌳 Tree',   type: TREE },
   { label: '🪨 Stone',  type: STONE },
+  { label: '🏰 Tower',  type: TOWER },
   { label: '🛡 Bunker', type: BUNKER },
   { label: '❌ Erase',  type: EMPTY },
   { label: '🌪 THE MACHINE', machine: true },
@@ -180,7 +196,7 @@ function buttonRects() {
   const rects = [];
   let x = 10;
   for (const b of buttons) {
-    const w = b.machine ? 220 : 98;
+    const w = b.machine ? 220 : 86;
     const bx = b.machine ? canvas.width - w - 10 : x;
     rects.push({ ...b, x: bx, y: 10, w, h: TOPBAR - 20 });
     if (!b.machine) x += w + 8;
@@ -260,10 +276,12 @@ addEventListener('touchend', () => { painting = false; });
 addEventListener('keydown', e => {
   if (e.key === '1') selected = HOUSE;
   if (e.key === '2') selected = APT;
-  if (e.key === '3') selected = TREE;
-  if (e.key === '4') selected = STONE;
-  if (e.key === '5') selected = BUNKER;
-  if (e.key === '6') selected = EMPTY;
+  if (e.key === '3') selected = SKY;
+  if (e.key === '4') selected = TREE;
+  if (e.key === '5') selected = STONE;
+  if (e.key === '6') selected = TOWER;
+  if (e.key === '7') selected = BUNKER;
+  if (e.key === '8') selected = EMPTY;
   if (e.key.toLowerCase() === 'd') machineOpen = !machineOpen;   // D for DISASTER menu
   if (e.key.toLowerCase() === 'p') spawnPeople();                // P for PEOPLE
 });
@@ -286,7 +304,8 @@ function update(dt) {
       let target = null, best = 999999;
       for (let gy = 0; gy < ROWS; gy++) {
         for (let gx = 0; gx < COLS; gx++) {
-          if (grid[gy][gx] !== HOUSE && grid[gy][gx] !== APT) continue;
+          const hk = grid[gy][gx];
+          if (hk !== HOUSE && hk !== APT && hk !== SKY) continue;
           const bx = gx * s + s / 2, by = TOPBAR + gy * s + s / 2;
           const d2 = Math.hypot(bx - D.x, by - D.y);
           if (d2 < best) { best = d2; target = { x: bx, y: by }; }
@@ -303,11 +322,12 @@ function update(dt) {
       }
       D.y = Math.max(TOPBAR + 40, Math.min(canvas.height - 40, D.y));
       shake = 0.2;
-      // it ONLY eats housing (houses AND apartments) — trees and stone
-      // just get a wild hairdo
+      // it ONLY eats housing (houses, apartments, skyscrapers) — trees
+      // and stone just get a wild hairdo
       for (let gy = 0; gy < ROWS; gy++) {
         for (let gx = 0; gx < COLS; gx++) {
-          if (grid[gy][gx] !== HOUSE && grid[gy][gx] !== APT) continue;
+          const hk2 = grid[gy][gx];
+          if (hk2 !== HOUSE && hk2 !== APT && hk2 !== SKY) continue;
           const bx = gx * s + s / 2, by = TOPBAR + gy * s + s / 2;
           if (Math.hypot(bx - D.x, by - D.y) < 70) smashBlock(gx, gy, bx, by);
         }
@@ -371,9 +391,12 @@ function update(dt) {
           const kind = grid[gy][gx];
           if (kind === EMPTY) continue;
           if (kind === BUNKER) continue;             // bunkers do not care
-          const fragile = kind === HOUSE ? 0.9
+          const fragile = kind === SKY ? 1.1         // the tallest fall hardest
+                        : kind === HOUSE ? 0.9
                         : kind === APT ? 0.7         // tall = topply
-                        : kind === TREE ? 0.35 : 0.15;
+                        : kind === TREE ? 0.35
+                        : kind === TOWER ? 0.08      // castle-grade stonework
+                        : 0.15;
           if (Math.random() < fragile * dt) {
             smashBlock(gx, gy, gx * s + s / 2, TOPBAR + gy * s + s / 2);
           }
@@ -394,7 +417,7 @@ function update(dt) {
       for (let gy = 0; gy < ROWS; gy++) {
         for (let gx = 0; gx < COLS; gx++) {
           const kind = grid[gy][gx];
-          if (kind === EMPTY || kind === STONE || kind === BUNKER) continue;   // waterproof
+          if (kind === EMPTY || kind === STONE || kind === BUNKER || kind === TOWER) continue;   // waterproof
           const by = TOPBAR + gy * s + s / 2;
           if (by > D.waterY) smashBlock(gx, gy, gx * s + s / 2, by, true);
         }
@@ -457,7 +480,7 @@ function update(dt) {
     // already hiding inside a building?
     if (p.sheltering) {
       const kind = grid[p.sheltering.gy][p.sheltering.gx];
-      if (kind !== HOUSE && kind !== APT && kind !== BUNKER) {
+      if (!isShelter(kind)) {
         // their shelter was DESTROYED with them inside it. out they go!
         p.gone = true;
         peopleLaunched++;
@@ -481,16 +504,14 @@ function update(dt) {
       // RUN FOR SHELTER — find the nearest building with a roof.
       // (Whether it's a GOOD shelter is... not their department.)
       let target = p.shelterTarget;
-      if (!target || (grid[target.gy][target.gx] !== HOUSE &&
-                      grid[target.gy][target.gx] !== APT &&
-                      grid[target.gy][target.gx] !== BUNKER)) {
+      if (!target || !isShelter(grid[target.gy][target.gx])) {
         target = null;
         let best = 999999;
         for (let gy = 0; gy < ROWS; gy++) {
           for (let gx = 0; gx < COLS; gx++) {
             const kind = grid[gy][gx];
-            if (kind !== HOUSE && kind !== APT && kind !== BUNKER) continue;
-            if ((occupancy[gx + ',' + gy] || 0) >= 3) continue;   // that one's FULL
+            if (!isShelter(kind)) continue;
+            if ((occupancy[gx + ',' + gy] || 0) >= shelterCap(kind)) continue;   // FULL
             const bx = gx * cs + cs / 2, by = TOPBAR + gy * cs + cs / 2;
             const d2 = Math.hypot(bx - p.x, by - p.y);
             if (d2 < best) { best = d2; target = { gx, gy, x: bx, y: by }; }
@@ -511,7 +532,7 @@ function update(dt) {
             if (q.sheltering && q.sheltering.gx === target.gx &&
                 q.sheltering.gy === target.gy) inside++;
           }
-          if (inside < 3) {
+          if (inside < shelterCap(grid[target.gy][target.gx])) {
             p.sheltering = { gx: target.gx, gy: target.gy };   // squeezed in!
             p.shelterTarget = null;
             continue;
@@ -660,6 +681,29 @@ function draw() {
                          s * 0.16, s * 0.13);
           }
         }
+      } else if (kind === SKY) {
+        // a SKYSCRAPER — so tall it pokes out the top of its square
+        ctx.fillStyle = '#4a7a9a';
+        ctx.fillRect(x + s * 0.14, y - s * 0.55, s * 0.72, s * 1.47);
+        ctx.fillStyle = '#6a9aba';                      // roofline
+        ctx.fillRect(x + s * 0.14, y - s * 0.55, s * 0.72, s * 0.12);
+        ctx.fillStyle = '#ffd23f';                      // five floors of lit windows
+        for (let wy2 = 0; wy2 < 5; wy2++) {
+          for (let wx2 = 0; wx2 < 2; wx2++) {
+            ctx.fillRect(x + s * (0.26 + wx2 * 0.28), y - s * 0.4 + wy2 * s * 0.28,
+                         s * 0.14, s * 0.14);
+          }
+        }
+      } else if (kind === TOWER) {
+        // a castle TOWER with battlements, looming over its square
+        ctx.fillStyle = '#9aa0a8';
+        ctx.fillRect(x + s * 0.18, y - s * 0.35, s * 0.64, s * 1.27);
+        ctx.fillStyle = '#b8bec6';                      // the battlements
+        for (let b2 = 0; b2 < 3; b2++) {
+          ctx.fillRect(x + s * (0.18 + b2 * 0.24), y - s * 0.47, s * 0.16, s * 0.14);
+        }
+        ctx.fillStyle = '#5a6068';                      // arrow-slit window
+        ctx.fillRect(x + s * 0.44, y - s * 0.1, s * 0.12, s * 0.3);
       } else if (kind === BUNKER) {
         ctx.fillStyle = '#4a5548';                      // squat armored dome
         ctx.beginPath();
@@ -685,11 +729,17 @@ function draw() {
   for (const k in peek) {
     const parts = k.split(',');
     const px2 = parts[0] * s, py2 = TOPBAR + parts[1] * s;
-    for (let i = 0; i < Math.min(3, peek[k]); i++) {
+    for (let i = 0; i < Math.min(4, peek[k]); i++) {
       ctx.fillStyle = '#f2c79b';
       ctx.beginPath();
-      ctx.arc(px2 + s * (0.3 + i * 0.2), py2 + s * 0.88, 2.5, 0, Math.PI * 2);
+      ctx.arc(px2 + s * (0.22 + i * 0.19), py2 + s * 0.88, 2.5, 0, Math.PI * 2);
       ctx.fill();
+    }
+    if (peek[k] > 4) {                       // packed building — show the count
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 10px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('x' + peek[k], px2 + s * 0.5, py2 + s * 0.78);
     }
   }
 
