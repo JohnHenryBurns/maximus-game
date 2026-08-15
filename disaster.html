@@ -593,6 +593,7 @@ const BUZZ = {
   badguys: [80, 60, 80, 60, 80],
   dinos:   [260, 120, 260, 120, 420],     // great big footsteps, then a ROAR
   virus:   [60, 40, 60, 40, 300],         // cough, cough... blegh
+  cowrain: [100, 60, 100, 60, 100, 60, 200],   // thud. thud. thud. moo.
 };
 function buzz(type) {
   try { if (navigator.vibrate) navigator.vibrate(BUZZ[type] || 180); } catch (e) {}
@@ -689,6 +690,8 @@ function beginDisaster(type) {
         fed: 0,                  // how many it's swallowed (pies follow...)
       });
     }
+  } else if (type === 'cowrain') {
+    disasters.push({ type, life: 8, spawnTimer: 0, drops: [], dropped: 0 });
   } else if (type === 'badguys') {
     // a GANG of four, storming in from the edges of town
     for (let i = 0; i < 4; i++) {
@@ -968,6 +971,7 @@ const MACHINE_MENU = [
   { label: '🦹 Bad Guys',     type: 'badguys', cost: 10 },
   { label: '🦖 Dinosaurs',    type: 'dinos',   cost: 14 },
   { label: '🦠 The Virus',    type: 'virus',   cost: 7 },
+  { label: '🐄 Raining Cows', type: 'cowrain', cost: 20 },
 ];
 
 // quick point-in-box test, used all over the input code
@@ -1637,6 +1641,65 @@ function update(dt) {
       }
     }
   }
+  // ---- RAINING COWS — twenty of them. believe it or not, this is
+  // also a cow DELIVERY service: every survivor joins the town. ----
+  for (const D of disasters) {
+    if (D.type !== 'cowrain') continue;
+    const s = cellSize();
+    D.spawnTimer -= dt;
+    if (D.spawnTimer <= 0 && D.dropped < 20) {
+      D.spawnTimer = 0.22;
+      D.dropped++;
+      D.drops.push({
+        x: 30 + Math.random() * (gridW() - 60),
+        y: TOPBAR - 60 - Math.random() * 150,
+        ty: TOPBAR + 30 + Math.random() * (gridH() - 60),
+        wob: Math.random() * 6.28,
+      });
+    }
+    for (const c of D.drops) {
+      c.wob += dt * 9;
+      c.y += 480 * dt;
+      if (c.y >= c.ty) {
+        c.landed = true;
+        shake = Math.max(shake, 0.25);
+        // THUD. dust everywhere.
+        for (let i = 0; i < 8; i++) {
+          debris.push({ x: c.x, y: c.ty, vx: (Math.random() - 0.5) * 260,
+            vy: -Math.random() * 200 - 40, spin: Math.random() * 8, life: 0.6,
+            color: i % 2 ? '#c9b8a0' : '#f4f4f2' });
+        }
+        // a falling cow flattens whatever it lands on (sorry)
+        const gx = Math.floor(c.x / s), gy = Math.floor((c.ty - TOPBAR) / s);
+        if (gx >= 0 && gy >= 0 && gx < COLS && gy < ROWS &&
+            grid[gy][gx] !== EMPTY && grid[gy][gx] !== BUNKER) {
+          hitBlock(gx, gy, c.x, c.ty, 2);
+        }
+        // anyone standing underneath gets LAUNCHED
+        for (const p of people) {
+          if (!p.gone && !p.sheltering && Math.hypot(p.x - c.x, p.y - c.ty) < 36) {
+            p.gone = true;
+            peopleLaunched++;
+            launchedFolk.push({ x: p.x, y: p.y, vx: (Math.random() - 0.5) * 600,
+              vy: -400 - Math.random() * 300, spin: 0, life: 1.4, shirt: p.shirt });
+          }
+        }
+        // ...and then the cow just gets up and joins the town. moo.
+        if (people.length < 500) {
+          people.push({
+            kind: 'cow', x: c.x, y: c.ty,
+            angle: Math.random() * 6.28, walk: Math.random() * 6.28,
+            mood: Math.floor(Math.random() * 3), fear: Math.floor(Math.random() * 3),
+            bob: Math.random() * 6.28,
+            shirt: '#f4f4f2',
+          });
+        }
+      }
+    }
+    D.drops = D.drops.filter(c => !c.landed);
+    if (D.life <= 0 && D.drops.length === 0 && D.dropped >= 20) D.done = true;
+  }
+
   disasters = disasters.filter(D => !D.done);   // sweep up the finished ones
 
   // ---- THE LITTLE PEOPLE — wandering, panicking, HIDING, or REPAIRING ----
@@ -3520,6 +3583,43 @@ function draw() {
     ctx.fillStyle = '#6d4a26';
     ctx.beginPath(); ctx.arc(13, -0.2, 4, 0, Math.PI * 2); ctx.fill();
     ctx.restore();
+  }
+
+  // ---- FALLING COWS (this game is perfect) ----
+  for (const D of disasters) {
+    if (D.type !== 'cowrain') continue;
+    for (const c of D.drops) {
+      // the growing shadow of impending cow
+      const near = Math.max(0, 1 - (c.ty - c.y) / 380);
+      ctx.fillStyle = `rgba(0, 0, 0, ${0.25 * near})`;
+      ctx.beginPath();
+      ctx.ellipse(c.x, c.ty, 16 * near + 4, 6 * near + 2, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // the cow, mid-plummet, legs flailing
+      ctx.save();
+      ctx.translate(c.x, c.y);
+      ctx.rotate(Math.sin(c.wob) * 0.35);
+      ctx.fillStyle = '#3b2f2a';                    // flailing legs
+      for (let l = 0; l < 4; l++) {
+        ctx.save();
+        ctx.rotate(Math.sin(c.wob * 1.6 + l * 1.7) * 0.5);
+        ctx.fillRect(-8 + l * 5, 4, 2.6, 7);
+        ctx.restore();
+      }
+      ctx.fillStyle = '#f4f4f2';                    // the cow itself
+      rrect(-10, -7, 20, 12, 4); ctx.fill();
+      ctx.fillStyle = '#2f2a28';                    // patches
+      ctx.beginPath(); ctx.ellipse(-3, -2, 3.4, 2.6, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(4, 1, 2.6, 2, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#f4f4f2';                    // head, also concerned
+      rrect(8, -12, 8, 8, 3); ctx.fill();
+      ctx.fillStyle = '#f0a5b8';                    // snout
+      rrect(9.5, -8, 5, 3, 1.4); ctx.fill();
+      ctx.fillStyle = '#000';                       // very, very wide eyes
+      ctx.beginPath(); ctx.arc(10, -10, 1.1, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(14, -10, 1.1, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
+    }
   }
 
   // ---- SICK CITIZENS: green haze, cough clouds, and the BLEGH ----
