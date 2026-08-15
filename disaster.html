@@ -157,6 +157,132 @@ function spawnCritters(kind) {
 }
 
 // ---------------------------------------------------------------------
+// WORKING OUT WHAT THE ROADS ACTUALLY ARE
+//
+// Whenever you build or break a road we take one look at the whole map and
+// write down, for every square:
+//   - which neighbours it joins on to
+//   - whether it's half of a TWO-LANE road (a twin running alongside it)
+//   - if it's a plain one-lane road, WHICH WAY the traffic goes (one-way!)
+//   - whether it's a junction, which is where the traffic lights go
+// Doing it once and remembering it is much cheaper than working it out
+// again for every car, every frame.
+// ---------------------------------------------------------------------
+let roadsDirty = true;
+const roadConn = [];      // {N,S,E,W} — which sides join on
+const roadDual = [];      // 'v' / 'h' if this is one lane of a two-lane road
+const roadOne  = [];      // {dx,dy} one-way direction, for plain one-lane road
+const roadJunc = [];      // true if 3+ roads meet here — needs a traffic light
+for (let y = 0; y < ROWS; y++) {
+  roadConn.push(new Array(COLS).fill(null));
+  roadDual.push(new Array(COLS).fill(null));
+  roadOne.push(new Array(COLS).fill(null));
+  roadJunc.push(new Array(COLS).fill(false));
+}
+
+function isRoad(gx, gy) {
+  return gx >= 0 && gy >= 0 && gx < COLS && gy < ROWS && grid[gy][gx] === ROAD;
+}
+
+function ensureRoads() {
+  if (!roadsDirty) return;
+  roadsDirty = false;
+  // pass 1: who joins on to whom, and which squares are junctions
+  for (let gy = 0; gy < ROWS; gy++) {
+    for (let gx = 0; gx < COLS; gx++) {
+      roadDual[gy][gx] = null; roadOne[gy][gx] = null; roadJunc[gy][gx] = false;
+      if (!isRoad(gx, gy)) { roadConn[gy][gx] = null; continue; }
+      const c = { N: isRoad(gx, gy - 1), S: isRoad(gx, gy + 1),
+                  W: isRoad(gx - 1, gy), E: isRoad(gx + 1, gy) };
+      c.n = (c.N ? 1 : 0) + (c.S ? 1 : 0) + (c.W ? 1 : 0) + (c.E ? 1 : 0);
+      c.runsH = c.W || c.E;                      // goes left/right at all
+      c.runsV = c.N || c.S;                      // goes up/down at all
+      c.straightH = c.runsH && !c.N && !c.S;     // ONLY left/right — a plain lane
+      c.straightV = c.runsV && !c.W && !c.E;     // ONLY up/down
+      roadConn[gy][gx] = c;
+    }
+  }
+  // pass 2: TWO-LANE roads. A lane is half of a pair when it runs one way
+  // and has exactly ONE road alongside it that runs the same way.
+  // (This has to happen BEFORE we look for junctions: a square in a two-lane
+  // road touches three others, which would otherwise look like a T-junction.)
+  for (let gy = 0; gy < ROWS; gy++) {
+    for (let gx = 0; gx < COLS; gx++) {
+      const c = roadConn[gy][gx];
+      if (!c) continue;
+      const nb = (ox, oy) => roadConn[gy + oy] && roadConn[gy + oy][gx + ox];
+      // vertical pair: runs up/down, with a twin to one side (not both)
+      if (c.runsV && (c.W !== c.E)) {
+        const twin = nb(c.E ? 1 : -1, 0);
+        if (twin && twin.runsV) roadDual[gy][gx] = 'v';
+      }
+      // horizontal pair: runs left/right, with a twin above or below (not both)
+      if (!roadDual[gy][gx] && c.runsH && (c.N !== c.S)) {
+        const twin = nb(0, c.S ? 1 : -1);
+        if (twin && twin.runsH) roadDual[gy][gx] = 'h';
+      }
+    }
+  }
+  // pass 2b: JUNCTIONS — where three or more roads genuinely meet. A square
+  // that's simply part of a two-lane road doesn't count.
+  for (let gy = 0; gy < ROWS; gy++) {
+    for (let gx = 0; gx < COLS; gx++) {
+      const c = roadConn[gy][gx];
+      roadJunc[gy][gx] = !!c && c.n >= 3 && !roadDual[gy][gx];
+    }
+  }
+  // pass 3: ONE-WAY directions. Every straight one-lane run gets a single
+  // direction for its whole length, so cars on it never meet head-on.
+  const runDir = (len, seed) => (hash(seed) < 0.5 ? 1 : -1);
+  for (let gy = 0; gy < ROWS; gy++) {            // left-to-right runs
+    let start = -1;
+    for (let gx = 0; gx <= COLS; gx++) {
+      const c = gx < COLS ? roadConn[gy][gx] : null;
+      const ok = c && c.straightH && !roadDual[gy][gx];
+      if (ok && start < 0) start = gx;
+      if (!ok && start >= 0) {
+        const d = runDir(gx - start, start * 3.7 + gy * 9.1);
+        for (let i = start; i < gx; i++) roadOne[gy][i] = { dx: d, dy: 0 };
+        start = -1;
+      }
+    }
+  }
+  for (let gx = 0; gx < COLS; gx++) {            // top-to-bottom runs
+    let start = -1;
+    for (let gy = 0; gy <= ROWS; gy++) {
+      const c = gy < ROWS ? roadConn[gy][gx] : null;
+      const ok = c && c.straightV && !roadDual[gy][gx];
+      if (ok && start < 0) start = gy;
+      if (!ok && start >= 0) {
+        const d = runDir(gy - start, gx * 5.3 + start * 2.9);
+        for (let i = start; i < gy; i++) roadOne[i][gx] = { dx: 0, dy: d };
+        start = -1;
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------
+// TRAFFIC LIGHTS. Every junction in town runs off one shared clock:
+// up-and-down traffic goes, then everyone stops, then left-and-right goes.
+// ---------------------------------------------------------------------
+let lightClock = 0;
+const LIGHT_CYCLE = [ { ns: true,  ew: false, t: 5 },   // up/down GO
+                      { ns: false, ew: false, t: 1.2 }, // everybody stop
+                      { ns: false, ew: true,  t: 5 },   // left/right GO
+                      { ns: false, ew: false, t: 1.2 } ];
+function lightPhase() {
+  let t = lightClock % LIGHT_CYCLE.reduce((a, p) => a + p.t, 0);
+  for (const p of LIGHT_CYCLE) { if (t < p.t) return p; t -= p.t; }
+  return LIGHT_CYCLE[0];
+}
+// may a car heading (dx,dy) drive into this junction right now?
+function greenFor(dx, dy) {
+  const p = lightPhase();
+  return dy !== 0 ? p.ns : p.ew;
+}
+
+// ---------------------------------------------------------------------
 // CARS — they appear by themselves on any decent stretch of road and
 // trundle along it. Nobody repairs a car: when a disaster catches one it
 // simply EXPLODES and is gone.
@@ -167,39 +293,53 @@ let carTimer = 0;
 const CAR_COLORS = ['#e8453c', '#3aa7e8', '#f5c542', '#8e6ee8', '#3fbf6f', '#ef8a3c'];
 const MIN_ROAD_RUN = 4;         // a road needs to be this long before cars bother with it
 
-// Look for a straight run of road at least MIN_ROAD_RUN squares long and
-// drop a car on it, pointed along the run.
-function trySpawnCar() {
-  const spots = [];
-  // horizontal runs
-  for (let gy = 0; gy < ROWS; gy++) {
-    let run = 0;
-    for (let gx = 0; gx <= COLS; gx++) {
-      if (gx < COLS && grid[gy][gx] === ROAD) run++;
-      else {
-        if (run >= MIN_ROAD_RUN) spots.push({ gx: gx - Math.ceil(run / 2), gy, dx: 1, dy: 0 });
-        run = 0;
-      }
-    }
+// Which way should a car on this square be pointed? A one-lane road has a
+// one-way direction; on a two-lane road you drive on the right, which means
+// the lane you're in decides your direction.
+function laneDir(gx, gy) {
+  const c = roadConn[gy] && roadConn[gy][gx];
+  if (!c) return null;
+  const dual = roadDual[gy][gx];
+  if (dual === 'v') {
+    // the lane with its twin on the LEFT is the right-hand lane going down
+    return isRoad(gx - 1, gy) && roadDual[gy][gx - 1] === 'v' ? { dx: 0, dy: 1 }
+                                                              : { dx: 0, dy: -1 };
   }
-  // vertical runs
-  for (let gx = 0; gx < COLS; gx++) {
-    let run = 0;
-    for (let gy = 0; gy <= ROWS; gy++) {
-      if (gy < ROWS && grid[gy][gx] === ROAD) run++;
-      else {
-        if (run >= MIN_ROAD_RUN) spots.push({ gx, gy: gy - Math.ceil(run / 2), dx: 0, dy: 1 });
-        run = 0;
+  if (dual === 'h') {
+    return isRoad(gx, gy - 1) && roadDual[gy - 1][gx] === 'h' ? { dx: -1, dy: 0 }
+                                                              : { dx: 1, dy: 0 };
+  }
+  return roadOne[gy][gx];        // plain one-lane road: its one-way direction
+}
+
+// Find a straight run of road at least MIN_ROAD_RUN long and put a car at
+// the START of it, pointed the way that road actually goes.
+function trySpawnCar() {
+  ensureRoads();
+  const spots = [];
+  for (let gy = 0; gy < ROWS; gy++) {
+    for (let gx = 0; gx < COLS; gx++) {
+      const dir = laneDir(gx, gy);
+      if (!dir) continue;
+      // measure how much clear road lies ahead of this square
+      let ahead = 0, cx = gx, cy = gy;
+      while (ahead < 40 && isRoad(cx + dir.dx, cy + dir.dy)) {
+        cx += dir.dx; cy += dir.dy; ahead++;
       }
+      // and make sure this really is the START (nothing feeding into it)
+      const behind = isRoad(gx - dir.dx, gy - dir.dy);
+      if (ahead >= MIN_ROAD_RUN - 1 && !behind) spots.push({ gx, gy, dir });
     }
   }
   if (!spots.length) return;
   const spot = spots[Math.floor(Math.random() * spots.length)];
   const s = cellSize();
-  const flip = Math.random() < 0.5 ? 1 : -1;
+  const px = spot.gx * s + s / 2, py = TOPBAR + spot.gy * s + s / 2;
+  // don't drop a car on top of one that's already sitting there
+  for (const c of cars) if (Math.hypot(c.x - px, c.y - py) < s) return;
   cars.push({
-    x: spot.gx * s + s / 2, y: TOPBAR + spot.gy * s + s / 2,
-    dx: spot.dx * flip, dy: spot.dy * flip,
+    x: px, y: py,
+    dx: spot.dir.dx, dy: spot.dir.dy,
     speed: 34 + Math.random() * 26,
     color: CAR_COLORS[Math.floor(Math.random() * CAR_COLORS.length)],
   });
@@ -356,6 +496,7 @@ function smashBlock(gx, gy, bx, by, splash) {
   const kind = grid[gy][gx];
   grid[gy][gx] = EMPTY;
   damage[gy][gx] = PRISTINE;         // empty ground isn't "damaged"
+  roadsDirty = true;                 // a road may have just been wiped out
   destroyed++;
   moneys += kind === APT ? 3 : 1;    // apartments pay TRIPLE. big building, big payout.
   for (let i = 0; i < 6; i++) {
@@ -430,6 +571,7 @@ function placeAt(px, py) {
   if (gx < 0 || gy < 0 || gx >= COLS || gy >= ROWS) return;
   grid[gy][gx] = selected;          // EMPTY works as the eraser
   damage[gy][gx] = PRISTINE;        // fresh out of the box
+  roadsDirty = true;                // the road map may have changed shape
 }
 
 // slide the whole zoomed view by a screen-pixel delta (used for one-finger pan)
@@ -761,37 +903,39 @@ function drawWay(gx, gy, x, y, s, kind) {
   }
 
   if (road) {
-    // IS THIS PART OF A TWO-LANE ROAD? That means the road beside us runs
-    // the same way we do. If so we skip our own centre line and paint the
-    // dashes along the shared edge instead, so the pair reads as one road.
-    const vertical = (N || S) && !(W && E);
-    const horizontal = (W || E) && !(N && S);
-    const twinRight = vertical && sameWay(gx + 1, gy, ROAD) &&
-                      (sameWay(gx + 1, gy - 1, ROAD) || sameWay(gx + 1, gy + 1, ROAD));
-    const twinLeft  = vertical && sameWay(gx - 1, gy, ROAD) &&
-                      (sameWay(gx - 1, gy - 1, ROAD) || sameWay(gx - 1, gy + 1, ROAD));
-    const twinDown  = horizontal && sameWay(gx, gy + 1, ROAD) &&
-                      (sameWay(gx - 1, gy + 1, ROAD) || sameWay(gx + 1, gy + 1, ROAD));
-    const twinUp    = horizontal && sameWay(gx, gy - 1, ROAD) &&
-                      (sameWay(gx - 1, gy - 1, ROAD) || sameWay(gx + 1, gy - 1, ROAD));
-
+    // ONLY a two-lane road gets a centre line — there's nothing to divide on
+    // a one-way single lane. The line sits on the edge shared with our twin,
+    // and we draw it across the FULL square so it meets the line from the
+    // next square along, which is what makes bends and junctions join up.
+    const dual = roadDual[gy][gx];
     ctx.strokeStyle = '#f2d24b';
     ctx.lineWidth = Math.max(1, s * 0.05);
     ctx.setLineDash([s * 0.16, s * 0.14]);
     ctx.beginPath();
-    if (twinRight) {            // we're the LEFT lane — line down our right edge
-      ctx.moveTo(x + s, y); ctx.lineTo(x + s, y + s);
-    } else if (twinLeft) {      // we're the RIGHT lane — the twin drew the line
-    } else if (twinDown) {      // we're the TOP lane — line along our bottom edge
-      ctx.moveTo(x, y + s); ctx.lineTo(x + s, y + s);
-    } else if (twinUp) {        // bottom lane — the twin drew it
-    } else if (vertical) {
-      ctx.moveTo(x + mid, y); ctx.lineTo(x + mid, y + s);
-    } else if (horizontal) {
-      ctx.moveTo(x, y + mid); ctx.lineTo(x + s, y + mid);
+    if (dual === 'v' && isRoad(gx + 1, gy) && roadDual[gy][gx + 1] === 'v') {
+      ctx.moveTo(x + s, y); ctx.lineTo(x + s, y + s);       // left lane of the pair
+    } else if (dual === 'h' && isRoad(gx, gy + 1) && roadDual[gy + 1][gx] === 'h') {
+      ctx.moveTo(x, y + s); ctx.lineTo(x + s, y + s);       // top lane of the pair
     }
     ctx.stroke();
     ctx.setLineDash([]);
+
+    // ONE-WAY ARROWS on a single lane, so you can see which way it flows
+    const one = roadOne[gy][gx];
+    if (one && !roadJunc[gy][gx]) {
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+      ctx.lineWidth = Math.max(1, s * 0.045);
+      ctx.lineCap = 'round';
+      const ax = x + mid, ay = y + mid;
+      const px2 = one.dx * s * 0.16, py2 = one.dy * s * 0.16;   // point of the arrow
+      const wx = one.dy * s * 0.13, wy = one.dx * s * 0.13;     // its two barbs
+      ctx.beginPath();
+      ctx.moveTo(ax + px2 - px2 * 2 + wx, ay + py2 - py2 * 2 + wy);
+      ctx.lineTo(ax + px2, ay + py2);
+      ctx.lineTo(ax + px2 - px2 * 2 - wx, ay + py2 - py2 * 2 - wy);
+      ctx.stroke();
+      ctx.lineCap = 'butt';
+    }
   } else {
     // paths get little stepping-stone speckles
     ctx.fillStyle = 'rgba(150, 128, 92, 0.55)';
@@ -851,6 +995,8 @@ function update(dt) {
   if (shake > 0) shake -= dt;
   if (brokeFlash > 0) brokeFlash -= dt;
   if (statusTimer > 0 && !statusSticky) statusTimer -= dt;
+  ensureRoads();                 // keep our notes about the roads up to date
+  lightClock += dt;              // and let the traffic lights tick round
 
   // let squares recover from their "just been hit" moment
   for (let y = 0; y < ROWS; y++) {
@@ -1247,29 +1393,100 @@ function update(dt) {
   }
   for (const car of cars) {
     const gx = Math.floor(car.x / cs), gy = Math.floor((car.y - TOPBAR) / cs);
-    if (grid[gy] === undefined || grid[gy][gx] !== ROAD) { popCar(car); continue; }  // road's gone!
-    car.x += car.dx * car.speed * dt;
-    car.y += car.dy * car.speed * dt;
-    // reached the middle of the next square? decide where to go from here
+    const onMap = gx >= 0 && gy >= 0 && gx < COLS && gy < ROWS;
+    if (!onMap) { car.gone = true; continue; }        // drove off the map — bye!
+    if (grid[gy][gx] !== ROAD) { popCar(car); continue; }   // road vanished under it
+
+    // WHAT'S THE SQUARE IN FRONT?
+    const fx = gx + car.dx, fy = gy + car.dy;
+    const frontIsRoad = isRoad(fx, fy);
+    const frontOffMap = fx < 0 || fy < 0 || fx >= COLS || fy >= ROWS;
+
+    // Reasons to hold still: a red light at the junction ahead, or the
+    // back bumper of the car in front.
+    let stop = false;
+    if (frontIsRoad && roadJunc[fy][fx] && !roadJunc[gy][gx] && !greenFor(car.dx, car.dy)) {
+      stop = true;                                    // RED — wait at the line
+    }
+    if (!stop) {
+      for (const o of cars) {                         // don't rear-end anybody
+        if (o === car || o.gone) continue;
+        const relx = (o.x - car.x) * car.dx + (o.y - car.y) * car.dy;   // how far ahead
+        const side = Math.abs((o.x - car.x) * car.dy - (o.y - car.y) * car.dx);
+        if (relx > 0 && relx < cs * 0.95 && side < cs * 0.5) { stop = true; break; }
+      }
+    }
+
+    if (!stop) {
+      car.x += car.dx * car.speed * dt;
+      car.y += car.dy * car.speed * dt;
+    } else {
+      // creep up to the stop line and hold there
+      const lineX = gx * cs + cs / 2, lineY = TOPBAR + gy * cs + cs / 2;
+      if (car.dx > 0) car.x = Math.min(car.x, lineX + cs * 0.3);
+      if (car.dx < 0) car.x = Math.max(car.x, lineX - cs * 0.3);
+      if (car.dy > 0) car.y = Math.min(car.y, lineY + cs * 0.3);
+      if (car.dy < 0) car.y = Math.max(car.y, lineY - cs * 0.3);
+    }
+
+    // crossed into a new square? work out where to go next
     const nx2 = Math.floor(car.x / cs), ny2 = Math.floor((car.y - TOPBAR) / cs);
     if (nx2 !== gx || ny2 !== gy) {
-      const ahead = grid[ny2] && grid[ny2][nx2] === ROAD;
-      if (!ahead) {                          // ran off the end — pick a new way
-        const turns = [[car.dy, car.dx], [-car.dy, -car.dx], [-car.dx, -car.dy]];
-        let picked = null;
-        for (const [tx, ty] of turns) {
-          if (grid[gy + ty] && grid[gy + ty][gx + tx] === ROAD) { picked = [tx, ty]; break; }
+      if (nx2 < 0 || ny2 < 0 || nx2 >= COLS || ny2 >= ROWS) { car.gone = true; continue; }
+      // NO DRIVING THE WRONG WAY. If the square we just rolled into is a
+      // one-way going the other way, take a legal turn instead — and if
+      // there isn't one, this car's journey quietly ends here.
+      const into = laneDir(nx2, ny2);
+      if (into && (into.dx !== car.dx || into.dy !== car.dy)) {
+        const legal = [[car.dy, car.dx], [-car.dy, -car.dx]].filter(([tx, ty]) => {
+          if (!isRoad(nx2 + tx, ny2 + ty)) return false;
+          const d2 = laneDir(nx2 + tx, ny2 + ty);
+          return !d2 || (d2.dx === tx && d2.dy === ty);
+        });
+        if (legal.length && (into.dx === -car.dx && into.dy === -car.dy)) {
+          const t = legal[Math.floor(Math.random() * legal.length)];
+          car.x = gx * cs + cs / 2; car.y = TOPBAR + gy * cs + cs / 2;
+          car.dx = t[0]; car.dy = t[1];
+          continue;
         }
-        car.x = gx * cs + cs / 2; car.y = TOPBAR + gy * cs + cs / 2;   // back to the middle
-        if (picked) { car.dx = picked[0]; car.dy = picked[1]; }
-        else { car.dx = -car.dx; car.dy = -car.dy; }                   // dead end: turn around
-      } else if (Math.random() < 0.25) {      // an intersection? sometimes take the turn
-        const side = [[car.dy, car.dx], [-car.dy, -car.dx]].filter(([tx, ty]) =>
-          grid[ny2 + ty] && grid[ny2 + ty][nx2 + tx] === ROAD);
-        if (side.length) {
-          const t = side[Math.floor(Math.random() * side.length)];
+        if (into.dx === -car.dx && into.dy === -car.dy) { car.gone = true; continue; }
+      }
+      if (roadJunc[ny2][nx2] && Math.random() < 0.4) {
+        // at a junction, sometimes turn off — but only onto a road that
+        // actually runs the way we'd be going (no driving up a one-way!)
+        const options = [[car.dy, car.dx], [-car.dy, -car.dx]].filter(([tx, ty]) => {
+          if (!isRoad(nx2 + tx, ny2 + ty)) return false;
+          const d2 = laneDir(nx2 + tx, ny2 + ty);
+          return !d2 || (d2.dx === tx && d2.dy === ty);
+        });
+        if (options.length) {
+          const t = options[Math.floor(Math.random() * options.length)];
           car.x = nx2 * cs + cs / 2; car.y = TOPBAR + ny2 * cs + cs / 2;
           car.dx = t[0]; car.dy = t[1];
+        }
+      }
+    } else if (!frontIsRoad && !stop) {
+      // THE ROAD RUNS OUT AHEAD.
+      if (frontOffMap) {
+        // it goes right to the edge of the map — drive off and away
+      } else {
+        // a bend? follow it. Otherwise the car simply slips away rather
+        // than doing a U-turn on a one-way street.
+        const bends = [[car.dy, car.dx], [-car.dy, -car.dx]].filter(([tx, ty]) => {
+          if (!isRoad(gx + tx, gy + ty)) return false;
+          const d2 = laneDir(gx + tx, gy + ty);
+          return !d2 || (d2.dx === tx && d2.dy === ty);
+        });
+        const past = (car.x - (gx * cs + cs / 2)) * car.dx +
+                     (car.y - (TOPBAR + gy * cs + cs / 2)) * car.dy;
+        if (past >= 0) {
+          if (bends.length) {
+            const t = bends[Math.floor(Math.random() * bends.length)];
+            car.x = gx * cs + cs / 2; car.y = TOPBAR + gy * cs + cs / 2;
+            car.dx = t[0]; car.dy = t[1];
+          } else if (past > cs * 0.35) {
+            car.gone = true; continue;     // end of the line — quietly gone
+          }
         }
       }
     }
@@ -1310,6 +1527,7 @@ function update(dt) {
 // DRAWING
 // ---------------------------------------------------------------------
 function draw() {
+  ensureRoads();                 // make sure our road notes match the map
   const shx = shake > 0 ? (Math.random() - 0.5) * 10 : 0;
   const shy = shake > 0 ? (Math.random() - 0.5) * 10 : 0;
   ctx.save();
@@ -1534,6 +1752,29 @@ function draw() {
         }
         ctx.fillStyle = dmg === HEAVY ? 'rgba(0,0,0,0.22)' : 'rgba(0,0,0,0.1)';
         ctx.fillRect(x, y, s, s);                        // soot over the whole square
+      }
+    }
+  }
+
+  // ---- TRAFFIC LIGHTS at every junction ----
+  {
+    const ph = lightPhase();
+    for (let gy = 0; gy < ROWS; gy++) {
+      for (let gx = 0; gx < COLS; gx++) {
+        if (!roadJunc[gy][gx]) continue;
+        const lx = gx * s + s * 0.86, ly = TOPBAR + gy * s + s * 0.06;
+        const bw = s * 0.16, bh = s * 0.3;
+        ctx.fillStyle = '#1b1f24';                      // the little light box
+        rrect(lx - bw / 2, ly, bw, bh, s * 0.05); ctx.fill();
+        // two lamps: the top one is for up/down, the bottom for left/right
+        ctx.fillStyle = ph.ns ? '#4ade6a' : '#3a2222';
+        ctx.beginPath(); ctx.arc(lx, ly + bh * 0.28, s * 0.045, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = ph.ew ? '#4ade6a' : '#3a2222';
+        ctx.beginPath(); ctx.arc(lx, ly + bh * 0.72, s * 0.045, 0, Math.PI * 2); ctx.fill();
+        if (!ph.ns && !ph.ew) {                          // the everybody-stop moment
+          ctx.fillStyle = '#f2b33d';
+          ctx.beginPath(); ctx.arc(lx, ly + bh * 0.5, s * 0.04, 0, Math.PI * 2); ctx.fill();
+        }
       }
     }
   }
