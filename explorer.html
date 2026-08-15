@@ -53,6 +53,7 @@ let hasArmor = localStorage.getItem('explorer_plate_armor') === 'yes';
 let hasGoldSword = localStorage.getItem('explorer_gold_sword') === 'yes';
 let hasInfectedArmor = localStorage.getItem('explorer_infected_armor') === 'yes';
 let hasBeatSky = localStorage.getItem('explorer_beat_sky') === 'yes';   // Multi-Tasker defeated?
+let hasChippy = localStorage.getItem('explorer_chippy') === 'yes';      // has Chippy joined you?
 let armorRegenTimer = 0;       // the infection slowly knitting your armor back
 
 // how many armor points can you have? best armor wins.
@@ -115,7 +116,15 @@ const LEVELS = [
     worldH: 2800,
     start: { x: 1400, y: 2650 }, // the bottom of the first sky-bridge
   },
-  { name: 'The Dimension of Chippy', unlocked: false },   // Level 5 — who IS Chippy?!
+  {
+    name: 'The Dimension of Chippy',
+    kind: 'chippy',
+    unlocked: false,             // opens when the Multi-Tasker falls
+    grass: '#1d3d3a',            // teal grass. dimension rules are different.
+    worldW: 2200,
+    worldH: 2200,
+    start: { x: 200, y: 2000 },  // you arrive in the bottom-left corner
+  },
 ];
 // prizes you earned on past visits keep their doors open
 LEVELS[1].unlocked = hasArmor;
@@ -135,6 +144,9 @@ let skeletons = [];     // spear patrol, temple only
 let torches = [];       // flickering lights along the temple walkway
 let scorches = [];      // burn marks left by creeper explosions
 let tiles = [];         // sand + stone paving squares on the temple walkway
+let logs = [];          // fallen logs (Chippy's dimension)
+let webs = [];          // sticky spider webs (Chippy's dimension)
+let geckos = [];        // harmless, dramatic (Chippy's dimension)
 let emeralds = [];      // dropped treasure waiting to be grabbed
 let particles = [];     // flying bits when a monster goes POOF
 let emeraldCount = 0;   // your treasure so far
@@ -270,6 +282,9 @@ const SKY_PATHS = [
   ],
 ];
 const arena = { x: 1400, y: 300 };   // the round sky-arena. HE lives there.
+
+// Chippy's home: a great glowing stump in the far corner of his dimension
+const chippyStump = { x: 1980, y: 260 };
 
 // smallest distance to ANY of a list of paths
 function distToAnyPath(x, y, paths) {
@@ -814,6 +829,95 @@ function buildSky(lv) {
 }
 
 // ---------------------------------------------------------------------
+// BUILDING THE DIMENSION OF CHIPPY — a wrong-colored forest full of
+// fallen logs, sticky webs, panicking geckos... and one very happy axe.
+// ---------------------------------------------------------------------
+function buildChippy(lv) {
+  // strange purple-leafed trees, spread out with room to wander
+  trees = [];
+  for (let i = 0; i < 90; i++) {
+    const x = 80 + noise(i * 3.17 + 31) * (lv.worldW - 160);
+    const y = 80 + noise(i * 7.71 + 31) * (lv.worldH - 160);
+    if (Math.hypot(x - lv.start.x, y - lv.start.y) < 160) continue;
+    if (Math.hypot(x - chippyStump.x, y - chippyStump.y) < 180) continue;
+    trees.push({ x, y, size: 0.8 + noise(i * 13.3) * 0.6 });
+  }
+  // a tree wall around the edges of the dimension
+  for (let x = 30; x < lv.worldW; x += 70) {
+    trees.push({ x: x + noise(x) * 30, y: 25 + noise(x * 2) * 20, size: 1 });
+    trees.push({ x: x + noise(x * 3) * 30, y: lv.worldH - 25 - noise(x * 4) * 20, size: 1 });
+  }
+  for (let y = 30; y < lv.worldH; y += 70) {
+    trees.push({ x: 25 + noise(y * 5) * 20, y: y + noise(y * 6) * 30, size: 1 });
+    trees.push({ x: lv.worldW - 25 - noise(y * 7) * 20, y: y + noise(y * 8) * 30, size: 1 });
+  }
+
+  // FALLEN LOGS everywhere — someone (something?) has been chopping
+  // this whole dimension down for a very long time...
+  logs = [];
+  for (let i = 0; i < 60; i++) {
+    const x = 120 + noise(i * 9.13 + 41) * (lv.worldW - 240);
+    const y = 120 + noise(i * 5.77 + 41) * (lv.worldH - 240);
+    if (Math.hypot(x - lv.start.x, y - lv.start.y) < 170) continue;
+    if (Math.hypot(x - chippyStump.x, y - chippyStump.y) < 170) continue;
+    logs.push({ x, y, log: true, len: 70 + noise(i * 2.9) * 90 });
+  }
+
+  // SPIDER WEBS stretched between the wreckage. Sticky. You'll see.
+  webs = [];
+  for (let i = 0; i < 30; i++) {
+    const x = 150 + noise(i * 11.3 + 51) * (lv.worldW - 300);
+    const y = 150 + noise(i * 17.9 + 51) * (lv.worldH - 300);
+    if (Math.hypot(x - lv.start.x, y - lv.start.y) < 170) continue;
+    webs.push({ x, y, r: 45 + noise(i * 3.1) * 35 });
+  }
+
+  // GECKOS. So many geckos. They live here and they are THRIVING.
+  geckos = [];
+  for (let i = 0; i < 22; i++) {
+    geckos.push({
+      x: 100 + noise(i * 23.3 + 61) * (lv.worldW - 200),
+      y: 100 + noise(i * 41.7 + 61) * (lv.worldH - 200),
+      angle: noise(i * 7.7) * 6.28,
+      speed: 30,
+      color: ['#5fbf5f', '#e0a23c', '#4cc3c9', '#c96fb0'][Math.floor(noise(i * 5.5) * 4)],
+    });
+  }
+
+  // glowing flowers, because dimensions get to have those
+  flowers = [];
+  for (let i = 0; i < 120; i++) {
+    flowers.push({
+      x: noise(i * 31.7 + 71) * lv.worldW,
+      y: noise(i * 77.1 + 71) * lv.worldH,
+      kind: Math.floor(noise(i * 9.9) * 3),
+    });
+  }
+
+  // pink dimension sparks in the air
+  fireflies = [];
+  for (let i = 0; i < 50; i++) {
+    fireflies.push({
+      x: noise(i * 21.3 + 9) * lv.worldW,
+      y: noise(i * 47.7 + 9) * lv.worldH,
+      phase: noise(i * 5.5) * 6.28,
+      speed: 0.5 + noise(i * 2.2),
+    });
+  }
+
+  // no monsters live here. the geckos would like to keep it that way.
+  pond = { x: -9999, y: -9999, rx: 1, ry: 1, hidden: true };
+  stumps = []; scorches = []; tiles = []; torches = [];
+  zombies = []; skeletons = []; creepers = [];
+
+  emeralds = [];
+  particles = [];
+  emeraldCount = 0;
+  player.hp = player.maxHp;
+  player.armor = armorMax();
+}
+
+// ---------------------------------------------------------------------
 // THE EXPLORER (you!)
 // ---------------------------------------------------------------------
 const player = {
@@ -845,7 +949,9 @@ function swingSword() {
 
 function startLevel(i) {
   current = LEVELS[i];
-  if (current.kind === 'temple') buildTemple(current);
+  logs = []; webs = []; geckos = [];   // only Chippy's dimension refills these
+  if (current.kind === 'chippy') buildChippy(current);
+  else if (current.kind === 'temple') buildTemple(current);
   else if (current.kind === 'castle') buildCastle(current);
   else if (current.kind === 'sky') buildSky(current);
   else buildForest(current);
@@ -871,6 +977,11 @@ function blocked(x, y, r = player.radius) {
   // the pond (explorers hate wet socks; zombies can't swim either)
   if (((x - pond.x) / (pond.rx + r)) ** 2 +
       ((y - pond.y) / (pond.ry + r)) ** 2 < 1) return true;
+  // fallen logs — solid wood, waist high, no climbing over
+  for (const l of logs) {
+    const nearestX = Math.max(l.x - l.len / 2, Math.min(x, l.x + l.len / 2));
+    if (Math.hypot(x - nearestX, y - l.y) < r + 11) return true;
+  }
   // tree trunks, stone pillars, and temple walls — each blocks differently
   for (const t of trees) {
     const chunk = t.wall ? 21 : t.pillar ? 18 : 13;
@@ -986,11 +1097,33 @@ function update(dt) {
     if (dx > 0.1) player.facing = 1;
     if (dx < -0.1) player.facing = -1;
 
-    const newX = player.x + dx * player.speed * dt;
-    const newY = player.y + dy * player.speed * dt;
+    // spider webs are STICKY — walking through one is slooooow
+    let sticky = 1;
+    for (const w of webs) {
+      if (Math.hypot(player.x - w.x, player.y - w.y) < w.r) { sticky = 0.45; break; }
+    }
+    const newX = player.x + dx * player.speed * sticky * dt;
+    const newY = player.y + dy * player.speed * sticky * dt;
     // try x and y separately so you slide around trees instead of sticking
     if (!blocked(newX, player.y)) player.x = newX;
     if (!blocked(player.x, newY)) player.y = newY;
+  }
+
+  // ---- GECKOS — harmless, fast, and extremely dramatic ----
+  for (const g of geckos) {
+    const d = Math.hypot(player.x - g.x, player.y - g.y);
+    if (d < 130) {
+      // AAAA A GIANT!! run!!!
+      g.angle = Math.atan2(g.y - player.y, g.x - player.x) + (noise(g.x + Math.floor(elapsed)) - 0.5);
+      g.speed = 210;
+    } else {
+      g.speed = Math.max(26, g.speed - 260 * dt);   // calming back down
+      g.angle += (noise(Math.floor(elapsed * 2) + g.x) - 0.5) * dt * 6;
+    }
+    const nx = g.x + Math.cos(g.angle) * g.speed * dt;
+    const ny = g.y + Math.sin(g.angle) * g.speed * dt;
+    if (!blocked(nx, g.y, 4)) g.x = nx; else g.angle += 2.5;
+    if (!blocked(g.x, ny, 4)) g.y = ny;
   }
 
   // ---- ZOMBIES ----
@@ -1041,7 +1174,7 @@ function update(dt) {
     if (player.attackTime > 0 && z.lastHitSwing !== player.swingId &&
         distToYou < (z.boss ? 95 : z.giant ? 68 : 55) && (z.x - player.x) * player.facing > -8) {
       z.lastHitSwing = player.swingId;
-      z.hp -= hasGoldSword ? 2 : 1;    // golden sword = one-bonk wonders
+      z.hp -= hasChippy ? 3 : hasGoldSword ? 2 : 1;   // Chippy chops HARD
       z.hurtFlash = 0.15;
       // knock it backwards, away from you
       const push = 40 / Math.max(1, distToYou);
@@ -1162,7 +1295,7 @@ function update(dt) {
     if (player.attackTime > 0 && c.lastHitSwing !== player.swingId &&
         distToYou < 55 && (c.x - player.x) * player.facing > -8 && c.hp > 0) {
       c.lastHitSwing = player.swingId;
-      c.hp -= hasGoldSword ? 2 : 1;
+      c.hp -= hasChippy ? 3 : hasGoldSword ? 2 : 1;
       c.hurtFlash = 0.15;
       c.fuse = 0;                      // interrupted mid-hiss!
       const push = 40 / Math.max(1, distToYou);
@@ -1213,7 +1346,7 @@ function update(dt) {
     if (player.attackTime > 0 && s.lastHitSwing !== player.swingId &&
         distToYou < 55 && (s.x - player.x) * player.facing > -8) {
       s.lastHitSwing = player.swingId;
-      s.hp -= hasGoldSword ? 2 : 1;
+      s.hp -= hasChippy ? 3 : hasGoldSword ? 2 : 1;
       s.hurtFlash = 0.15;
       const push = 40 / Math.max(1, distToYou);
       if (!blocked(s.x + (s.x - player.x) * push, s.y, 10)) s.x += (s.x - player.x) * push;
@@ -1299,6 +1432,7 @@ function update(dt) {
   // Reach it = level beaten, every time. Prizes only come the first time.
   const goal = current.kind === 'temple' ? altar
              : current.kind === 'castle' ? throne
+             : current.kind === 'chippy' ? chippyStump
              : null;
   if (goal && !altarDone && player.deathTimer <= 0 &&
       Math.hypot(player.x - goal.x, player.y - goal.y) < 70) {
@@ -1311,7 +1445,7 @@ function update(dt) {
         LEVELS[2].unlocked = true;               // the castle opens!
       }
       victoryLevel = 2;
-    } else {
+    } else if (current.kind === 'castle') {
       victoryNew = !hasInfectedArmor;
       if (!hasInfectedArmor) {
         hasInfectedArmor = true;
@@ -1320,6 +1454,14 @@ function update(dt) {
       }
       player.armor = armorMax();       // the infection suits up immediately
       victoryLevel = 3;
+    } else {
+      // you found Chippy's stump — and Chippy has decided he likes you
+      victoryNew = !hasChippy;
+      if (!hasChippy) {
+        hasChippy = true;
+        localStorage.setItem('explorer_chippy', 'yes');
+      }
+      victoryLevel = 5;
     }
     victoryTimer = 5;
   }
@@ -1540,10 +1682,71 @@ function drawGame() {
     ctx.fillRect(fx + 1, fy + 4, 2, 4);
   }
 
+  // spider webs — flat on the ground, glinting faintly
+  for (const w of webs) {
+    const wx = w.x - cam.x, wy = w.y - cam.y;
+    if (wx < -80 || wy < -80 || wx > canvas.width + 80 || wy > canvas.height + 80) continue;
+    ctx.strokeStyle = 'rgba(240, 240, 255, 0.28)';
+    ctx.lineWidth = 1;
+    for (let ring = 1; ring <= 3; ring++) {
+      ctx.beginPath();
+      ctx.arc(wx, wy, w.r * ring / 3, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.beginPath();
+    for (let s2 = 0; s2 < 6; s2++) {
+      const ang = s2 / 6 * Math.PI * 2;
+      ctx.moveTo(wx, wy);
+      ctx.lineTo(wx + Math.cos(ang) * w.r, wy + Math.sin(ang) * w.r);
+    }
+    ctx.stroke();
+  }
+
+  // geckos!! scurrying around having the best day of their lives
+  for (const g of geckos) {
+    const gx2 = g.x - cam.x, gy2 = g.y - cam.y;
+    if (gx2 < -20 || gy2 < -20 || gx2 > canvas.width + 20 || gy2 > canvas.height + 20) continue;
+    const flip = Math.cos(g.angle) < 0 ? -1 : 1;
+    ctx.fillStyle = g.color;
+    ctx.fillRect(gx2 - 5, gy2 - 2, 10, 5);              // body
+    ctx.fillRect(gx2 + 5 * flip, gy2 - 3, 4, 4);        // head
+    ctx.fillRect(gx2 - 8 * flip, gy2 - 1, 4, 2);        // tail
+    ctx.fillStyle = '#222';
+    ctx.fillRect(gx2 + 6.5 * flip, gy2 - 2, 1.5, 1.5);  // one alert eye
+  }
+
+  // CHIPPY'S STUMP — the great glowing stump, with the man himself in it
+  if (current.kind === 'chippy') {
+    const sx = chippyStump.x - cam.x, sy = chippyStump.y - cam.y;
+    ctx.fillStyle = '#4a3520';
+    ctx.beginPath(); ctx.ellipse(sx, sy, 44, 30, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#8a6b3f';
+    ctx.beginPath(); ctx.ellipse(sx, sy - 4, 36, 23, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#6d5330';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.ellipse(sx, sy - 4, 20, 12, 0, 0, Math.PI * 2); ctx.stroke();
+
+    // Chippy, wiggling happily in his stump. (Yes, he can also be in your
+    // hand at the same time. He's a living axe from another dimension.
+    // Don't worry about it.)
+    ctx.save();
+    ctx.translate(sx, sy - 26);
+    ctx.rotate(-0.2 + Math.sin(elapsed * 2) * 0.08);
+    ctx.scale(1.5, 1.5);
+    ctx.fillStyle = '#8a6b3f'; ctx.fillRect(-2, -4, 4, 22);     // handle, standing up
+    ctx.fillStyle = '#c8ccd4'; ctx.fillRect(-11, -12, 18, 9);   // axe head
+    ctx.fillStyle = '#e8ecf2'; ctx.fillRect(-11, -12, 18, 3);   // the sharp bit
+    ctx.fillStyle = '#ffffff';                                  // his eyes!
+    ctx.fillRect(-8, -8, 3, 3); ctx.fillRect(1, -8, 3, 3);
+    ctx.fillStyle = '#222';
+    ctx.fillRect(-7, -7, 1.5, 1.5); ctx.fillRect(2, -7, 1.5, 1.5);
+    ctx.restore();
+  }
+
   // ---- THE DRAW-ORDER TRICK ----
   // Put the trees and YOU in one list, sort it by how far down the world
   // each thing is, then draw top-to-bottom. Lower = drawn later = in front.
-  const things = [...trees, ...zombies, ...creepers, ...skeletons, ...torches, player];
+  const things = [...trees, ...zombies, ...creepers, ...skeletons, ...torches, ...logs, player];
   things.sort((a, b) => a.y - b.y);
   for (const thing of things) {
     if (thing === player) drawPlayer(cam);
@@ -1551,6 +1754,7 @@ function drawGame() {
     else if (thing.skeleton) drawSkeleton(thing, cam);
     else if (thing.creeper) drawCreeper(thing, cam);
     else if (thing.torch) drawTorch(thing, cam);
+    else if (thing.log) drawLog(thing, cam);
     else if (thing.wall) drawWall(thing, cam);
     else if (thing.pillar) drawPillar(thing, cam);
     else drawTree(thing, cam);
@@ -1593,10 +1797,12 @@ function drawGame() {
     const glowA = current.kind === 'temple' ? '255, 150, 70'
                 : current.kind === 'castle' ? '190, 140, 255'
                 : current.kind === 'sky'    ? '170, 200, 255'
+                : current.kind === 'chippy' ? '255, 150, 220'
                 : '190, 255, 130';
     const glowB = current.kind === 'temple' ? '255, 210, 140'
                 : current.kind === 'castle' ? '220, 190, 255'
                 : current.kind === 'sky'    ? '225, 240, 255'
+                : current.kind === 'chippy' ? '255, 215, 245'
                 : '220, 255, 170';
     ctx.fillStyle = `rgba(${glowA}, ${0.15 + 0.25 * twinkle})`;
     ctx.beginPath(); ctx.arc(fx, fy, 5, 0, Math.PI * 2); ctx.fill();
@@ -1695,6 +1901,16 @@ function drawGame() {
     ag.addColorStop(1, 'rgba(255, 215, 90, 0)');
     ctx.fillStyle = ag;
     ctx.fillRect(ax - 130, ay - 130, 260, 260);
+  }
+
+  if (current.kind === 'chippy') {
+    // Chippy's stump glows warm and friendly through the strange night
+    const sx = chippyStump.x - cam.x, sy = chippyStump.y - cam.y - 20;
+    const sg = ctx.createRadialGradient(sx, sy, 5, sx, sy, 140);
+    sg.addColorStop(0, 'rgba(255, 230, 130, 0.35)');
+    sg.addColorStop(1, 'rgba(255, 230, 130, 0)');
+    ctx.fillStyle = sg;
+    ctx.fillRect(sx - 140, sy - 140, 280, 280);
   }
 
   if (current.kind === 'castle') {
@@ -1855,7 +2071,28 @@ function drawGame() {
     ctx.fillStyle = '#ffd23f';
     ctx.font = 'bold 40px monospace';
     ctx.fillText(`LEVEL ${victoryLevel} COMPLETE!`, canvas.width / 2, canvas.height / 2 - 60);
-    if (victoryLevel === 4) {
+    if (victoryLevel === 5) {
+      // Chippy himself, big and proud
+      ctx.save();
+      ctx.translate(canvas.width / 2, canvas.height / 2 + 4);
+      ctx.rotate(-Math.PI / 4);
+      ctx.scale(2.6, 2.6);
+      ctx.fillStyle = '#8a6b3f'; ctx.fillRect(-14, -2, 24, 4);
+      ctx.fillStyle = '#c8ccd4'; ctx.fillRect(6, -11, 9, 18);
+      ctx.fillStyle = '#e8ecf2'; ctx.fillRect(13, -11, 3, 18);
+      ctx.fillStyle = '#ffffff'; ctx.fillRect(7.5, -8, 3, 3); ctx.fillRect(7.5, 1, 3, 3);
+      ctx.fillStyle = '#222'; ctx.fillRect(8.5, -7, 1.5, 1.5); ctx.fillRect(8.5, 2, 1.5, 1.5);
+      ctx.restore();
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 22px monospace';
+      ctx.fillText(victoryNew ? 'CHIPPY JOINS YOU!' : 'You visited Chippy!',
+                   canvas.width / 2, canvas.height / 2 + 62);
+      ctx.fillStyle = '#bfffe0';
+      ctx.font = '16px monospace';
+      ctx.fillText(victoryNew ? 'A living axe! One chop takes out almost anything.'
+                              : 'He is still very happy to see you.',
+                   canvas.width / 2, canvas.height / 2 + 90);
+    } else if (victoryLevel === 4) {
       // its giant eye — closed forever. your trophy.
       ctx.fillStyle = '#f4f0e8';
       ctx.beginPath(); ctx.arc(canvas.width / 2, canvas.height / 2 + 2, 24, 0, Math.PI * 2); ctx.fill();
@@ -1995,6 +2232,24 @@ function drawInventory() {
     ctx.fillText(hasInfectedArmor ? 'Infected Armor' : 'Plate Armor', ax, startY + slot + 16);
   }
 
+  // SLOT 4: CHIPPY! (he insisted on a corner slot with a view)
+  if (hasChippy) {
+    const cx4 = startX + 3 * (slot + gap) + slot / 2;
+    ctx.save();
+    ctx.translate(cx4, startY + slot / 2);
+    ctx.rotate(-Math.PI / 4);
+    ctx.scale(1.5, 1.5);
+    ctx.fillStyle = '#8a6b3f'; ctx.fillRect(-14, -2, 24, 4);
+    ctx.fillStyle = '#c8ccd4'; ctx.fillRect(6, -11, 9, 18);
+    ctx.fillStyle = '#e8ecf2'; ctx.fillRect(13, -11, 3, 18);
+    ctx.fillStyle = '#ffffff'; ctx.fillRect(7.5, -8, 3, 3); ctx.fillRect(7.5, 1, 3, 3);
+    ctx.fillStyle = '#222'; ctx.fillRect(8.5, -7, 1.5, 1.5); ctx.fillRect(8.5, 2, 1.5, 1.5);
+    ctx.restore();
+    ctx.fillStyle = '#cdd6f4';
+    ctx.font = '13px monospace';
+    ctx.fillText('Chippy', cx4, startY + slot + 16);
+  }
+
   ctx.fillStyle = '#8890b8';
   ctx.font = '14px monospace';
   ctx.fillText('(the empty slots are waiting for future treasure...)', W / 2, py + ph - 40);
@@ -2015,9 +2270,12 @@ function drawTree(t, cam) {
   ctx.fillStyle = '#3f2a15';
   ctx.fillRect(x - 5 * t.size, y - 18 * t.size, 10 * t.size, 20 * t.size);
 
-  // blocky leaf top — every tree gets its own shade of gloomy green
+  // blocky leaf top — gloomy green in the forest, but in Chippy's
+  // dimension the trees grow PURPLE. dimension rules.
   const g = 55 + noise(t.x * 0.13 + t.y) * 35;
-  ctx.fillStyle = `rgb(22, ${Math.floor(g)}, 30)`;
+  ctx.fillStyle = current.kind === 'chippy'
+    ? `rgb(${Math.floor(g + 35)}, 40, ${Math.floor(g + 65)})`
+    : `rgb(22, ${Math.floor(g)}, 30)`;
   ctx.fillRect(x - 24 * t.size, y - 58 * t.size, 48 * t.size, 44 * t.size);
   // a faint square of moonlight on the leaves
   ctx.fillStyle = 'rgba(200,220,255,0.10)';
@@ -2077,10 +2335,21 @@ function drawPlayer(cam) {
   // resting angle points the blade down; swinging sweeps it up-and-over
   ctx.rotate(swinging ? (-1.3 + 2.6 * progress) : 1.0);
 
-  ctx.fillStyle = '#5b3b1e'; ctx.fillRect(0, -2, 7, 4);      // handle
-  ctx.fillStyle = '#c9a83c'; ctx.fillRect(6, -5, 3, 10);     // crossguard
-  ctx.fillStyle = hasGoldSword ? '#f2c94c' : '#dbe4ee'; ctx.fillRect(9, -2, 17, 4);     // blade
-  ctx.fillStyle = hasGoldSword ? '#fff3b8' : '#ffffff'; ctx.fillRect(9, -2, 17, 1.5);   // shiny edge
+  if (hasChippy) {
+    // CHIPPY — a living axe, and he's THRILLED to be swung
+    ctx.fillStyle = '#8a6b3f'; ctx.fillRect(0, -2, 20, 4);     // long handle
+    ctx.fillStyle = '#c8ccd4'; ctx.fillRect(16, -11, 9, 18);   // axe head
+    ctx.fillStyle = '#e8ecf2'; ctx.fillRect(23, -11, 3, 18);   // the sharp bit
+    ctx.fillStyle = '#ffffff';                                 // his eyes!
+    ctx.fillRect(17.5, -8, 3, 3); ctx.fillRect(17.5, 1, 3, 3);
+    ctx.fillStyle = '#222';
+    ctx.fillRect(18.5, -7, 1.5, 1.5); ctx.fillRect(18.5, 2, 1.5, 1.5);
+  } else {
+    ctx.fillStyle = '#5b3b1e'; ctx.fillRect(0, -2, 7, 4);      // handle
+    ctx.fillStyle = '#c9a83c'; ctx.fillRect(6, -5, 3, 10);     // crossguard
+    ctx.fillStyle = hasGoldSword ? '#f2c94c' : '#dbe4ee'; ctx.fillRect(9, -2, 17, 4);     // blade
+    ctx.fillStyle = hasGoldSword ? '#fff3b8' : '#ffffff'; ctx.fillRect(9, -2, 17, 1.5);   // shiny edge
+  }
 
   // the whoosh trail, fading out as the swing finishes
   if (swinging) {
@@ -2355,6 +2624,35 @@ function drawPillar(p, cam) {
   if (noise(p.x * 1.7) > 0.4) ctx.fillRect(x - 13 * s, y - 30 * s, 10 * s, 12 * s);
   if (noise(p.y * 2.3) > 0.5) ctx.fillRect(x + 2 * s, y - 52 * s, 9 * s, 10 * s);
   ctx.fillStyle = '#63655c'; ctx.fillRect(x - 17 * s, y - 70 * s, 34 * s, 10 * s);  // cap
+}
+
+// ---------------------------------------------------------------------
+// A FALLEN LOG — chopped long ago, lying where it fell
+// ---------------------------------------------------------------------
+function drawLog(l, cam) {
+  const x = l.x - cam.x, y = l.y - cam.y;
+  if (x < -l.len || y < -60 || x > canvas.width + l.len || y > canvas.height + 60) return;
+
+  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  ctx.beginPath();
+  ctx.ellipse(x + 4, y + 6, l.len / 2 + 8, 9, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#5a4126';                       // the log itself
+  ctx.fillRect(x - l.len / 2, y - 22, l.len, 22);
+  ctx.fillStyle = '#6d5330';                       // bark stripes
+  for (let s2 = 0; s2 < l.len - 8; s2 += 18) {
+    ctx.fillRect(x - l.len / 2 + s2, y - 22, 8, 22);
+  }
+  ctx.fillStyle = '#8a6b3f';                       // the pale cut end
+  ctx.beginPath();
+  ctx.ellipse(x + l.len / 2, y - 11, 7, 11, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#6d5330';                     // one tree ring
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.ellipse(x + l.len / 2, y - 11, 3.5, 5.5, 0, 0, Math.PI * 2);
+  ctx.stroke();
 }
 
 // ---------------------------------------------------------------------
