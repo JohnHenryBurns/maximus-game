@@ -499,6 +499,8 @@ const REPAIR_TIME = 3.4;      // seconds of hammering per damage level — slow,
 // ---------------------------------------------------------------------
 let litter = [];
 let tidied = 0;
+let footprints = [];       // the brown trail of somebody's worst afternoon
+let piesSteppedIn = 0;     // the town keeps count. the town never forgets.
 const CLEAN_TIME = 1.5;       // seconds of sweeping per piece of mess
 const MAX_LITTER = 260;       // stop the whole town turning into a landfill
 
@@ -1903,6 +1905,35 @@ function update(dt) {
     p.x = Math.max(4, Math.min(COLS * cs - 4, p.x));
     p.y = Math.max(TOPBAR + 4, Math.min(TOPBAR + ROWS * cs - 4, p.y));
 
+    // ---- STEPPING IN IT ----
+    // a pie underfoot ruins somebody's whole afternoon
+    if (p.kind === 'person' && !(p.ick > 0) && elapsed > (p.ickCool || 0)) {
+      for (const L of litter) {
+        if (L.kind !== 'pie' || L.gone) continue;
+        if (Math.hypot(L.x - p.x, L.y - p.y) < 8) {
+          L.squish = true;                    // that pie will never be the same
+          piesSteppedIn++;
+          p.ick = 1.2;                        // the full-body EWWW
+          p.ickCool = elapsed + 5;            // one catastrophe per shoe, please
+          p.trackT = 2.6;                     // and now they're tracking it around
+          if (piesSteppedIn % 3 === 1) {
+            setStatus('EWWW — somebody stepped in a cow pie! (' + piesSteppedIn + ' so far)', '#c98a3d');
+          }
+          break;
+        }
+      }
+    }
+    if (p.ick > 0) p.ick -= dt;
+    // brown footprints follow the unlucky shoe wherever it goes
+    if (p.trackT > 0) {
+      p.trackT -= dt;
+      p.trackTick = (p.trackTick || 0) - dt;
+      if (p.trackTick <= 0) {
+        p.trackTick = 0.14;
+        footprints.push({ x: p.x + (Math.random() - 0.5) * 4, y: p.y + 3, born: elapsed });
+      }
+    }
+
     // did something GET them on the way?
     let hit = false;
     for (const D of disasters) {
@@ -2055,6 +2086,7 @@ function update(dt) {
   for (const b of blasts) b.t += dt;            // fireballs bloom then fade
   blasts = blasts.filter(b => b.t < b.life);
   litter = litter.filter(L => !L.gone);         // swept-up mess is gone for good
+  footprints = footprints.filter(f => elapsed - f.born < 5);   // tracks fade away
 
   // airborne folk tumble gracefully out of frame
   for (const f of launchedFolk) {
@@ -2520,16 +2552,35 @@ function draw() {
       ctx.fillStyle = 'rgba(255,255,255,0.65)';
       ctx.beginPath(); ctx.arc(L.x - 1.5 * u, L.y - 2.5 * u, 1.4 * u, 0, Math.PI * 2); ctx.fill();
     } else if (L.kind === 'pie') {
-      // a splat, in three shades of... let's call it brown
+      // a splat, in three shades of... let's call it brown.
+      // a STEPPED-IN pie is wider, flatter, and has seen things.
+      const sq = L.squish ? 1 : 0;
       ctx.fillStyle = '#6b4a24';
-      ctx.beginPath(); ctx.ellipse(L.x, L.y, 5.4 * u, 2.9 * u, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(L.x, L.y, (5.4 + sq * 2.6) * u, (2.9 - sq * 0.7) * u, 0, 0, Math.PI * 2);
+      ctx.fill();
       ctx.fillStyle = '#7d5a2c';
-      ctx.beginPath(); ctx.ellipse(L.x - 1 * u, L.y - 1.1 * u, 3.6 * u, 2.1 * u, 0, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = '#8d6733';
-      ctx.beginPath(); ctx.ellipse(L.x + 0.6 * u, L.y - 2.2 * u, 2.1 * u, 1.4 * u, 0, 0, Math.PI * 2); ctx.fill();
-      // two flies, doing laps. because of course there are flies.
+      ctx.beginPath();
+      ctx.ellipse(L.x - 1 * u, L.y - (1.1 - sq * 0.5) * u,
+                  (3.6 + sq * 1.6) * u, (2.1 - sq * 0.5) * u, 0, 0, Math.PI * 2);
+      ctx.fill();
+      if (!L.squish) {
+        ctx.fillStyle = '#8d6733';
+        ctx.beginPath(); ctx.ellipse(L.x + 0.6 * u, L.y - 2.2 * u, 2.1 * u, 1.4 * u, 0, 0, Math.PI * 2); ctx.fill();
+      } else {
+        // the guilty BOOT PRINT, pressed right into the middle of it
+        ctx.fillStyle = '#4e3518';
+        ctx.beginPath();
+        ctx.ellipse(L.x + 0.8 * u, L.y - 0.6 * u, 2.6 * u, 1.5 * u, 0.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#5e4120';
+        for (let t = 0; t < 3; t++) {
+          ctx.fillRect(L.x - 0.6 * u + t * 1.4 * u, L.y - 1.6 * u, 0.8 * u, 0.6 * u);
+        }
+      }
+      // flies, doing laps. a squished pie earns a THIRD, angrier fly.
       ctx.fillStyle = '#22242a';
-      for (let f = 0; f < 2; f++) {
+      for (let f = 0; f < 2 + sq; f++) {
         const a = elapsed * (3.4 + f) + L.seed + f * 2.6;
         ctx.beginPath();
         ctx.arc(L.x + Math.cos(a) * 6 * u, L.y - 4.5 * u + Math.sin(a * 1.7) * 2.4 * u,
@@ -2547,6 +2598,15 @@ function draw() {
       ctx.fillStyle = '#948b7e';
       ctx.fillRect(L.x - 1 * u + h3 * u, L.y - 5 * u, 1.8 * u, 1.9 * u);
     }
+  }
+
+  // brown footprints, tracked around by whoever stepped in it
+  for (const f of footprints) {
+    const age = (elapsed - f.born) / 5;
+    ctx.fillStyle = `rgba(107, 74, 36, ${0.55 * (1 - age)})`;
+    ctx.beginPath();
+    ctx.ellipse(f.x, f.y, 2.2, 1.3, 0, 0, Math.PI * 2);
+    ctx.fill();
   }
 
   // tiny heads peeking out of every occupied shelter
@@ -2817,6 +2877,20 @@ function draw() {
     ctx.fillStyle = '#6d4a26';
     ctx.beginPath(); ctx.arc(13, -0.2, 4, 0, Math.PI * 2); ctx.fill();
     ctx.restore();
+  }
+
+  // the full-body EWWW of somebody who just stepped in it
+  for (const p of people) {
+    if (!(p.ick > 0) || p.sheltering) continue;
+    const wob = Math.sin(elapsed * 24) * 3;
+    ctx.fillStyle = '#aef28b';                       // little stink squiggles
+    ctx.font = 'bold 9px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('~', p.x - 6, p.y - 26 + wob * 0.4);
+    ctx.fillText('~', p.x + 6, p.y - 28 - wob * 0.4);
+    ctx.fillStyle = '#ffe066';
+    ctx.font = 'bold 12px monospace';
+    ctx.fillText('EW!!', p.x, p.y - 34 + wob * 0.3);
   }
 
   // folk currently airborne (they're fine. probably.) — same scale as on foot
