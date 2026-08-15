@@ -51,6 +51,13 @@ let inventoryOpen = false;     // is the bag open right now?
 // game gets to keep stuff in between visits.
 let hasArmor = localStorage.getItem('explorer_plate_armor') === 'yes';
 let hasGoldSword = localStorage.getItem('explorer_gold_sword') === 'yes';
+let hasInfectedArmor = localStorage.getItem('explorer_infected_armor') === 'yes';
+let armorRegenTimer = 0;       // the infection slowly knitting your armor back
+
+// how many armor points can you have? best armor wins.
+function armorMax() {
+  return hasInfectedArmor ? 4 : hasArmor ? 3 : 0;
+}
 let victoryTimer = 0;          // counts down the LEVEL COMPLETE celebration
 let victoryLevel = 1;          // which level we're celebrating
 let victoryNew = false;        // did this win come with a brand-new prize?
@@ -98,6 +105,7 @@ const LEVELS = [
     worldH: 2400,
     start: { x: 1200, y: 2300 }, // the shattered front gates
   },
+  { name: 'The Dungeon in the Sky', unlocked: false },   // Level 4 — named by Max, not built yet!
 ];
 // prizes you earned on past visits keep their doors open
 LEVELS[1].unlocked = hasArmor;
@@ -296,7 +304,7 @@ function buildForest(lv) {
   particles = [];
   emeraldCount = 0;
   player.hp = player.maxHp;
-  player.armor = hasArmor ? 3 : 0;   // suit up (if you've earned it)
+  player.armor = armorMax();   // suit up (if you've earned it)
 }
 
 // ---------------------------------------------------------------------
@@ -475,7 +483,7 @@ function buildTemple(lv) {
   particles = [];
   emeraldCount = 0;
   player.hp = player.maxHp;
-  player.armor = hasArmor ? 3 : 0;
+  player.armor = armorMax();
 }
 
 // ---------------------------------------------------------------------
@@ -608,7 +616,7 @@ function buildCastle(lv) {
   particles = [];
   emeraldCount = 0;
   player.hp = player.maxHp;
-  player.armor = hasArmor ? 3 : 0;
+  player.armor = armorMax();
 }
 
 // ---------------------------------------------------------------------
@@ -1029,6 +1037,18 @@ function update(dt) {
 
   if (player.hurtTimer > 0) player.hurtTimer -= dt;
 
+  // INFECTED ARMOR regrows itself: lose a plate, and about 8 seconds
+  // later the infection has knitted a new one. Ew. Also: awesome.
+  if (hasInfectedArmor && player.armor < armorMax() && player.deathTimer <= 0) {
+    armorRegenTimer += dt;
+    if (armorRegenTimer >= 8) {
+      armorRegenTimer = 0;
+      player.armor += 1;
+    }
+  } else {
+    armorRegenTimer = 0;
+  }
+
   // down for the count → respawn back at camp
   if (player.deathTimer > 0) {
     player.deathTimer -= dt;
@@ -1036,7 +1056,7 @@ function update(dt) {
       player.x = current.start.x;
       player.y = current.start.y;
       player.hp = player.maxHp;
-      player.armor = hasArmor ? 3 : 0;   // fresh armor plates too
+      player.armor = armorMax();   // fresh armor plates too
     }
   }
 
@@ -1050,7 +1070,7 @@ function update(dt) {
       if (!hasArmor) {
         // first time here = Level 1 complete → PLATE ARMOR!
         hasArmor = true;
-        player.armor = 3;
+        player.armor = armorMax();
         localStorage.setItem('explorer_plate_armor', 'yes');   // remembered forever
         LEVELS[1].unlocked = true;                             // the temple opens
         victoryTimer = 5;
@@ -1080,7 +1100,12 @@ function update(dt) {
       }
       victoryLevel = 2;
     } else {
-      victoryNew = false;
+      victoryNew = !hasInfectedArmor;
+      if (!hasInfectedArmor) {
+        hasInfectedArmor = true;
+        localStorage.setItem('explorer_infected_armor', 'yes');
+      }
+      player.armor = armorMax();       // the infection suits up immediately
       victoryLevel = 3;
     }
     victoryTimer = 5;
@@ -1450,11 +1475,11 @@ function drawGame() {
   for (let i = 0; i < player.maxHp; i++) {
     drawHeart(14 + i * 26, 14, i < player.hp);
   }
-  // silver armor points line up after the hearts
-  if (hasArmor) {
-    for (let i = 0; i < 3; i++) {
-      drawHeart(22 + (player.maxHp + i) * 26, 14, i < player.armor, '#b8c4d0');
-    }
+  // armor points line up after the hearts — silver plate, or glowing
+  // purple once the infection has it
+  for (let i = 0; i < armorMax(); i++) {
+    drawHeart(22 + (player.maxHp + i) * 26, 14, i < player.armor,
+              hasInfectedArmor ? '#a86cf0' : '#b8c4d0');
   }
   // emerald counter under the hearts
   ctx.save();
@@ -1517,13 +1542,16 @@ function drawGame() {
     ctx.font = 'bold 40px monospace';
     ctx.fillText(`LEVEL ${victoryLevel} COMPLETE!`, canvas.width / 2, canvas.height / 2 - 60);
     if (victoryLevel === 3) {
+      drawChestplate(canvas.width / 2, canvas.height / 2 + 4, 2.4, true);
       ctx.fillStyle = '#ffffff';
       ctx.font = 'bold 22px monospace';
-      ctx.fillText('THE ABANDONED CASTLE IS CONQUERED!', canvas.width / 2, canvas.height / 2 + 10);
+      ctx.fillText(victoryNew ? 'You found: INFECTED ARMOR' : 'CASTLE CONQUERED!',
+                   canvas.width / 2, canvas.height / 2 + 62);
       ctx.fillStyle = '#d8c2ff';
       ctx.font = '16px monospace';
-      ctx.fillText("The prize? You haven't invented it yet — tell me what you win!",
-                   canvas.width / 2, canvas.height / 2 + 42);
+      ctx.fillText(victoryNew ? 'Four armor points — and the infection REGROWS them on its own'
+                              : 'The Infected Armor is already yours!',
+                   canvas.width / 2, canvas.height / 2 + 90);
     } else if (victoryLevel === 1) {
       drawChestplate(canvas.width / 2, canvas.height / 2 + 4, 2.4);
       ctx.fillStyle = '#ffffff';
@@ -1629,13 +1657,13 @@ function drawInventory() {
   ctx.font = '13px monospace';
   ctx.fillText('Emeralds x ' + emeraldCount, ex, startY + slot + 16);
 
-  // SLOT 3: plate armor — but only once you've earned it
-  if (hasArmor) {
+  // SLOT 3: your armor — plate, or the infected upgrade
+  if (hasArmor || hasInfectedArmor) {
     const ax = startX + 2 * (slot + gap) + slot / 2;
-    drawChestplate(ax, startY + slot / 2, 1.6);
+    drawChestplate(ax, startY + slot / 2, 1.6, hasInfectedArmor);
     ctx.fillStyle = '#cdd6f4';
     ctx.font = '13px monospace';
-    ctx.fillText('Plate Armor', ax, startY + slot + 16);
+    ctx.fillText(hasInfectedArmor ? 'Infected Armor' : 'Plate Armor', ax, startY + slot + 16);
   }
 
   ctx.fillStyle = '#8890b8';
@@ -1678,10 +1706,18 @@ function drawPlayer(cam) {
   ctx.ellipse(x, y + 8, 12, 5, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // body — regular shirt, OR gleaming plate armor if you've earned it
-  ctx.fillStyle = hasArmor ? '#b8c4d0' : '#c98a3d';
+  // body — regular shirt, gleaming plate armor... or the INFECTED armor,
+  // dark and veined with purple glow
+  ctx.fillStyle = hasInfectedArmor ? '#3a3345' : hasArmor ? '#b8c4d0' : '#c98a3d';
   ctx.fillRect(x - 8, y - 14 - bob, 16, 16);
-  if (hasArmor) {
+  if (hasInfectedArmor) {
+    ctx.fillStyle = '#7c5cc9';                 // glowing shoulder plate
+    ctx.fillRect(x - 8, y - 14 - bob, 16, 3);
+    ctx.fillStyle = '#b06cff';                 // the infection's veins
+    ctx.fillRect(x - 1, y - 11 - bob, 3, 12);
+    ctx.fillRect(x - 6, y - 8 - bob, 2, 5);
+    ctx.fillRect(x + 4, y - 6 - bob, 2, 5);
+  } else if (hasArmor) {
     ctx.fillStyle = '#dde6ee';                 // shine across the shoulders
     ctx.fillRect(x - 8, y - 14 - bob, 16, 3);
     ctx.fillStyle = '#8b98a8';                 // ridge down the middle
@@ -1977,18 +2013,22 @@ function drawTorch(t, cam) {
 // ---------------------------------------------------------------------
 // A blocky chestplate (for the victory screen and the inventory)
 // ---------------------------------------------------------------------
-function drawChestplate(cx, cy, s) {
+function drawChestplate(cx, cy, s, infected = false) {
   ctx.save();
   ctx.translate(cx, cy);
   ctx.scale(s, s);
-  ctx.fillStyle = '#b8c4d0';
+  ctx.fillStyle = infected ? '#3a3345' : '#b8c4d0';
   ctx.fillRect(-12, -10, 24, 20);    // chest
   ctx.fillRect(-16, -10, 4, 8);      // left shoulder
   ctx.fillRect(12, -10, 4, 8);       // right shoulder
-  ctx.fillStyle = '#dde6ee';
+  ctx.fillStyle = infected ? '#7c5cc9' : '#dde6ee';
   ctx.fillRect(-12, -10, 24, 4);     // shine across the top
-  ctx.fillStyle = '#8b98a8';
+  ctx.fillStyle = infected ? '#b06cff' : '#8b98a8';
   ctx.fillRect(-2, -6, 4, 14);       // ridge down the middle
+  if (infected) {
+    ctx.fillRect(-9, -4, 2, 6);      // extra glowing veins
+    ctx.fillRect(6, -2, 2, 6);
+  }
   ctx.restore();
 }
 
@@ -2029,9 +2069,10 @@ function drawMenu() {
   ctx.font = '18px monospace';
   ctx.fillText('choose your level', W / 2, H * 0.25 + 35);
 
-  // lay out the three level cards, centered
-  const cw = Math.min(210, W / 4), ch = cw * 0.75, gap = cw * 0.15;
-  const totalW = cw * 3 + gap * 2;
+  // lay out the level cards, centered — however many levels there are
+  const count = LEVELS.length;
+  const cw = Math.min(210, W / (count + 1.5)), ch = cw * 0.75, gap = cw * 0.15;
+  const totalW = cw * count + gap * (count - 1);
   cards = [];
   for (let i = 0; i < LEVELS.length; i++) {
     const cx = W / 2 - totalW / 2 + i * (cw + gap);
@@ -2048,12 +2089,14 @@ function drawMenu() {
     ctx.fillStyle = lv.unlocked ? '#ffffff' : '#666b99';
     ctx.font = `bold ${ch * 0.25}px monospace`;
     ctx.fillText(String(i + 1), cx + cw / 2, cy + ch * 0.35);
-    ctx.font = `${ch * 0.14}px monospace`;
+    // long names get a smaller font so they still fit on the card
+    ctx.font = `${Math.min(ch * 0.14, (cw * 1.55) / lv.name.length)}px monospace`;
     ctx.fillText(lv.name, cx + cw / 2, cy + ch * 0.62);
     ctx.font = `${ch * 0.11}px monospace`;
     ctx.fillText(lv.unlocked ? `press ${i + 1} or tap`
                : i === 1 ? 'beat Level 1 first'
                : i === 2 ? 'beat Level 2 first'
+               : i === 3 ? 'beat Level 3 first'
                : 'locked', cx + cw / 2, cy + ch * 0.85);
   }
 
@@ -2067,9 +2110,10 @@ function drawMenu() {
 // the right "no you can't" message for each locked level
 function lockedMessageFor(i) {
   if (i === 1) return 'Beat Level 1 to open the Creeper Temple!';
-  if (i === 2) return hasGoldSword
-    ? 'The Abandoned Castle is still being built — tell me what goes inside!'
-    : 'Beat Level 2 to reach the Abandoned Castle!';
+  if (i === 2) return 'Beat Level 2 to reach the Abandoned Castle!';
+  if (i === 3) return hasInfectedArmor
+    ? 'The Dungeon in the Sky is still being built — tell me what goes inside!'
+    : 'Beat Level 3 to reach the Dungeon in the Sky!';
   return "You haven't invented that level yet!";
 }
 
