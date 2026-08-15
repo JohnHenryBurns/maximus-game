@@ -48,6 +48,29 @@ const EMPTY = 0, HOUSE = 1, TREE = 2, STONE = 3, APT = 4, BUNKER = 5;
 // what's selected in the palette right now
 let selected = HOUSE;
 
+// ---------------------------------------------------------------------
+// LITTLE PEOPLE — they live in your town. they have no idea.
+// ---------------------------------------------------------------------
+let people = [];
+let launchedFolk = [];     // people currently flying through the air (they're fine)
+let peopleLaunched = 0;
+
+function spawnPeople() {
+  for (let i = 0; i < 5 && people.length < 40; i++) {
+    people.push({
+      x: 30 + Math.random() * (canvas.width - 60),
+      y: TOPBAR + 30 + Math.random() * (canvas.height - TOPBAR - 90),
+      angle: Math.random() * 6.28,
+      walk: Math.random() * 6.28,
+      shirt: ['#e74c3c', '#3498db', '#f1c40f', '#9b59b6', '#2ecc71', '#e67e22'][Math.floor(Math.random() * 6)],
+    });
+  }
+}
+
+function peopleButtonRect() {
+  return { x: canvas.width - 210, y: canvas.height - 64, w: 200, h: 52 };
+}
+
 // scoreboard of destruction
 let destroyed = 0;
 
@@ -194,6 +217,12 @@ function pressAt(px, py) {
       }
     }
   }
+  // the SPAWN PEOPLE button in the bottom-right corner
+  const pb = peopleButtonRect();
+  if (px > pb.x && px < pb.x + pb.w && py > pb.y && py < pb.y + pb.h) {
+    spawnPeople();
+    return true;
+  }
   if (py > TOPBAR) { machineOpen = false; return false; }   // clicked the world
   for (const r of buttonRects()) {
     if (px > r.x && px < r.x + r.w && py > r.y && py < r.y + r.h) {
@@ -236,6 +265,7 @@ addEventListener('keydown', e => {
   if (e.key === '5') selected = BUNKER;
   if (e.key === '6') selected = EMPTY;
   if (e.key.toLowerCase() === 'd') machineOpen = !machineOpen;   // D for DISASTER menu
+  if (e.key.toLowerCase() === 'p') spawnPeople();                // P for PEOPLE
 });
 
 // ---------------------------------------------------------------------
@@ -303,6 +333,15 @@ function update(dt) {
           m.hit = true;
           shake = 0.35;
           craters.push({ x: m.x, y: m.y, r: 26 + Math.random() * 14 });
+          // anyone standing near the impact gets LAUNCHED
+          for (const p of people) {
+            if (!p.gone && Math.hypot(p.x - m.x, p.y - m.y) < 85) {
+              p.gone = true;
+              peopleLaunched++;
+              launchedFolk.push({ x: p.x, y: p.y, vx: (Math.random() - 0.5) * 600,
+                vy: -400 - Math.random() * 300, spin: 0, life: 1.4, shirt: p.shirt });
+            }
+          }
           // BOOM — everything near the impact is gone, even stone
           for (let gy = 0; gy < ROWS; gy++) {
             for (let gx = 0; gx < COLS; gx++) {
@@ -397,6 +436,69 @@ function update(dt) {
     }
   }
   disasters = disasters.filter(D => !D.done);   // sweep up the finished ones
+
+  // ---- THE LITTLE PEOPLE — wandering, or screaming, depending ----
+  const panicking = disasters.length > 0;
+  for (const p of people) {
+    p.walk += dt * (panicking ? 16 : 6);
+
+    // find the nearest scary thing to run away from
+    let threat = null, tBest = 999999;
+    for (const D of disasters) {
+      if (D.type === 'tornado') {
+        const d2 = Math.hypot(D.x - p.x, D.y - p.y);
+        if (d2 < tBest) { tBest = d2; threat = D; }
+      }
+      if (D.type === 'balls') {
+        for (const ball of D.balls) {
+          const d2 = Math.hypot(ball.x - p.x, ball.y - p.y);
+          if (d2 < tBest) { tBest = d2; threat = ball; }
+        }
+      }
+    }
+    if (threat) {
+      // run AWAY, with panic wobble
+      p.angle = Math.atan2(p.y - threat.y, p.x - threat.x) + (Math.random() - 0.5) * 0.6;
+    } else if (panicking) {
+      p.angle += (Math.random() - 0.5) * dt * 22;   // headless-chicken mode
+    } else if (Math.random() < dt * 0.8) {
+      p.angle = Math.random() * 6.28;               // calm amble, new direction sometimes
+    }
+    const speed = panicking ? 150 : 30;
+    p.x += Math.cos(p.angle) * speed * dt;
+    p.y += Math.sin(p.angle) * speed * dt;
+    p.x = Math.max(14, Math.min(canvas.width - 14, p.x));
+    p.y = Math.max(TOPBAR + 14, Math.min(canvas.height - 14, p.y));
+
+    // did something GET them?
+    let hit = false;
+    for (const D of disasters) {
+      if (D.type === 'tornado' && Math.hypot(D.x - p.x, D.y - p.y) < 45) hit = true;
+      if (D.type === 'balls') {
+        for (const ball of D.balls) {
+          if (Math.hypot(ball.x - p.x, ball.y - p.y) < 26) hit = true;
+        }
+      }
+      if (D.type === 'flood' && p.y > D.waterY + 10) hit = true;
+    }
+    if (hit && !p.gone) {
+      p.gone = true;
+      peopleLaunched++;
+      launchedFolk.push({ x: p.x, y: p.y, vx: (Math.random() - 0.5) * 600,
+        vy: -400 - Math.random() * 300, spin: 0, life: 1.4, shirt: p.shirt });
+    }
+  }
+  people = people.filter(p => !p.gone);
+
+  // airborne folk tumble gracefully out of frame
+  for (const f of launchedFolk) {
+    f.x += f.vx * dt;
+    f.y += f.vy * dt;
+    f.vy += 600 * dt;
+    f.spin += dt * 12;
+    f.life -= dt;
+  }
+  launchedFolk = launchedFolk.filter(f => f.life > 0);
 
   // debris tumbles through the air and fades
   for (const d of debris) {
@@ -507,6 +609,38 @@ function draw() {
       }
     }
   }
+
+  // the little people, bless them
+  for (const p of people) {
+    const step = Math.sin(p.walk) * 2;
+    ctx.fillStyle = '#333';                          // busy little legs
+    ctx.fillRect(p.x - 3, p.y - 2 + step, 2, 5 - step);
+    ctx.fillRect(p.x + 1, p.y - 2 - step, 2, 5 + step);
+    ctx.fillStyle = p.shirt;                         // shirt
+    ctx.fillRect(p.x - 4, p.y - 10, 8, 9);
+    ctx.fillStyle = '#f2c79b';                       // head
+    ctx.beginPath(); ctx.arc(p.x, p.y - 13, 3.5, 0, Math.PI * 2); ctx.fill();
+    if (disasters.length > 0) {                      // screaming, obviously
+      ctx.fillStyle = '#ff4757';
+      ctx.font = 'bold 10px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('!!', p.x, p.y - 20);
+    }
+  }
+
+  // people currently airborne (they're fine. probably.)
+  for (const f of launchedFolk) {
+    ctx.save();
+    ctx.translate(f.x, f.y);
+    ctx.rotate(f.spin);
+    ctx.globalAlpha = Math.max(0, Math.min(1, f.life));
+    ctx.fillStyle = f.shirt;
+    ctx.fillRect(-4, -6, 8, 9);
+    ctx.fillStyle = '#f2c79b';
+    ctx.beginPath(); ctx.arc(0, -9, 3.5, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
 
   // flying debris (the fun part)
   for (const d of debris) {
@@ -667,12 +801,25 @@ function draw() {
                  canvas.width / 2, TOPBAR + 52);
   }
 
+  // the SPAWN PEOPLE button, bottom-right corner (as ordered by Amos)
+  const pb = peopleButtonRect();
+  ctx.fillStyle = '#26473b';
+  ctx.fillRect(pb.x, pb.y, pb.w, pb.h);
+  ctx.strokeStyle = '#7ddf8f';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(pb.x, pb.y, pb.w, pb.h);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 16px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('🧍 SPAWN PEOPLE', pb.x + pb.w / 2, pb.y + pb.h / 2 + 6);
+
   // the destruction scoreboard
-  if (destroyed > 0) {
+  if (destroyed > 0 || peopleLaunched > 0) {
     ctx.fillStyle = '#ff9f43';
     ctx.font = 'bold 14px monospace';
     ctx.textAlign = 'center';
-    ctx.fillText(`blocks destroyed: ${destroyed}`, canvas.width / 2, TOPBAR + 22);
+    ctx.fillText(`blocks destroyed: ${destroyed}    people launched: ${peopleLaunched}`,
+                 canvas.width / 2, TOPBAR + 22);
   }
 }
 
