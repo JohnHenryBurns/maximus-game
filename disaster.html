@@ -51,6 +51,12 @@ let selected = HOUSE;
 // scoreboard of destruction
 let destroyed = 0;
 
+// THE ECONOMY. You start with 30 MONEYS. Disasters cost MONEYS.
+// Every block a disaster smashes pays you 1 MONEY. Yes, really.
+// Destruction is a business.
+let moneys = 30;
+let brokeFlash = 0;    // flashes when you try to buy doom you can't afford
+
 // ---------------------------------------------------------------------
 // THE DISASTERS — one at a time, chosen from THE MACHINE's menu.
 // null means the world is at peace. For now.
@@ -64,6 +70,12 @@ let machineOpen = false;            // is the disaster menu showing?
 
 function summonDisaster(type) {
   if (disasters.length >= 8) return;   // even chaos has a fire code
+  const item = MACHINE_MENU.find(m => m.type === type);
+  if (moneys < item.cost) {            // doom costs MONEYS, friend
+    brokeFlash = 1.5;
+    return;
+  }
+  moneys -= item.cost;
   if (type === 'tornado') {
     disasters.push({ type, x: -60, y: TOPBAR + Math.random() * (canvas.height - TOPBAR),
                      life: 12, wobble: Math.random() * 6.28 });
@@ -81,6 +93,7 @@ function smashBlock(gx, gy, bx, by, splash) {
   const kind = grid[gy][gx];
   grid[gy][gx] = EMPTY;
   destroyed++;
+  moneys++;          // insurance payout! destruction PAYS.
   for (let i = 0; i < 6; i++) {
     debris.push({
       x: bx, y: by,
@@ -136,10 +149,10 @@ function buttonRects() {
 
 // the machine's dial of doom
 const MACHINE_MENU = [
-  { label: '🌪 Tornado',    type: 'tornado' },
-  { label: '☄ Meteors',     type: 'meteors' },
-  { label: '💥 Earthquake', type: 'quake' },
-  { label: '🌊 Flood',      type: 'flood' },
+  { label: '🌪 Tornado',    type: 'tornado', cost: 10 },
+  { label: '☄ Meteors',     type: 'meteors', cost: 15 },
+  { label: '💥 Earthquake', type: 'quake',   cost: 8 },
+  { label: '🌊 Flood',      type: 'flood',   cost: 12 },
 ];
 
 function machineRects() {
@@ -211,6 +224,7 @@ let lastTime = 0;
 function update(dt) {
   elapsed += dt;
   if (shake > 0) shake -= dt;
+  if (brokeFlash > 0) brokeFlash -= dt;
 
   for (const D of disasters) {      // every active disaster does its thing
     D.life -= dt;
@@ -508,20 +522,35 @@ function draw() {
   // THE MACHINE's menu of doom, when open
   if (machineOpen) {
     for (const r of machineRects()) {
-      ctx.fillStyle = '#7a1f2b';
+      const canAfford = moneys >= r.cost;
+      ctx.fillStyle = canAfford ? '#7a1f2b' : '#2c2126';   // grayed out = too broke
       ctx.fillRect(r.x, r.y, r.w, r.h);
-      ctx.strokeStyle = '#ff6b5e';
+      ctx.strokeStyle = canAfford ? '#ff6b5e' : '#5a4a4e';
       ctx.lineWidth = 2;
       ctx.strokeRect(r.x, r.y, r.w, r.h);
-      ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 16px monospace';
+      ctx.fillStyle = canAfford ? '#ffffff' : '#8a7a7e';
+      ctx.font = 'bold 15px monospace';
       ctx.textAlign = 'center';
-      ctx.fillText(r.label, r.x + r.w / 2, r.y + r.h / 2 + 6);
+      ctx.fillText(`${r.label} — ${r.cost}💰`, r.x + r.w / 2, r.y + r.h / 2 + 6);
     }
     ctx.fillStyle = '#ffb3ab';
     ctx.font = '13px monospace';
-    ctx.fillText('(stack as many as you dare)', canvas.width - 120,
+    ctx.fillText('(stack as many as you can afford)', canvas.width - 120,
                  TOPBAR + 8 + 4 * 50 + 14);
+  }
+
+  // THE BANK BALANCE — front and center, because MONEYS matter now
+  ctx.fillStyle = '#ffd23f';
+  ctx.font = 'bold 20px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(`💰 ${moneys} MONEYS`, canvas.width / 2, 40);
+
+  // tried to buy doom you can't afford
+  if (brokeFlash > 0) {
+    ctx.fillStyle = `rgba(255, 80, 70, ${Math.min(1, brokeFlash)})`;
+    ctx.font = 'bold 22px monospace';
+    ctx.fillText('NOT ENOUGH MONEYS! (smashed blocks pay 1 each)',
+                 canvas.width / 2, TOPBAR + 52);
   }
 
   // the destruction scoreboard
