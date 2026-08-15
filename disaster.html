@@ -796,7 +796,13 @@ function cellSize() {
 // the town's size in pixels (the grass rectangle). The world outside this is fog.
 function gridW() { return COLS * cellSize(); }
 function gridH() { return ROWS * cellSize(); }
-const FOG_PEEK = 70;                 // how far past the town edge you may pan into the fog
+// How far past the edge of the town you're allowed to drag, as a fraction
+// of the screen. Half a screen means you can bring ANY edge of the map to
+// the middle of your view — handy when a dinosaur is standing on the top
+// row with its head up in the fog and you want a proper look at it.
+const FOG_PEEK = 0.5;
+function peekX() { return canvas.width * FOG_PEEK; }
+function peekY() { return (canvas.height - TOPBAR) * FOG_PEEK; }
 
 // The camera slides and scales what we DRAW, so a finger tap on the glass
 // isn't the same spot in the town anymore. screenToWorld undoes the camera:
@@ -815,15 +821,27 @@ function screenToWorld(sx, sy) {
 function clampPan() {
   const PW = canvas.width, PH = canvas.height - TOPBAR;
   const gw = gridW() * zoom, gh = gridH() * zoom;   // town size on screen right now
-  panX = gw <= PW ? (PW - gw) / 2
-                  : Math.min(FOG_PEEK, Math.max(PW - gw - FOG_PEEK, panX));
-  panY = gh <= PH ? (PH - gh) / 2
-                  : Math.min(FOG_PEEK, Math.max(PH - gh - FOG_PEEK, panY));
+  const px = peekX(), py = peekY();
+  // You may drag until there's `peek` of fog showing on a side, and no more.
+  // This applies at every zoom, including all the way out — so you can
+  // always slide the map over far enough to see something standing right on
+  // the edge. If the town is so much smaller than the peek that the limits
+  // cross over, just centre it.
+  const loX = PW - gw - px, hiX = px;
+  const loY = PH - gh - py, hiY = py;
+  panX = loX > hiX ? (PW - gw) / 2 : Math.min(hiX, Math.max(loX, panX));
+  panY = loY > hiY ? (PH - gh) / 2 : Math.min(hiY, Math.max(loY, panY));
 }
-// after the window resizes (fitCanvas already ran), tidy the view back onto
-// the town so a rotate or resize can't leave a gap at the edge
+// put the town in the middle of the view (used on first load)
+function centerTown() {
+  panX = (canvas.width - gridW() * zoom) / 2;
+  panY = ((canvas.height - TOPBAR) - gridH() * zoom) / 2;
+  clampPan();
+}
+// after the window resizes (fitCanvas already ran), tidy the view so a
+// rotate or resize can't leave you staring at nothing but fog
 addEventListener('resize', clampPan);
-clampPan();   // center the town on first load
+centerTown();   // centre the town on first load
 
 // Change the zoom while keeping one spot of the town pinned under a finger
 // (or the mouse). worldPt is that spot; (sx, sy) is where it should stay on
