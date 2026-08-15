@@ -125,12 +125,14 @@ const LEVELS = [
     worldH: 2200,
     start: { x: 200, y: 2000 },  // you arrive in the bottom-left corner
   },
+  { name: 'Revenge of Chippy', unlocked: false },   // Level 6 — he's been planning something...
 ];
 // prizes you earned on past visits keep their doors open
 LEVELS[1].unlocked = hasArmor;
 LEVELS[2].unlocked = hasGoldSword;
 LEVELS[3].unlocked = hasInfectedArmor;
 LEVELS[4].unlocked = hasBeatSky;
+LEVELS[5].unlocked = hasChippy;      // beat Chippy once → face his revenge
 
 // Things that live in the current level (filled in by buildForest)
 let trees = [];
@@ -3039,6 +3041,7 @@ function drawMenu() {
                : i === 2 ? 'beat Level 2 first'
                : i === 3 ? 'beat Level 3 first'
                : i === 4 ? 'beat Level 4 first'
+               : i === 5 ? 'beat Level 5 first'
                : 'locked', cx + cw / 2, cy + ch * 0.85);
   }
 
@@ -3054,9 +3057,10 @@ function lockedMessageFor(i) {
   if (i === 1) return 'Beat Level 1 to open the Creeper Temple!';
   if (i === 2) return 'Beat Level 2 to reach the Abandoned Castle!';
   if (i === 3) return 'Beat Level 3 to reach the Dungeon in the Sky!';
-  if (i === 4) return hasBeatSky
-    ? "The Dimension of Chippy is still being built — tell me who Chippy IS!"
-    : 'Defeat the Multi-Tasker to reach the Dimension of Chippy!';
+  if (i === 4) return 'Defeat the Multi-Tasker to reach the Dimension of Chippy!';
+  if (i === 5) return hasChippy
+    ? "Revenge of Chippy is still being built — tell me what his revenge IS!"
+    : 'Defeat Chippy in his dimension first!';
   return "You haven't invented that level yet!";
 }
 
