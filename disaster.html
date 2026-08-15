@@ -7,10 +7,24 @@
 <style>
   html, body { margin: 0; background: #1a2530; height: 100%; overflow: hidden; }
   canvas { display: block; }
+  /* Back-to-arcade pill, the same look the other games use. */
+  #back {
+    position: fixed; top: 10px; left: 10px; z-index: 10;
+    color: #ffe0c4; background: rgba(24, 14, 28, 0.6);
+    border: 1px solid rgba(255, 200, 150, 0.4);
+    font-family: system-ui, sans-serif; font-size: 13px; font-weight: 600; letter-spacing: 0.3px;
+    padding: 7px 12px; border-radius: 999px; text-decoration: none; cursor: pointer;
+    -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px);
+    transition: transform 0.12s, border-color 0.12s, background 0.12s;
+  }
+  #back:hover, #back:active {
+    transform: scale(1.05); border-color: rgba(255, 200, 150, 0.85); background: rgba(40, 22, 44, 0.75);
+  }
 </style>
 </head>
 <body>
 <canvas id="game"></canvas>
+<a id="back" href="index.html">&larr; Arcade</a>
 <script>
 // =====================================================================
 // AMOS'S DISASTER BUILDER
@@ -34,57 +48,364 @@ addEventListener('resize', fitCanvas);
 // ---------------------------------------------------------------------
 // THE WORLD — a grid of cells, like graph paper. Every cell holds one
 // thing: nothing (0), a house (1), a tree (2), or a stone block (3).
+//
+// The grid is TALL (20 wide, 40 high) — a 1:2 shape that fills a phone held
+// upright almost perfectly, so the whole town shows at once with no wasted
+// space. Zoom in to build the little details.
 // ---------------------------------------------------------------------
-const COLS = 44, ROWS = 26;
+const COLS = 20, ROWS = 40;
 let cell = 34;                      // pixel size of one grid square
-const TOPBAR = 64;                  // room at the top for the buttons
+// Room at the top for the toolbar. It's two tiers now (money + THE MACHINE
+// on top, the build palette in a full-width row below) so everything fits on
+// a phone instead of running off the side.
+const TOPBAR = 108;                  // two roomy rows: Arcade+money on top, buttons below
+
+// ---------------------------------------------------------------------
+// THE CAMERA — lets you zoom in to build with detail, then slide around.
+//   zoom = 1  ->  the whole town fits on screen (all the way zoomed out)
+//   zoom = 4  ->  four times closer, for placing tiny blocks just so
+// panX/panY are how far we've slid the zoomed view left/right and up/down.
+// At zoom 1 the camera does nothing at all, so the game looks exactly the
+// same until you actually pinch or scroll to zoom in.
+// ---------------------------------------------------------------------
+let zoom = 1;
+let panX = 0, panY = 0;
+const MAX_ZOOM = 4;
 
 // make the grid: ROWS rows, each row is COLS zeros (all empty land)
 const grid = [];
 for (let y = 0; y < ROWS; y++) grid.push(new Array(COLS).fill(0));
 
-const EMPTY = 0, HOUSE = 1, TREE = 2, STONE = 3, APT = 4, BUNKER = 5, SKY = 6, TOWER = 7;
+const EMPTY = 0, HOUSE = 1, TREE = 2, STONE = 3, APT = 4, BUNKER = 5;
+// Roads and paths are things you BUILD, but you can still walk on them —
+// in fact everyone would rather walk on a path than through the grass.
+const ROAD = 6, PATH = 7;
+function isWay(k) { return k === ROAD || k === PATH; }   // "is this a road or a path?"
 
-// which blocks can people hide inside, and how many fit?
-function isShelter(kind) {
-  return kind === HOUSE || kind === APT || kind === BUNKER ||
-         kind === SKY || kind === TOWER;
-}
-function shelterCap(kind) {
-  return kind === SKY ? 12 : kind === APT ? 6 : kind === TOWER ? 6
-       : kind === BUNKER ? 4 : 3;
-}
+// What you're placing right now. Starts as null — the game opens in
+// look-around mode, so you can drag and zoom before you build anything.
+let selected = null;
 
-// what's selected in the palette right now
-let selected = HOUSE;
+// HOW BEATEN-UP EVERY SQUARE IS. Same shape as the grid.
+//   0 = pristine, 1 = lightly damaged, 2 = heavily damaged
+// A third hit (or an unlucky first one) knocks it down completely.
+const PRISTINE = 0, LIGHT = 1, HEAVY = 2, WRECKED = 3;
+const damage = [];
+for (let y = 0; y < ROWS; y++) damage.push(new Array(COLS).fill(PRISTINE));
+
+// A square that's just been hit is briefly immune, so a tornado sitting on
+// top of a house doesn't chew through all three damage levels in one frame.
+// You get to SEE each stage.
+const hitCool = [];
+for (let y = 0; y < ROWS; y++) hitCool.push(new Array(COLS).fill(0));
+const HIT_COOLDOWN = 0.55;
 
 // ---------------------------------------------------------------------
-// LITTLE PEOPLE — they live in your town. they have no idea.
+// BIG BUILDINGS. An apartment block is a proper tower — it takes up FOUR
+// squares (2 across, 2 down) instead of one. All four squares hold APT,
+// but they all point back to the top-left one, the "root". The root is
+// where we draw the tower, keep its damage, and where the repair crew go.
+// ---------------------------------------------------------------------
+const SPAN = { [APT]: 2 };                     // how many squares wide/tall a kind is
+function spanOf(kind) { return SPAN[kind] || 1; }
+const rootAt = [];                             // {rx,ry} for every square of a big building
+for (let y = 0; y < ROWS; y++) rootAt.push(new Array(COLS).fill(null));
+
+// Where does this square's building really live? (itself, unless it's part
+// of something bigger)
+function rootOf(gx, gy) {
+  const r = rootAt[gy] && rootAt[gy][gx];
+  return r ? r : { rx: gx, ry: gy };
+}
+
+// Wipe a square — and if it belongs to a big building, take the whole
+// building with it, so we never leave half a tower standing.
+function clearCell(gx, gy) {
+  if (gx < 0 || gy < 0 || gx >= COLS || gy >= ROWS) return;
+  const r = rootOf(gx, gy);
+  const sp = spanOf(grid[r.ry] && grid[r.ry][r.rx]);
+  for (let oy = 0; oy < sp; oy++) {
+    for (let ox = 0; ox < sp; ox++) {
+      const cx = r.rx + ox, cy = r.ry + oy;
+      if (cx < 0 || cy < 0 || cx >= COLS || cy >= ROWS) continue;
+      grid[cy][cx] = EMPTY;
+      damage[cy][cx] = PRISTINE;
+      rootAt[cy][cx] = null;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------
+// LITTLE PEOPLE (and cows, and dogs) — they live in your town. no idea.
 // ---------------------------------------------------------------------
 let people = [];
-let launchedFolk = [];     // people currently flying through the air (they're fine)
+let launchedFolk = [];     // folk currently flying through the air (they're fine)
 let peopleLaunched = 0;
 
-function spawnPeople() {
-  // ten per press, as many presses as you like (500 is where the
-  // computer starts sweating, so that's the only ceiling)
-  for (let i = 0; i < 10 && people.length < 500; i++) {
+// A square you can't walk into: anything built except an OPEN square.
+// (Trees and stone block you too — you can't stroll through a boulder.)
+function blocked(gx, gy) {
+  if (gx < 0 || gy < 0 || gx >= COLS || gy >= ROWS) return true;   // off the map
+  const k = grid[gy][gx];
+  return k !== EMPTY && !isWay(k);        // roads and paths are walk-through
+}
+// is there a road or path on this square?
+function wayAt(gx, gy) {
+  if (gx < 0 || gy < 0 || gx >= COLS || gy >= ROWS) return false;
+  return isWay(grid[gy][gx]);
+}
+// same question, but in pixels
+function blockedAt(x, y) {
+  const s = cellSize();
+  return blocked(Math.floor(x / s), Math.floor((y - TOPBAR) / s));
+}
+
+// find an open square to drop a new critter on (never inside a building)
+function freeSpot() {
+  const s = cellSize();
+  for (let tries = 0; tries < 60; tries++) {
+    const gx = Math.floor(Math.random() * COLS), gy = Math.floor(Math.random() * ROWS);
+    if (!blocked(gx, gy)) return { x: gx * s + s / 2, y: TOPBAR + gy * s + s / 2 };
+  }
+  return null;                     // town completely full — nowhere to stand
+}
+
+function spawnCritters(kind) {
+  let made = 0;
+  for (let i = 0; i < 5 && people.length < 60; i++) {
+    const spot = freeSpot();
+    if (!spot) break;
     people.push({
-      x: 30 + Math.random() * (canvas.width - 60),
-      y: TOPBAR + 30 + Math.random() * (canvas.height - TOPBAR - 90),
+      kind,                        // 'person', 'cow' or 'dog'
+      x: spot.x, y: spot.y,
       angle: Math.random() * 6.28,
       walk: Math.random() * 6.28,
+      // little personality knobs so nobody looks quite the same:
+      mood: Math.floor(Math.random() * 3),   // which happy face they pull
+      fear: Math.floor(Math.random() * 3),   // which panicked face they pull
+      bob: Math.random() * 6.28,             // where they are in their bounce
       shirt: ['#e74c3c', '#3498db', '#f1c40f', '#9b59b6', '#2ecc71', '#e67e22'][Math.floor(Math.random() * 6)],
+    });
+    made++;
+  }
+  return made;
+}
+
+// ---------------------------------------------------------------------
+// WORKING OUT WHAT THE ROADS ACTUALLY ARE
+//
+// Whenever you build or break a road we take one look at the whole map and
+// write down, for every square:
+//   - which neighbours it joins on to
+//   - whether it's half of a TWO-LANE road (a twin running alongside it)
+//   - if it's a plain one-lane road, WHICH WAY the traffic goes (one-way!)
+//   - whether it's a junction, which is where the traffic lights go
+// Doing it once and remembering it is much cheaper than working it out
+// again for every car, every frame.
+// ---------------------------------------------------------------------
+let roadsDirty = true;
+const roadConn = [];      // {N,S,E,W} — which sides join on
+const roadDual = [];      // 'v' / 'h' if this is one lane of a two-lane road
+const roadOne  = [];      // {dx,dy} one-way direction, for plain one-lane road
+const roadJunc = [];      // true if 3+ roads meet here — needs a traffic light
+for (let y = 0; y < ROWS; y++) {
+  roadConn.push(new Array(COLS).fill(null));
+  roadDual.push(new Array(COLS).fill(null));
+  roadOne.push(new Array(COLS).fill(null));
+  roadJunc.push(new Array(COLS).fill(false));
+}
+
+function isRoad(gx, gy) {
+  return gx >= 0 && gy >= 0 && gx < COLS && gy < ROWS && grid[gy][gx] === ROAD;
+}
+
+function ensureRoads() {
+  if (!roadsDirty) return;
+  roadsDirty = false;
+  // pass 1: who joins on to whom, and which squares are junctions
+  for (let gy = 0; gy < ROWS; gy++) {
+    for (let gx = 0; gx < COLS; gx++) {
+      roadDual[gy][gx] = null; roadOne[gy][gx] = null; roadJunc[gy][gx] = false;
+      if (!isRoad(gx, gy)) { roadConn[gy][gx] = null; continue; }
+      const c = { N: isRoad(gx, gy - 1), S: isRoad(gx, gy + 1),
+                  W: isRoad(gx - 1, gy), E: isRoad(gx + 1, gy) };
+      c.n = (c.N ? 1 : 0) + (c.S ? 1 : 0) + (c.W ? 1 : 0) + (c.E ? 1 : 0);
+      c.runsH = c.W || c.E;                      // goes left/right at all
+      c.runsV = c.N || c.S;                      // goes up/down at all
+      c.straightH = c.runsH && !c.N && !c.S;     // ONLY left/right — a plain lane
+      c.straightV = c.runsV && !c.W && !c.E;     // ONLY up/down
+      roadConn[gy][gx] = c;
+    }
+  }
+  // pass 2: TWO-LANE roads. A lane is half of a pair when it runs one way
+  // and has exactly ONE road alongside it that runs the same way.
+  // (This has to happen BEFORE we look for junctions: a square in a two-lane
+  // road touches three others, which would otherwise look like a T-junction.)
+  for (let gy = 0; gy < ROWS; gy++) {
+    for (let gx = 0; gx < COLS; gx++) {
+      const c = roadConn[gy][gx];
+      if (!c) continue;
+      const nb = (ox, oy) => roadConn[gy + oy] && roadConn[gy + oy][gx + ox];
+      // vertical pair: runs up/down, with a twin to one side (not both)
+      if (c.runsV && (c.W !== c.E)) {
+        const twin = nb(c.E ? 1 : -1, 0);
+        if (twin && twin.runsV) roadDual[gy][gx] = 'v';
+      }
+      // horizontal pair: runs left/right, with a twin above or below (not both)
+      if (!roadDual[gy][gx] && c.runsH && (c.N !== c.S)) {
+        const twin = nb(0, c.S ? 1 : -1);
+        if (twin && twin.runsH) roadDual[gy][gx] = 'h';
+      }
+    }
+  }
+  // pass 2b: JUNCTIONS — where three or more roads genuinely meet. A square
+  // that's simply part of a two-lane road doesn't count.
+  for (let gy = 0; gy < ROWS; gy++) {
+    for (let gx = 0; gx < COLS; gx++) {
+      const c = roadConn[gy][gx];
+      roadJunc[gy][gx] = !!c && c.n >= 3 && !roadDual[gy][gx];
+    }
+  }
+  // pass 3: ONE-WAY directions. Every straight one-lane run gets a single
+  // direction for its whole length, so cars on it never meet head-on.
+  const runDir = (len, seed) => (hash(seed) < 0.5 ? 1 : -1);
+  for (let gy = 0; gy < ROWS; gy++) {            // left-to-right runs
+    let start = -1;
+    for (let gx = 0; gx <= COLS; gx++) {
+      const c = gx < COLS ? roadConn[gy][gx] : null;
+      const ok = c && c.straightH && !roadDual[gy][gx];
+      if (ok && start < 0) start = gx;
+      if (!ok && start >= 0) {
+        const d = runDir(gx - start, start * 3.7 + gy * 9.1);
+        for (let i = start; i < gx; i++) roadOne[gy][i] = { dx: d, dy: 0 };
+        start = -1;
+      }
+    }
+  }
+  for (let gx = 0; gx < COLS; gx++) {            // top-to-bottom runs
+    let start = -1;
+    for (let gy = 0; gy <= ROWS; gy++) {
+      const c = gy < ROWS ? roadConn[gy][gx] : null;
+      const ok = c && c.straightV && !roadDual[gy][gx];
+      if (ok && start < 0) start = gy;
+      if (!ok && start >= 0) {
+        const d = runDir(gy - start, gx * 5.3 + start * 2.9);
+        for (let i = start; i < gy; i++) roadOne[i][gx] = { dx: 0, dy: d };
+        start = -1;
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------
+// TRAFFIC LIGHTS. Every junction in town runs off one shared clock:
+// up-and-down traffic goes, then everyone stops, then left-and-right goes.
+// ---------------------------------------------------------------------
+let lightClock = 0;
+const LIGHT_CYCLE = [ { ns: true,  ew: false, t: 5 },   // up/down GO
+                      { ns: false, ew: false, t: 1.2 }, // everybody stop
+                      { ns: false, ew: true,  t: 5 },   // left/right GO
+                      { ns: false, ew: false, t: 1.2 } ];
+function lightPhase() {
+  let t = lightClock % LIGHT_CYCLE.reduce((a, p) => a + p.t, 0);
+  for (const p of LIGHT_CYCLE) { if (t < p.t) return p; t -= p.t; }
+  return LIGHT_CYCLE[0];
+}
+// may a car heading (dx,dy) drive into this junction right now?
+function greenFor(dx, dy) {
+  const p = lightPhase();
+  return dy !== 0 ? p.ns : p.ew;
+}
+
+// ---------------------------------------------------------------------
+// CARS — they appear by themselves on any decent stretch of road and
+// trundle along it. Nobody repairs a car: when a disaster catches one it
+// simply EXPLODES and is gone.
+// ---------------------------------------------------------------------
+let cars = [];
+let carsPopped = 0;
+let carTimer = 0;
+const CAR_COLORS = ['#e8453c', '#3aa7e8', '#f5c542', '#8e6ee8', '#3fbf6f', '#ef8a3c'];
+const MIN_ROAD_RUN = 4;         // a road needs to be this long before cars bother with it
+
+// Which way should a car on this square be pointed? A one-lane road has a
+// one-way direction; on a two-lane road you drive on the right, which means
+// the lane you're in decides your direction.
+function laneDir(gx, gy) {
+  const c = roadConn[gy] && roadConn[gy][gx];
+  if (!c) return null;
+  const dual = roadDual[gy][gx];
+  if (dual === 'v') {
+    // the lane with its twin on the LEFT is the right-hand lane going down
+    return isRoad(gx - 1, gy) && roadDual[gy][gx - 1] === 'v' ? { dx: 0, dy: 1 }
+                                                              : { dx: 0, dy: -1 };
+  }
+  if (dual === 'h') {
+    return isRoad(gx, gy - 1) && roadDual[gy - 1][gx] === 'h' ? { dx: -1, dy: 0 }
+                                                              : { dx: 1, dy: 0 };
+  }
+  return roadOne[gy][gx];        // plain one-lane road: its one-way direction
+}
+
+// Find a straight run of road at least MIN_ROAD_RUN long and put a car at
+// the START of it, pointed the way that road actually goes.
+function trySpawnCar() {
+  ensureRoads();
+  const spots = [];
+  for (let gy = 0; gy < ROWS; gy++) {
+    for (let gx = 0; gx < COLS; gx++) {
+      const dir = laneDir(gx, gy);
+      if (!dir) continue;
+      // measure how much clear road lies ahead of this square
+      let ahead = 0, cx = gx, cy = gy;
+      while (ahead < 40 && isRoad(cx + dir.dx, cy + dir.dy)) {
+        cx += dir.dx; cy += dir.dy; ahead++;
+      }
+      // and make sure this really is the START (nothing feeding into it)
+      const behind = isRoad(gx - dir.dx, gy - dir.dy);
+      if (ahead >= MIN_ROAD_RUN - 1 && !behind) spots.push({ gx, gy, dir });
+    }
+  }
+  if (!spots.length) return;
+  const spot = spots[Math.floor(Math.random() * spots.length)];
+  const s = cellSize();
+  const px = spot.gx * s + s / 2, py = TOPBAR + spot.gy * s + s / 2;
+  // don't drop a car on top of one that's already sitting there
+  for (const c of cars) if (Math.hypot(c.x - px, c.y - py) < s) return;
+  cars.push({
+    x: px, y: py,
+    dx: spot.dir.dx, dy: spot.dir.dy,
+    speed: 34 + Math.random() * 26,
+    color: CAR_COLORS[Math.floor(Math.random() * CAR_COLORS.length)],
+  });
+}
+
+// KABOOM. A car caught in a disaster goes up in a FIREBALL and is gone for
+// good. The blast stays tight around the car — a hot little ball of flame
+// with a few bits pinging off it, rather than confetti across the street.
+let blasts = [];
+function popCar(car) {
+  if (car.gone) return;
+  car.gone = true;
+  carsPopped++;
+  const s = cellSize();
+  blasts.push({ x: car.x, y: car.y, t: 0, life: 0.55, r: s * 0.42 });
+  for (let i = 0; i < 8; i++) {
+    const a = Math.random() * Math.PI * 2, sp = 40 + Math.random() * 90;
+    debris.push({
+      x: car.x, y: car.y,
+      vx: Math.cos(a) * sp,
+      vy: Math.sin(a) * sp - 60,       // a small hop, not a launch
+      spin: Math.random() * 10, life: 0.45 + Math.random() * 0.25,
+      color: i % 3 === 0 ? '#ff9f43' : i % 3 === 1 ? '#ffd23f' : '#3a3a40',
     });
   }
 }
 
-function peopleButtonRect() {
-  return { x: canvas.width - 210, y: canvas.height - 64, w: 200, h: 52 };
-}
-
-// scoreboard of destruction
+// scoreboard of destruction (and of putting it all back together)
 let destroyed = 0;
+let repaired = 0;
+const REPAIR_TIME = 3.4;      // seconds of hammering per damage level — slow, so you can watch
 
 // THE ECONOMY. You start with 30 MONEYS. Disasters cost MONEYS.
 // Every block a disaster smashes pays you 1 MONEY. Yes, really.
@@ -101,25 +422,71 @@ let debris = [];                    // flying bits of what used to be a town
 let craters = [];                   // meteor scars. they never heal.
 let shake = 0;                      // screen trembles while disaster reigns
 let elapsed = 0;
-let machineOpen = false;            // is the disaster menu showing?
 
-function summonDisaster(type) {
-  if (disasters.length >= 8) return;   // even chaos has a fire code
-  const item = MACHINE_MENU.find(m => m.type === type);
-  if (moneys < item.cost) {            // doom costs MONEYS, friend
+// Which dropdown is showing right now: 'items', 'disasters', or null (none).
+// Only one is ever open at a time.
+let openMenu = null;
+
+// Disasters you've PAID for but that haven't struck yet — they count down a
+// moment of dread first. This is the "build tension" delay.
+let pendings = [];
+const TENSION = 1.3;                 // seconds between choosing doom and it landing
+
+// A little message box at the bottom tells you what just happened.
+// News (like "Tornado incoming!") fades after a moment; a plain note about
+// what you're doing right now ("Now placing House") just stays put until
+// something else replaces it.
+let statusText = '', statusColor = '#ffffff', statusTimer = 0, statusSticky = false;
+function setStatus(text, color, sticky) {
+  statusText = text;
+  statusColor = color || '#ffffff';
+  statusSticky = !!sticky;
+  statusTimer = 2.4;                 // how long a fading message lingers
+}
+
+// Pick a disaster from the menu: pay for it, close the menu, and start the
+// tension countdown. The actual mayhem begins later, in update().
+function pickDisaster(item) {
+  if (moneys < item.cost) {          // can't afford this one — say so, leave the menu open
     brokeFlash = 1.5;
+    setStatus('Not enough MONEYS — smashed blocks pay you back!', '#ff6b5e');
     return;
   }
   moneys -= item.cost;
+  openMenu = null;                   // CLOSE the menu before the disaster begins
+  selected = null;                   // and stop building — you'll want to watch this
+  pendings.push({ type: item.type, label: item.label, timer: TENSION });
+  setStatus(item.label + ' incoming…', '#ffb454');
+}
+
+// BUZZ THE PHONE. Each disaster gets its own rumble pattern (in milliseconds:
+// buzz, pause, buzz, …). Only Android/Chrome phones can actually vibrate —
+// on a laptop or an iPhone navigator.vibrate simply isn't there, so we check
+// first and wrap it in try/catch so it can never break the game.
+const BUZZ = {
+  tornado: [120, 40, 120, 40, 200],
+  meteors: [40, 30, 40, 30, 40, 30, 120],
+  quake:   [450],
+  flood:   [200, 80, 300],
+  balls:   [30, 50, 30, 50, 30, 50, 30],
+};
+function buzz(type) {
+  try { if (navigator.vibrate) navigator.vibrate(BUZZ[type] || 180); } catch (e) {}
+}
+
+// Actually unleash the disaster (called once its tension timer runs out).
+// No money changes hands here — that already happened in pickDisaster.
+function beginDisaster(type) {
+  if (disasters.length >= 8) return;   // even chaos has a fire code
   if (type === 'tornado') {
-    disasters.push({ type, x: -60, y: TOPBAR + Math.random() * (canvas.height - TOPBAR),
+    disasters.push({ type, x: -60, y: TOPBAR + Math.random() * gridH(),
                      life: 12, wobble: Math.random() * 6.28 });
   } else if (type === 'meteors') {
     disasters.push({ type, life: 8, spawnTimer: 0, meteors: [] });
   } else if (type === 'quake') {
     disasters.push({ type, life: 6, seed: Math.random() * 100 });
   } else if (type === 'flood') {
-    disasters.push({ type, life: 10, waterY: canvas.height + 50 });
+    disasters.push({ type, life: 10, waterY: TOPBAR + gridH() + 50 });
   } else if (type === 'balls') {
     // 10 rubber balls, dropped from above, each with its own direction
     const balls = [];
@@ -127,7 +494,7 @@ function summonDisaster(type) {
                     '#eccc68', '#7bed9f', '#70a1ff', '#ff7f50', '#a29bfe'];
     for (let i = 0; i < 10; i++) {
       balls.push({
-        x: 60 + Math.random() * (canvas.width - 120),
+        x: 10 + Math.random() * (gridW() - 20),
         y: TOPBAR - 40 - Math.random() * 250,        // starting up in the sky
         vx: (Math.random() < 0.5 ? -1 : 1) * (220 + Math.random() * 220),
         vy: 250 + Math.random() * 200,
@@ -138,14 +505,47 @@ function summonDisaster(type) {
   }
 }
 
+// SOMETHING HIT A BUILDING. It doesn't just vanish any more — it takes
+// damage and gets uglier: pristine -> lightly damaged -> heavily damaged ->
+// gone. `force` is how hard the hit was: a big meteor usually flattens a
+// house outright, a bouncing ball usually just dents it. Every hit rolls
+// the dice, so even a gentle knock can occasionally finish a building off
+// and a direct meteor sometimes leaves a wall standing.
+function hitBlock(gx, gy, bx, by, force, splash) {
+  if (grid[gy][gx] === EMPTY) return;
+  // a hit anywhere on a big building counts against the whole building
+  const r = rootOf(gx, gy);
+  gx = r.rx; gy = r.ry;
+  if (hitCool[gy][gx] > 0) return;           // still reeling from the last hit
+  hitCool[gy][gx] = HIT_COOLDOWN;
+  const roll = 1 + Math.floor(Math.random() * (force || 1));   // 1 .. force
+  damage[gy][gx] += roll;
+  if (damage[gy][gx] >= WRECKED) {
+    smashBlock(gx, gy, bx, by, splash);      // that's the end of that
+  } else {
+    // a puff of bits flies off, but the building is still standing
+    for (let i = 0; i < 3; i++) {
+      debris.push({
+        x: bx, y: by,
+        vx: (Math.random() - 0.5) * 260,
+        vy: -Math.random() * 240 - 60,
+        spin: Math.random() * 10, life: 0.7,
+        color: splash ? '#5da3e0' : '#9a8a78',
+      });
+    }
+  }
+}
+
 // one block, smashed: emptied from the grid, launched as flying bits
 function smashBlock(gx, gy, bx, by, splash) {
-  const kind = grid[gy][gx];
-  grid[gy][gx] = EMPTY;
+  const r = rootOf(gx, gy);
+  const kind = grid[r.ry][r.rx];
+  const sp = spanOf(kind);
+  clearCell(r.rx, r.ry);             // takes every square of a big building
+  roadsDirty = true;                 // a road may have just been wiped out
   destroyed++;
-  // bigger building, bigger payout: skyscraper 6, apartment 3, tower 2
-  moneys += kind === SKY ? 6 : kind === APT ? 3 : kind === TOWER ? 2 : 1;
-  for (let i = 0; i < 6; i++) {
+  moneys += kind === APT ? 3 : 1;    // apartments pay TRIPLE. big building, big payout.
+  for (let i = 0; i < 6 * sp; i++) { // a bigger building makes a bigger mess
     debris.push({
       x: bx, y: by,
       vx: (Math.random() - 0.5) * 500,
@@ -154,8 +554,7 @@ function smashBlock(gx, gy, bx, by, splash) {
       life: 1.2,
       color: splash ? '#5da3e0'
            : kind === TREE ? '#3f8a3f' : kind === STONE ? '#8a8d94'
-           : kind === APT ? '#5a6a7a' : kind === SKY ? '#4a7a9a'
-           : kind === TOWER ? '#9aa0a8' : '#b5563c',
+           : kind === APT ? '#5a6a7a' : '#b5563c',
     });
   }
 }
@@ -167,44 +566,109 @@ function cellSize() {
   // the grid stretches to fit whatever screen we're on
   return Math.min(canvas.width / COLS, (canvas.height - TOPBAR) / ROWS);
 }
+// the town's size in pixels (the grass rectangle). The world outside this is fog.
+function gridW() { return COLS * cellSize(); }
+function gridH() { return ROWS * cellSize(); }
+const FOG_PEEK = 70;                 // how far past the town edge you may pan into the fog
+
+// The camera slides and scales what we DRAW, so a finger tap on the glass
+// isn't the same spot in the town anymore. screenToWorld undoes the camera:
+// give it where you touched, it tells you which spot of the town that is.
+function screenToWorld(sx, sy) {
+  return {
+    x: (sx - panX) / zoom,
+    y: (sy - TOPBAR - panY) / zoom + TOPBAR,
+  };
+}
+
+// Keep the view sensible: if the whole town fits on screen, center it; if
+// it's bigger than the screen (zoomed in), let it slide — but only a little
+// way past the town edge, so you can peek into the fog without getting lost
+// in it. FOG_PEEK is how far past the edge you're allowed to go.
+function clampPan() {
+  const PW = canvas.width, PH = canvas.height - TOPBAR;
+  const gw = gridW() * zoom, gh = gridH() * zoom;   // town size on screen right now
+  panX = gw <= PW ? (PW - gw) / 2
+                  : Math.min(FOG_PEEK, Math.max(PW - gw - FOG_PEEK, panX));
+  panY = gh <= PH ? (PH - gh) / 2
+                  : Math.min(FOG_PEEK, Math.max(PH - gh - FOG_PEEK, panY));
+}
+// after the window resizes (fitCanvas already ran), tidy the view back onto
+// the town so a rotate or resize can't leave a gap at the edge
+addEventListener('resize', clampPan);
+clampPan();   // center the town on first load
+
+// Change the zoom while keeping one spot of the town pinned under a finger
+// (or the mouse). worldPt is that spot; (sx, sy) is where it should stay on
+// screen. This is what makes pinch-zoom feel like you're grabbing the map.
+function setCamera(newZoom, worldPt, sx, sy) {
+  zoom = Math.min(MAX_ZOOM, Math.max(1, newZoom));
+  panX = sx - zoom * worldPt.x;
+  panY = sy - TOPBAR - zoom * (worldPt.y - TOPBAR);
+  clampPan();
+}
 
 function placeAt(px, py) {
+  if (selected == null) return;     // pan mode — nothing to place
+  const w = screenToWorld(px, py);  // where in the town did we really touch?
   const s = cellSize();
-  const gx = Math.floor(px / s);
-  const gy = Math.floor((py - TOPBAR) / s);
+  const gx = Math.floor(w.x / s);
+  const gy = Math.floor((w.y - TOPBAR) / s);
   if (gx < 0 || gy < 0 || gx >= COLS || gy >= ROWS) return;
-  grid[gy][gx] = selected;          // EMPTY works as the eraser
+  const sp = spanOf(selected);
+  if (sp > 1) {
+    // A BIG BUILDING. Nudge it back on to the map if you aimed at the very
+    // edge, clear everything it's about to sit on, then plant all its squares.
+    const rx = Math.min(gx, COLS - sp), ry = Math.min(gy, ROWS - sp);
+    if (rx < 0 || ry < 0) return;                     // town too small — can't fit
+    for (let oy = 0; oy < sp; oy++)
+      for (let ox = 0; ox < sp; ox++) clearCell(rx + ox, ry + oy);
+    for (let oy = 0; oy < sp; oy++) {
+      for (let ox = 0; ox < sp; ox++) {
+        grid[ry + oy][rx + ox] = selected;
+        damage[ry + oy][rx + ox] = PRISTINE;
+        rootAt[ry + oy][rx + ox] = { rx, ry };
+      }
+    }
+  } else {
+    clearCell(gx, gy);              // takes a whole big building if you hit one
+    grid[gy][gx] = selected;        // EMPTY works as the eraser
+    damage[gy][gx] = PRISTINE;      // fresh out of the box
+  }
+  roadsDirty = true;                // the road map may have changed shape
 }
 
+// slide the whole zoomed view by a screen-pixel delta (used for one-finger pan)
+function doPan(dx, dy) { panX += dx; panY += dy; clampPan(); }
+
 // ---------------------------------------------------------------------
-// THE BUTTONS along the top (palette + THE MACHINE)
+// THE TOP BAR — three drop-down buttons and the money.
+//   Items ▾      the stuff you build (houses, trees, stone, bunkers…)
+//   Disasters ▾  the mayhem you rain down (this is the old MACHINE)
+//   People       spawns little citizens (no menu, just a button)
+// Each drop-down opens a list below it, like a real menu.
 // ---------------------------------------------------------------------
+
+// everything you can BUILD — these fill the Items drop-down
 const buttons = [
-  { label: '🏠 House',  type: HOUSE },
-  { label: '🏢 Apt',    type: APT },
-  { label: '🏙 Sky',    type: SKY },
-  { label: '🌳 Tree',   type: TREE },
-  { label: '🪨 Stone',  type: STONE },
-  { label: '🏰 Tower',  type: TOWER },
-  { label: '🛡 Bunker', type: BUNKER },
-  { label: '❌ Erase',  type: EMPTY },
-  { label: '🌪 THE MACHINE', machine: true },
+  { icon: '🏠', short: 'House',  type: HOUSE },
+  { icon: '🏢', short: 'Apt',    type: APT },
+  { icon: '🌳', short: 'Tree',   type: TREE },
+  { icon: '🪨', short: 'Stone',  type: STONE },
+  { icon: '🛡', short: 'Bunker', type: BUNKER },
+  { icon: '🛣', short: 'Road',   type: ROAD },
+  { icon: '👣', short: 'Path',   type: PATH },
+  { icon: '❌', short: 'Erase',  type: EMPTY },
 ];
 
-function buttonRects() {
-  // lay the buttons out across the top bar, machine pushed to the right
-  const rects = [];
-  let x = 10;
-  for (const b of buttons) {
-    const w = b.machine ? 220 : 86;
-    const bx = b.machine ? canvas.width - w - 10 : x;
-    rects.push({ ...b, x: bx, y: 10, w, h: TOPBAR - 20 });
-    if (!b.machine) x += w + 8;
-  }
-  return rects;
-}
+// the critters you can drop into town — these fill the People drop-down
+const CRITTER_MENU = [
+  { label: '🧍 People', kind: 'person' },
+  { label: '🐄 Cows',   kind: 'cow' },
+  { label: '🐕 Dogs',   kind: 'dog' },
+];
 
-// the machine's dial of doom
+// everything you can UNLEASH — these fill the Disaster drop-down
 const MACHINE_MENU = [
   { label: '🌪 Tornado',      type: 'tornado', cost: 10 },
   { label: '☄ Meteors',       type: 'meteors', cost: 15 },
@@ -213,78 +677,378 @@ const MACHINE_MENU = [
   { label: '🔴 Rubber Balls', type: 'balls',   cost: 9 },
 ];
 
-function machineRects() {
-  const rects = [];
-  const w = 220, h = 44;
-  for (let i = 0; i < MACHINE_MENU.length; i++) {
-    rects.push({ ...MACHINE_MENU[i],
-      x: canvas.width - w - 10, y: TOPBAR + 8 + i * (h + 6), w, h });
+// quick point-in-box test, used all over the input code
+function inside(px, py, r) { return px > r.x && px < r.x + r.w && py > r.y && py < r.y + r.h; }
+
+// builds a rounded-rectangle path (call ctx.fill()/ctx.stroke() after).
+// We roll our own so it works even on browsers without ctx.roundRect.
+function rrect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+// a steady pseudo-random 0..1 from a number — same input, same output every
+// frame, so things placed with it (like fog clouds) hold still instead of flickering
+function hash(n) { const v = Math.sin(n * 127.1) * 43758.5453; return v - Math.floor(v); }
+
+// Pick the biggest font size (up to `size`) that makes `text` fit in `maxW`,
+// and set it. Emoji are extra-wide, so words like "🌪 Disasters ▾" used to
+// spill outside their button — this stops that on any screen.
+function fitFont(text, maxW, size, min) {
+  let fs = size;
+  ctx.font = `bold ${fs}px monospace`;
+  while (fs > (min || 10) && ctx.measureText(text).width > maxW) {
+    fs -= 1;
+    ctx.font = `bold ${fs}px monospace`;
   }
-  return rects;
+  return fs;
+}
+
+// the emoji of whatever build item is currently picked
+function iconFor(type) {
+  const b = buttons.find(b => b.type === type);
+  return b ? b.icon : '🏠';
+}
+// what the Build button shows: a hand when you're NOT building (so you're
+// free to drag the map), otherwise the icon of the thing you're placing.
+function buildIcon() { return selected == null ? '✋' : iconFor(selected); }
+
+// Stop building. There's no "pan mode" to switch on — dragging the map is
+// simply what happens whenever you're not placing something.
+function stopBuilding() {
+  selected = null;
+  openMenu = null;
+  setStatus('✋ Drag to move the map, pinch to zoom', '#7dd3ff', true);
+}
+
+// ROW 1 (top): ← Arcade pill on the left, the gold money chip in the MIDDLE,
+// and the fullscreen button on the right.
+function moneyChipRect() {
+  const narrow = canvas.width < 480;
+  const w = narrow ? 104 : 150;
+  return { x: (canvas.width - w) / 2, y: 12, w, h: 32, narrow };
+}
+
+// The fullscreen toggle, top-right. Real fullscreen hides the phone's
+// browser bars, which gives the town a lot more room.
+function fullBtnRect() {
+  return { x: canvas.width - 46, y: 12, w: 36, h: 32 };
+}
+function isFullscreen() {
+  return !!(document.fullscreenElement || document.webkitFullscreenElement);
+}
+function toggleFullscreen() {
+  try {
+    if (isFullscreen()) {
+      (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+    } else {
+      const el = document.documentElement;
+      (el.requestFullscreen || el.webkitRequestFullscreen).call(el);
+    }
+  } catch (e) {}          // some browsers say no. that's fine, carry on.
+}
+
+// ROW 2 (below): the three big buttons across the full width, with room to
+// breathe — Build, People, then Disasters last (it's the dangerous one).
+function topButtons() {
+  const gap = 10, pad = 10, y = 58, h = 38;
+  const x0 = pad, x1 = canvas.width - pad;
+  const w = (x1 - x0 - gap * 2) / 3;
+  const defs = [
+    { key: 'build',     icon: buildIcon(), word: 'Build',    menu: true },
+    { key: 'people',    icon: '🧍',        word: 'People',   menu: true },
+    { key: 'disasters', icon: '🌪',        word: 'Disaster', menu: true },
+  ];
+  return defs.map((d, i) => ({ ...d, x: x0 + i * (w + gap), y, w, h }));
+}
+
+// The "Stop Building" button, parked at the BOTTOM CENTRE and shown only
+// while you're actually placing something. Tap it and you're back to
+// dragging the map around.
+function stopBuildRect() {
+  if (selected == null) return null;
+  const w = 190, h = 40;
+  return { x: (canvas.width - w) / 2, y: canvas.height - h - 16, w, h };
+}
+
+// The list that drops down under an open button. Kept on-screen at the right edge.
+function menuRects(kind) {
+  const btn = topButtons().find(b => b.key === kind);
+  const items = kind === 'build'
+    ? buttons.map(b => ({ label: b.icon + ' ' + b.short, type: b.type, cost: 0 }))
+    : kind === 'people'
+    ? CRITTER_MENU.map(c => ({ ...c }))
+    : MACHINE_MENU.map(m => ({ ...m }));
+  // disasters need extra room so the name never crowds its price tag
+  const minW = kind === 'disasters' ? 214 : 172;
+  const w = Math.max(btn.w, minW), h = 38, gap = 4;
+  let x = btn.x;
+  if (x + w > canvas.width - 6) x = canvas.width - 6 - w;   // don't run off the right edge
+  return items.map((it, i) => ({ ...it, x, y: TOPBAR + 6 + i * (h + gap), w, h }));
+}
+
+// tapping a top button: open or close its drop-down
+function handleTopButton(b) {
+  openMenu = (openMenu === b.key) ? null : b.key;
+}
+
+// tapping a row inside an open menu
+function chooseFromMenu(kind, r) {
+  if (kind === 'build') {
+    selected = r.type;
+    setStatus('Now placing ' + r.label, '#7ddf8f', true);
+    openMenu = null;
+  } else if (kind === 'people') {
+    const made = spawnCritters(r.kind);
+    setStatus(made ? r.label + ' wander in!' : 'No open ground left to stand on!',
+              made ? '#7ddf8f' : '#ff6b5e');
+    openMenu = null;
+    selected = null;                 // stop building so you can watch them arrive
+  } else {
+    pickDisaster(r);      // pays, closes the menu, and starts the tension countdown
+  }
 }
 
 function pressAt(px, py) {
-  // if the machine menu is open, its buttons get first dibs
-  if (machineOpen) {
-    for (const r of machineRects()) {
-      if (px > r.x && px < r.x + r.w && py > r.y && py < r.y + r.h) {
-        summonDisaster(r.type);
-        return true;
-      }
+  // if a menu is open, it gets first say
+  if (openMenu) {
+    for (const r of menuRects(openMenu)) {
+      if (inside(px, py, r)) { chooseFromMenu(openMenu, r); return true; }
     }
-  }
-  // the SPAWN PEOPLE button in the bottom-right corner
-  const pb = peopleButtonRect();
-  if (px > pb.x && px < pb.x + pb.w && py > pb.y && py < pb.y + pb.h) {
-    spawnPeople();
+    const tb = topButtons().find(b => inside(px, py, b));
+    if (tb) { handleTopButton(tb); return true; }   // let them switch menus
+    openMenu = null;                                 // tapped away — just close it
     return true;
   }
-  if (py > TOPBAR) { machineOpen = false; return false; }   // clicked the world
-  for (const r of buttonRects()) {
-    if (px > r.x && px < r.x + r.w && py > r.y && py < r.y + r.h) {
-      if (r.machine) machineOpen = !machineOpen;   // the machine opens its menu
-      else { selected = r.type; machineOpen = false; }
-      return true;
-    }
-  }
-  return true;                      // clicked the bar but no button — do nothing
+  // no menu open: check the top buttons
+  const tb = topButtons().find(b => inside(px, py, b));
+  if (tb) { handleTopButton(tb); return true; }
+  if (inside(px, py, fullBtnRect())) { toggleFullscreen(); return true; }
+  // the bottom-centre STOP BUILDING button
+  const sb = stopBuildRect();
+  if (sb && inside(px, py, sb)) { stopBuilding(); return true; }
+  if (py <= TOPBAR) return true;    // tapped an empty part of the bar — do nothing
+  return false;                     // tapped the world — paint, or drag the map
 }
 
 // ---------------------------------------------------------------------
 // INPUT — mouse and touch both paint blocks while held down
 // ---------------------------------------------------------------------
-let painting = false;
+let painting = false;               // dragging to paint blocks (an item is selected)
+let panning = false;                // dragging to slide the map (pan mode)
+let lastDrag = { x: 0, y: 0 };      // where the finger/mouse was last frame, for panning
+// Taps on the Arcade link are left alone so the link actually navigates.
+function onBackButton(e) { return e.target && e.target.closest && e.target.closest('#back'); }
+
+// after a tap lands in the world, either paint or start a pan, depending on mode
+function startWorldDrag(x, y) {
+  if (selected == null) { panning = true; lastDrag = { x, y }; }   // pan mode
+  else { painting = true; placeAt(x, y); }                          // build mode
+}
+
 addEventListener('mousedown', e => {
-  if (!pressAt(e.clientX, e.clientY)) { painting = true; placeAt(e.clientX, e.clientY); }
+  if (onBackButton(e)) return;
+  if (!pressAt(e.clientX, e.clientY)) startWorldDrag(e.clientX, e.clientY);
 });
-addEventListener('mousemove', e => { if (painting) placeAt(e.clientX, e.clientY); });
-addEventListener('mouseup', () => { painting = false; });
+addEventListener('mousemove', e => {
+  if (painting) placeAt(e.clientX, e.clientY);
+  else if (panning) { doPan(e.clientX - lastDrag.x, e.clientY - lastDrag.y); lastDrag = { x: e.clientX, y: e.clientY }; }
+});
+addEventListener('mouseup', () => { painting = false; panning = false; });
+
+// MOUSE WHEEL / TRACKPAD ZOOM. Scroll up over the town to zoom in toward
+// the pointer, scroll down to zoom back out. We keep the spot under the
+// cursor pinned so it feels like leaning in, not jumping.
+addEventListener('wheel', e => {
+  if (onBackButton(e)) return;
+  if (e.clientY <= TOPBAR) return;             // leave the toolbar alone
+  e.preventDefault();
+  const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+  setCamera(zoom * factor, screenToWorld(e.clientX, e.clientY), e.clientX, e.clientY);
+}, { passive: false });
+
+// PINCH TO ZOOM. Two fingers on the glass = grab the map: spread apart to
+// zoom in, pinch together to zoom out, and slide both fingers to pan. One
+// finger still paints blocks like before.
+let pinch = null;   // remembers the two-finger gesture between frames, or null
+
+// distance between the two fingers, and the point exactly between them
+function twoFinger(e) {
+  const a = e.touches[0], b = e.touches[1];
+  return {
+    dist: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY),
+    x: (a.clientX + b.clientX) / 2,
+    y: (a.clientY + b.clientY) / 2,
+  };
+}
 
 addEventListener('touchstart', e => {
+  if (onBackButton(e)) return;                 // don't preventDefault - let the link work
   e.preventDefault();
+  if (e.touches.length >= 2) {                 // two fingers down: start a pinch, don't paint/pan
+    painting = false; panning = false;
+    pinch = twoFinger(e);
+    return;
+  }
   const t = e.changedTouches[0];
-  if (!pressAt(t.clientX, t.clientY)) { painting = true; placeAt(t.clientX, t.clientY); }
+  if (!pressAt(t.clientX, t.clientY)) startWorldDrag(t.clientX, t.clientY);
 }, { passive: false });
 addEventListener('touchmove', e => {
   e.preventDefault();
+  if (pinch && e.touches.length >= 2) {        // mid-pinch: zoom + pan together
+    const now = twoFinger(e);
+    // the town spot under the OLD midpoint should land under the NEW one
+    const anchor = screenToWorld(pinch.x, pinch.y);
+    setCamera(zoom * (now.dist / pinch.dist), anchor, now.x, now.y);
+    pinch = now;
+    return;
+  }
   const t = e.changedTouches[0];
   if (painting) placeAt(t.clientX, t.clientY);
+  else if (panning) { doPan(t.clientX - lastDrag.x, t.clientY - lastDrag.y); lastDrag = { x: t.clientX, y: t.clientY }; }
 }, { passive: false });
-addEventListener('touchend', () => { painting = false; });
-
-// number keys pick from the palette too
-addEventListener('keydown', e => {
-  if (e.key === '1') selected = HOUSE;
-  if (e.key === '2') selected = APT;
-  if (e.key === '3') selected = SKY;
-  if (e.key === '4') selected = TREE;
-  if (e.key === '5') selected = STONE;
-  if (e.key === '6') selected = TOWER;
-  if (e.key === '7') selected = BUNKER;
-  if (e.key === '8') selected = EMPTY;
-  if (e.key.toLowerCase() === 'd') machineOpen = !machineOpen;   // D for DISASTER menu
-  if (e.key.toLowerCase() === 'p') spawnPeople();                // P for PEOPLE
+addEventListener('touchend', e => {
+  painting = false; panning = false;
+  if (e.touches.length < 2) pinch = null;      // pinch is over once a finger lifts
 });
+
+// number keys pick a build item too
+const KEY_ITEM = { '1': HOUSE, '2': APT, '3': TREE, '4': STONE, '5': BUNKER,
+                   '6': ROAD, '7': PATH, '8': EMPTY };
+addEventListener('keydown', e => {
+  if (e.key in KEY_ITEM) {
+    selected = KEY_ITEM[e.key];
+    setStatus('Now placing ' + iconFor(selected), '#7ddf8f', true);
+  }
+  if (e.key.toLowerCase() === 'd') openMenu = openMenu === 'disasters' ? null : 'disasters';  // D for Disasters menu
+  if (e.key.toLowerCase() === 'b') openMenu = openMenu === 'build' ? null : 'build';          // B for Build menu
+  if (e.key.toLowerCase() === 'p') { spawnCritters('person'); setStatus('🧍 People wander in!', '#7ddf8f'); }
+  if (e.key.toLowerCase() === 'c') { spawnCritters('cow');    setStatus('🐄 Cows wander in!', '#7ddf8f'); }
+  if (e.key.toLowerCase() === 'g') { spawnCritters('dog');    setStatus('🐕 Dogs wander in!', '#7ddf8f'); }
+  if (e.key === 'Escape') stopBuilding();                        // Esc stops building
+  if (e.key === '0') { zoom = 1; panX = 0; panY = 0; }           // 0 zooms back out to the whole town
+});
+
+// ---------------------------------------------------------------------
+// DRAWING ROADS AND PATHS
+// A road square looks at its four neighbours and draws itself to match, so
+// straights, corners, T-junctions and crossroads all join up by themselves.
+// And when two road lines run side by side, they merge into one wide
+// two-lane road with a dashed line down the middle.
+// ---------------------------------------------------------------------
+function sameWay(gx, gy, kind) {
+  if (gx < 0 || gy < 0 || gx >= COLS || gy >= ROWS) return false;
+  return grid[gy][gx] === kind;
+}
+
+function drawWay(gx, gy, x, y, s, kind) {
+  const road = kind === ROAD;
+  const N = sameWay(gx, gy - 1, kind), S = sameWay(gx, gy + 1, kind);
+  const W = sameWay(gx - 1, gy, kind), E = sameWay(gx + 1, gy, kind);
+  const wide = road ? 0.78 : 0.5;                 // roads are fat, paths are skinny
+  const half = s * wide / 2, mid = s / 2;
+
+  ctx.fillStyle = road ? '#4b4f55' : '#c8b38b';   // tarmac, or trodden dirt
+  // the square's own middle patch
+  ctx.fillRect(x + mid - half, y + mid - half, half * 2, half * 2);
+  // a stub reaching out to each neighbour it connects to
+  if (N) ctx.fillRect(x + mid - half, y, half * 2, mid);
+  if (S) ctx.fillRect(x + mid - half, y + mid, half * 2, mid + 1);
+  if (W) ctx.fillRect(x, y + mid - half, mid, half * 2);
+  if (E) ctx.fillRect(x + mid, y + mid - half, mid + 1, half * 2);
+  // a lone square with no neighbours at all still shows something
+  if (!N && !S && !W && !E) {
+    ctx.fillRect(x + mid - half, y + mid - half, half * 2, half * 2);
+  }
+
+  if (road) {
+    // ONLY a two-lane road gets a centre line — there's nothing to divide on
+    // a one-way single lane. The line sits on the edge shared with our twin,
+    // and we draw it across the FULL square so it meets the line from the
+    // next square along, which is what makes bends and junctions join up.
+    const dual = roadDual[gy][gx];
+    ctx.strokeStyle = '#f2d24b';
+    ctx.lineWidth = Math.max(1, s * 0.05);
+    ctx.setLineDash([s * 0.16, s * 0.14]);
+    ctx.beginPath();
+    if (dual === 'v' && isRoad(gx + 1, gy) && roadDual[gy][gx + 1] === 'v') {
+      ctx.moveTo(x + s, y); ctx.lineTo(x + s, y + s);       // left lane of the pair
+    } else if (dual === 'h' && isRoad(gx, gy + 1) && roadDual[gy + 1][gx] === 'h') {
+      ctx.moveTo(x, y + s); ctx.lineTo(x + s, y + s);       // top lane of the pair
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // ONE-WAY ARROWS on a single lane, so you can see which way it flows
+    const one = roadOne[gy][gx];
+    if (one && !roadJunc[gy][gx]) {
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+      ctx.lineWidth = Math.max(1, s * 0.045);
+      ctx.lineCap = 'round';
+      const ax = x + mid, ay = y + mid;
+      const px2 = one.dx * s * 0.16, py2 = one.dy * s * 0.16;   // point of the arrow
+      const wx = one.dy * s * 0.13, wy = one.dx * s * 0.13;     // its two barbs
+      ctx.beginPath();
+      ctx.moveTo(ax + px2 - px2 * 2 + wx, ay + py2 - py2 * 2 + wy);
+      ctx.lineTo(ax + px2, ay + py2);
+      ctx.lineTo(ax + px2 - px2 * 2 - wx, ay + py2 - py2 * 2 - wy);
+      ctx.stroke();
+      ctx.lineCap = 'butt';
+    }
+  } else {
+    // paths get little stepping-stone speckles
+    ctx.fillStyle = 'rgba(150, 128, 92, 0.55)';
+    for (let i = 0; i < 3; i++) {
+      const h2 = hash(gx * 5.1 + gy * 2.7 + i);
+      ctx.fillRect(x + s * (0.28 + h2 * 0.42), y + s * (0.24 + i * 0.24), s * 0.09, s * 0.07);
+    }
+  }
+}
+
+// A CALM WANDER. Everyone would rather stroll along a road or path than
+// wade through the grass — so if they're on one, they mostly follow it; if
+// they're near one, they drift toward it. But they still wander off now and
+// then, because they're not robots.
+const STEP4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+function strollAbout(p, dt, cs) {
+  const gx = Math.floor(p.x / cs), gy = Math.floor((p.y - TOPBAR) / cs);
+  if (wayAt(gx, gy)) {
+    // ON a path: keep following it, choosing among the ways out of this square
+    if (Math.random() < dt * 1.6) {
+      const outs = STEP4.filter(([dx, dy]) => wayAt(gx + dx, gy + dy));
+      if (outs.length && Math.random() < 0.85) {          // 85%: stay on the path
+        const [dx, dy] = outs[Math.floor(Math.random() * outs.length)];
+        p.angle = Math.atan2(dy, dx) + (Math.random() - 0.5) * 0.25;
+      } else {
+        p.angle = Math.random() * 6.28;                   // 15%: strike out cross-country
+      }
+    }
+    return;
+  }
+  // OFF the path: every so often, look around for one nearby and head for it
+  if (Math.random() < dt * 0.9) {
+    let best = null, bestD = 99;
+    for (let r = 1; r <= 3 && !best; r++) {
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (!wayAt(gx + dx, gy + dy)) continue;
+          const d2 = Math.abs(dx) + Math.abs(dy);
+          if (d2 < bestD) { bestD = d2; best = [dx, dy]; }
+        }
+      }
+    }
+    if (best && Math.random() < 0.7) {
+      p.angle = Math.atan2(best[1], best[0]) + (Math.random() - 0.5) * 0.4;
+    } else {
+      p.angle = Math.random() * 6.28;
+    }
+  }
+}
 
 // ---------------------------------------------------------------------
 // UPDATE — the tornado wanders and EATS
@@ -294,6 +1058,32 @@ function update(dt) {
   elapsed += dt;
   if (shake > 0) shake -= dt;
   if (brokeFlash > 0) brokeFlash -= dt;
+  if (statusTimer > 0 && !statusSticky) statusTimer -= dt;
+  ensureRoads();                 // keep our notes about the roads up to date
+  lightClock += dt;              // and let the traffic lights tick round
+
+  // let squares recover from their "just been hit" moment
+  for (let y = 0; y < ROWS; y++) {
+    for (let x = 0; x < COLS; x++) if (hitCool[y][x] > 0) hitCool[y][x] -= dt;
+  }
+
+  // Disasters you've paid for count down a moment of dread, with the ground
+  // rumbling harder the closer they get. When the timer hits zero, they strike.
+  if (pendings.length) {
+    for (const p of pendings) p.timer -= dt;
+    let worst = 0;
+    for (const p of pendings) worst = Math.max(worst, 1 - p.timer / TENSION);
+    shake = Math.max(shake, 0.05 + worst * 0.25);   // tension you can feel
+    for (const p of pendings) {
+      if (p.timer <= 0) {
+        beginDisaster(p.type);
+        setStatus(p.label + '!', '#ff9f43');
+        shake = Math.max(shake, 0.5);
+        buzz(p.type);                 // rattle the phone (where the browser allows it)
+      }
+    }
+    pendings = pendings.filter(p => p.timer > 0);
+  }
 
   for (const D of disasters) {      // every active disaster does its thing
     D.life -= dt;
@@ -304,8 +1094,7 @@ function update(dt) {
       let target = null, best = 999999;
       for (let gy = 0; gy < ROWS; gy++) {
         for (let gx = 0; gx < COLS; gx++) {
-          const hk = grid[gy][gx];
-          if (hk !== HOUSE && hk !== APT && hk !== SKY) continue;
+          if (grid[gy][gx] !== HOUSE && grid[gy][gx] !== APT) continue;
           const bx = gx * s + s / 2, by = TOPBAR + gy * s + s / 2;
           const d2 = Math.hypot(bx - D.x, by - D.y);
           if (d2 < best) { best = d2; target = { x: bx, y: by }; }
@@ -320,19 +1109,19 @@ function update(dt) {
       } else {
         D.x += 150 * dt;   // no houses left — it spins away, satisfied
       }
-      D.y = Math.max(TOPBAR + 40, Math.min(canvas.height - 40, D.y));
+      D.y = Math.max(TOPBAR + 40, Math.min(TOPBAR + ROWS * s - 40, D.y));
       shake = 0.2;
-      // it ONLY eats housing (houses, apartments, skyscrapers) — trees
-      // and stone just get a wild hairdo
+      // it ONLY eats housing (houses AND apartments) — trees and stone
+      // just get a wild hairdo
       for (let gy = 0; gy < ROWS; gy++) {
         for (let gx = 0; gx < COLS; gx++) {
-          const hk2 = grid[gy][gx];
-          if (hk2 !== HOUSE && hk2 !== APT && hk2 !== SKY) continue;
+          if (grid[gy][gx] !== HOUSE && grid[gy][gx] !== APT) continue;
           const bx = gx * s + s / 2, by = TOPBAR + gy * s + s / 2;
-          if (Math.hypot(bx - D.x, by - D.y) < 70) smashBlock(gx, gy, bx, by);
+          // a tornado CHEWS — usually takes a house out in one go
+          if (Math.hypot(bx - D.x, by - D.y) < 70) hitBlock(gx, gy, bx, by, 3);
         }
       }
-      if (D.life <= 0 || D.x > canvas.width + 80) D.done = true;
+      if (D.life <= 0 || D.x > COLS * s + 80) D.done = true;
     }
 
     if (D.type === 'meteors') {
@@ -340,11 +1129,12 @@ function update(dt) {
       D.spawnTimer -= dt;
       if (D.spawnTimer <= 0) {
         D.spawnTimer = 0.45;                    // a new fireball every half second
-        D.meteors.push({
-          x: Math.random() * canvas.width + 120,
-          y: TOPBAR - 60,
-          ty: TOPBAR + 40 + Math.random() * (ROWS * s - 80),
-        });
+        // aim each fireball to land ON the town: pick a landing spot, then
+        // start it up-and-to-the-right so its slanted fall arrives there
+        const lx = Math.random() * (COLS * s);
+        const ty = TOPBAR + 40 + Math.random() * (ROWS * s - 80);
+        const fall = (ty - (TOPBAR - 60)) / 620;   // seconds it takes to fall
+        D.meteors.push({ x: lx + 260 * fall, y: TOPBAR - 60, ty });
       }
       for (const m of D.meteors) {
         m.x -= 260 * dt;                        // falling at a slant
@@ -353,6 +1143,10 @@ function update(dt) {
           m.hit = true;
           shake = 0.35;
           craters.push({ x: m.x, y: m.y, r: 26 + Math.random() * 14 });
+          // any car parked in the blast is instantly scrap
+          for (const car of cars) {
+            if (!car.gone && Math.hypot(car.x - m.x, car.y - m.y) < 60) popCar(car);
+          }
           // anyone standing OUTSIDE near the impact gets LAUNCHED
           for (const p of people) {
             if (!p.gone && !p.sheltering && Math.hypot(p.x - m.x, p.y - m.y) < 85) {
@@ -368,7 +1162,8 @@ function update(dt) {
               // bunkers shrug off even a direct meteor hit
               if (grid[gy][gx] === EMPTY || grid[gy][gx] === BUNKER) continue;
               const bx = gx * s + s / 2, by = TOPBAR + gy * s + s / 2;
-              if (Math.hypot(bx - m.x, by - m.y) < 60) smashBlock(gx, gy, bx, by);
+              // a meteor lands hardest of all
+              if (Math.hypot(bx - m.x, by - m.y) < 60) hitBlock(gx, gy, bx, by, 4);
             }
           }
           for (let i = 0; i < 14; i++) {
@@ -391,14 +1186,12 @@ function update(dt) {
           const kind = grid[gy][gx];
           if (kind === EMPTY) continue;
           if (kind === BUNKER) continue;             // bunkers do not care
-          const fragile = kind === SKY ? 1.1         // the tallest fall hardest
-                        : kind === HOUSE ? 0.9
+          const fragile = kind === HOUSE ? 0.9
                         : kind === APT ? 0.7         // tall = topply
-                        : kind === TREE ? 0.35
-                        : kind === TOWER ? 0.08      // castle-grade stonework
-                        : 0.15;
+                        : kind === TREE ? 0.35 : 0.15;
           if (Math.random() < fragile * dt) {
-            smashBlock(gx, gy, gx * s + s / 2, TOPBAR + gy * s + s / 2);
+            // a quake rattles things loose a crack at a time
+            hitBlock(gx, gy, gx * s + s / 2, TOPBAR + gy * s + s / 2, 2);
           }
         }
       }
@@ -412,14 +1205,16 @@ function update(dt) {
       if (t2 < 4) frac = t2 / 4;
       else if (t2 < 6) frac = 1;
       else frac = Math.max(0, 1 - (t2 - 6) / 4);
-      D.waterY = canvas.height - frac * (canvas.height - TOPBAR) * 0.65;
+      D.waterY = (TOPBAR + ROWS * s) - frac * (ROWS * s) * 0.72;
       // anything underwater washes away... except STONE. stone doesn't care.
       for (let gy = 0; gy < ROWS; gy++) {
         for (let gx = 0; gx < COLS; gx++) {
           const kind = grid[gy][gx];
-          if (kind === EMPTY || kind === STONE || kind === BUNKER || kind === TOWER) continue;   // waterproof
+          if (kind === EMPTY || kind === STONE || kind === BUNKER) continue;   // waterproof
           const by = TOPBAR + gy * s + s / 2;
-          if (by > D.waterY) smashBlock(gx, gy, gx * s + s / 2, by, true);
+          // underwater: the damp works away at it
+          if (by > D.waterY && Math.random() < dt * 2.5)
+            hitBlock(gx, gy, gx * s + s / 2, by, 2, true);
         }
       }
       if (D.life <= 0) D.done = true;
@@ -432,16 +1227,17 @@ function update(dt) {
         ball.y += ball.vy * dt;
         // BOING — bounce off every edge of the world
         if (ball.x < 16) { ball.x = 16; ball.vx = Math.abs(ball.vx); }
-        if (ball.x > canvas.width - 16) { ball.x = canvas.width - 16; ball.vx = -Math.abs(ball.vx); }
+        if (ball.x > COLS * s - 16) { ball.x = COLS * s - 16; ball.vx = -Math.abs(ball.vx); }
         if (ball.y < TOPBAR + 16) { ball.y = TOPBAR + 16; ball.vy = Math.abs(ball.vy); }
-        if (ball.y > canvas.height - 16) { ball.y = canvas.height - 16; ball.vy = -Math.abs(ball.vy); }
+        if (ball.y > TOPBAR + ROWS * s - 16) { ball.y = TOPBAR + ROWS * s - 16; ball.vy = -Math.abs(ball.vy); }
         // anything a ball touches gets bounced INTO OBLIVION (except bunkers)
         for (let gy = 0; gy < ROWS; gy++) {
           for (let gx = 0; gx < COLS; gx++) {
             const kind = grid[gy][gx];
             if (kind === EMPTY || kind === BUNKER) continue;
             const bx = gx * s + s / 2, by = TOPBAR + gy * s + s / 2;
-            if (Math.hypot(bx - ball.x, by - ball.y) < 34) smashBlock(gx, gy, bx, by);
+            // a rubber ball mostly just DENTS things
+            if (Math.hypot(bx - ball.x, by - ball.y) < 34) hitBlock(gx, gy, bx, by, 2);
           }
         }
       }
@@ -460,9 +1256,18 @@ function update(dt) {
   }
   disasters = disasters.filter(D => !D.done);   // sweep up the finished ones
 
-  // ---- THE LITTLE PEOPLE — wandering, panicking, or HIDING ----
+  // ---- THE LITTLE PEOPLE — wandering, panicking, HIDING, or REPAIRING ----
   const panicking = disasters.length > 0;
   const cs = cellSize();
+
+  // which broken buildings already have a worker on them (one each, no crowding)
+  const claimed = new Set();
+  for (const p of people) {
+    if (p.job) {
+      if (panicking) { p.job = null; p.jobT = 0; p.fixing = false; p.stand = null; }  // drop tools and RUN
+      else claimed.add(p.job.gx + ',' + p.job.gy);
+    }
+  }
 
   // how many people are inside (or racing toward) each building? MAX 3.
   // a house is not a clown car.
@@ -480,7 +1285,7 @@ function update(dt) {
     // already hiding inside a building?
     if (p.sheltering) {
       const kind = grid[p.sheltering.gy][p.sheltering.gx];
-      if (!isShelter(kind)) {
+      if (kind !== HOUSE && kind !== APT && kind !== BUNKER) {
         // their shelter was DESTROYED with them inside it. out they go!
         p.gone = true;
         peopleLaunched++;
@@ -499,19 +1304,22 @@ function update(dt) {
     }
 
     p.walk += dt * (panicking ? 16 : 6);
+    p.bob += dt * (panicking ? 14 : 3.2);      // a happy sway, or a terrified jitter
 
     if (panicking) {
       // RUN FOR SHELTER — find the nearest building with a roof.
       // (Whether it's a GOOD shelter is... not their department.)
       let target = p.shelterTarget;
-      if (!target || !isShelter(grid[target.gy][target.gx])) {
+      if (!target || (grid[target.gy][target.gx] !== HOUSE &&
+                      grid[target.gy][target.gx] !== APT &&
+                      grid[target.gy][target.gx] !== BUNKER)) {
         target = null;
         let best = 999999;
         for (let gy = 0; gy < ROWS; gy++) {
           for (let gx = 0; gx < COLS; gx++) {
             const kind = grid[gy][gx];
-            if (!isShelter(kind)) continue;
-            if ((occupancy[gx + ',' + gy] || 0) >= shelterCap(kind)) continue;   // FULL
+            if (kind !== HOUSE && kind !== APT && kind !== BUNKER) continue;
+            if ((occupancy[gx + ',' + gy] || 0) >= 3) continue;   // that one's FULL
             const bx = gx * cs + cs / 2, by = TOPBAR + gy * cs + cs / 2;
             const d2 = Math.hypot(bx - p.x, by - p.y);
             if (d2 < best) { best = d2; target = { gx, gy, x: bx, y: by }; }
@@ -532,7 +1340,7 @@ function update(dt) {
             if (q.sheltering && q.sheltering.gx === target.gx &&
                 q.sheltering.gy === target.gy) inside++;
           }
-          if (inside < shelterCap(grid[target.gy][target.gx])) {
+          if (inside < 3) {
             p.sheltering = { gx: target.gx, gy: target.gy };   // squeezed in!
             p.shelterTarget = null;
             continue;
@@ -545,15 +1353,107 @@ function update(dt) {
         p.angle += (Math.random() - 0.5) * dt * 22;   // no shelter?! headless-chicken mode
       }
     } else {
+      // ---- ALL CLEAR: TIME TO FIX THE PLACE UP ----
+      // Only people do repairs (cows and dogs are no help at all). One
+      // worker per building, and it's slow on purpose so you can watch the
+      // building climb back from heavy damage to light to good as new.
       p.shelterTarget = null;
-      if (Math.random() < dt * 0.8) p.angle = Math.random() * 6.28;   // calm amble
+      if (p.kind === 'person') {
+        // is the job we picked still a job? (it may have been finished or flattened)
+        if (p.job && (grid[p.job.gy][p.job.gx] === EMPTY ||
+                      damage[p.job.gy][p.job.gx] === PRISTINE)) {
+          p.job = null; p.jobT = 0; p.stand = null;
+        }
+        if (!p.job) {                       // look for the nearest broken thing
+          let best = 999999, found = null;
+          for (let gy = 0; gy < ROWS; gy++) {
+            for (let gx = 0; gx < COLS; gx++) {
+              if (grid[gy][gx] === EMPTY || damage[gy][gx] === PRISTINE) continue;
+              if (claimed.has(gx + ',' + gy)) continue;      // someone's already on it
+              const bx = gx * cs + cs / 2, by = TOPBAR + gy * cs + cs / 2;
+              const d2 = Math.hypot(bx - p.x, by - p.y);
+              if (d2 < best) { best = d2; found = { gx, gy, x: bx, y: by }; }
+            }
+          }
+          if (found) {
+            p.job = found; p.jobT = 0; claimed.add(found.gx + ',' + found.gy);
+            p.stand = null;
+          }
+        }
+        if (p.job) {
+          // WHICH SIDE DO WE WORK FROM? Stand on the open square to the
+          // building's left or right — whichever is free and nearer to us.
+          // (If both sides are walled in, above or below will do.)
+          if (!p.stand) {
+            const sp2 = spanOf(grid[p.job.gy][p.job.gx]);
+            const sides = [ { dx: -1, dy: 0 }, { dx: sp2, dy: 0 },
+                            { dx: 0, dy: -1 }, { dx: 0, dy: sp2 } ];
+            let bestSide = null, bestD = 1e9;
+            for (const sd of sides) {
+              const cx = p.job.gx + (sd.dx === sp2 ? sp2 : sd.dx === -1 ? -1 : 0);
+              const cy = p.job.gy + (sd.dy === sp2 ? sp2 : sd.dy === -1 ? -1 : 0);
+              const tx = sd.dx !== 0 ? cx : p.job.gx;
+              const ty = sd.dy !== 0 ? cy : p.job.gy;
+              if (blocked(tx, ty)) continue;                 // can't stand in a wall
+              const wx = tx * cs + cs / 2, wy = TOPBAR + ty * cs + cs / 2;
+              const d3 = Math.hypot(wx - p.x, wy - p.y) + (sd.dy !== 0 ? cs * 0.6 : 0);
+              if (d3 < bestD) { bestD = d3; bestSide = { x: wx, y: wy }; }
+            }
+            // nowhere free to stand? just walk up to it and make do
+            p.stand = bestSide || { x: p.job.x, y: p.job.y };
+          }
+          const reach = Math.hypot(p.stand.x - p.x, p.stand.y - p.y);
+          if (reach > cs * 0.45) {          // still walking over, toolbox in hand
+            p.angle = Math.atan2(p.stand.y - p.y, p.stand.x - p.x);
+            p.fixing = false;
+          } else {                          // ON SITE — start hammering
+            // face the building: hammer on our left or our right to suit
+            p.workSide = p.job.x >= p.x ? 1 : -1;
+            p.fixing = true;
+            p.jobT += dt;
+            p.hammer = (p.hammer || 0) + dt * 9;         // swing the hammer
+            if (p.jobT >= REPAIR_TIME) {                 // one damage level mended!
+              p.jobT = 0;
+              damage[p.job.gy][p.job.gx]--;
+              repaired++;
+              if (damage[p.job.gy][p.job.gx] <= PRISTINE) {
+                claimed.delete(p.job.gx + ',' + p.job.gy);
+                p.job = null; p.fixing = false; p.stand = null;
+              }
+            }
+          }
+        } else {
+          p.fixing = false;
+          strollAbout(p, dt, cs);           // nothing to fix — go for a wander
+        }
+      } else {
+        strollAbout(p, dt, cs);             // cows and dogs are always just wandering
+      }
     }
+    if (p.fixing) continue;               // a worker mid-repair stands still
 
-    const speed = panicking ? 150 : 30;
-    p.x += Math.cos(p.angle) * speed * dt;
-    p.y += Math.sin(p.angle) * speed * dt;
-    p.x = Math.max(14, Math.min(canvas.width - 14, p.x));
-    p.y = Math.max(TOPBAR + 14, Math.min(canvas.height - 14, p.y));
+    // dogs scamper, cows plod, people are in between
+    const pace = p.kind === 'dog' ? 1.35 : p.kind === 'cow' ? 0.6 : 1;
+    const speed = (panicking ? 150 : 30) * pace;
+    const nx = p.x + Math.cos(p.angle) * speed * dt;
+    const ny = p.y + Math.sin(p.angle) * speed * dt;
+
+    // WALLS ARE SOLID. Try each direction on its own so they slide along a
+    // wall instead of sticking to it. The one square they ARE allowed into
+    // is the shelter they're running for — that's the door.
+    const goal = p.shelterTarget;
+    const okAt = (x, y) => {
+      const gx = Math.floor(x / cs), gy = Math.floor((y - TOPBAR) / cs);
+      if (goal && goal.gx === gx && goal.gy === gy) return true;   // their doorway
+      return !blocked(gx, gy);
+    };
+    if (okAt(nx, p.y)) p.x = nx;
+    else p.angle = Math.PI - p.angle;              // bounced off a wall sideways
+    if (okAt(p.x, ny)) p.y = ny;
+    else p.angle = -p.angle;                       // bounced off a wall up/down
+
+    p.x = Math.max(4, Math.min(COLS * cs - 4, p.x));
+    p.y = Math.max(TOPBAR + 4, Math.min(TOPBAR + ROWS * cs - 4, p.y));
 
     // did something GET them on the way?
     let hit = false;
@@ -574,6 +1474,125 @@ function update(dt) {
     }
   }
   people = people.filter(p => !p.gone);
+
+  // ---- CARS ON THE ROADS ----
+  carTimer -= dt;
+  if (carTimer <= 0) {                       // now and then, a new car turns up
+    carTimer = 2.5;
+    if (cars.length < 14) trySpawnCar();
+  }
+  for (const car of cars) {
+    const gx = Math.floor(car.x / cs), gy = Math.floor((car.y - TOPBAR) / cs);
+    const onMap = gx >= 0 && gy >= 0 && gx < COLS && gy < ROWS;
+    if (!onMap) { car.gone = true; continue; }        // drove off the map — bye!
+    if (grid[gy][gx] !== ROAD) { popCar(car); continue; }   // road vanished under it
+
+    // WHAT'S THE SQUARE IN FRONT?
+    const fx = gx + car.dx, fy = gy + car.dy;
+    const frontIsRoad = isRoad(fx, fy);
+    const frontOffMap = fx < 0 || fy < 0 || fx >= COLS || fy >= ROWS;
+
+    // Reasons to hold still: a red light at the junction ahead, or the
+    // back bumper of the car in front.
+    let stop = false;
+    if (frontIsRoad && roadJunc[fy][fx] && !roadJunc[gy][gx] && !greenFor(car.dx, car.dy)) {
+      stop = true;                                    // RED — wait at the line
+    }
+    if (!stop) {
+      for (const o of cars) {                         // don't rear-end anybody
+        if (o === car || o.gone) continue;
+        const relx = (o.x - car.x) * car.dx + (o.y - car.y) * car.dy;   // how far ahead
+        const side = Math.abs((o.x - car.x) * car.dy - (o.y - car.y) * car.dx);
+        if (relx > 0 && relx < cs * 0.95 && side < cs * 0.5) { stop = true; break; }
+      }
+    }
+
+    if (!stop) {
+      car.x += car.dx * car.speed * dt;
+      car.y += car.dy * car.speed * dt;
+    } else {
+      // creep up to the stop line and hold there
+      const lineX = gx * cs + cs / 2, lineY = TOPBAR + gy * cs + cs / 2;
+      if (car.dx > 0) car.x = Math.min(car.x, lineX + cs * 0.3);
+      if (car.dx < 0) car.x = Math.max(car.x, lineX - cs * 0.3);
+      if (car.dy > 0) car.y = Math.min(car.y, lineY + cs * 0.3);
+      if (car.dy < 0) car.y = Math.max(car.y, lineY - cs * 0.3);
+    }
+
+    // crossed into a new square? work out where to go next
+    const nx2 = Math.floor(car.x / cs), ny2 = Math.floor((car.y - TOPBAR) / cs);
+    if (nx2 !== gx || ny2 !== gy) {
+      if (nx2 < 0 || ny2 < 0 || nx2 >= COLS || ny2 >= ROWS) { car.gone = true; continue; }
+      // NO DRIVING THE WRONG WAY. If the square we just rolled into is a
+      // one-way going the other way, take a legal turn instead — and if
+      // there isn't one, this car's journey quietly ends here.
+      const into = laneDir(nx2, ny2);
+      if (into && (into.dx !== car.dx || into.dy !== car.dy)) {
+        const legal = [[car.dy, car.dx], [-car.dy, -car.dx]].filter(([tx, ty]) => {
+          if (!isRoad(nx2 + tx, ny2 + ty)) return false;
+          const d2 = laneDir(nx2 + tx, ny2 + ty);
+          return !d2 || (d2.dx === tx && d2.dy === ty);
+        });
+        if (legal.length && (into.dx === -car.dx && into.dy === -car.dy)) {
+          const t = legal[Math.floor(Math.random() * legal.length)];
+          car.x = gx * cs + cs / 2; car.y = TOPBAR + gy * cs + cs / 2;
+          car.dx = t[0]; car.dy = t[1];
+          continue;
+        }
+        if (into.dx === -car.dx && into.dy === -car.dy) { car.gone = true; continue; }
+      }
+      if (roadJunc[ny2][nx2] && Math.random() < 0.4) {
+        // at a junction, sometimes turn off — but only onto a road that
+        // actually runs the way we'd be going (no driving up a one-way!)
+        const options = [[car.dy, car.dx], [-car.dy, -car.dx]].filter(([tx, ty]) => {
+          if (!isRoad(nx2 + tx, ny2 + ty)) return false;
+          const d2 = laneDir(nx2 + tx, ny2 + ty);
+          return !d2 || (d2.dx === tx && d2.dy === ty);
+        });
+        if (options.length) {
+          const t = options[Math.floor(Math.random() * options.length)];
+          car.x = nx2 * cs + cs / 2; car.y = TOPBAR + ny2 * cs + cs / 2;
+          car.dx = t[0]; car.dy = t[1];
+        }
+      }
+    } else if (!frontIsRoad && !stop) {
+      // THE ROAD RUNS OUT AHEAD.
+      if (frontOffMap) {
+        // it goes right to the edge of the map — drive off and away
+      } else {
+        // a bend? follow it. Otherwise the car simply slips away rather
+        // than doing a U-turn on a one-way street.
+        const bends = [[car.dy, car.dx], [-car.dy, -car.dx]].filter(([tx, ty]) => {
+          if (!isRoad(gx + tx, gy + ty)) return false;
+          const d2 = laneDir(gx + tx, gy + ty);
+          return !d2 || (d2.dx === tx && d2.dy === ty);
+        });
+        const past = (car.x - (gx * cs + cs / 2)) * car.dx +
+                     (car.y - (TOPBAR + gy * cs + cs / 2)) * car.dy;
+        if (past >= 0) {
+          if (bends.length) {
+            const t = bends[Math.floor(Math.random() * bends.length)];
+            car.x = gx * cs + cs / 2; car.y = TOPBAR + gy * cs + cs / 2;
+            car.dx = t[0]; car.dy = t[1];
+          } else if (past > cs * 0.35) {
+            car.gone = true; continue;     // end of the line — quietly gone
+          }
+        }
+      }
+    }
+    // did a disaster catch it?
+    for (const D of disasters) {
+      if (D.type === 'tornado' && Math.hypot(D.x - car.x, D.y - car.y) < 60) popCar(car);
+      if (D.type === 'flood' && car.y > D.waterY + 6) popCar(car);
+      if (D.type === 'balls') {
+        for (const ball of D.balls) if (Math.hypot(ball.x - car.x, ball.y - car.y) < 28) popCar(car);
+      }
+      if (D.type === 'quake' && Math.random() < dt * 0.25) popCar(car);
+    }
+  }
+  cars = cars.filter(c => !c.gone);
+  for (const b of blasts) b.t += dt;            // fireballs bloom then fade
+  blasts = blasts.filter(b => b.t < b.life);
 
   // airborne folk tumble gracefully out of frame
   for (const f of launchedFolk) {
@@ -600,14 +1619,50 @@ function update(dt) {
 // DRAWING
 // ---------------------------------------------------------------------
 function draw() {
+  ensureRoads();                 // make sure our road notes match the map
   const shx = shake > 0 ? (Math.random() - 0.5) * 10 : 0;
   const shy = shake > 0 ? (Math.random() - 0.5) * 10 : 0;
   ctx.save();
   ctx.translate(shx, shy);
 
-  // grass everywhere
-  ctx.fillStyle = '#4a7c3a';
+  // THE CAMERA. Everything from here until ctx.restore() is drawn through
+  // the zoom lens. We clip to the play area first so zoomed-in scenery can
+  // never spill up over the toolbar, then slide (pan) and scale (zoom).
+  // At zoom 1 with no pan this is exactly the identity — nothing changes.
+  ctx.beginPath();
+  ctx.rect(0, TOPBAR, canvas.width, canvas.height - TOPBAR);
+  ctx.clip();
+
+  // FOG OF WAR — a misty slate fills the whole play area behind everything.
+  // The green town gets drawn on top, so fog shows around the town's edges
+  // (and a little more as you pan past them). Drawn in SCREEN space, before
+  // the camera transform, so it's a steady backdrop the town floats over.
+  ctx.fillStyle = '#2b333d';
   ctx.fillRect(0, TOPBAR, canvas.width, canvas.height - TOPBAR);
+  for (let i = 0; i < 12; i++) {                 // soft cloud blobs for a foggy look
+    const cxF = hash(i * 1.3) * canvas.width;
+    const cyF = TOPBAR + hash(i * 2.7) * (canvas.height - TOPBAR);
+    const rF = 50 + hash(i * 3.9) * 80;
+    ctx.fillStyle = `rgba(210, 220, 235, ${0.04 + hash(i * 5.1) * 0.05})`;
+    ctx.beginPath();
+    ctx.ellipse(cxF, cyF, rF, rF * 0.6, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.translate(panX, TOPBAR + panY);
+  ctx.scale(zoom, zoom);
+  ctx.translate(0, -TOPBAR);
+
+  // the town's grass — ONLY the grid area now (the rest stays fog), with a
+  // dark earth border and a bright rim so the town has clear, crisp edges.
+  const gw = gridW(), gh = gridH();
+  ctx.fillStyle = '#243318';
+  ctx.fillRect(-6, TOPBAR - 6, gw + 12, gh + 12);
+  ctx.fillStyle = '#4a7c3a';
+  ctx.fillRect(0, TOPBAR, gw, gh);
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.14)';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(1, TOPBAR + 1, gw - 2, gh - 2);
 
   // meteor craters, scarred into the lawn forever
   for (const c of craters) {
@@ -644,66 +1699,110 @@ function draw() {
     for (let gx = 0; gx < COLS; gx++) {
       const kind = grid[gy][gx];
       if (kind === EMPTY) continue;
+      // A big building is drawn ONCE, by its top-left square. The other
+      // squares it covers skip their turn.
+      const rt = rootAt[gy][gx];
+      if (rt && (rt.rx !== gx || rt.ry !== gy)) continue;
+      const sp = spanOf(kind);
       const x = gx * s, y = TOPBAR + gy * s;
-      if (kind === HOUSE) {
-        ctx.fillStyle = '#c9a06a';                      // walls
-        ctx.fillRect(x + s * 0.15, y + s * 0.4, s * 0.7, s * 0.5);
-        ctx.fillStyle = '#b5563c';                      // roof
+      const s2 = s * sp;                       // how big this building really is
+      // every block gets its own little quirk from its position, so the town
+      // looks hand-made instead of stamped out
+      const q = hash(gx * 7.3 + gy * 3.1);
+      // a soft shadow on the grass under everything that stands up
+      // (roads and paths lie flat, so they don't get one)
+      if (!isWay(kind)) {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.16)';
         ctx.beginPath();
-        ctx.moveTo(x + s * 0.08, y + s * 0.45);
-        ctx.lineTo(x + s * 0.5, y + s * 0.08);
-        ctx.lineTo(x + s * 0.92, y + s * 0.45);
+        ctx.ellipse(x + s2 * 0.5, y + s2 * 0.94, s2 * 0.36, s2 * 0.06, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      if (isWay(kind)) {
+        drawWay(gx, gy, x, y, s, kind);
+      } else if (kind === HOUSE) {
+        ctx.fillStyle = ['#c9a06a', '#d9b184', '#c08f5e'][Math.floor(q * 3)];  // walls
+        ctx.fillRect(x + s * 0.15, y + s * 0.4, s * 0.7, s * 0.5);
+        ctx.fillStyle = '#8fd0ff';                      // a cheerful little window
+        ctx.fillRect(x + s * 0.2, y + s * 0.5, s * 0.16, s * 0.14);
+        ctx.fillStyle = ['#b5563c', '#a8483f', '#c26a44'][Math.floor(q * 3)];  // roof
+        ctx.beginPath();
+        ctx.moveTo(x + s * 0.06, y + s * 0.46);
+        ctx.lineTo(x + s * 0.5, y + s * 0.06);
+        ctx.lineTo(x + s * 0.94, y + s * 0.46);
         ctx.closePath();
         ctx.fill();
+        ctx.fillStyle = '#8c6b4a';                      // chimney
+        ctx.fillRect(x + s * 0.68, y + s * 0.14, s * 0.11, s * 0.2);
+        ctx.fillStyle = 'rgba(230, 230, 235, 0.6)';     // a curl of smoke
+        ctx.beginPath();
+        ctx.arc(x + s * (0.735 + Math.sin(elapsed * 1.4 + q * 6) * 0.04),
+                y + s * 0.06, s * 0.055, 0, Math.PI * 2);
+        ctx.fill();
         ctx.fillStyle = '#5b3b1e';                      // door
-        ctx.fillRect(x + s * 0.42, y + s * 0.62, s * 0.16, s * 0.28);
+        ctx.fillRect(x + s * 0.44, y + s * 0.62, s * 0.16, s * 0.28);
+        ctx.fillStyle = '#ffd23f';                      // doorknob
+        ctx.fillRect(x + s * 0.57, y + s * 0.74, s * 0.03, s * 0.03);
       } else if (kind === TREE) {
         ctx.fillStyle = '#6d5330';                      // trunk
-        ctx.fillRect(x + s * 0.42, y + s * 0.55, s * 0.16, s * 0.35);
-        ctx.fillStyle = '#3f8a3f';                      // leaves
-        ctx.beginPath();
-        ctx.arc(x + s * 0.5, y + s * 0.38, s * 0.32, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.fillRect(x + s * 0.44, y + s * 0.55, s * 0.14, s * 0.35);
+        // three overlapping puffs of leaves, swaying in the breeze
+        const sway = Math.sin(elapsed * 1.1 + q * 6.28) * s * 0.03;
+        ctx.fillStyle = ['#3f8a3f', '#4d9c43', '#357a38'][Math.floor(q * 3)];
+        ctx.beginPath(); ctx.arc(x + s * 0.5 + sway, y + s * 0.34, s * 0.28, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(x + s * 0.32 + sway, y + s * 0.46, s * 0.19, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(x + s * 0.68 + sway, y + s * 0.46, s * 0.19, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.18)';    // sunlight on top
+        ctx.beginPath(); ctx.arc(x + s * 0.42 + sway, y + s * 0.26, s * 0.1, 0, Math.PI * 2); ctx.fill();
+        if (q > 0.72) {                                 // some trees have apples!
+          ctx.fillStyle = '#e8453c';
+          ctx.beginPath(); ctx.arc(x + s * 0.62 + sway, y + s * 0.38, s * 0.05, 0, Math.PI * 2); ctx.fill();
+        }
       } else if (kind === STONE) {
-        ctx.fillStyle = '#8a8d94';
-        ctx.fillRect(x + s * 0.08, y + s * 0.12, s * 0.84, s * 0.8);
-        ctx.fillStyle = '#a7aab2';
-        ctx.fillRect(x + s * 0.08, y + s * 0.12, s * 0.84, s * 0.2);
+        ctx.fillStyle = '#8a8d94';                      // a lumpy boulder
+        ctx.beginPath();
+        ctx.moveTo(x + s * 0.1,  y + s * 0.88);
+        ctx.lineTo(x + s * 0.16, y + s * 0.34);
+        ctx.lineTo(x + s * 0.44, y + s * 0.14);
+        ctx.lineTo(x + s * 0.8,  y + s * 0.26);
+        ctx.lineTo(x + s * 0.9,  y + s * 0.88);
+        ctx.closePath(); ctx.fill();
+        ctx.fillStyle = '#a7aab2';                      // light catching the top
+        ctx.beginPath();
+        ctx.moveTo(x + s * 0.16, y + s * 0.34);
+        ctx.lineTo(x + s * 0.44, y + s * 0.14);
+        ctx.lineTo(x + s * 0.8,  y + s * 0.26);
+        ctx.lineTo(x + s * 0.6,  y + s * 0.4);
+        ctx.closePath(); ctx.fill();
+        ctx.fillStyle = 'rgba(60, 62, 68, 0.55)';       // speckles
+        ctx.fillRect(x + s * 0.3, y + s * 0.58, s * 0.09, s * 0.07);
+        ctx.fillRect(x + s * 0.62, y + s * 0.68, s * 0.07, s * 0.06);
       } else if (kind === APT) {
+        // A PROPER TOWER BLOCK, four squares of it. Drawn against s2 (the
+        // whole 2x2 footprint) rather than one square.
         ctx.fillStyle = '#5a6a7a';                      // the tall tower
-        ctx.fillRect(x + s * 0.12, y + s * 0.06, s * 0.76, s * 0.86);
+        ctx.fillRect(x + s2 * 0.1, y + s2 * 0.08, s2 * 0.8, s2 * 0.84);
+        ctx.fillStyle = '#4c5a68';                      // a shaded side, for depth
+        ctx.fillRect(x + s2 * 0.72, y + s2 * 0.08, s2 * 0.18, s2 * 0.84);
         ctx.fillStyle = '#7a8a9a';                      // roof ledge
-        ctx.fillRect(x + s * 0.12, y + s * 0.06, s * 0.76, s * 0.1);
-        ctx.fillStyle = '#ffd23f';                      // lit windows
-        for (let wy2 = 0; wy2 < 3; wy2++) {
-          for (let wx2 = 0; wx2 < 2; wx2++) {
-            ctx.fillRect(x + s * (0.24 + wx2 * 0.3), y + s * (0.24 + wy2 * 0.22),
-                         s * 0.16, s * 0.13);
+        ctx.fillRect(x + s2 * 0.06, y + s2 * 0.08, s2 * 0.88, s2 * 0.07);
+        ctx.fillStyle = '#93a3b3';                      // rooftop water tank
+        ctx.fillRect(x + s2 * 0.62, y + s2 * 0.005, s2 * 0.13, s2 * 0.075);
+        ctx.fillStyle = '#6a7a8a';                      // and a little aerial
+        ctx.fillRect(x + s2 * 0.26, y - s2 * 0.03, s2 * 0.02, s2 * 0.11);
+        // six floors of windows — a few dark, because some people are out
+        for (let wy2 = 0; wy2 < 6; wy2++) {
+          for (let wx2 = 0; wx2 < 3; wx2++) {
+            const lit = hash(gx * 11 + gy * 5 + wy2 * 3.3 + wx2 * 1.7) > 0.3;
+            ctx.fillStyle = lit ? '#ffd23f' : '#33414e';
+            ctx.fillRect(x + s2 * (0.17 + wx2 * 0.21), y + s2 * (0.2 + wy2 * 0.115),
+                         s2 * 0.13, s2 * 0.075);
           }
         }
-      } else if (kind === SKY) {
-        // a SKYSCRAPER — so tall it pokes out the top of its square
-        ctx.fillStyle = '#4a7a9a';
-        ctx.fillRect(x + s * 0.14, y - s * 0.55, s * 0.72, s * 1.47);
-        ctx.fillStyle = '#6a9aba';                      // roofline
-        ctx.fillRect(x + s * 0.14, y - s * 0.55, s * 0.72, s * 0.12);
-        ctx.fillStyle = '#ffd23f';                      // five floors of lit windows
-        for (let wy2 = 0; wy2 < 5; wy2++) {
-          for (let wx2 = 0; wx2 < 2; wx2++) {
-            ctx.fillRect(x + s * (0.26 + wx2 * 0.28), y - s * 0.4 + wy2 * s * 0.28,
-                         s * 0.14, s * 0.14);
-          }
-        }
-      } else if (kind === TOWER) {
-        // a castle TOWER with battlements, looming over its square
-        ctx.fillStyle = '#9aa0a8';
-        ctx.fillRect(x + s * 0.18, y - s * 0.35, s * 0.64, s * 1.27);
-        ctx.fillStyle = '#b8bec6';                      // the battlements
-        for (let b2 = 0; b2 < 3; b2++) {
-          ctx.fillRect(x + s * (0.18 + b2 * 0.24), y - s * 0.47, s * 0.16, s * 0.14);
-        }
-        ctx.fillStyle = '#5a6068';                      // arrow-slit window
-        ctx.fillRect(x + s * 0.44, y - s * 0.1, s * 0.12, s * 0.3);
+        ctx.fillStyle = '#33414e';                      // front doors
+        ctx.fillRect(x + s2 * 0.42, y + s2 * 0.8, s2 * 0.16, s2 * 0.12);
+        ctx.fillStyle = '#ffd23f';                      // a light over the door
+        ctx.fillRect(x + s2 * 0.46, y + s2 * 0.76, s2 * 0.08, s2 * 0.025);
       } else if (kind === BUNKER) {
         ctx.fillStyle = '#4a5548';                      // squat armored dome
         ctx.beginPath();
@@ -712,10 +1811,132 @@ function draw() {
         ctx.fillRect(x + s * 0.1, y + s * 0.72, s * 0.8, s * 0.2);
         ctx.fillStyle = '#6a7a66';                      // top rim
         ctx.fillRect(x + s * 0.1, y + s * 0.72, s * 0.8, s * 0.06);
+        ctx.fillStyle = 'rgba(255,255,255,0.14)';       // shine on the dome
+        ctx.beginPath();
+        ctx.ellipse(x + s * 0.36, y + s * 0.52, s * 0.12, s * 0.06, -0.5, 0, Math.PI * 2);
+        ctx.fill();
         ctx.fillStyle = '#2c332b';                      // the sealed door
         ctx.fillRect(x + s * 0.4, y + s * 0.6, s * 0.2, s * 0.32);
+        ctx.fillStyle = '#8fd0ff';                      // tiny porthole
+        ctx.beginPath(); ctx.arc(x + s * 0.5, y + s * 0.68, s * 0.05, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#c8d4c4';                      // bolts
+        ctx.fillRect(x + s * 0.16, y + s * 0.8, s * 0.05, s * 0.05);
+        ctx.fillRect(x + s * 0.79, y + s * 0.8, s * 0.05, s * 0.05);
+      }
+
+      // ---- BATTLE SCARS ----
+      // Lightly damaged: a couple of cracks and a scorch. Heavily damaged:
+      // deep cracks, a bite taken out of the top, and a wisp of smoke.
+      const dmg = damage[gy][gx];
+      if (dmg > PRISTINE) {
+        ctx.strokeStyle = dmg === HEAVY ? 'rgba(20,14,10,0.75)' : 'rgba(30,22,16,0.5)';
+        ctx.lineWidth = Math.max(1, s2 * (dmg === HEAVY ? 0.05 : 0.035));
+        ctx.beginPath();                                 // a jagged crack
+        ctx.moveTo(x + s2 * 0.32, y + s2 * 0.9);
+        ctx.lineTo(x + s2 * 0.42, y + s2 * 0.62);
+        ctx.lineTo(x + s2 * 0.34, y + s2 * 0.5);
+        ctx.stroke();
+        if (dmg === HEAVY) {
+          ctx.beginPath();                               // a second, worse one
+          ctx.moveTo(x + s2 * 0.72, y + s2 * 0.9);
+          ctx.lineTo(x + s2 * 0.62, y + s2 * 0.58);
+          ctx.lineTo(x + s2 * 0.74, y + s2 * 0.38);
+          ctx.stroke();
+          ctx.fillStyle = '#4a7c3a';                     // a chunk missing off the top
+          ctx.beginPath();
+          ctx.moveTo(x + s2 * 0.5, y + s2 * 0.06);
+          ctx.lineTo(x + s2 * 0.95, y + s2 * 0.1);
+          ctx.lineTo(x + s2 * 0.95, y + s2 * 0.34);
+          ctx.closePath(); ctx.fill();
+          // a lazy wisp of smoke
+          ctx.fillStyle = 'rgba(60, 60, 66, 0.35)';
+          ctx.beginPath();
+          ctx.arc(x + s2 * (0.7 + Math.sin(elapsed * 1.7 + gx) * 0.06),
+                  y + s2 * (0.16 - (elapsed * 0.15 + gy * 0.3) % 0.3),
+                  s2 * 0.09, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.fillStyle = dmg === HEAVY ? 'rgba(0,0,0,0.22)' : 'rgba(0,0,0,0.1)';
+        ctx.fillRect(x, y, s2, s2);                      // soot over the whole building
       }
     }
+  }
+
+  // ---- TRAFFIC LIGHTS at every junction ----
+  {
+    const ph = lightPhase();
+    for (let gy = 0; gy < ROWS; gy++) {
+      for (let gx = 0; gx < COLS; gx++) {
+        if (!roadJunc[gy][gx]) continue;
+        const lx = gx * s + s * 0.86, ly = TOPBAR + gy * s + s * 0.06;
+        const bw = s * 0.16, bh = s * 0.3;
+        ctx.fillStyle = '#1b1f24';                      // the little light box
+        rrect(lx - bw / 2, ly, bw, bh, s * 0.05); ctx.fill();
+        // two lamps: the top one is for up/down, the bottom for left/right
+        ctx.fillStyle = ph.ns ? '#4ade6a' : '#3a2222';
+        ctx.beginPath(); ctx.arc(lx, ly + bh * 0.28, s * 0.045, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = ph.ew ? '#4ade6a' : '#3a2222';
+        ctx.beginPath(); ctx.arc(lx, ly + bh * 0.72, s * 0.045, 0, Math.PI * 2); ctx.fill();
+        if (!ph.ns && !ph.ew) {                          // the everybody-stop moment
+          ctx.fillStyle = '#f2b33d';
+          ctx.beginPath(); ctx.arc(lx, ly + bh * 0.5, s * 0.04, 0, Math.PI * 2); ctx.fill();
+        }
+      }
+    }
+  }
+
+  // ---- CARS, trundling along the roads ----
+  for (const car of cars) {
+    const u = s / 26;
+    const horiz = car.dx !== 0;
+    const L = 15 * u, Wd = 9 * u;                 // length and width
+    const cw = horiz ? L : Wd, ch = horiz ? Wd : L;
+    ctx.fillStyle = 'rgba(0,0,0,0.22)';           // shadow under the car
+    ctx.beginPath();
+    ctx.ellipse(car.x, car.y + 2 * u, cw * 0.5, ch * 0.35, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = car.color;                    // the body
+    rrect(car.x - cw / 2, car.y - ch / 2, cw, ch, 2.5 * u); ctx.fill();
+    ctx.fillStyle = 'rgba(180, 225, 255, 0.85)';  // windscreen, up at the front
+    if (horiz) ctx.fillRect(car.x + car.dx * 1.5 * u - 2 * u, car.y - ch / 2 + 1.4 * u, 4 * u, ch - 2.8 * u);
+    else       ctx.fillRect(car.x - cw / 2 + 1.4 * u, car.y + car.dy * 1.5 * u - 2 * u, cw - 2.8 * u, 4 * u);
+    ctx.fillStyle = '#ffe9a8';                    // headlights
+    if (horiz) ctx.fillRect(car.x + car.dx * (L / 2 - 1.4 * u) - 0.7 * u, car.y - ch / 2 + 1 * u, 1.6 * u, ch - 2 * u);
+    else       ctx.fillRect(car.x - cw / 2 + 1 * u, car.y + car.dy * (L / 2 - 1.4 * u) - 0.7 * u, cw - 2 * u, 1.6 * u);
+  }
+
+  // ---- CAR FIREBALLS: a hot core, a flame ring, then a puff of smoke ----
+  for (const b of blasts) {
+    const f = b.t / b.life;                      // 0 at the bang, 1 at the end
+    const r = b.r * (0.45 + f * 0.85);
+    ctx.globalAlpha = 1 - f;
+    ctx.fillStyle = '#ff7a1a';                   // orange flame ball
+    ctx.beginPath(); ctx.arc(b.x, b.y, r, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#ffd23f';                   // white-hot centre
+    ctx.beginPath(); ctx.arc(b.x, b.y, r * 0.55, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#fff3c4';
+    ctx.beginPath(); ctx.arc(b.x, b.y, r * 0.24, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = (1 - f) * 0.5;             // smoke curling off the top
+    ctx.fillStyle = '#5a5a62';
+    ctx.beginPath(); ctx.arc(b.x, b.y - r * 0.8 - f * b.r, r * 0.5, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  // A little green progress bar over whatever building is being repaired,
+  // so you can see the work happening.
+  for (const p of people) {
+    if (!p.fixing || !p.job) continue;
+    const bs = s * spanOf(grid[p.job.gy][p.job.gx]);   // span the whole building
+    const bx2 = p.job.gx * s, by2 = TOPBAR + p.job.gy * s;
+    const frac = Math.max(0, Math.min(1, p.jobT / REPAIR_TIME));
+    ctx.fillStyle = 'rgba(10, 14, 20, 0.75)';
+    ctx.fillRect(bx2 + bs * 0.12, by2 - s * 0.16, bs * 0.76, s * 0.1);
+    ctx.fillStyle = '#7ddf8f';
+    ctx.fillRect(bx2 + bs * 0.13, by2 - s * 0.15, bs * 0.74 * frac, s * 0.08);
+    ctx.fillStyle = '#ffe9a8';                       // a tiny wrench, to say "under repair"
+    ctx.font = `bold ${Math.max(7, s * 0.3)}px monospace`;
+    ctx.textAlign = 'center';
+    ctx.fillText('🔧', bx2 + bs * 0.5, by2 - s * 0.22);
   }
 
   // tiny heads peeking out of every occupied shelter
@@ -729,49 +1950,178 @@ function draw() {
   for (const k in peek) {
     const parts = k.split(',');
     const px2 = parts[0] * s, py2 = TOPBAR + parts[1] * s;
-    for (let i = 0; i < Math.min(4, peek[k]); i++) {
+    for (let i = 0; i < Math.min(3, peek[k]); i++) {
       ctx.fillStyle = '#f2c79b';
       ctx.beginPath();
-      ctx.arc(px2 + s * (0.22 + i * 0.19), py2 + s * 0.88, 2.5, 0, Math.PI * 2);
+      ctx.arc(px2 + s * (0.3 + i * 0.2), py2 + s * 0.88, s * 0.08, 0, Math.PI * 2);
       ctx.fill();
     }
-    if (peek[k] > 4) {                       // packed building — show the count
-      ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 10px monospace';
-      ctx.textAlign = 'center';
-      ctx.fillText('x' + peek[k], px2 + s * 0.5, py2 + s * 0.78);
-    }
   }
 
-  // the little people, bless them (the hiding ones are indoors, unseen)
+  // The critters, bless them (the hiding ones are indoors, unseen).
+  // Everyone is drawn relative to `u` — one grid square — so they stay the
+  // right size next to the houses however big the squares are.
+  //
+  // When the sky is calm they're HAPPY: bouncing, smiling, humming little
+  // notes. The moment doom is on the way they're TERRIFIED: eyes like
+  // dinner plates, arms in the air, wobbling. Everyone pulls a slightly
+  // different face, so a crowd doesn't look like clones.
+  const doom = disasters.length > 0 || pendings.length > 0;
+  const HAPPY_EMOTE = ['♪', '♥', '☺'];
+  const PANIC_EMOTE = ['!!', '?!', 'AAA'];
+
   for (const p of people) {
     if (p.sheltering) continue;
-    const step = Math.sin(p.walk) * 2;
-    ctx.fillStyle = '#333';                          // busy little legs
-    ctx.fillRect(p.x - 3, p.y - 2 + step, 2, 5 - step);
-    ctx.fillRect(p.x + 1, p.y - 2 - step, 2, 5 + step);
-    ctx.fillStyle = p.shirt;                         // shirt
-    ctx.fillRect(p.x - 4, p.y - 10, 8, 9);
-    ctx.fillStyle = '#f2c79b';                       // head
-    ctx.beginPath(); ctx.arc(p.x, p.y - 13, 3.5, 0, Math.PI * 2); ctx.fill();
-    if (disasters.length > 0) {                      // screaming, obviously
-      ctx.fillStyle = '#ff4757';
-      ctx.font = 'bold 10px monospace';
-      ctx.textAlign = 'center';
-      ctx.fillText('!!', p.x, p.y - 20);
+    const u = s / 26;                                // one "unit" scaled to the square
+    const step = p.fixing ? 0 : Math.sin(p.walk) * 2 * u;   // planted feet while working
+    const facing = Math.cos(p.angle) < 0 ? -1 : 1;   // which way are they pointed?
+    const hop = p.fixing ? 0
+              : doom ? Math.abs(Math.sin(p.bob)) * 2.5 * u   // panicked jitter
+                     : Math.sin(p.bob) * 1.2 * u;            // happy sway
+    const eyeW = doom ? 2.3 * u : 1.1 * u;           // eyes go WIDE when scared
+
+    ctx.save();
+    ctx.translate(0, -hop);                          // bounce the whole critter
+
+    if (p.kind === 'cow') {
+      ctx.fillStyle = '#3b2f2a';                     // stumpy legs
+      ctx.fillRect(p.x - 7 * u, p.y - 1 * u + step, 2.4 * u, 6 * u - step);
+      ctx.fillRect(p.x + 4.6 * u, p.y - 1 * u - step, 2.4 * u, 6 * u + step);
+      ctx.strokeStyle = '#f4f4f2'; ctx.lineWidth = 1.6 * u;   // tail with a tuft
+      ctx.beginPath();
+      ctx.moveTo(p.x - facing * 9 * u, p.y - 8 * u);
+      ctx.lineTo(p.x - facing * 11.5 * u, p.y - 4 * u + Math.sin(p.walk) * 1.5 * u);
+      ctx.stroke();
+      ctx.fillStyle = '#f4f4f2';                     // big white body
+      rrect(p.x - 9 * u, p.y - 10 * u, 18 * u, 10 * u, 4 * u); ctx.fill();
+      ctx.fillStyle = '#2f2a28';                     // cow patches
+      ctx.beginPath(); ctx.ellipse(p.x - 4 * u, p.y - 7 * u, 3.2 * u, 2.4 * u, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(p.x + 3 * u, p.y - 4.5 * u, 2.6 * u, 2 * u, 0, 0, Math.PI * 2); ctx.fill();
+      const hx = p.x + facing * 9 * u;               // head out front
+      ctx.fillStyle = '#f4f4f2';
+      rrect(hx - 3.4 * u, p.y - 14 * u, 6.8 * u, 7 * u, 2.5 * u); ctx.fill();
+      ctx.fillStyle = '#2f2a28';                     // little horns
+      ctx.fillRect(hx - 3 * u, p.y - 15.5 * u, 1.4 * u, 2 * u);
+      ctx.fillRect(hx + 1.6 * u, p.y - 15.5 * u, 1.4 * u, 2 * u);
+      ctx.fillStyle = '#f0a5b8';                     // pink snout
+      rrect(hx - 2.4 * u, p.y - 9.5 * u, 4.8 * u, 3 * u, 1.4 * u); ctx.fill();
+      ctx.fillStyle = '#000';                        // eyes
+      ctx.beginPath(); ctx.arc(hx - 1.6 * u, p.y - 11.6 * u, eyeW * 0.8, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(hx + 1.6 * u, p.y - 11.6 * u, eyeW * 0.8, 0, Math.PI * 2); ctx.fill();
+      if (!doom) {                                   // chewing, always chewing
+        ctx.strokeStyle = '#7cb342'; ctx.lineWidth = 1.2 * u;
+        ctx.beginPath();
+        ctx.moveTo(hx + facing * 2.5 * u, p.y - 8 * u);
+        ctx.lineTo(hx + facing * 5 * u, p.y - 9.5 * u + Math.sin(p.walk * 3) * u);
+        ctx.stroke();
+      }
+    } else if (p.kind === 'dog') {
+      ctx.fillStyle = '#6b4b2a';                     // little legs
+      ctx.fillRect(p.x - 5 * u, p.y - 1 * u + step, 2 * u, 5 * u - step);
+      ctx.fillRect(p.x + 3 * u, p.y - 1 * u - step, 2 * u, 5 * u + step);
+      ctx.strokeStyle = '#8a5c33'; ctx.lineWidth = 2 * u;    // tail: wags happy, tucks scared
+      ctx.beginPath();
+      ctx.moveTo(p.x - facing * 6.5 * u, p.y - 7 * u);
+      if (doom) ctx.lineTo(p.x - facing * 8 * u, p.y - 2 * u);
+      else ctx.lineTo(p.x - facing * 10 * u, p.y - 11 * u + Math.sin(p.walk * 3) * 3 * u);
+      ctx.stroke();
+      ctx.fillStyle = '#8a5c33';                     // body
+      rrect(p.x - 6.5 * u, p.y - 8 * u, 13 * u, 7 * u, 3 * u); ctx.fill();
+      const hx = p.x + facing * 7 * u;               // head
+      ctx.beginPath(); ctx.arc(hx, p.y - 10.5 * u, 3.8 * u, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#5e3d20';                     // floppy ear
+      ctx.beginPath();
+      ctx.ellipse(hx - facing * 2 * u, p.y - 12.5 * u, 1.7 * u, 3 * u, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#3b2a18';                     // snout
+      ctx.beginPath(); ctx.arc(hx + facing * 3 * u, p.y - 9.6 * u, 1.5 * u, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#000';                        // eye
+      ctx.beginPath(); ctx.arc(hx + facing * 1 * u, p.y - 11.4 * u, eyeW * 0.8, 0, Math.PI * 2); ctx.fill();
+      if (!doom) {                                   // happy lolling tongue
+        ctx.fillStyle = '#ff8fa3';
+        ctx.fillRect(hx + facing * 2.4 * u, p.y - 8.6 * u, 1.6 * u, 2.6 * u);
+      }
+    } else {
+      ctx.fillStyle = '#333';                        // busy little legs
+      ctx.fillRect(p.x - 3 * u, p.y - 2 * u + step, 2 * u, 5 * u - step);
+      ctx.fillRect(p.x + 1 * u, p.y - 2 * u - step, 2 * u, 5 * u + step);
+      ctx.fillStyle = p.shirt;                       // shirt
+      rrect(p.x - 4 * u, p.y - 10 * u, 8 * u, 9 * u, 1.6 * u); ctx.fill();
+      // ARMS: straight up in a panic, hammering when fixing, else swinging
+      ctx.strokeStyle = '#f2c79b'; ctx.lineWidth = 1.8 * u;
+      ctx.beginPath();
+      if (doom) {
+        ctx.moveTo(p.x - 4 * u, p.y - 9 * u); ctx.lineTo(p.x - 6.5 * u, p.y - 15 * u);
+        ctx.moveTo(p.x + 4 * u, p.y - 9 * u); ctx.lineTo(p.x + 6.5 * u, p.y - 15 * u);
+      } else if (p.fixing) {
+        // Hammer on whichever side the building is — so a worker on the
+        // right of a house swings to their LEFT, and vice versa.
+        const k = p.workSide || 1;
+        const sw = Math.abs(Math.sin(p.hammer || 0));  // the swing, 0=down 1=up
+        const hy2 = p.y - 9 * u - sw * 7 * u;
+        ctx.moveTo(p.x + k * 4 * u, p.y - 9 * u); ctx.lineTo(p.x + k * 7 * u, hy2);
+        ctx.moveTo(p.x - k * 4 * u, p.y - 9 * u); ctx.lineTo(p.x - k * 6 * u, p.y - 6 * u);
+        ctx.stroke();
+        ctx.strokeStyle = '#6d5330'; ctx.lineWidth = 1.4 * u;   // hammer handle
+        ctx.beginPath();
+        ctx.moveTo(p.x + k * 7 * u, hy2); ctx.lineTo(p.x + k * 9.5 * u, hy2 - 3 * u);
+        ctx.stroke();
+        ctx.fillStyle = '#9aa3ad';                              // hammer head
+        ctx.fillRect(p.x + k * 8.6 * u - (k < 0 ? 3.4 * u : 0), hy2 - 5 * u, 3.4 * u, 2.4 * u);
+        if (sw < 0.15) {                                        // CLANK! sparks
+          ctx.fillStyle = '#ffe9a8';
+          ctx.font = `bold ${Math.max(7, 8 * u)}px monospace`;
+          ctx.textAlign = k > 0 ? 'left' : 'right';
+          ctx.fillText('✦', p.x + k * 10 * u, hy2 - 5 * u);
+        }
+        ctx.beginPath();                             // (restart path for the stroke below)
+      } else {
+        ctx.moveTo(p.x - 4 * u, p.y - 9 * u); ctx.lineTo(p.x - 6 * u, p.y - 5 * u + step);
+        ctx.moveTo(p.x + 4 * u, p.y - 9 * u); ctx.lineTo(p.x + 6 * u, p.y - 5 * u - step);
+      }
+      ctx.strokeStyle = '#f2c79b'; ctx.lineWidth = 1.8 * u;
+      ctx.stroke();
+      const hy = p.y - 13.5 * u;                     // head
+      ctx.fillStyle = '#f2c79b';
+      ctx.beginPath(); ctx.arc(p.x, hy, 3.8 * u, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#000';                        // eyes
+      ctx.beginPath(); ctx.arc(p.x - 1.5 * u, hy - 0.5 * u, eyeW * 0.7, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(p.x + 1.5 * u, hy - 0.5 * u, eyeW * 0.7, 0, Math.PI * 2); ctx.fill();
+      if (doom) {                                    // a big round screaming mouth
+        ctx.fillStyle = '#7a2230';
+        ctx.beginPath(); ctx.ellipse(p.x, hy + 1.8 * u, 1.3 * u, 1.7 * u, 0, 0, Math.PI * 2); ctx.fill();
+      } else {                                       // a little smile + rosy cheeks
+        ctx.strokeStyle = '#7a4a2a'; ctx.lineWidth = 0.9 * u;
+        ctx.beginPath(); ctx.arc(p.x, hy + 0.6 * u, 1.9 * u, 0.25 * Math.PI, 0.75 * Math.PI); ctx.stroke();
+        ctx.fillStyle = 'rgba(255, 140, 140, 0.55)';
+        ctx.beginPath(); ctx.arc(p.x - 3 * u, hy + 1 * u, 1 * u, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(p.x + 3 * u, hy + 1 * u, 1 * u, 0, Math.PI * 2); ctx.fill();
+      }
     }
+
+    // the little floating emote above their head
+    ctx.font = `bold ${Math.max(7, 9 * u)}px monospace`;
+    ctx.textAlign = 'center';
+    if (doom) {
+      ctx.fillStyle = '#ff4757';
+      ctx.fillText(PANIC_EMOTE[p.fear], p.x, p.y - 19 * u + Math.sin(p.bob * 2) * u);
+    } else if (Math.sin(p.bob * 0.5 + p.mood) > 0.72) {   // only now and then
+      ctx.fillStyle = '#ffe9a8';
+      ctx.fillText(HAPPY_EMOTE[p.mood], p.x + 5 * u, p.y - 18 * u);
+    }
+    ctx.restore();
   }
 
-  // people currently airborne (they're fine. probably.)
+  // folk currently airborne (they're fine. probably.) — same scale as on foot
   for (const f of launchedFolk) {
+    const u = s / 26;
     ctx.save();
     ctx.translate(f.x, f.y);
     ctx.rotate(f.spin);
     ctx.globalAlpha = Math.max(0, Math.min(1, f.life));
     ctx.fillStyle = f.shirt;
-    ctx.fillRect(-4, -6, 8, 9);
+    ctx.fillRect(-4 * u, -6 * u, 8 * u, 9 * u);
     ctx.fillStyle = '#f2c79b';
-    ctx.beginPath(); ctx.arc(0, -9, 3.5, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(0, -9 * u, 3.5 * u, 0, Math.PI * 2); ctx.fill();
     ctx.restore();
   }
   ctx.globalAlpha = 1;
@@ -829,8 +2179,8 @@ function draw() {
       ctx.strokeStyle = 'rgba(20, 14, 8, 0.6)';
       ctx.lineWidth = 4;
       for (let c = 0; c < 6; c++) {
-        let cx2 = rnd(c * 3.3) * canvas.width;
-        let cy2 = TOPBAR + rnd(c * 7.7) * (canvas.height - TOPBAR) * 0.3;
+        let cx2 = rnd(c * 3.3) * gridW();
+        let cy2 = TOPBAR + rnd(c * 7.7) * gridH() * 0.3;
         ctx.beginPath();
         ctx.moveTo(cx2, cy2);
         for (let seg = 0; seg < 8; seg++) {
@@ -843,21 +2193,22 @@ function draw() {
     }
 
     if (D.type === 'flood') {
-      // the rising water, with a wavy crest
+      // the rising water, with a wavy crest — only over the town
+      const fw = gridW(), fb = TOPBAR + gridH();
       ctx.fillStyle = 'rgba(60, 130, 200, 0.55)';
       ctx.beginPath();
       ctx.moveTo(0, D.waterY);
-      for (let wx2 = 0; wx2 <= canvas.width; wx2 += 30) {
+      for (let wx2 = 0; wx2 <= fw; wx2 += 30) {
         ctx.lineTo(wx2, D.waterY + Math.sin(elapsed * 3 + wx2 * 0.02) * 6);
       }
-      ctx.lineTo(canvas.width, canvas.height);
-      ctx.lineTo(0, canvas.height);
+      ctx.lineTo(fw, fb);
+      ctx.lineTo(0, fb);
       ctx.closePath();
       ctx.fill();
       ctx.strokeStyle = 'rgba(200, 230, 255, 0.6)';
       ctx.lineWidth = 3;
       ctx.beginPath();
-      for (let wx2 = 0; wx2 <= canvas.width; wx2 += 30) {
+      for (let wx2 = 0; wx2 <= fw; wx2 += 30) {
         const wy2 = D.waterY + Math.sin(elapsed * 3 + wx2 * 0.02) * 6;
         if (wx2 === 0) ctx.moveTo(wx2, wy2); else ctx.lineTo(wx2, wy2);
       }
@@ -884,76 +2235,136 @@ function draw() {
 
   ctx.restore();   // stop shaking for the buttons — the UI stays calm
 
-  // the top bar
+  // the top bar background (two rows)
   ctx.fillStyle = '#10161d';
   ctx.fillRect(0, 0, canvas.width, TOPBAR);
-  for (const r of buttonRects()) {
-    const active = !r.machine && selected === r.type;
-    ctx.fillStyle = r.machine ? '#7a1f2b' : active ? '#3d6b30' : '#26303b';
-    ctx.fillRect(r.x, r.y, r.w, r.h);
-    ctx.strokeStyle = r.machine ? '#ff6b5e' : active ? '#7ddf8f' : '#3a4654';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(r.x, r.y, r.w, r.h);
-    ctx.fillStyle = '#ffffff';
-    ctx.font = `bold ${r.machine ? 18 : 15}px monospace`;
-    ctx.textAlign = 'center';
-    ctx.fillText(r.label, r.x + r.w / 2, r.y + r.h / 2 + 6);
+
+  // --- ROW 1: the money chip, just right of the ← Arcade pill ---
+  const money = moneyChipRect();
+  const flashing = (brokeFlash > 0 && Math.sin(brokeFlash * 30) > 0);
+  ctx.fillStyle = '#1c2530';
+  rrect(money.x, money.y, money.w, money.h, 8); ctx.fill();
+  ctx.strokeStyle = flashing ? '#ff5046' : '#3a4654'; ctx.lineWidth = 2;
+  rrect(money.x, money.y, money.w, money.h, 8); ctx.stroke();
+  ctx.fillStyle = flashing ? '#ff5046' : '#ffd23f';
+  ctx.font = 'bold 15px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(`💰 ${moneys}`, money.x + money.w / 2, money.y + money.h / 2 + 5);
+
+  // --- the FULLSCREEN button, top-right: four little corner brackets ---
+  const fb = fullBtnRect();
+  ctx.fillStyle = '#1c2530';
+  rrect(fb.x, fb.y, fb.w, fb.h, 8); ctx.fill();
+  ctx.strokeStyle = '#3a4654'; ctx.lineWidth = 2;
+  rrect(fb.x, fb.y, fb.w, fb.h, 8); ctx.stroke();
+  ctx.strokeStyle = '#cfe3ff'; ctx.lineWidth = 2;
+  const fcx = fb.x + fb.w / 2, fcy = fb.y + fb.h / 2;
+  const out = isFullscreen() ? -1 : 1;      // arrows point in when already fullscreen
+  for (const [sx, sy] of [[-1,-1],[1,-1],[-1,1],[1,1]]) {
+    const ax = fcx + sx * 8, ay = fcy + sy * 7;
+    ctx.beginPath();
+    ctx.moveTo(ax - sx * out * 5, ay);
+    ctx.lineTo(ax, ay);
+    ctx.lineTo(ax, ay - sy * out * 5);
+    ctx.stroke();
   }
 
-  // THE MACHINE's menu of doom, when open
-  if (machineOpen) {
-    for (const r of machineRects()) {
-      const canAfford = moneys >= r.cost;
-      ctx.fillStyle = canAfford ? '#7a1f2b' : '#2c2126';   // grayed out = too broke
-      ctx.fillRect(r.x, r.y, r.w, r.h);
-      ctx.strokeStyle = canAfford ? '#ff6b5e' : '#5a4a4e';
+  // --- ROW 2: the three drop-down buttons: Build, Disasters, People ---
+  const palette = {
+    build:     { bg: '#24343a', border: '#4f9d6b' },
+    disasters: { bg: '#7a1f2b', border: '#ff6b5e' },
+    people:    { bg: '#26473b', border: '#7ddf8f' },
+  };
+  for (const b of topButtons()) {
+    const col = palette[b.key];
+    const open = openMenu === b.key;
+    ctx.fillStyle = open ? col.border : col.bg;
+    rrect(b.x, b.y, b.w, b.h, 9); ctx.fill();
+    ctx.strokeStyle = col.border; ctx.lineWidth = 2;
+    rrect(b.x, b.y, b.w, b.h, 9); ctx.stroke();
+    ctx.fillStyle = open ? '#10161d' : '#ffffff';
+    ctx.textAlign = 'center';
+    // full label if it fits; otherwise shrink, and only drop the word as a
+    // last resort on a really tiny screen
+    let cap = b.icon + ' ' + b.word + (b.menu ? ' ▾' : '');
+    let fs = fitFont(cap, b.w - 14, 16, 11);
+    if (ctx.measureText(cap).width > b.w - 14) {
+      cap = b.icon + (b.menu ? ' ▾' : '');
+      fs = fitFont(cap, b.w - 14, 16, 10);
+    }
+    ctx.fillText(cap, b.x + b.w / 2, b.y + b.h / 2 + fs * 0.35);
+  }
+
+  // --- the open drop-down list, if any ---
+  if (openMenu) {
+    const costly = openMenu === 'disasters';         // only disasters have a price
+    for (const r of menuRects(openMenu)) {
+      const canAfford = !costly || moneys >= r.cost;
+      const chosen = openMenu === 'build' && selected === r.type;
+      ctx.fillStyle = chosen ? '#3d6b30' : canAfford ? '#24343a' : '#2c2126';
+      rrect(r.x, r.y, r.w, r.h, 8); ctx.fill();
+      ctx.strokeStyle = chosen ? '#7ddf8f' : canAfford ? '#3a4654' : '#5a4a4e';
       ctx.lineWidth = 2;
-      ctx.strokeRect(r.x, r.y, r.w, r.h);
+      rrect(r.x, r.y, r.w, r.h, 8); ctx.stroke();
       ctx.fillStyle = canAfford ? '#ffffff' : '#8a7a7e';
       ctx.font = 'bold 15px monospace';
-      ctx.textAlign = 'center';
-      ctx.fillText(`${r.label} — ${r.cost}💰`, r.x + r.w / 2, r.y + r.h / 2 + 6);
+      ctx.textAlign = 'left';
+      ctx.fillText(r.label, r.x + 12, r.y + r.h / 2 + 5);
+      if (costly) {                         // disasters show their price on the right
+        ctx.textAlign = 'right';
+        ctx.fillStyle = canAfford ? '#ffd23f' : '#8a7a7e';
+        ctx.fillText(`${r.cost}💰`, r.x + r.w - 12, r.y + r.h / 2 + 5);
+      }
     }
-    ctx.fillStyle = '#ffb3ab';
-    ctx.font = '13px monospace';
-    ctx.fillText('(stack as many as you can afford)', canvas.width - 120,
-                 TOPBAR + 8 + MACHINE_MENU.length * 50 + 14);
   }
 
-  // THE BANK BALANCE — parked right next to THE MACHINE, so you can
-  // see exactly what doom you can afford
-  ctx.fillStyle = '#ffd23f';
-  ctx.font = 'bold 20px monospace';
-  ctx.textAlign = 'right';
-  ctx.fillText(`💰 ${moneys} MONEYS`, canvas.width - 245, 40);
-
-  // tried to buy doom you can't afford
-  if (brokeFlash > 0) {
-    ctx.fillStyle = `rgba(255, 80, 70, ${Math.min(1, brokeFlash)})`;
-    ctx.font = 'bold 22px monospace';
-    ctx.fillText('NOT ENOUGH MONEYS! (smashed blocks pay 1 each)',
-                 canvas.width / 2, TOPBAR + 52);
-  }
-
-  // the SPAWN PEOPLE button, bottom-right corner (as ordered by Amos)
-  const pb = peopleButtonRect();
-  ctx.fillStyle = '#26473b';
-  ctx.fillRect(pb.x, pb.y, pb.w, pb.h);
-  ctx.strokeStyle = '#7ddf8f';
-  ctx.lineWidth = 2;
-  ctx.strokeRect(pb.x, pb.y, pb.w, pb.h);
-  ctx.fillStyle = '#ffffff';
-  ctx.font = 'bold 16px monospace';
-  ctx.textAlign = 'center';
-  ctx.fillText('🧍 SPAWN PEOPLE', pb.x + pb.w / 2, pb.y + pb.h / 2 + 6);
-
-  // the destruction scoreboard
-  if (destroyed > 0 || peopleLaunched > 0) {
-    ctx.fillStyle = '#ff9f43';
-    ctx.font = 'bold 14px monospace';
+  // --- STOP BUILDING, bottom centre, only while you're placing something ---
+  const sb = stopBuildRect();
+  if (sb) {
+    ctx.fillStyle = '#1d3a4a';
+    rrect(sb.x, sb.y, sb.w, sb.h, 10); ctx.fill();
+    ctx.strokeStyle = '#7dd3ff'; ctx.lineWidth = 2;
+    rrect(sb.x, sb.y, sb.w, sb.h, 10); ctx.stroke();
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 15px monospace';
     ctx.textAlign = 'center';
-    ctx.fillText(`blocks destroyed: ${destroyed}    people launched: ${peopleLaunched}`,
-                 canvas.width / 2, TOPBAR + 22);
+    ctx.fillText('✋ Stop Building', sb.x + sb.w / 2, sb.y + sb.h / 2 + 5);
+  }
+
+  // --- the STATUS BOX at the bottom: a readable box for the latest news ---
+  if ((statusSticky || statusTimer > 0) && statusText) {
+    // shrink the text just enough to always fit on a narrow phone
+    let fs = 15;
+    ctx.font = `bold ${fs}px monospace`;
+    let tw = ctx.measureText(statusText).width;
+    const maxTextW = canvas.width - 44;
+    if (tw > maxTextW) {
+      fs = Math.max(10, Math.floor(fs * maxTextW / tw));
+      ctx.font = `bold ${fs}px monospace`;
+      tw = ctx.measureText(statusText).width;
+    }
+    const boxW = tw + 30, boxH = 34;
+    // sit above the Stop Building button when it's showing, so they never overlap
+    const bottom = sb ? sb.y - 8 : canvas.height - 14;
+    const bx = (canvas.width - boxW) / 2, by = bottom - boxH;
+    ctx.globalAlpha = statusSticky ? 1 : Math.min(1, statusTimer / 0.5);   // news fades, notes stay
+    ctx.fillStyle = 'rgba(10, 14, 20, 0.9)';
+    rrect(bx, by, boxW, boxH, 10); ctx.fill();
+    ctx.strokeStyle = statusColor; ctx.lineWidth = 2;
+    rrect(bx, by, boxW, boxH, 10); ctx.stroke();
+    ctx.fillStyle = statusColor; ctx.textAlign = 'center';
+    ctx.fillText(statusText, canvas.width / 2, by + boxH / 2 + 5);
+    ctx.globalAlpha = 1;
+  }
+
+  // the destruction scoreboard, tucked top-left under the bar
+  // (hidden while a drop-down is open so it can't show through the menu)
+  if ((destroyed > 0 || peopleLaunched > 0 || repaired > 0 || carsPopped > 0) && !openMenu) {
+    ctx.fillStyle = 'rgba(255, 159, 67, 0.9)';
+    ctx.font = 'bold 12px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(`💥 ${destroyed}   🚀 ${peopleLaunched}   🔧 ${repaired}   🚗 ${carsPopped}`,
+                 12, TOPBAR + 18);
   }
 }
 
