@@ -280,24 +280,37 @@ function buildTemple(lv) {
   // drop a sandstone block every few steps, one on each side. "Perpendicular"
   // means "sideways from the direction you're walking" — that's how we
   // know where "each side" even is.
-  let wn = 0;
+  // blocks every 38 steps, both sides, no gaps — this corridor is SEALED
   for (let i = 0; i < TEMPLE_PATH.length - 1; i++) {
     const a = TEMPLE_PATH[i], b = TEMPLE_PATH[i + 1];
     const segLen = Math.hypot(b.x - a.x, b.y - a.y);
     const ux = (b.x - a.x) / segLen, uy = (b.y - a.y) / segLen;   // walking direction
-    for (let d = 0; d < segLen; d += 44) {
+    for (let d = 0; d <= segLen; d += 38) {
       for (const side of [-1, 1]) {
-        wn++;
-        if (noise(wn * 6.1) < 0.15) continue;   // crumbled away — a peek-through gap
         const wx = a.x + ux * d + (-uy) * 105 * side;   // sideways from the path
         const wy = a.y + uy * d + ux * 105 * side;
-        if (Math.hypot(wx - altar.x, wy - altar.y) < 150) continue;
-        if (Math.hypot(wx - lv.start.x, wy - lv.start.y) < 90) continue;
+        if (Math.hypot(wx - altar.x, wy - altar.y) < 150) continue;   // chamber has its own walls
         // where two path pieces meet, don't stack blocks on top of each other
-        if (trees.some(t => t.wall && Math.hypot(t.x - wx, t.y - wy) < 30)) continue;
+        if (trees.some(t => t.wall && Math.hypot(t.x - wx, t.y - wy) < 26)) continue;
         trees.push({ x: wx, y: wy, size: 1, wall: true });
       }
     }
+  }
+  // seal the corridor BEHIND the entrance too — "back" is never a way out
+  for (const sideX of [lv.start.x - 105, lv.start.x + 105]) {
+    for (let y = lv.start.y; y < lv.worldH - 40; y += 38) {
+      trees.push({ x: sideX, y, size: 1, wall: true });
+    }
+  }
+  // the altar chamber: a ring of wall with exactly ONE doorway, where
+  // the path comes in from the south
+  for (let ang = 0; ang < Math.PI * 2; ang += 0.28) {
+    if (Math.abs(ang - Math.PI / 2) < 0.55) continue;   // the doorway
+    const wx = altar.x + Math.cos(ang) * 175;
+    const wy = altar.y + Math.sin(ang) * 175;
+    if (wx < 60 || wy < 60 || wx > lv.worldW - 60 || wy > lv.worldH - 60) continue;
+    if (trees.some(t => t.wall && Math.hypot(t.x - wx, t.y - wy) < 26)) continue;
+    trees.push({ x: wx, y: wy, size: 1, wall: true });
   }
 
   // the SAND-AND-STONE PAVING — scatter little square tiles all along
