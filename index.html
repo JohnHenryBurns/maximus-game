@@ -20,204 +20,234 @@
 
   <style>
     /* ------------------------------------------------------------------
-       This page has NO canvas and NO game loop. It doesn't need them.
-       It's just a page with two links on it that happen to look cool.
+       THE LAUNCHER. No canvas, no game loop - just a menu. But it has
+       three TABS now (Highlights / Latest / All), so there's one tiny
+       bit of script at the bottom that decides which games to show.
 
-       That's the whole point of splitting the files up: the menu only
-       has to worry about being a menu.
+       Every game is written down ONCE in a list in that script, and the
+       page builds the little cards from the list. Add a game to the list
+       and it shows up everywhere it should - no copy-pasting cards.
        ------------------------------------------------------------------ */
+
+    * { box-sizing: border-box; }
 
     body {
       margin: 0;
       overscroll-behavior: none;
       min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 28px;
-      background: #07060a;
+      background:
+        radial-gradient(1200px 600px at 50% -10%, #1a1030 0%, rgba(26,16,48,0) 60%),
+        radial-gradient(900px 500px at 90% 110%, #2a0d12 0%, rgba(42,13,18,0) 55%),
+        #07060a;
       color: #e8e8f0;
       font-family: system-ui, sans-serif;
-      /* Stops your finger accidentally selecting the text when you tap. */
-      -webkit-user-select: none;
-      user-select: none;
+      -webkit-user-select: none; user-select: none;
+      display: flex; flex-direction: column; align-items: center;
+      padding: 22px 12px 40px;
     }
 
+    /* ---- the big neon arcade sign ---- */
     h1 {
-      margin: 0;
-      font-size: clamp(28px, 9vw, 64px);
+      margin: 6px 0 2px;
+      font-size: clamp(30px, 9vw, 66px);
       letter-spacing: 4px;
-      /* Three shadows stacked up = a fat neon glow, like an arcade sign. */
-      text-shadow:
-        0 0 8px  #ff9a3c,
-        0 0 24px #ff5e00,
-        0 0 60px #ff2d00;
+      text-align: center;
+      text-shadow: 0 0 8px #ff9a3c, 0 0 24px #ff5e00, 0 0 60px #ff2d00;
+    }
+    .tagline {
+      margin: 0 0 20px;
+      font-size: 13px; letter-spacing: 1px;
+      color: #b79bff;
+      text-align: center;
+    }
+    .tagline b { color: #ffcf7a; }
+
+    /* ---- the TABS: three pills you tap to switch which games show ---- */
+    .tabs {
+      display: flex; flex-wrap: wrap; justify-content: center; gap: 10px;
+      margin-bottom: 26px;
+      position: sticky; top: 8px; z-index: 5;
+    }
+    .tab {
+      font-family: inherit; font-size: 14px; font-weight: 700; letter-spacing: 0.5px;
+      color: #cfd0e6;
+      background: rgba(20, 18, 32, 0.72);
+      border: 1.5px solid #2f2b45;
+      padding: 10px 18px; border-radius: 999px; cursor: pointer;
+      -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+      transition: transform 0.12s, border-color 0.12s, background 0.12s, color 0.12s;
+    }
+    .tab:hover { transform: translateY(-1px); border-color: #574d7a; }
+    .tab.active {
+      color: #1a0f04;
+      background: linear-gradient(180deg, #ffb24d, #ff7a1a);
+      border-color: #ffca7a;
+      box-shadow: 0 0 22px rgba(255, 122, 26, 0.45);
     }
 
-    /* The row of game cabinets. "wrap" means that if the screen is too
-       narrow to fit them side by side, they stack up instead. */
+    /* ---- the grid of game cards ---- */
     .cabinets {
-      display: flex;
-      flex-wrap: wrap;
-      justify-content: center;
-      gap: 22px;
-      padding: 0 16px;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+      gap: 18px;
+      width: 100%; max-width: 940px;
     }
 
     /* Each cabinet is an <a> - a link. Tapping it loads a whole
        different page, which is a whole different game. */
     .cabinet {
-      width: 230px;
-      padding: 22px 18px;
+      position: relative;
+      display: flex; flex-direction: column;
+      padding: 20px 18px 18px;
       border: 2px solid #35354a;
-      border-radius: 14px;
-      background: #12121c;
-      color: #e8e8f0;
-      text-decoration: none;    /* kills the blue underline */
-      text-align: center;
-      /* 0.15s = how long the grow-when-touched takes. Try 1s for a laugh. */
+      border-radius: 16px;
+      background: linear-gradient(180deg, #15141f 0%, #100f18 100%);
+      color: #e8e8f0; text-decoration: none; text-align: center;
       transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
     }
-
-    /* :hover is "the mouse is on top of me". :active is "a finger is
-       pressing me right now" - that's the one that works on a phone. */
-    .cabinet:hover,
-    .cabinet:active {
-      transform: scale(1.06);
+    .cabinet:hover, .cabinet:active {
+      transform: translateY(-3px) scale(1.02);
       border-color: #ff8a3c;
-      box-shadow: 0 0 30px rgba(255, 94, 0, 0.45);
+      box-shadow: 0 10px 30px rgba(255, 94, 0, 0.28);
+    }
+    /* Starred games glow gold wherever they show up, so the top picks
+       always stand out from the crowd. */
+    .cabinet.star {
+      border-color: rgba(255, 199, 92, 0.6);
+      box-shadow: 0 0 22px rgba(255, 190, 70, 0.14);
+    }
+    .cabinet.star:hover, .cabinet.star:active {
+      border-color: #ffd76a;
+      box-shadow: 0 10px 32px rgba(255, 190, 70, 0.4);
     }
 
-    /* The little picture at the top of each cabinet is just a big emoji.
-       No image files to download, so it works instantly and offline. */
-    .art {
-      font-size: 62px;
-      line-height: 1.1;
-    }
-
+    .art { font-size: 60px; line-height: 1.05; }
     .name {
-      margin-top: 12px;
-      font-size: 19px;
-      font-weight: bold;
-      letter-spacing: 1px;
+      margin-top: 10px; font-size: 18px; font-weight: 800; letter-spacing: 0.6px;
     }
-
     .blurb {
-      margin-top: 8px;
-      font-size: 13px;
-      line-height: 1.45;
-      color: #9a9ab4;
+      margin-top: 8px; font-size: 12.5px; line-height: 1.45; color: #9a9ab4;
     }
 
-    footer {
-      font-size: 12px;
-      color: #55556e;
+    /* little corner badges */
+    .badge {
+      position: absolute; top: 10px;
+      font-size: 11px; font-weight: 800; letter-spacing: 0.5px;
+      padding: 3px 8px; border-radius: 999px;
     }
+    .badge.star { right: 10px; background: rgba(255, 199, 92, 0.16); color: #ffcf7a; border: 1px solid rgba(255,199,92,0.5); }
+    .badge.new  { left: 10px;  background: rgba(120, 230, 150, 0.15); color: #8fe0a0; border: 1px solid rgba(120,230,150,0.5); }
+
+    .empty { color: #6b6b86; font-size: 14px; padding: 40px; text-align: center; }
+
+    footer { margin-top: 30px; font-size: 12px; color: #55556e; }
   </style>
 </head>
 <body>
 
   <h1>MAX'S ARCADE</h1>
+  <p class="tagline"><b id="count">0</b> tiny worlds &mdash; every wall, spider and lava wave drawn by code</p>
 
-  <div class="cabinets">
+  <nav class="tabs">
+    <button class="tab active" data-tab="highlights">&#9733; Highlights</button>
+    <button class="tab" data-tab="latest">&#10024; Latest</button>
+    <button class="tab" data-tab="all">&#9638; All Games</button>
+  </nav>
 
-    <!-- href="cavern.html" is a RELATIVE path - it means "the file sitting
-         next to me in this same folder". That's why it works both when you
-         open the file on this computer AND on the real website. -->
-    <a class="cabinet" href="cavern.html">
-      <div class="art">🕷️</div>
-      <div class="name">CURSED CAVERN</div>
-      <div class="blurb">First-person 3D. Shotgun, machine gun, and far too many spiders.</div>
-    </a>
-
-    <a class="cabinet" href="gnome2.html">
-      <div class="art">🧙</div>
-      <div class="name">SINKING POLE</div>
-      <div class="blurb">A stone pole sinking into lava. Climb past monsters and bosses, grab power-ups, don't cook.</div>
-    </a>
-
-    <a class="cabinet" href="builder.html">
-      <div class="art">🧱</div>
-      <div class="name">CAVERN BUILDER</div>
-      <div class="blurb">Draw your own cave, then go and get lost in it in 3D.</div>
-    </a>
-
-    <a class="cabinet" href="boss.html">
-      <div class="art">🤖</div>
-      <div class="name">BOB THE ROBOT PIRATE</div>
-      <div class="blurb">A 25-foot robot buccaneer climbs out of the sea. Only one of you is leaving.</div>
-    </a>
-
-    <a class="cabinet" href="racer.html">
-      <div class="art">🏎️</div>
-      <div class="name">MAX'S RACER</div>
-      <div class="blurb">First person, foot down. The road never ends and it never stops turning.</div>
-    </a>
-
-    <a class="cabinet" href="wasteland.html">
-      <div class="art">☢️</div>
-      <div class="name">THE WASTELAND</div>
-      <div class="blurb">Dead open ground, orange sky, and things walking at you through the dust.</div>
-    </a>
-
-    <a class="cabinet" href="space.html">
-      <div class="art">🚀</div>
-      <div class="name">DEEP BLACK</div>
-      <div class="blurb">No gravity, no brakes, no up. Asteroids everywhere and something hunting you between them.</div>
-    </a>
-
-    <a class="cabinet" href="rig.html">
-      <div class="art">🚚</div>
-      <div class="name">THE LONG HAUL</div>
-      <div class="blurb">The whole wasteland, but now you have a rig. Haul cargo between the settlements and the marine forts. Speed is armour - slow down and they get on.</div>
-    </a>
-
-    <a class="cabinet" href="pizza.html">
-      <div class="art">🍕</div>
-      <div class="name">MAX'S PIZZA</div>
-      <div class="blurb">Nothing is trying to kill you. Cut the wheat, grind the dough, build the pizza, sell it, buy a better oven.</div>
-    </a>
-
-    <a class="cabinet" href="run.html">
-      <div class="art">👟</div>
-      <div class="name">RUN!</div>
-      <div class="blurb">2D, and something enormous is eating the city behind you. Don't look back - just don't stop.</div>
-    </a>
-
-    <a class="cabinet" href="salmon.html">
-      <div class="art">🐟</div>
-      <div class="name">SALMON</div>
-      <div class="blurb">Swim up the river. It will not help you. Bears on the banks, eagles overhead, and only one of those is scared of a leap.</div>
-    </a>
-
-    <a class="cabinet" href="bot.html">
-      <div class="art">🤖</div>
-      <div class="name">BOT RUSH</div>
-      <div class="blurb">A rush of robots is racing for the exit at the top, and every one of them genuinely works out the cheapest way up. Wall them off, lock a door and hide the key at the bottom, then bolt a saw to the long way round. How many can you stop?</div>
-    </a>
-
-    <a class="cabinet" href="ship.html">
-      <div class="art">🚀</div>
-      <div class="name">THE LOST SHIP</div>
-      <div class="blurb">You are in a spacesuit, walking the decks of a ship nobody came back from. The robots still work, and they do not want you here. Cut through them with a plasma blade, get stronger, go deeper. How far in can you get?</div>
-    </a>
-
-    <a class="cabinet" href="tooth.html">
-      <div class="art">🦷</div>
-      <div class="name">DEFEND THE TOOTH</div>
-      <div class="blurb">Germs march down the road towards your tooth. You cannot move them and you cannot block them - all you can do is put brushes and floss beside the road and hope they shoot fast enough. How many waves can you last?</div>
-    </a>
-
-    <a class="cabinet" href="cards.html">
-      <div class="art">🃏</div>
-      <div class="name">MONSTER DUEL</div>
-      <div class="blurb">Collect monsters, then fight with them. One free card pack a day, and you can only play cards you actually own. Every monster attacks the one standing straight opposite it, so a gap in their line is a hole your big hitter walks right through.</div>
-    </a>
-
-  </div>
+  <main id="grid" class="cabinets"></main>
 
   <footer>Made by Maximus</footer>
+
+  <script>
+    // ===============================================================
+    //  EVERY GAME, WRITTEN DOWN ONCE.
+    //
+    //  The list is in order NEWEST-FIRST (the game I worked on most
+    //  recently is at the top). That's what the "Latest" tab uses.
+    //   - star:true  -> a top pick (shows on Highlights, glows gold)
+    //   - isNew:true -> a fresh one (gets a green NEW badge)
+    //  Add a new game here and it appears in the right tabs by itself.
+    // ===============================================================
+    const GAMES = [
+      { href: "explorer.html", emoji: "🧭", name: "THE EXPLORER", isNew: true,
+        blurb: "Float above the world like a friendly drone and steer your explorer through a big open forest. A calm top-down adventure — wander and discover." },
+      { href: "disaster.html", emoji: "🌪️", name: "AMOS'S DISASTER BUILDER", star: true, isNew: true,
+        blurb: "Rain meteors, tornadoes, floods and bouncing rubber balls onto a little town. Build shelters, spawn tiny citizens, and watch them flee for cover — or get comically launched." },
+      { href: "ship.html", emoji: "🚀", name: "THE LOST SHIP", isNew: true,
+        blurb: "In a spacesuit on the decks of a ship nobody came back from. The robots still work, and they don't want you here. Cut through them with a plasma blade and go deeper." },
+      { href: "gnome2.html", emoji: "🧙", name: "SINKING POLE", star: true,
+        blurb: "A stone pole sinking into lava. Climb past monsters and bosses, grab power-ups, and don't cook. Fireballs, mushrooms, balloons and more." },
+      { href: "tooth.html", emoji: "🦷", name: "DEFEND THE TOOTH",
+        blurb: "Germs march down the road towards your tooth. You can't move or block them — just line brushes and floss along the road and hope they shoot fast enough." },
+      { href: "cards.html", emoji: "🃏", name: "MONSTER DUEL",
+        blurb: "Collect monsters, then fight with them. One free card pack a day, and you can only play cards you own. Each monster hits the one straight across — so gaps are trouble." },
+      { href: "bot.html", emoji: "🤖", name: "BOT RUSH", star: true,
+        blurb: "A rush of robots races for the exit, each working out the cheapest way up. Wall them off, hide a key, and bolt saws to the long way round. How many can you stop?" },
+      { href: "salmon.html", emoji: "🐟", name: "SALMON",
+        blurb: "Swim up the river. It will not help you. Bears on the banks, eagles overhead, and only one of those is scared of a leap." },
+      { href: "run.html", emoji: "👟", name: "RUN!",
+        blurb: "2D, and something enormous is eating the city behind you. Don't look back — just don't stop." },
+      { href: "pizza.html", emoji: "🍕", name: "MAX'S PIZZA",
+        blurb: "Nothing is trying to kill you. Cut the wheat, grind the dough, build the pizza, sell it, and buy a better oven." },
+      { href: "rig.html", emoji: "🚚", name: "THE LONG HAUL",
+        blurb: "The whole wasteland, but now you have a rig. Haul cargo between the settlements and the marine forts. Speed is armour — slow down and they get on." },
+      { href: "wasteland.html", emoji: "☢️", name: "THE WASTELAND",
+        blurb: "Dead open ground, orange sky, and things walking at you through the dust." },
+      { href: "space.html", emoji: "🌌", name: "DEEP BLACK",
+        blurb: "No gravity, no brakes, no up. Asteroids everywhere and something hunting you between them." },
+      { href: "racer.html", emoji: "🏎️", name: "MAX'S RACER",
+        blurb: "First person, foot down. The road never ends and it never stops turning." },
+      { href: "cavern.html", emoji: "🕷️", name: "CURSED CAVERN",
+        blurb: "First-person 3D. Shotgun, machine gun, and far too many spiders." },
+      { href: "builder.html", emoji: "🧱", name: "CAVERN BUILDER",
+        blurb: "Draw your own cave, then go and get lost in it in 3D." },
+      { href: "boss.html", emoji: "🏴‍☠️", name: "BOB THE ROBOT PIRATE",
+        blurb: "A 25-foot robot buccaneer climbs out of the sea. Only one of you is leaving." },
+    ];
+
+    const LATEST_COUNT = 6;   // how many "most recent" games the Latest tab shows
+
+    const grid = document.getElementById("grid");
+    document.getElementById("count").textContent = GAMES.length;
+
+    // Build the little HTML for one game card.
+    function cardHTML(g) {
+      const badges =
+        (g.star  ? '<span class="badge star">&#9733; TOP</span>' : '') +
+        (g.isNew ? '<span class="badge new">NEW</span>' : '');
+      return '<a class="cabinet' + (g.star ? ' star' : '') + '" href="' + g.href + '">' +
+               badges +
+               '<div class="art">' + g.emoji + '</div>' +
+               '<div class="name">' + g.name + '</div>' +
+               '<div class="blurb">' + g.blurb + '</div>' +
+             '</a>';
+    }
+
+    // Show the games for whichever tab is picked.
+    //   highlights -> just the starred top picks
+    //   latest     -> the newest few (list is already newest-first)
+    //   all        -> every single game
+    function render(tab) {
+      let list;
+      if (tab === "highlights")   list = GAMES.filter(g => g.star);
+      else if (tab === "latest")  list = GAMES.slice(0, LATEST_COUNT);
+      else                        list = GAMES;
+      grid.innerHTML = list.length
+        ? list.map(cardHTML).join("")
+        : '<div class="empty">Nothing here yet!</div>';
+    }
+
+    // Wire up the tab buttons: tapping one lights it up and re-draws the grid.
+    for (const btn of document.querySelectorAll(".tab")) {
+      btn.addEventListener("click", function () {
+        for (const b of document.querySelectorAll(".tab")) b.classList.remove("active");
+        btn.classList.add("active");
+        render(btn.dataset.tab);
+      });
+    }
+
+    render("highlights");   // Highlights is what you see first
+  </script>
 
 </body>
 </html>
