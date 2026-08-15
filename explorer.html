@@ -105,11 +105,20 @@ const LEVELS = [
     worldH: 2400,
     start: { x: 1200, y: 2300 }, // the shattered front gates
   },
-  { name: 'The Dungeon in the Sky', unlocked: false },   // Level 4 — named by Max, not built yet!
+  {
+    name: 'The Dungeon in the Sky',
+    kind: 'sky',
+    unlocked: false,             // opens when you beat Level 3
+    grass: '#2b2e38',            // storm-dark sky
+    worldW: 2800,
+    worldH: 2800,
+    start: { x: 1400, y: 2650 }, // the bottom of the first sky-bridge
+  },
 ];
 // prizes you earned on past visits keep their doors open
 LEVELS[1].unlocked = hasArmor;
 LEVELS[2].unlocked = hasGoldSword;
+LEVELS[3].unlocked = hasInfectedArmor;
 
 // Things that live in the current level (filled in by buildForest)
 let trees = [];
@@ -201,6 +210,42 @@ const CASTLE_PATHS = [
   ],
 ];
 const throne = { x: 1200, y: 200 };   // the broken throne. reach it, win.
+
+// ---------------------------------------------------------------------
+// THE SKY BRIDGES — a whole web of floating stone passages over the
+// storm. Off the edge of a bridge is open air. Nobody walks on air.
+// ---------------------------------------------------------------------
+const SKY_PATHS = [
+  [ // the main bridge, all the way up to the boss arena
+    { x: 1400, y: 2650 }, { x: 1400, y: 2400 }, { x: 1250, y: 2250 },
+    { x: 1250, y: 2000 }, { x: 1450, y: 1900 }, { x: 1650, y: 1950 },
+    { x: 1800, y: 1800 }, { x: 1750, y: 1550 }, { x: 1550, y: 1450 },
+    { x: 1300, y: 1500 }, { x: 1100, y: 1400 }, { x: 1050, y: 1150 },
+    { x: 1200, y: 1000 }, { x: 1450, y: 1050 }, { x: 1650, y: 950 },
+    { x: 1600, y: 700 },  { x: 1450, y: 550 },  { x: 1400, y: 420 },
+    { x: 1400, y: 320 },
+  ],
+  [ // west passage, low
+    { x: 1250, y: 2250 }, { x: 950, y: 2150 }, { x: 800, y: 1900 },
+    { x: 850,  y: 1600 }, { x: 1100, y: 1400 },
+  ],
+  [ // east passage, low
+    { x: 1650, y: 1950 }, { x: 1950, y: 1850 }, { x: 2100, y: 1550 },
+    { x: 1950, y: 1300 }, { x: 1750, y: 1550 },
+  ],
+  [ // west passage, high
+    { x: 1050, y: 1150 }, { x: 800, y: 1050 }, { x: 750, y: 750 },
+    { x: 950,  y: 600 },  { x: 1200, y: 650 }, { x: 1450, y: 550 },
+  ],
+  [ // east passage, high
+    { x: 1450, y: 1050 }, { x: 1700, y: 1200 }, { x: 1900, y: 1000 },
+    { x: 1750, y: 800 },  { x: 1600, y: 700 },
+  ],
+  [ // a short middle shortcut
+    { x: 1300, y: 1500 }, { x: 1300, y: 1250 }, { x: 1200, y: 1000 },
+  ],
+];
+const arena = { x: 1400, y: 300 };   // the round sky-arena. HE lives there.
 
 // smallest distance to ANY of a list of paths
 function distToAnyPath(x, y, paths) {
@@ -620,6 +665,131 @@ function buildCastle(lv) {
 }
 
 // ---------------------------------------------------------------------
+// BUILDING THE DUNGEON IN THE SKY — bridges over a storm, every monster
+// in the game, and the Storm King waiting at the top.
+// ---------------------------------------------------------------------
+function buildSky(lv) {
+  trees = [];          // no trees, no walls — just bridges and open air
+  stumps = [];
+  flowers = [];
+  scorches = [];
+  pond = { x: -9999, y: -9999, rx: 1, ry: 1, hidden: true };
+
+  // stone speckles all over the bridges
+  tiles = [];
+  let tn = 0;
+  for (const wp of SKY_PATHS) {
+    for (let i = 0; i < wp.length - 1; i++) {
+      const a = wp[i], b = wp[i + 1];
+      const segLen = Math.hypot(b.x - a.x, b.y - a.y);
+      const ux = (b.x - a.x) / segLen, uy = (b.y - a.y) / segLen;
+      for (let d = 0; d < segLen; d += 26) {
+        tn++;
+        const off = (noise(tn * 3.7) - 0.5) * 130;
+        tiles.push({
+          x: a.x + ux * d + (-uy) * off,
+          y: a.y + uy * d + ux * off,
+          size: 14 + noise(tn * 5.3) * 12,
+          color: ['#565a63', '#4a4e57', '#5f636c'][Math.floor(noise(tn * 7.7) * 3)],
+        });
+      }
+    }
+  }
+
+  // lanterns along the main bridge (magic ones — the rain can't touch them)
+  torches = [];
+  const mainBridge = SKY_PATHS[0];
+  for (let i = 0; i < mainBridge.length - 1; i++) {
+    const a = mainBridge[i], b = mainBridge[i + 1];
+    torches.push({ x: (a.x + b.x) / 2 + 70, y: (a.y + b.y) / 2, torch: true });
+    torches.push({ x: (a.x + b.x) / 2 - 70, y: (a.y + b.y) / 2, torch: true });
+  }
+
+  // storm sparks crackling in the air
+  fireflies = [];
+  for (let i = 0; i < 50; i++) {
+    fireflies.push({
+      x: noise(i * 21.3 + 9) * lv.worldW,
+      y: noise(i * 47.7 + 9) * lv.worldH,
+      phase: noise(i * 5.5) * 6.28,
+      speed: 0.5 + noise(i * 2.2),
+    });
+  }
+
+  // ---- EVERY CREATURE IN THE GAME LIVES UP HERE ----
+  zombies = [];
+  let forestZ = 0, sandZ = 0, blackZ = 0, giantZ = 0;
+  for (let i = 0; i < 2000; i++) {
+    const x = noise(i * 61.3 + 21) * lv.worldW;
+    const y = noise(i * 37.9 + 21) * lv.worldH;
+    if (Math.hypot(x - lv.start.x, y - lv.start.y) < 350) continue;
+    if (distToAnyPath(x, y, SKY_PATHS) > 70) continue;
+    if (Math.hypot(x - arena.x, y - arena.y) < 320) continue;
+    // deal out one of each kind in turn until every quota is full
+    if (forestZ < 4) {
+      forestZ++;
+      zombies.push({ x, y, zombie: true, hp: 2,
+                     wanderAngle: noise(i) * 6.28, lastHitSwing: 0, hurtFlash: 0 });
+    } else if (sandZ < 4) {
+      sandZ++;
+      zombies.push({ x, y, zombie: true, sand: true, buried: false, hp: 3,
+                     wanderAngle: noise(i) * 6.28, lastHitSwing: 0, hurtFlash: 0 });
+    } else if (blackZ < 5) {
+      blackZ++;
+      zombies.push({ x, y, zombie: true, black: true, hp: 3, speed: 95,
+                     wanderAngle: noise(i) * 6.28, lastHitSwing: 0, hurtFlash: 0 });
+    } else if (giantZ < 2 && Math.hypot(x - lv.start.x, y - lv.start.y) > 700) {
+      giantZ++;
+      zombies.push({ x, y, zombie: true, black: true, giant: true, hp: 6, speed: 60,
+                     wanderAngle: noise(i) * 6.28, lastHitSwing: 0, hurtFlash: 0 });
+    } else if (forestZ + sandZ + blackZ >= 13 && giantZ >= 2) {
+      break;
+    }
+  }
+
+  // THE STORM KING. He does not wander. He waits.
+  zombies.push({
+    x: arena.x, y: arena.y - 20,
+    zombie: true, black: true, giant: true, boss: true,
+    hp: 24,              // a proper boss fight
+    speed: 78,
+    wanderAngle: 0,
+    lastHitSwing: 0,
+    hurtFlash: 0,
+  });
+
+  // skeletons on the bridges
+  skeletons = [];
+  for (let i = 0; i < 600 && skeletons.length < 5; i++) {
+    const x = noise(i * 71.9 + 23) * lv.worldW;
+    const y = noise(i * 23.1 + 23) * lv.worldH;
+    if (Math.hypot(x - lv.start.x, y - lv.start.y) < 350) continue;
+    if (distToAnyPath(x, y, SKY_PATHS) > 70) continue;
+    if (Math.hypot(x - arena.x, y - arena.y) < 320) continue;
+    skeletons.push({ x, y, skeleton: true, hp: 2, facing: 1,
+                     wanderAngle: noise(i * 1.7) * 6.28, lastHitSwing: 0, hurtFlash: 0 });
+  }
+
+  // and creepers. on NARROW BRIDGES. you're welcome.
+  creepers = [];
+  for (let i = 0; i < 600 && creepers.length < 8; i++) {
+    const x = noise(i * 57.1 + 25) * lv.worldW;
+    const y = noise(i * 33.7 + 25) * lv.worldH;
+    if (Math.hypot(x - lv.start.x, y - lv.start.y) < 350) continue;
+    if (distToAnyPath(x, y, SKY_PATHS) > 70) continue;
+    if (Math.hypot(x - arena.x, y - arena.y) < 320) continue;
+    creepers.push({ x, y, creeper: true, hp: 2, fuse: 0,
+                    wanderAngle: noise(i) * 6.28, lastHitSwing: 0, hurtFlash: 0 });
+  }
+
+  emeralds = [];
+  particles = [];
+  emeraldCount = 0;
+  player.hp = player.maxHp;
+  player.armor = armorMax();
+}
+
+// ---------------------------------------------------------------------
 // THE EXPLORER (you!)
 // ---------------------------------------------------------------------
 const player = {
@@ -653,6 +823,7 @@ function startLevel(i) {
   current = LEVELS[i];
   if (current.kind === 'temple') buildTemple(current);
   else if (current.kind === 'castle') buildCastle(current);
+  else if (current.kind === 'sky') buildSky(current);
   else buildForest(current);
   player.x = current.start.x;
   player.y = current.start.y;
@@ -668,6 +839,11 @@ function startLevel(i) {
 function blocked(x, y, r = player.radius) {
   // edge of the world
   if (x < 20 || y < 20 || x > current.worldW - 20 || y > current.worldH - 20) return true;
+  // in the sky, off the edge of a bridge is open air — nothing to stand on
+  if (current.kind === 'sky') {
+    if (distToAnyPath(x, y, SKY_PATHS) > 92 &&
+        Math.hypot(x - arena.x, y - arena.y) > 250) return true;
+  }
   // the pond (explorers hate wet socks; zombies can't swim either)
   if (((x - pond.x) / (pond.rx + r)) ** 2 +
       ((y - pond.y) / (pond.ry + r)) ** 2 < 1) return true;
@@ -819,7 +995,7 @@ function update(dt) {
     // THE ZOMBIE BRAIN (it's a very small brain):
     // If you're close, shamble at you. Otherwise wander around aimlessly.
     let zdx, zdy, zombieSpeed;
-    if (distToYou < 240 && player.deathTimer <= 0) {
+    if (distToYou < (z.boss ? 340 : 240) && player.deathTimer <= 0) {
       zdx = (player.x - z.x) / distToYou;      // an arrow pointing at YOU
       zdy = (player.y - z.y) / distToYou;
       zombieSpeed = z.speed || 75;             // black zombies override this — they're QUICK
@@ -839,7 +1015,7 @@ function update(dt) {
     // you're FACING (no cheating hits behind your back), and not already
     // hit by this same swing.
     if (player.attackTime > 0 && z.lastHitSwing !== player.swingId &&
-        distToYou < (z.giant ? 68 : 55) && (z.x - player.x) * player.facing > -8) {
+        distToYou < (z.boss ? 95 : z.giant ? 68 : 55) && (z.x - player.x) * player.facing > -8) {
       z.lastHitSwing = player.swingId;
       z.hp -= hasGoldSword ? 2 : 1;    // golden sword = one-bonk wonders
       z.hurtFlash = 0.15;
@@ -862,19 +1038,28 @@ function update(dt) {
                  : (i % 2 ? '#4a9e4a' : '#2e6e8e'),
           });
         }
-        // giants guard a whole pile of treasure
-        const loot = z.giant ? 3 : 1;
+        // giants guard a whole pile of treasure; the boss guards a HOARD
+        const loot = z.boss ? 8 : z.giant ? 3 : 1;
         for (let e = 0; e < loot; e++) {
-          emeralds.push({ x: z.x + (e - 1) * 14, y: z.y, born: elapsed });
+          emeralds.push({ x: z.x + (e - loot / 2) * 14, y: z.y, born: elapsed });
+        }
+        if (z.boss) {
+          // THE STORM KING FALLS — that's the whole game, explorer!
+          victoryNew = true;
+          victoryLevel = 4;
+          victoryTimer = 6;
         }
       }
     }
 
     // Did it get YOU? (hurtTimer = a moment of safety after each hit,
     // so one zombie can't eat all five hearts in one second)
-    if (distToYou < (z.giant ? 42 : 26) && z.hp > 0 && player.hurtTimer <= 0 && player.deathTimer <= 0) {
-      if (player.armor > 0) player.armor -= 1;   // CLANK — the armor takes it!
-      else player.hp -= 1;
+    if (distToYou < (z.boss ? 60 : z.giant ? 42 : 26) && z.hp > 0 && player.hurtTimer <= 0 && player.deathTimer <= 0) {
+      const hits = z.boss ? 2 : 1;               // the Storm King hits HARD
+      for (let h = 0; h < hits; h++) {
+        if (player.armor > 0) player.armor -= 1; // CLANK — the armor takes it!
+        else player.hp -= 1;
+      }
       player.hurtTimer = 1;
       // shove you away from it
       const push = 50 / Math.max(1, distToYou);
@@ -1104,6 +1289,7 @@ function update(dt) {
       if (!hasInfectedArmor) {
         hasInfectedArmor = true;
         localStorage.setItem('explorer_infected_armor', 'yes');
+        LEVELS[3].unlocked = true;       // the sky opens
       }
       player.armor = armorMax();       // the infection suits up immediately
       victoryLevel = 3;
@@ -1150,14 +1336,29 @@ function drawGame() {
   ctx.fillStyle = current.grass;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // darker grass patches, so the ground isn't one flat color
-  ctx.fillStyle = 'rgba(0, 60, 0, 0.10)';
-  for (let i = 0; i < 40; i++) {
-    const px = noise(i * 51.3) * current.worldW - cam.x;
-    const py = noise(i * 17.9) * current.worldH - cam.y;
-    ctx.beginPath();
-    ctx.ellipse(px, py, 90, 55, 0, 0, Math.PI * 2);
-    ctx.fill();
+  if (current.kind === 'sky') {
+    // storm clouds drifting far BELOW the bridges. They scroll slower
+    // than the ground when you walk — that trick is called PARALLAX,
+    // and it's what makes your brain believe in the height.
+    ctx.fillStyle = 'rgba(18, 20, 28, 0.55)';
+    for (let i = 0; i < 14; i++) {
+      const drift = elapsed * (6 + noise(i) * 12);
+      const cxp = ((noise(i * 9.1) * (current.worldW + 800) + drift) % (current.worldW + 800)) - 400 - cam.x * 0.6;
+      const cyp = noise(i * 4.3) * current.worldH - cam.y * 0.6;
+      ctx.beginPath();
+      ctx.ellipse(cxp, cyp, 180 + noise(i * 2.2) * 120, 60 + noise(i * 5.5) * 40, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  } else {
+    // darker grass patches, so the ground isn't one flat color
+    ctx.fillStyle = 'rgba(0, 60, 0, 0.10)';
+    for (let i = 0; i < 40; i++) {
+      const px = noise(i * 51.3) * current.worldW - cam.x;
+      const py = noise(i * 17.9) * current.worldH - cam.y;
+      ctx.beginPath();
+      ctx.ellipse(px, py, 90, 55, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 
   // tree stumps — the leftovers of whoever chopped this trail. Flat on
@@ -1198,17 +1399,31 @@ function drawGame() {
 
   // the walkway floors: sand base in the temple, cracked stone halls in
   // the castle (every branching passage gets floor), then the tiles/carpet
-  if (current.kind === 'temple' || current.kind === 'castle') {
-    const walkways = current.kind === 'temple' ? [TEMPLE_PATH] : CASTLE_PATHS;
+  if (current.kind === 'temple' || current.kind === 'castle' || current.kind === 'sky') {
+    const walkways = current.kind === 'temple' ? [TEMPLE_PATH]
+                   : current.kind === 'castle' ? CASTLE_PATHS
+                   : SKY_PATHS;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     for (const wp of walkways) {
       ctx.beginPath();
       ctx.moveTo(wp[0].x - cam.x, wp[0].y - cam.y);
       for (const p of wp) ctx.lineTo(p.x - cam.x, p.y - cam.y);
-      ctx.strokeStyle = current.kind === 'temple' ? '#6e6248' : '#46474d';
+      ctx.strokeStyle = current.kind === 'temple' ? '#6e6248'
+                      : current.kind === 'castle' ? '#46474d'
+                      : '#4e5259';
       ctx.lineWidth = 175;
       ctx.stroke();
+    }
+    if (current.kind === 'sky') {
+      // the round boss arena at the top of the world
+      const ax = arena.x - cam.x, ay = arena.y - cam.y;
+      ctx.fillStyle = '#4e5259';
+      ctx.beginPath(); ctx.arc(ax, ay, 250, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = '#5f636c';
+      ctx.lineWidth = 6;
+      ctx.beginPath(); ctx.arc(ax, ay, 230, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(ax, ay, 120, 0, Math.PI * 2); ctx.stroke();
     }
     if (current.kind === 'castle') {
       // the long red carpet down the main hall (what's left of it)
@@ -1350,9 +1565,11 @@ function drawGame() {
     // eerie purple dust in the castle
     const glowA = current.kind === 'temple' ? '255, 150, 70'
                 : current.kind === 'castle' ? '190, 140, 255'
+                : current.kind === 'sky'    ? '170, 200, 255'
                 : '190, 255, 130';
     const glowB = current.kind === 'temple' ? '255, 210, 140'
                 : current.kind === 'castle' ? '220, 190, 255'
+                : current.kind === 'sky'    ? '225, 240, 255'
                 : '220, 255, 170';
     ctx.fillStyle = `rgba(${glowA}, ${0.15 + 0.25 * twinkle})`;
     ctx.beginPath(); ctx.arc(fx, fy, 5, 0, Math.PI * 2); ctx.fill();
@@ -1368,11 +1585,12 @@ function drawGame() {
     if (zx < -20 || zy < -20 || zx > canvas.width + 20 || zy > canvas.height + 20) continue;
     if (z.giant) {
       // a 3x3 grid of purple lights drifting toward you in the dark.
-      // when you see NINE eyes... that's a giant.
+      // when you see NINE eyes... that's a giant. when they're BIG... run.
+      const gs = z.boss ? 1.7 : 1;
       ctx.fillStyle = 'rgba(176, 108, 255, 0.85)';
       for (let row = 0; row < 3; row++) {
         for (let col = 0; col < 3; col++) {
-          ctx.fillRect(zx - 8 + col * 7, zy - 47 + row * 7, 3, 3);
+          ctx.fillRect(zx + (-8 + col * 7) * gs, zy + (-47 + row * 7) * gs, 3 * gs, 3 * gs);
         }
       }
     } else if (z.black) {
@@ -1470,6 +1688,46 @@ function drawGame() {
     ctx.fillText('⚔', bx, by + 10);
   }
 
+  if (current.kind === 'sky') {
+    // RAIN — streaks slashing down the screen
+    ctx.strokeStyle = 'rgba(180, 200, 255, 0.30)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (let i = 0; i < 90; i++) {
+      const speed = 700 + noise(i) * 400;
+      const ry = (noise(i * 3.3) * 3000 + elapsed * speed) % (canvas.height + 60) - 30;
+      const rx = (noise(i * 7.7) * canvas.width + ry * 0.3) % canvas.width;
+      ctx.moveTo(rx, ry);
+      ctx.lineTo(rx + 5, ry + 16);
+    }
+    ctx.stroke();
+
+    // LIGHTNING — a double-flash rolls through every 7 seconds
+    const cycle = elapsed % 7;
+    if (cycle < 0.12 || (cycle > 0.22 && cycle < 0.30)) {
+      ctx.fillStyle = 'rgba(230, 240, 255, 0.22)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+
+    // BOSS BAR — appears when the Storm King has noticed you
+    const boss = zombies.find(z => z.boss);
+    if (boss && Math.hypot(player.x - boss.x, player.y - boss.y) < 520) {
+      const bw = Math.min(500, canvas.width - 80);
+      const bx = canvas.width / 2 - bw / 2, by = 30;
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#d8c2ff';
+      ctx.font = 'bold 16px monospace';
+      ctx.fillText('THE STORM KING', canvas.width / 2, by - 8);
+      ctx.fillStyle = 'rgba(0,0,0,0.5)';
+      ctx.fillRect(bx, by, bw, 14);
+      ctx.fillStyle = '#b06cff';
+      ctx.fillRect(bx + 2, by + 2, (bw - 4) * (boss.hp / 24), 10);
+      ctx.strokeStyle = '#d8c2ff';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(bx, by, bw, 14);
+    }
+  }
+
   // ---- HUD (the stuff glued to the screen, not the world) ----
   // hearts, top-left
   for (let i = 0; i < player.maxHp; i++) {
@@ -1508,6 +1766,7 @@ function drawGame() {
     ctx.font = 'bold 34px monospace';
     ctx.fillText(current.kind === 'temple' ? 'The temple got you!'
                : current.kind === 'castle' ? 'The castle got you!'
+               : current.kind === 'sky'    ? 'The storm got you!'
                : 'The zombies got you!',
                  canvas.width / 2, canvas.height / 2 - 10);
     ctx.font = '18px monospace';
@@ -1541,7 +1800,20 @@ function drawGame() {
     ctx.fillStyle = '#ffd23f';
     ctx.font = 'bold 40px monospace';
     ctx.fillText(`LEVEL ${victoryLevel} COMPLETE!`, canvas.width / 2, canvas.height / 2 - 60);
-    if (victoryLevel === 3) {
+    if (victoryLevel === 4) {
+      ctx.fillStyle = '#ffd23f';                       // his crown, your trophy
+      ctx.fillRect(canvas.width / 2 - 30, canvas.height / 2 + 6, 60, 14);
+      ctx.fillRect(canvas.width / 2 - 30, canvas.height / 2 - 8, 10, 14);
+      ctx.fillRect(canvas.width / 2 - 5, canvas.height / 2 - 12, 10, 18);
+      ctx.fillRect(canvas.width / 2 + 20, canvas.height / 2 - 8, 10, 14);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 22px monospace';
+      ctx.fillText('THE STORM KING IS DEFEATED!', canvas.width / 2, canvas.height / 2 + 62);
+      ctx.fillStyle = '#d8c2ff';
+      ctx.font = '16px monospace';
+      ctx.fillText('You beat every level of THE EXPLORER. What a run.',
+                   canvas.width / 2, canvas.height / 2 + 90);
+    } else if (victoryLevel === 3) {
       drawChestplate(canvas.width / 2, canvas.height / 2 + 4, 2.4, true);
       ctx.fillStyle = '#ffffff';
       ctx.font = 'bold 22px monospace';
@@ -1790,6 +2062,13 @@ function drawZombie(z, cam) {
     const stomp = Math.abs(Math.sin(elapsed * 4 + z.x)) * 4;   // heavy stomps
     const flash = z.hurtFlash > 0;
 
+    // the Storm King is EXTRA giant — scale the whole drawing up around him
+    const g = z.boss ? 1.7 : 1;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(g, g);
+    ctx.translate(-x, -y);
+
     // spider legs FIRST, so they come out from BEHIND the body
     ctx.strokeStyle = '#141418';
     ctx.lineWidth = 3;
@@ -1826,6 +2105,16 @@ function drawZombie(z, cam) {
     ctx.fillStyle = flash ? '#ffffff' : '#1c1c22';   // massive grabby arms
     ctx.fillRect(x - 20, y - 22 - stomp, 6, 16);
     ctx.fillRect(x + 14, y - 22 - stomp, 6, 16);
+
+    if (z.boss) {
+      // the crown. HIS crown.
+      ctx.fillStyle = '#ffd23f';
+      ctx.fillRect(x - 12, y - 58 - stomp, 24, 6);
+      ctx.fillRect(x - 12, y - 64 - stomp, 4, 6);
+      ctx.fillRect(x - 2, y - 66 - stomp, 4, 8);
+      ctx.fillRect(x + 8, y - 64 - stomp, 4, 6);
+    }
+    ctx.restore();
     return;
   }
 
