@@ -482,6 +482,7 @@ const BUZZ = {
   quake:   [450],
   flood:   [200, 80, 300],
   balls:   [30, 50, 30, 50, 30, 50, 30],
+  badguys: [80, 60, 80, 60, 80],
 };
 function buzz(type) {
   try { if (navigator.vibrate) navigator.vibrate(BUZZ[type] || 180); } catch (e) {}
@@ -515,8 +516,30 @@ function beginDisaster(type) {
       });
     }
     disasters.push({ type, life: 3.8, balls });
+  } else if (type === 'badguys') {
+    // a GANG of four, storming in from the edges of town
+    for (let i = 0; i < 4; i++) {
+      const side = Math.floor(Math.random() * 4);
+      badGuys.push({
+        x: side === 0 ? -20 : side === 1 ? gridW() + 20 : Math.random() * gridW(),
+        y: side === 2 ? TOPBAR - 20 : side === 3 ? TOPBAR + gridH() + 20
+                                    : TOPBAR + Math.random() * gridH(),
+        angle: 0,
+        walk: Math.random() * 6.28,
+        swing: 0,              // club wind-up timer
+        life: 18,              // seconds of crime before they flee
+        leaving: false,
+      });
+    }
   }
 }
+
+// ---------------------------------------------------------------------
+// BAD GUYS — they smash shelters with clubs and bonk anyone they catch.
+// The only building they can't dent is a bunker. After their crime spree
+// they scatter off the edges of the map.
+// ---------------------------------------------------------------------
+let badGuys = [];
 
 // SOMETHING HIT A BUILDING. It doesn't just vanish any more — it takes
 // damage and gets uglier: pristine -> lightly damaged -> heavily damaged ->
@@ -734,6 +757,7 @@ const MACHINE_MENU = [
   { label: '💥 Earthquake',   type: 'quake',   cost: 8 },
   { label: '🌊 Flood',        type: 'flood',   cost: 12 },
   { label: '🔴 Rubber Balls', type: 'balls',   cost: 9 },
+  { label: '🦹 Bad Guys',     type: 'badguys', cost: 10 },
 ];
 
 // quick point-in-box test, used all over the input code
@@ -1319,7 +1343,93 @@ function update(dt) {
   disasters = disasters.filter(D => !D.done);   // sweep up the finished ones
 
   // ---- THE LITTLE PEOPLE — wandering, panicking, HIDING, or REPAIRING ----
-  const panicking = disasters.length > 0;
+  // ---- BAD GUYS on their crime spree ----
+  const bs = cellSize();
+  for (const b of badGuys) {
+    b.walk += dt * 10;
+    b.life -= dt;
+    if (b.swing > 0) b.swing -= dt;
+    if (b.life <= 0) b.leaving = true;
+
+    if (b.leaving) {
+      // crime spree over — scatter to the nearest edge and vanish
+      const exits = [
+        { x: -40, y: b.y }, { x: gridW() + 40, y: b.y },
+        { x: b.x, y: TOPBAR - 40 }, { x: b.x, y: TOPBAR + gridH() + 40 },
+      ];
+      let exit = exits[0], eBest = 999999;
+      for (const e of exits) {
+        const d2 = Math.hypot(e.x - b.x, e.y - b.y);
+        if (d2 < eBest) { eBest = d2; exit = e; }
+      }
+      b.angle = Math.atan2(exit.y - b.y, exit.x - b.x);
+      b.x += Math.cos(b.angle) * 140 * dt;
+      b.y += Math.sin(b.angle) * 140 * dt;
+      if (b.x < -30 || b.x > gridW() + 30 ||
+          b.y < TOPBAR - 30 || b.y > TOPBAR + gridH() + 30) b.gone = true;
+      continue;
+    }
+
+    // find the nearest smashable shelter (bunkers are club-proof)
+    let target = null, best = 999999;
+    for (let gy = 0; gy < ROWS; gy++) {
+      for (let gx = 0; gx < COLS; gx++) {
+        const kind = grid[gy][gx];
+        if (!isShelter(kind) || kind === BUNKER) continue;
+        const rt = rootAt[gy][gx];
+        if (rt && (rt.rx !== gx || rt.ry !== gy)) continue;   // big buildings count once
+        const sp = spanOf(kind);
+        const bx2 = gx * bs + (bs * sp) / 2, by2 = TOPBAR + gy * bs + (bs * sp) / 2;
+        const d2 = Math.hypot(bx2 - b.x, by2 - b.y);
+        if (d2 < best) {
+          best = d2;
+          target = { gx, gy, x: bx2, y: by2, reach: bs * sp * 0.65 };
+        }
+      }
+    }
+    // no shelters left to smash? chase the nearest person instead
+    let prey = null;
+    if (!target) {
+      let pBest = 999999;
+      for (const p of people) {
+        if (p.sheltering || p.gone || p.kind !== 'person') continue;
+        const d2 = Math.hypot(p.x - b.x, p.y - b.y);
+        if (d2 < pBest) { pBest = d2; prey = p; }
+      }
+    }
+    const goal = target || prey;
+    if (goal) {
+      const d2 = Math.hypot(goal.x - b.x, goal.y - b.y);
+      const reach = target ? target.reach : 20;
+      if (d2 > reach) {
+        b.angle = Math.atan2(goal.y - b.y, goal.x - b.x) + Math.sin(b.walk) * 0.15;
+        b.x += Math.cos(b.angle) * 95 * dt;
+        b.y += Math.sin(b.angle) * 95 * dt;
+      } else if (target && b.swing <= 0) {
+        // WHACK. the damage system does the cracking and the collapsing
+        b.swing = 0.8;
+        hitBlock(target.gx, target.gy, target.x, target.y, 1);
+      }
+    } else {
+      b.angle += (Math.random() - 0.5) * dt * 6;   // nothing left — mill about smugly
+      b.x += Math.cos(b.angle) * 60 * dt;
+      b.y += Math.sin(b.angle) * 60 * dt;
+    }
+
+    // bonk anyone they catch out in the open
+    for (const p of people) {
+      if (p.gone || p.sheltering || p.kind !== 'person') continue;
+      if (Math.hypot(p.x - b.x, p.y - b.y) < 22) {
+        p.gone = true;
+        peopleLaunched++;
+        launchedFolk.push({ x: p.x, y: p.y, vx: (Math.random() - 0.5) * 600,
+          vy: -400 - Math.random() * 300, spin: 0, life: 1.4, shirt: p.shirt });
+      }
+    }
+  }
+  badGuys = badGuys.filter(b => !b.gone);
+
+  const panicking = disasters.length > 0 || badGuys.length > 0;
   const cs = cellSize();
 
   // which broken buildings already have a worker on them (one each, no crowding)
@@ -2216,6 +2326,38 @@ function draw() {
       ctx.fillStyle = '#ffe9a8';
       ctx.fillText(HAPPY_EMOTE[p.mood], p.x + 5 * u, p.y - 18 * u);
     }
+    ctx.restore();
+  }
+
+  // ---- THE BAD GUYS — dark clothes, masks, clubs, no manners ----
+  for (const b of badGuys) {
+    const step = Math.sin(b.walk) * 2.5;
+    const facing = Math.cos(b.angle) < 0 ? -1 : 1;
+    ctx.fillStyle = 'rgba(0,0,0,0.2)';                 // shadow
+    ctx.beginPath();
+    ctx.ellipse(b.x, b.y + 4, 8, 3, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#1e1e26';                         // stompy boots
+    ctx.fillRect(b.x - 4.5, b.y - 2 + step, 3, 6 - step);
+    ctx.fillRect(b.x + 1.5, b.y - 2 - step, 3, 6 + step);
+    ctx.fillStyle = '#2c2c38';                         // dark villain coat
+    ctx.fillRect(b.x - 6, b.y - 14, 12, 13);
+    ctx.fillStyle = '#f2c79b';                         // head
+    ctx.beginPath(); ctx.arc(b.x, b.y - 18, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#1e1e26';                         // the mask band
+    ctx.fillRect(b.x - 5, b.y - 20.5, 10, 4);
+    ctx.fillStyle = '#ff4757';                         // mean glowing eyes
+    ctx.fillRect(b.x - 3.5 + facing, b.y - 19.5, 2, 2);
+    ctx.fillRect(b.x + 1.5 + facing, b.y - 19.5, 2, 2);
+    // THE CLUB — raised high on the wind-up, SLAMMED on the swing
+    ctx.save();
+    ctx.translate(b.x + 6 * facing, b.y - 12);
+    if (facing === -1) ctx.scale(-1, 1);
+    ctx.rotate(b.swing > 0.4 ? -1.8 : b.swing > 0 ? -0.2 : -0.9 + Math.sin(b.walk) * 0.1);
+    ctx.fillStyle = '#5b3b1e';
+    ctx.fillRect(0, -2, 12, 3.5);
+    ctx.fillStyle = '#6d4a26';
+    ctx.beginPath(); ctx.arc(13, -0.2, 4, 0, Math.PI * 2); ctx.fill();
     ctx.restore();
   }
 
