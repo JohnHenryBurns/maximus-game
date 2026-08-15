@@ -54,7 +54,7 @@ let cell = 34;                      // pixel size of one grid square
 // Room at the top for the toolbar. It's two tiers now (money + THE MACHINE
 // on top, the build palette in a full-width row below) so everything fits on
 // a phone instead of running off the side.
-const TOPBAR = 54;
+const TOPBAR = 82;                   // two rows: Arcade+money on top, the buttons below
 
 // ---------------------------------------------------------------------
 // THE CAMERA — lets you zoom in to build with detail, then slide around.
@@ -144,6 +144,21 @@ function pickDisaster(item) {
   openMenu = null;                   // CLOSE the menu before the disaster begins
   pendings.push({ type: item.type, label: item.label, timer: TENSION });
   setStatus(item.label + ' incoming…', '#ffb454');
+}
+
+// BUZZ THE PHONE. Each disaster gets its own rumble pattern (in milliseconds:
+// buzz, pause, buzz, …). Only Android/Chrome phones can actually vibrate —
+// on a laptop or an iPhone navigator.vibrate simply isn't there, so we check
+// first and wrap it in try/catch so it can never break the game.
+const BUZZ = {
+  tornado: [120, 40, 120, 40, 200],
+  meteors: [40, 30, 40, 30, 40, 30, 120],
+  quake:   [450],
+  flood:   [200, 80, 300],
+  balls:   [30, 50, 30, 50, 30, 50, 30],
+};
+function buzz(type) {
+  try { if (navigator.vibrate) navigator.vibrate(BUZZ[type] || 180); } catch (e) {}
 }
 
 // Actually unleash the disaster (called once its tension timer runs out).
@@ -237,6 +252,7 @@ function setCamera(newZoom, worldPt, sx, sy) {
 }
 
 function placeAt(px, py) {
+  if (selected == null) return;     // pan mode — nothing to place
   const w = screenToWorld(px, py);  // where in the town did we really touch?
   const s = cellSize();
   const gx = Math.floor(w.x / s);
@@ -244,6 +260,9 @@ function placeAt(px, py) {
   if (gx < 0 || gy < 0 || gx >= COLS || gy >= ROWS) return;
   grid[gy][gx] = selected;          // EMPTY works as the eraser
 }
+
+// slide the whole zoomed view by a screen-pixel delta (used for one-finger pan)
+function doPan(dx, dy) { panX += dx; panY += dy; clampPan(); }
 
 // ---------------------------------------------------------------------
 // THE TOP BAR — three drop-down buttons and the money.
@@ -287,46 +306,62 @@ function rrect(x, y, w, h, r) {
   ctx.closePath();
 }
 
-// the emoji of whatever build item is currently picked (shown on the Items button)
+// the emoji of whatever build item is currently picked
 function iconFor(type) {
   const b = buttons.find(b => b.type === type);
   return b ? b.icon : '🏠';
 }
+// what the Build button shows: a hand when you're in pan mode (nothing to
+// place), otherwise the icon of the thing you're placing.
+function buildIcon() { return selected == null ? '✋' : iconFor(selected); }
 
-// The money chip sits just right of the ← Arcade pill (which lives in the
-// top-left corner), so we reserve room for the pill first.
-function moneyChipRect() {
-  const narrow = canvas.width < 560;
-  const y = 8, h = TOPBAR - 16;
-  const w = narrow ? 66 : 108;
-  return { x: 100, y, w, h, narrow };
+// Leave building and go back to just moving the map around.
+function setPanMode() {
+  selected = null;
+  openMenu = null;
+  setStatus('✋ Pan mode — drag to move, pinch/scroll to zoom', '#7dd3ff');
 }
 
-// The three top buttons fill the space from the money chip to the right edge.
+// ROW 1 (top): the gold money chip, sitting right of the ← Arcade pill.
+function moneyChipRect() {
+  const narrow = canvas.width < 480;
+  return { x: 104, y: 10, w: narrow ? 96 : 150, h: 28, narrow };
+}
+
+// ROW 2 (below): the three big buttons, spread across the FULL width so their
+// words always fit — Build, Disasters, People.
 function topButtons() {
-  const gap = 6, pad = 8, y = 8, h = TOPBAR - 16;
-  const money = moneyChipRect();
-  const x0 = money.x + money.w + gap;
-  const x1 = canvas.width - pad;
+  const gap = 8, pad = 8, y = 44, h = 30;
+  const x0 = pad, x1 = canvas.width - pad;
   const w = (x1 - x0 - gap * 2) / 3;
-  const compact = w < 116;                 // too tight for the full word? show icon + ▾
+  const compact = w < 104;                 // only a very tiny phone hides the words
   const defs = [
-    { key: 'items',     icon: iconFor(selected), word: 'Items',     menu: true },
-    { key: 'disasters', icon: '🌪',              word: 'Disasters', menu: true },
-    { key: 'people',    icon: '🧍',              word: 'People',    menu: false },
+    { key: 'build',     icon: buildIcon(), word: 'Build',     menu: true },
+    { key: 'disasters', icon: '🌪',        word: 'Disasters', menu: true },
+    { key: 'people',    icon: '🧍',        word: 'People',    menu: false },
   ];
   return defs.map((d, i) => ({ ...d, x: x0 + i * (w + gap), y, w, h, compact }));
+}
+
+// A small floating button, shown only WHILE you're placing, that drops you
+// back into pan/zoom mode. This is the clear "stop building" exit.
+function exitBtnRect() {
+  if (selected == null || openMenu) return null;
+  const w = 116, h = 32;
+  return { x: canvas.width - w - 10, y: TOPBAR + 8, w, h };
 }
 
 // The list that drops down under an open button. Kept on-screen at the right edge.
 function menuRects(kind) {
   const btn = topButtons().find(b => b.key === kind);
-  const items = kind === 'items'
-    ? buttons.map(b => ({ label: b.icon + ' ' + b.short, type: b.type, cost: 0 }))
+  // the Build menu starts with a "Move / Pan" choice, then all the buildables
+  const items = kind === 'build'
+    ? [{ label: '✋ Move / Pan', type: null, cost: 0 },
+       ...buttons.map(b => ({ label: b.icon + ' ' + b.short, type: b.type, cost: 0 }))]
     : MACHINE_MENU.map(m => ({ ...m }));
   // disasters need extra room so the name never crowds its price tag
-  const minW = kind === 'disasters' ? 214 : 168;
-  const w = Math.max(btn.w, minW), h = 40, gap = 4;
+  const minW = kind === 'disasters' ? 214 : 172;
+  const w = Math.max(btn.w, minW), h = 38, gap = 4;
   let x = btn.x;
   if (x + w > canvas.width - 6) x = canvas.width - 6 - w;   // don't run off the right edge
   return items.map((it, i) => ({ ...it, x, y: TOPBAR + 6 + i * (h + gap), w, h }));
@@ -345,7 +380,8 @@ function handleTopButton(b) {
 
 // tapping a row inside an open menu
 function chooseFromMenu(kind, r) {
-  if (kind === 'items') {
+  if (kind === 'build') {
+    if (r.type == null) { setPanMode(); return; }     // the "Move / Pan" choice
     selected = r.type;
     setStatus('Now placing ' + r.label, '#7ddf8f');
     openMenu = null;
@@ -368,22 +404,37 @@ function pressAt(px, py) {
   // no menu open: check the top buttons
   const tb = topButtons().find(b => inside(px, py, b));
   if (tb) { handleTopButton(tb); return true; }
+  // the floating "stop building" exit button
+  const xb = exitBtnRect();
+  if (xb && inside(px, py, xb)) { setPanMode(); return true; }
   if (py <= TOPBAR) return true;    // tapped an empty part of the bar — do nothing
-  return false;                     // tapped the world — go ahead and paint
+  return false;                     // tapped the world — paint, or pan if in pan mode
 }
 
 // ---------------------------------------------------------------------
 // INPUT — mouse and touch both paint blocks while held down
 // ---------------------------------------------------------------------
-let painting = false;
+let painting = false;               // dragging to paint blocks (an item is selected)
+let panning = false;                // dragging to slide the map (pan mode)
+let lastDrag = { x: 0, y: 0 };      // where the finger/mouse was last frame, for panning
 // Taps on the Arcade link are left alone so the link actually navigates.
 function onBackButton(e) { return e.target && e.target.closest && e.target.closest('#back'); }
+
+// after a tap lands in the world, either paint or start a pan, depending on mode
+function startWorldDrag(x, y) {
+  if (selected == null) { panning = true; lastDrag = { x, y }; }   // pan mode
+  else { painting = true; placeAt(x, y); }                          // build mode
+}
+
 addEventListener('mousedown', e => {
   if (onBackButton(e)) return;
-  if (!pressAt(e.clientX, e.clientY)) { painting = true; placeAt(e.clientX, e.clientY); }
+  if (!pressAt(e.clientX, e.clientY)) startWorldDrag(e.clientX, e.clientY);
 });
-addEventListener('mousemove', e => { if (painting) placeAt(e.clientX, e.clientY); });
-addEventListener('mouseup', () => { painting = false; });
+addEventListener('mousemove', e => {
+  if (painting) placeAt(e.clientX, e.clientY);
+  else if (panning) { doPan(e.clientX - lastDrag.x, e.clientY - lastDrag.y); lastDrag = { x: e.clientX, y: e.clientY }; }
+});
+addEventListener('mouseup', () => { painting = false; panning = false; });
 
 // MOUSE WHEEL / TRACKPAD ZOOM. Scroll up over the town to zoom in toward
 // the pointer, scroll down to zoom back out. We keep the spot under the
@@ -414,13 +465,13 @@ function twoFinger(e) {
 addEventListener('touchstart', e => {
   if (onBackButton(e)) return;                 // don't preventDefault - let the link work
   e.preventDefault();
-  if (e.touches.length >= 2) {                 // two fingers down: start a pinch, don't paint
-    painting = false;
+  if (e.touches.length >= 2) {                 // two fingers down: start a pinch, don't paint/pan
+    painting = false; panning = false;
     pinch = twoFinger(e);
     return;
   }
   const t = e.changedTouches[0];
-  if (!pressAt(t.clientX, t.clientY)) { painting = true; placeAt(t.clientX, t.clientY); }
+  if (!pressAt(t.clientX, t.clientY)) startWorldDrag(t.clientX, t.clientY);
 }, { passive: false });
 addEventListener('touchmove', e => {
   e.preventDefault();
@@ -434,9 +485,10 @@ addEventListener('touchmove', e => {
   }
   const t = e.changedTouches[0];
   if (painting) placeAt(t.clientX, t.clientY);
+  else if (panning) { doPan(t.clientX - lastDrag.x, t.clientY - lastDrag.y); lastDrag = { x: t.clientX, y: t.clientY }; }
 }, { passive: false });
 addEventListener('touchend', e => {
-  painting = false;
+  painting = false; panning = false;
   if (e.touches.length < 2) pinch = null;      // pinch is over once a finger lifts
 });
 
@@ -448,8 +500,9 @@ addEventListener('keydown', e => {
     setStatus('Now placing ' + iconFor(selected), '#7ddf8f');
   }
   if (e.key.toLowerCase() === 'd') openMenu = openMenu === 'disasters' ? null : 'disasters';  // D for Disasters menu
-  if (e.key.toLowerCase() === 'i') openMenu = openMenu === 'items' ? null : 'items';          // I for Items menu
+  if (e.key.toLowerCase() === 'b') openMenu = openMenu === 'build' ? null : 'build';          // B for Build menu
   if (e.key.toLowerCase() === 'p') { spawnPeople(); setStatus('🧍 New folk wander in!', '#7ddf8f'); }
+  if (e.key === 'Escape') setPanMode();                         // Esc stops building -> pan mode
   if (e.key === '0') { zoom = 1; panX = 0; panY = 0; }           // 0 zooms back out to the whole town
 });
 
@@ -475,6 +528,7 @@ function update(dt) {
         beginDisaster(p.type);
         setStatus(p.label + '!', '#ff9f43');
         shake = Math.max(shake, 0.5);
+        buzz(p.type);                 // rattle the phone (where the browser allows it)
       }
     }
     pendings = pendings.filter(p => p.timer > 0);
@@ -1048,11 +1102,11 @@ function draw() {
 
   ctx.restore();   // stop shaking for the buttons — the UI stays calm
 
-  // the top bar background (one tidy row now)
+  // the top bar background (two rows)
   ctx.fillStyle = '#10161d';
   ctx.fillRect(0, 0, canvas.width, TOPBAR);
 
-  // --- the money chip, just right of the ← Arcade pill ---
+  // --- ROW 1: the money chip, just right of the ← Arcade pill ---
   const money = moneyChipRect();
   const flashing = (brokeFlash > 0 && Math.sin(brokeFlash * 30) > 0);
   ctx.fillStyle = '#1c2530';
@@ -1064,9 +1118,9 @@ function draw() {
   ctx.textAlign = 'center';
   ctx.fillText(`💰 ${moneys}`, money.x + money.w / 2, money.y + money.h / 2 + 5);
 
-  // --- the three drop-down buttons: Items, Disasters, People ---
+  // --- ROW 2: the three drop-down buttons: Build, Disasters, People ---
   const palette = {
-    items:     { bg: '#24343a', border: '#4f9d6b' },
+    build:     { bg: '#24343a', border: '#4f9d6b' },
     disasters: { bg: '#7a1f2b', border: '#ff6b5e' },
     people:    { bg: '#26473b', border: '#7ddf8f' },
   };
@@ -1088,9 +1142,9 @@ function draw() {
   // --- the open drop-down list, if any ---
   if (openMenu) {
     for (const r of menuRects(openMenu)) {
-      const isItems = openMenu === 'items';
-      const canAfford = isItems || moneys >= r.cost;
-      const chosen = isItems && selected === r.type;
+      const isBuild = openMenu === 'build';
+      const canAfford = isBuild || moneys >= r.cost;
+      const chosen = isBuild && selected === r.type;   // also lights up "Move" in pan mode
       ctx.fillStyle = chosen ? '#3d6b30' : canAfford ? '#24343a' : '#2c2126';
       rrect(r.x, r.y, r.w, r.h, 8); ctx.fill();
       ctx.strokeStyle = chosen ? '#7ddf8f' : canAfford ? '#3a4654' : '#5a4a4e';
@@ -1100,12 +1154,25 @@ function draw() {
       ctx.font = 'bold 15px monospace';
       ctx.textAlign = 'left';
       ctx.fillText(r.label, r.x + 12, r.y + r.h / 2 + 5);
-      if (!isItems) {                       // disasters show their price on the right
+      if (!isBuild) {                       // disasters show their price on the right
         ctx.textAlign = 'right';
         ctx.fillStyle = canAfford ? '#ffd23f' : '#8a7a7e';
         ctx.fillText(`${r.cost}💰`, r.x + r.w - 12, r.y + r.h / 2 + 5);
       }
     }
+  }
+
+  // --- the floating "stop building" exit button (only while placing) ---
+  const xb = exitBtnRect();
+  if (xb) {
+    ctx.fillStyle = '#1d3a4a';
+    rrect(xb.x, xb.y, xb.w, xb.h, 8); ctx.fill();
+    ctx.strokeStyle = '#7dd3ff'; ctx.lineWidth = 2;
+    rrect(xb.x, xb.y, xb.w, xb.h, 8); ctx.stroke();
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 14px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('✋ Pan mode', xb.x + xb.w / 2, xb.y + xb.h / 2 + 5);
   }
 
   // --- the STATUS BOX at the bottom: a readable box for the latest news ---
@@ -1133,7 +1200,8 @@ function draw() {
   }
 
   // the destruction scoreboard, tucked top-left under the bar
-  if (destroyed > 0 || peopleLaunched > 0) {
+  // (hidden while a drop-down is open so it can't show through the menu)
+  if ((destroyed > 0 || peopleLaunched > 0) && !openMenu) {
     ctx.fillStyle = 'rgba(255, 159, 67, 0.9)';
     ctx.font = 'bold 12px monospace';
     ctx.textAlign = 'left';
