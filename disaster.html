@@ -77,6 +77,10 @@ const grid = [];
 for (let y = 0; y < ROWS; y++) grid.push(new Array(COLS).fill(0));
 
 const EMPTY = 0, HOUSE = 1, TREE = 2, STONE = 3, APT = 4, BUNKER = 5;
+// Roads and paths are things you BUILD, but you can still walk on them —
+// in fact everyone would rather walk on a path than through the grass.
+const ROAD = 6, PATH = 7;
+function isWay(k) { return k === ROAD || k === PATH; }   // "is this a road or a path?"
 
 // What you're placing right now. Starts as null — the game opens in
 // look-around mode, so you can drag and zoom before you build anything.
@@ -107,7 +111,13 @@ let peopleLaunched = 0;
 // (Trees and stone block you too — you can't stroll through a boulder.)
 function blocked(gx, gy) {
   if (gx < 0 || gy < 0 || gx >= COLS || gy >= ROWS) return true;   // off the map
-  return grid[gy][gx] !== EMPTY;
+  const k = grid[gy][gx];
+  return k !== EMPTY && !isWay(k);        // roads and paths are walk-through
+}
+// is there a road or path on this square?
+function wayAt(gx, gy) {
+  if (gx < 0 || gy < 0 || gx >= COLS || gy >= ROWS) return false;
+  return isWay(grid[gy][gx]);
 }
 // same question, but in pixels
 function blockedAt(x, y) {
@@ -144,6 +154,70 @@ function spawnCritters(kind) {
     made++;
   }
   return made;
+}
+
+// ---------------------------------------------------------------------
+// CARS — they appear by themselves on any decent stretch of road and
+// trundle along it. Nobody repairs a car: when a disaster catches one it
+// simply EXPLODES and is gone.
+// ---------------------------------------------------------------------
+let cars = [];
+let carsPopped = 0;
+let carTimer = 0;
+const CAR_COLORS = ['#e8453c', '#3aa7e8', '#f5c542', '#8e6ee8', '#3fbf6f', '#ef8a3c'];
+const MIN_ROAD_RUN = 4;         // a road needs to be this long before cars bother with it
+
+// Look for a straight run of road at least MIN_ROAD_RUN squares long and
+// drop a car on it, pointed along the run.
+function trySpawnCar() {
+  const spots = [];
+  // horizontal runs
+  for (let gy = 0; gy < ROWS; gy++) {
+    let run = 0;
+    for (let gx = 0; gx <= COLS; gx++) {
+      if (gx < COLS && grid[gy][gx] === ROAD) run++;
+      else {
+        if (run >= MIN_ROAD_RUN) spots.push({ gx: gx - Math.ceil(run / 2), gy, dx: 1, dy: 0 });
+        run = 0;
+      }
+    }
+  }
+  // vertical runs
+  for (let gx = 0; gx < COLS; gx++) {
+    let run = 0;
+    for (let gy = 0; gy <= ROWS; gy++) {
+      if (gy < ROWS && grid[gy][gx] === ROAD) run++;
+      else {
+        if (run >= MIN_ROAD_RUN) spots.push({ gx, gy: gy - Math.ceil(run / 2), dx: 0, dy: 1 });
+        run = 0;
+      }
+    }
+  }
+  if (!spots.length) return;
+  const spot = spots[Math.floor(Math.random() * spots.length)];
+  const s = cellSize();
+  const flip = Math.random() < 0.5 ? 1 : -1;
+  cars.push({
+    x: spot.gx * s + s / 2, y: TOPBAR + spot.gy * s + s / 2,
+    dx: spot.dx * flip, dy: spot.dy * flip,
+    speed: 34 + Math.random() * 26,
+    color: CAR_COLORS[Math.floor(Math.random() * CAR_COLORS.length)],
+  });
+}
+
+// KABOOM. A car caught in a disaster bursts into bits and is gone for good.
+function popCar(car) {
+  car.gone = true;
+  carsPopped++;
+  for (let i = 0; i < 10; i++) {
+    debris.push({
+      x: car.x, y: car.y,
+      vx: (Math.random() - 0.5) * 520,
+      vy: -Math.random() * 460 - 90,
+      spin: Math.random() * 10, life: 1.1,
+      color: i % 3 === 0 ? '#ff9f43' : i % 3 === 1 ? '#ffd23f' : car.color,
+    });
+  }
 }
 
 // scoreboard of destruction (and of putting it all back together)
@@ -376,6 +450,8 @@ const buttons = [
   { icon: '🌳', short: 'Tree',   type: TREE },
   { icon: '🪨', short: 'Stone',  type: STONE },
   { icon: '🛡', short: 'Bunker', type: BUNKER },
+  { icon: '🛣', short: 'Road',   type: ROAD },
+  { icon: '👣', short: 'Path',   type: PATH },
   { icon: '❌', short: 'Erase',  type: EMPTY },
 ];
 
@@ -636,7 +712,8 @@ addEventListener('touchend', e => {
 });
 
 // number keys pick a build item too
-const KEY_ITEM = { '1': HOUSE, '2': APT, '3': TREE, '4': STONE, '5': BUNKER, '6': EMPTY };
+const KEY_ITEM = { '1': HOUSE, '2': APT, '3': TREE, '4': STONE, '5': BUNKER,
+                   '6': ROAD, '7': PATH, '8': EMPTY };
 addEventListener('keydown', e => {
   if (e.key in KEY_ITEM) {
     selected = KEY_ITEM[e.key];
@@ -650,6 +727,120 @@ addEventListener('keydown', e => {
   if (e.key === 'Escape') stopBuilding();                        // Esc stops building
   if (e.key === '0') { zoom = 1; panX = 0; panY = 0; }           // 0 zooms back out to the whole town
 });
+
+// ---------------------------------------------------------------------
+// DRAWING ROADS AND PATHS
+// A road square looks at its four neighbours and draws itself to match, so
+// straights, corners, T-junctions and crossroads all join up by themselves.
+// And when two road lines run side by side, they merge into one wide
+// two-lane road with a dashed line down the middle.
+// ---------------------------------------------------------------------
+function sameWay(gx, gy, kind) {
+  if (gx < 0 || gy < 0 || gx >= COLS || gy >= ROWS) return false;
+  return grid[gy][gx] === kind;
+}
+
+function drawWay(gx, gy, x, y, s, kind) {
+  const road = kind === ROAD;
+  const N = sameWay(gx, gy - 1, kind), S = sameWay(gx, gy + 1, kind);
+  const W = sameWay(gx - 1, gy, kind), E = sameWay(gx + 1, gy, kind);
+  const wide = road ? 0.78 : 0.5;                 // roads are fat, paths are skinny
+  const half = s * wide / 2, mid = s / 2;
+
+  ctx.fillStyle = road ? '#4b4f55' : '#c8b38b';   // tarmac, or trodden dirt
+  // the square's own middle patch
+  ctx.fillRect(x + mid - half, y + mid - half, half * 2, half * 2);
+  // a stub reaching out to each neighbour it connects to
+  if (N) ctx.fillRect(x + mid - half, y, half * 2, mid);
+  if (S) ctx.fillRect(x + mid - half, y + mid, half * 2, mid + 1);
+  if (W) ctx.fillRect(x, y + mid - half, mid, half * 2);
+  if (E) ctx.fillRect(x + mid, y + mid - half, mid + 1, half * 2);
+  // a lone square with no neighbours at all still shows something
+  if (!N && !S && !W && !E) {
+    ctx.fillRect(x + mid - half, y + mid - half, half * 2, half * 2);
+  }
+
+  if (road) {
+    // IS THIS PART OF A TWO-LANE ROAD? That means the road beside us runs
+    // the same way we do. If so we skip our own centre line and paint the
+    // dashes along the shared edge instead, so the pair reads as one road.
+    const vertical = (N || S) && !(W && E);
+    const horizontal = (W || E) && !(N && S);
+    const twinRight = vertical && sameWay(gx + 1, gy, ROAD) &&
+                      (sameWay(gx + 1, gy - 1, ROAD) || sameWay(gx + 1, gy + 1, ROAD));
+    const twinLeft  = vertical && sameWay(gx - 1, gy, ROAD) &&
+                      (sameWay(gx - 1, gy - 1, ROAD) || sameWay(gx - 1, gy + 1, ROAD));
+    const twinDown  = horizontal && sameWay(gx, gy + 1, ROAD) &&
+                      (sameWay(gx - 1, gy + 1, ROAD) || sameWay(gx + 1, gy + 1, ROAD));
+    const twinUp    = horizontal && sameWay(gx, gy - 1, ROAD) &&
+                      (sameWay(gx - 1, gy - 1, ROAD) || sameWay(gx + 1, gy - 1, ROAD));
+
+    ctx.strokeStyle = '#f2d24b';
+    ctx.lineWidth = Math.max(1, s * 0.05);
+    ctx.setLineDash([s * 0.16, s * 0.14]);
+    ctx.beginPath();
+    if (twinRight) {            // we're the LEFT lane — line down our right edge
+      ctx.moveTo(x + s, y); ctx.lineTo(x + s, y + s);
+    } else if (twinLeft) {      // we're the RIGHT lane — the twin drew the line
+    } else if (twinDown) {      // we're the TOP lane — line along our bottom edge
+      ctx.moveTo(x, y + s); ctx.lineTo(x + s, y + s);
+    } else if (twinUp) {        // bottom lane — the twin drew it
+    } else if (vertical) {
+      ctx.moveTo(x + mid, y); ctx.lineTo(x + mid, y + s);
+    } else if (horizontal) {
+      ctx.moveTo(x, y + mid); ctx.lineTo(x + s, y + mid);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+  } else {
+    // paths get little stepping-stone speckles
+    ctx.fillStyle = 'rgba(150, 128, 92, 0.55)';
+    for (let i = 0; i < 3; i++) {
+      const h2 = hash(gx * 5.1 + gy * 2.7 + i);
+      ctx.fillRect(x + s * (0.28 + h2 * 0.42), y + s * (0.24 + i * 0.24), s * 0.09, s * 0.07);
+    }
+  }
+}
+
+// A CALM WANDER. Everyone would rather stroll along a road or path than
+// wade through the grass — so if they're on one, they mostly follow it; if
+// they're near one, they drift toward it. But they still wander off now and
+// then, because they're not robots.
+const STEP4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+function strollAbout(p, dt, cs) {
+  const gx = Math.floor(p.x / cs), gy = Math.floor((p.y - TOPBAR) / cs);
+  if (wayAt(gx, gy)) {
+    // ON a path: keep following it, choosing among the ways out of this square
+    if (Math.random() < dt * 1.6) {
+      const outs = STEP4.filter(([dx, dy]) => wayAt(gx + dx, gy + dy));
+      if (outs.length && Math.random() < 0.85) {          // 85%: stay on the path
+        const [dx, dy] = outs[Math.floor(Math.random() * outs.length)];
+        p.angle = Math.atan2(dy, dx) + (Math.random() - 0.5) * 0.25;
+      } else {
+        p.angle = Math.random() * 6.28;                   // 15%: strike out cross-country
+      }
+    }
+    return;
+  }
+  // OFF the path: every so often, look around for one nearby and head for it
+  if (Math.random() < dt * 0.9) {
+    let best = null, bestD = 99;
+    for (let r = 1; r <= 3 && !best; r++) {
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (!wayAt(gx + dx, gy + dy)) continue;
+          const d2 = Math.abs(dx) + Math.abs(dy);
+          if (d2 < bestD) { bestD = d2; best = [dx, dy]; }
+        }
+      }
+    }
+    if (best && Math.random() < 0.7) {
+      p.angle = Math.atan2(best[1], best[0]) + (Math.random() - 0.5) * 0.4;
+    } else {
+      p.angle = Math.random() * 6.28;
+    }
+  }
+}
 
 // ---------------------------------------------------------------------
 // UPDATE — the tornado wanders and EATS
@@ -742,6 +933,10 @@ function update(dt) {
           m.hit = true;
           shake = 0.35;
           craters.push({ x: m.x, y: m.y, r: 26 + Math.random() * 14 });
+          // any car parked in the blast is instantly scrap
+          for (const car of cars) {
+            if (!car.gone && Math.hypot(car.x - m.x, car.y - m.y) < 60) popCar(car);
+          }
           // anyone standing OUTSIDE near the impact gets LAUNCHED
           for (const p of people) {
             if (!p.gone && !p.sheltering && Math.hypot(p.x - m.x, p.y - m.y) < 85) {
@@ -993,10 +1188,10 @@ function update(dt) {
           }
         } else {
           p.fixing = false;
-          if (Math.random() < dt * 0.8) p.angle = Math.random() * 6.28;   // nothing to do, amble
+          strollAbout(p, dt, cs);           // nothing to fix — go for a wander
         }
       } else {
-        if (Math.random() < dt * 0.8) p.angle = Math.random() * 6.28;     // calm amble
+        strollAbout(p, dt, cs);             // cows and dogs are always just wandering
       }
     }
     if (p.fixing) continue;               // a worker mid-repair stands still
@@ -1043,6 +1238,52 @@ function update(dt) {
     }
   }
   people = people.filter(p => !p.gone);
+
+  // ---- CARS ON THE ROADS ----
+  carTimer -= dt;
+  if (carTimer <= 0) {                       // now and then, a new car turns up
+    carTimer = 2.5;
+    if (cars.length < 14) trySpawnCar();
+  }
+  for (const car of cars) {
+    const gx = Math.floor(car.x / cs), gy = Math.floor((car.y - TOPBAR) / cs);
+    if (grid[gy] === undefined || grid[gy][gx] !== ROAD) { popCar(car); continue; }  // road's gone!
+    car.x += car.dx * car.speed * dt;
+    car.y += car.dy * car.speed * dt;
+    // reached the middle of the next square? decide where to go from here
+    const nx2 = Math.floor(car.x / cs), ny2 = Math.floor((car.y - TOPBAR) / cs);
+    if (nx2 !== gx || ny2 !== gy) {
+      const ahead = grid[ny2] && grid[ny2][nx2] === ROAD;
+      if (!ahead) {                          // ran off the end — pick a new way
+        const turns = [[car.dy, car.dx], [-car.dy, -car.dx], [-car.dx, -car.dy]];
+        let picked = null;
+        for (const [tx, ty] of turns) {
+          if (grid[gy + ty] && grid[gy + ty][gx + tx] === ROAD) { picked = [tx, ty]; break; }
+        }
+        car.x = gx * cs + cs / 2; car.y = TOPBAR + gy * cs + cs / 2;   // back to the middle
+        if (picked) { car.dx = picked[0]; car.dy = picked[1]; }
+        else { car.dx = -car.dx; car.dy = -car.dy; }                   // dead end: turn around
+      } else if (Math.random() < 0.25) {      // an intersection? sometimes take the turn
+        const side = [[car.dy, car.dx], [-car.dy, -car.dx]].filter(([tx, ty]) =>
+          grid[ny2 + ty] && grid[ny2 + ty][nx2 + tx] === ROAD);
+        if (side.length) {
+          const t = side[Math.floor(Math.random() * side.length)];
+          car.x = nx2 * cs + cs / 2; car.y = TOPBAR + ny2 * cs + cs / 2;
+          car.dx = t[0]; car.dy = t[1];
+        }
+      }
+    }
+    // did a disaster catch it?
+    for (const D of disasters) {
+      if (D.type === 'tornado' && Math.hypot(D.x - car.x, D.y - car.y) < 60) popCar(car);
+      if (D.type === 'flood' && car.y > D.waterY + 6) popCar(car);
+      if (D.type === 'balls') {
+        for (const ball of D.balls) if (Math.hypot(ball.x - car.x, ball.y - car.y) < 28) popCar(car);
+      }
+      if (D.type === 'quake' && Math.random() < dt * 0.25) popCar(car);
+    }
+  }
+  cars = cars.filter(c => !c.gone);
 
   // airborne folk tumble gracefully out of frame
   for (const f of launchedFolk) {
@@ -1152,13 +1393,18 @@ function draw() {
       // every block gets its own little quirk from its position, so the town
       // looks hand-made instead of stamped out
       const q = hash(gx * 7.3 + gy * 3.1);
-      // a soft shadow on the grass under everything — makes it all pop
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.16)';
-      ctx.beginPath();
-      ctx.ellipse(x + s * 0.5, y + s * 0.92, s * 0.36, s * 0.09, 0, 0, Math.PI * 2);
-      ctx.fill();
+      // a soft shadow on the grass under everything that stands up
+      // (roads and paths lie flat, so they don't get one)
+      if (!isWay(kind)) {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.16)';
+        ctx.beginPath();
+        ctx.ellipse(x + s * 0.5, y + s * 0.92, s * 0.36, s * 0.09, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
 
-      if (kind === HOUSE) {
+      if (isWay(kind)) {
+        drawWay(gx, gy, x, y, s, kind);
+      } else if (kind === HOUSE) {
         ctx.fillStyle = ['#c9a06a', '#d9b184', '#c08f5e'][Math.floor(q * 3)];  // walls
         ctx.fillRect(x + s * 0.15, y + s * 0.4, s * 0.7, s * 0.5);
         ctx.fillStyle = '#8fd0ff';                      // a cheerful little window
@@ -1290,6 +1536,26 @@ function draw() {
         ctx.fillRect(x, y, s, s);                        // soot over the whole square
       }
     }
+  }
+
+  // ---- CARS, trundling along the roads ----
+  for (const car of cars) {
+    const u = s / 26;
+    const horiz = car.dx !== 0;
+    const L = 15 * u, Wd = 9 * u;                 // length and width
+    const cw = horiz ? L : Wd, ch = horiz ? Wd : L;
+    ctx.fillStyle = 'rgba(0,0,0,0.22)';           // shadow under the car
+    ctx.beginPath();
+    ctx.ellipse(car.x, car.y + 2 * u, cw * 0.5, ch * 0.35, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = car.color;                    // the body
+    rrect(car.x - cw / 2, car.y - ch / 2, cw, ch, 2.5 * u); ctx.fill();
+    ctx.fillStyle = 'rgba(180, 225, 255, 0.85)';  // windscreen, up at the front
+    if (horiz) ctx.fillRect(car.x + car.dx * 1.5 * u - 2 * u, car.y - ch / 2 + 1.4 * u, 4 * u, ch - 2.8 * u);
+    else       ctx.fillRect(car.x - cw / 2 + 1.4 * u, car.y + car.dy * 1.5 * u - 2 * u, cw - 2.8 * u, 4 * u);
+    ctx.fillStyle = '#ffe9a8';                    // headlights
+    if (horiz) ctx.fillRect(car.x + car.dx * (L / 2 - 1.4 * u) - 0.7 * u, car.y - ch / 2 + 1 * u, 1.6 * u, ch - 2 * u);
+    else       ctx.fillRect(car.x - cw / 2 + 1 * u, car.y + car.dy * (L / 2 - 1.4 * u) - 0.7 * u, cw - 2 * u, 1.6 * u);
   }
 
   // A little green progress bar over whatever building is being repaired,
@@ -1725,11 +1991,11 @@ function draw() {
 
   // the destruction scoreboard, tucked top-left under the bar
   // (hidden while a drop-down is open so it can't show through the menu)
-  if ((destroyed > 0 || peopleLaunched > 0 || repaired > 0) && !openMenu) {
+  if ((destroyed > 0 || peopleLaunched > 0 || repaired > 0 || carsPopped > 0) && !openMenu) {
     ctx.fillStyle = 'rgba(255, 159, 67, 0.9)';
     ctx.font = 'bold 12px monospace';
     ctx.textAlign = 'left';
-    ctx.fillText(`💥 ${destroyed} smashed   🚀 ${peopleLaunched} launched   🔧 ${repaired} fixed`,
+    ctx.fillText(`💥 ${destroyed}   🚀 ${peopleLaunched}   🔧 ${repaired}   🚗 ${carsPopped}`,
                  12, TOPBAR + 18);
   }
 }
