@@ -88,6 +88,10 @@ const SKY = 8, TOWER = 9;
 function isShelter(k) {
   return k === HOUSE || k === APT || k === BUNKER || k === SKY || k === TOWER;
 }
+// STACKING: place a shelter on a shelter and it GROWS into the next size up
+const UPGRADE = { [HOUSE]: APT, [APT]: SKY, [BUNKER]: TOWER };
+let lastUpgradeAt = -9;    // tiny pause between growth spurts, so a drag
+                           // doesn't zoom a house to a skyscraper instantly
 
 // What you're placing right now. Starts as null — the game opens in
 // look-around mode, so you can drag and zoom before you build anything.
@@ -626,6 +630,48 @@ function placeAt(px, py) {
   const gx = Math.floor(w.x / s);
   const gy = Math.floor((w.y - TOPBAR) / s);
   if (gx < 0 || gy < 0 || gx >= COLS || gy >= ROWS) return;
+
+  // ---- STACKING SHELTERS ----
+  // Placing a shelter ON an existing shelter doesn't replace it — it
+  // GROWS: house -> apartment -> skyscraper, bunker -> castle tower.
+  // Hold still and it grows one step at a time.
+  if (isShelter(selected) && isShelter(grid[gy][gx])) {
+    if (elapsed - lastUpgradeAt < 0.4) return;   // one growth spurt at a time
+    const r = rootOf(gx, gy);
+    const grown = UPGRADE[grid[r.ry][r.rx]];
+    if (!grown) {
+      setStatus("That one's fully grown — the biggest of its kind!", '#ffb454');
+      lastUpgradeAt = elapsed;
+      return;
+    }
+    lastUpgradeAt = elapsed;
+    const sp2 = spanOf(grown);
+    const rx = Math.min(r.rx, COLS - sp2), ry = Math.min(r.ry, ROWS - sp2);
+    if (rx < 0 || ry < 0) return;                // town too small to fit it
+    for (let oy = 0; oy < sp2; oy++)
+      for (let ox = 0; ox < sp2; ox++) clearCell(rx + ox, ry + oy);
+    for (let oy = 0; oy < sp2; oy++) {
+      for (let ox = 0; ox < sp2; ox++) {
+        grid[ry + oy][rx + ox] = grown;
+        damage[ry + oy][rx + ox] = PRISTINE;
+        rootAt[ry + oy][rx + ox] = { rx, ry };
+      }
+    }
+    // a golden construction poof — very satisfying
+    for (let i = 0; i < 12; i++) {
+      debris.push({
+        x: rx * s + (s * sp2) / 2, y: TOPBAR + ry * s + (s * sp2) / 2,
+        vx: (Math.random() - 0.5) * 320, vy: -Math.random() * 320 - 60,
+        spin: Math.random() * 10, life: 0.7, color: '#ffd23f',
+      });
+    }
+    setStatus(grown === APT ? 'It grew into an apartment block!'
+            : grown === SKY ? 'IT GREW INTO A SKYSCRAPER!!'
+            : 'It grew into a castle tower!', '#7ddf8f');
+    roadsDirty = true;
+    return;
+  }
+
   const sp = spanOf(selected);
   if (sp > 1) {
     // A BIG BUILDING. Nudge it back on to the map if you aimed at the very
