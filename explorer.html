@@ -52,6 +52,7 @@ let inventoryOpen = false;     // is the bag open right now?
 let hasArmor = localStorage.getItem('explorer_plate_armor') === 'yes';
 let hasGoldSword = localStorage.getItem('explorer_gold_sword') === 'yes';
 let hasInfectedArmor = localStorage.getItem('explorer_infected_armor') === 'yes';
+let hasBeatSky = localStorage.getItem('explorer_beat_sky') === 'yes';   // Multi-Tasker defeated?
 let armorRegenTimer = 0;       // the infection slowly knitting your armor back
 
 // how many armor points can you have? best armor wins.
@@ -114,11 +115,13 @@ const LEVELS = [
     worldH: 2800,
     start: { x: 1400, y: 2650 }, // the bottom of the first sky-bridge
   },
+  { name: 'The Dimension of Chippy', unlocked: false },   // Level 5 — who IS Chippy?!
 ];
 // prizes you earned on past visits keep their doors open
 LEVELS[1].unlocked = hasArmor;
 LEVELS[2].unlocked = hasGoldSword;
 LEVELS[3].unlocked = hasInfectedArmor;
+LEVELS[4].unlocked = hasBeatSky;
 
 // Things that live in the current level (filled in by buildForest)
 let trees = [];
@@ -1065,10 +1068,13 @@ function update(dt) {
           emeralds.push({ x: z.x + (e - loot / 2) * 14, y: z.y, born: elapsed });
         }
         if (z.boss) {
-          // THE STORM KING FALLS — that's the whole game, explorer!
+          // THE MULTI-TASKER FALLS — the sky is beaten, forever
           victoryNew = true;
           victoryLevel = 4;
           victoryTimer = 6;
+          hasBeatSky = true;
+          localStorage.setItem('explorer_beat_sky', 'yes');
+          LEVELS[4].unlocked = true;       // the Dimension of Chippy opens...
         }
       }
     }
@@ -2490,6 +2496,7 @@ function drawMenu() {
                : i === 1 ? 'beat Level 1 first'
                : i === 2 ? 'beat Level 2 first'
                : i === 3 ? 'beat Level 3 first'
+               : i === 4 ? 'beat Level 4 first'
                : 'locked', cx + cw / 2, cy + ch * 0.85);
   }
 
@@ -2504,9 +2511,10 @@ function drawMenu() {
 function lockedMessageFor(i) {
   if (i === 1) return 'Beat Level 1 to open the Creeper Temple!';
   if (i === 2) return 'Beat Level 2 to reach the Abandoned Castle!';
-  if (i === 3) return hasInfectedArmor
-    ? 'The Dungeon in the Sky is still being built — tell me what goes inside!'
-    : 'Beat Level 3 to reach the Dungeon in the Sky!';
+  if (i === 3) return 'Beat Level 3 to reach the Dungeon in the Sky!';
+  if (i === 4) return hasBeatSky
+    ? "The Dimension of Chippy is still being built — tell me who Chippy IS!"
+    : 'Defeat the Multi-Tasker to reach the Dimension of Chippy!';
   return "You haven't invented that level yet!";
 }
 
