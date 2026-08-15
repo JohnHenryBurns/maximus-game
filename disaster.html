@@ -120,6 +120,10 @@ function spawnCritters(kind) {
       x: spot.x, y: spot.y,
       angle: Math.random() * 6.28,
       walk: Math.random() * 6.28,
+      // little personality knobs so nobody looks quite the same:
+      mood: Math.floor(Math.random() * 3),   // which happy face they pull
+      fear: Math.floor(Math.random() * 3),   // which panicked face they pull
+      bob: Math.random() * 6.28,             // where they are in their bounce
       shirt: ['#e74c3c', '#3498db', '#f1c40f', '#9b59b6', '#2ecc71', '#e67e22'][Math.floor(Math.random() * 6)],
     });
     made++;
@@ -156,11 +160,15 @@ let pendings = [];
 const TENSION = 1.3;                 // seconds between choosing doom and it landing
 
 // A little message box at the bottom tells you what just happened.
-let statusText = '', statusColor = '#ffffff', statusTimer = 0;
-function setStatus(text, color) {
+// News (like "Tornado incoming!") fades after a moment; a plain note about
+// what you're doing right now ("Now placing House") just stays put until
+// something else replaces it.
+let statusText = '', statusColor = '#ffffff', statusTimer = 0, statusSticky = false;
+function setStatus(text, color, sticky) {
   statusText = text;
   statusColor = color || '#ffffff';
-  statusTimer = 2.4;                 // how long the message lingers before fading
+  statusSticky = !!sticky;
+  statusTimer = 2.4;                 // how long a fading message lingers
 }
 
 // Pick a disaster from the menu: pay for it, close the menu, and start the
@@ -385,15 +393,34 @@ function buildIcon() { return selected == null ? '✋' : iconFor(selected); }
 function stopBuilding() {
   selected = null;
   openMenu = null;
-  setStatus('✋ Drag to move the map, pinch to zoom', '#7dd3ff');
+  setStatus('✋ Drag to move the map, pinch to zoom', '#7dd3ff', true);
 }
 
-// ROW 1 (top): the gold money chip, pinned to the RIGHT edge (the ← Arcade
-// pill sits on the left, so the money gets the opposite corner).
+// ROW 1 (top): ← Arcade pill on the left, the gold money chip in the MIDDLE,
+// and the fullscreen button on the right.
 function moneyChipRect() {
   const narrow = canvas.width < 480;
   const w = narrow ? 104 : 150;
-  return { x: canvas.width - w - 10, y: 12, w, h: 32, narrow };
+  return { x: (canvas.width - w) / 2, y: 12, w, h: 32, narrow };
+}
+
+// The fullscreen toggle, top-right. Real fullscreen hides the phone's
+// browser bars, which gives the town a lot more room.
+function fullBtnRect() {
+  return { x: canvas.width - 46, y: 12, w: 36, h: 32 };
+}
+function isFullscreen() {
+  return !!(document.fullscreenElement || document.webkitFullscreenElement);
+}
+function toggleFullscreen() {
+  try {
+    if (isFullscreen()) {
+      (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+    } else {
+      const el = document.documentElement;
+      (el.requestFullscreen || el.webkitRequestFullscreen).call(el);
+    }
+  } catch (e) {}          // some browsers say no. that's fine, carry on.
 }
 
 // ROW 2 (below): the three big buttons across the full width, with room to
@@ -444,7 +471,7 @@ function handleTopButton(b) {
 function chooseFromMenu(kind, r) {
   if (kind === 'build') {
     selected = r.type;
-    setStatus('Now placing ' + r.label, '#7ddf8f');
+    setStatus('Now placing ' + r.label, '#7ddf8f', true);
     openMenu = null;
   } else if (kind === 'people') {
     const made = spawnCritters(r.kind);
@@ -470,6 +497,7 @@ function pressAt(px, py) {
   // no menu open: check the top buttons
   const tb = topButtons().find(b => inside(px, py, b));
   if (tb) { handleTopButton(tb); return true; }
+  if (inside(px, py, fullBtnRect())) { toggleFullscreen(); return true; }
   // the bottom-centre STOP BUILDING button
   const sb = stopBuildRect();
   if (sb && inside(px, py, sb)) { stopBuilding(); return true; }
@@ -563,7 +591,7 @@ const KEY_ITEM = { '1': HOUSE, '2': APT, '3': TREE, '4': STONE, '5': BUNKER, '6'
 addEventListener('keydown', e => {
   if (e.key in KEY_ITEM) {
     selected = KEY_ITEM[e.key];
-    setStatus('Now placing ' + iconFor(selected), '#7ddf8f');
+    setStatus('Now placing ' + iconFor(selected), '#7ddf8f', true);
   }
   if (e.key.toLowerCase() === 'd') openMenu = openMenu === 'disasters' ? null : 'disasters';  // D for Disasters menu
   if (e.key.toLowerCase() === 'b') openMenu = openMenu === 'build' ? null : 'build';          // B for Build menu
@@ -582,7 +610,7 @@ function update(dt) {
   elapsed += dt;
   if (shake > 0) shake -= dt;
   if (brokeFlash > 0) brokeFlash -= dt;
-  if (statusTimer > 0) statusTimer -= dt;
+  if (statusTimer > 0 && !statusSticky) statusTimer -= dt;
 
   // Disasters you've paid for count down a moment of dread, with the ground
   // rumbling harder the closer they get. When the timer hits zero, they strike.
@@ -802,6 +830,7 @@ function update(dt) {
     }
 
     p.walk += dt * (panicking ? 16 : 6);
+    p.bob += dt * (panicking ? 14 : 3.2);      // a happy sway, or a terrified jitter
 
     if (panicking) {
       // RUN FOR SHELTER — find the nearest building with a roof.
@@ -1002,42 +1031,90 @@ function draw() {
       const kind = grid[gy][gx];
       if (kind === EMPTY) continue;
       const x = gx * s, y = TOPBAR + gy * s;
+      // every block gets its own little quirk from its position, so the town
+      // looks hand-made instead of stamped out
+      const q = hash(gx * 7.3 + gy * 3.1);
+      // a soft shadow on the grass under everything — makes it all pop
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.16)';
+      ctx.beginPath();
+      ctx.ellipse(x + s * 0.5, y + s * 0.92, s * 0.36, s * 0.09, 0, 0, Math.PI * 2);
+      ctx.fill();
+
       if (kind === HOUSE) {
-        ctx.fillStyle = '#c9a06a';                      // walls
+        ctx.fillStyle = ['#c9a06a', '#d9b184', '#c08f5e'][Math.floor(q * 3)];  // walls
         ctx.fillRect(x + s * 0.15, y + s * 0.4, s * 0.7, s * 0.5);
-        ctx.fillStyle = '#b5563c';                      // roof
+        ctx.fillStyle = '#8fd0ff';                      // a cheerful little window
+        ctx.fillRect(x + s * 0.2, y + s * 0.5, s * 0.16, s * 0.14);
+        ctx.fillStyle = ['#b5563c', '#a8483f', '#c26a44'][Math.floor(q * 3)];  // roof
         ctx.beginPath();
-        ctx.moveTo(x + s * 0.08, y + s * 0.45);
-        ctx.lineTo(x + s * 0.5, y + s * 0.08);
-        ctx.lineTo(x + s * 0.92, y + s * 0.45);
+        ctx.moveTo(x + s * 0.06, y + s * 0.46);
+        ctx.lineTo(x + s * 0.5, y + s * 0.06);
+        ctx.lineTo(x + s * 0.94, y + s * 0.46);
         ctx.closePath();
         ctx.fill();
+        ctx.fillStyle = '#8c6b4a';                      // chimney
+        ctx.fillRect(x + s * 0.68, y + s * 0.14, s * 0.11, s * 0.2);
+        ctx.fillStyle = 'rgba(230, 230, 235, 0.6)';     // a curl of smoke
+        ctx.beginPath();
+        ctx.arc(x + s * (0.735 + Math.sin(elapsed * 1.4 + q * 6) * 0.04),
+                y + s * 0.06, s * 0.055, 0, Math.PI * 2);
+        ctx.fill();
         ctx.fillStyle = '#5b3b1e';                      // door
-        ctx.fillRect(x + s * 0.42, y + s * 0.62, s * 0.16, s * 0.28);
+        ctx.fillRect(x + s * 0.44, y + s * 0.62, s * 0.16, s * 0.28);
+        ctx.fillStyle = '#ffd23f';                      // doorknob
+        ctx.fillRect(x + s * 0.57, y + s * 0.74, s * 0.03, s * 0.03);
       } else if (kind === TREE) {
         ctx.fillStyle = '#6d5330';                      // trunk
-        ctx.fillRect(x + s * 0.42, y + s * 0.55, s * 0.16, s * 0.35);
-        ctx.fillStyle = '#3f8a3f';                      // leaves
-        ctx.beginPath();
-        ctx.arc(x + s * 0.5, y + s * 0.38, s * 0.32, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.fillRect(x + s * 0.44, y + s * 0.55, s * 0.14, s * 0.35);
+        // three overlapping puffs of leaves, swaying in the breeze
+        const sway = Math.sin(elapsed * 1.1 + q * 6.28) * s * 0.03;
+        ctx.fillStyle = ['#3f8a3f', '#4d9c43', '#357a38'][Math.floor(q * 3)];
+        ctx.beginPath(); ctx.arc(x + s * 0.5 + sway, y + s * 0.34, s * 0.28, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(x + s * 0.32 + sway, y + s * 0.46, s * 0.19, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(x + s * 0.68 + sway, y + s * 0.46, s * 0.19, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.18)';    // sunlight on top
+        ctx.beginPath(); ctx.arc(x + s * 0.42 + sway, y + s * 0.26, s * 0.1, 0, Math.PI * 2); ctx.fill();
+        if (q > 0.72) {                                 // some trees have apples!
+          ctx.fillStyle = '#e8453c';
+          ctx.beginPath(); ctx.arc(x + s * 0.62 + sway, y + s * 0.38, s * 0.05, 0, Math.PI * 2); ctx.fill();
+        }
       } else if (kind === STONE) {
-        ctx.fillStyle = '#8a8d94';
-        ctx.fillRect(x + s * 0.08, y + s * 0.12, s * 0.84, s * 0.8);
-        ctx.fillStyle = '#a7aab2';
-        ctx.fillRect(x + s * 0.08, y + s * 0.12, s * 0.84, s * 0.2);
+        ctx.fillStyle = '#8a8d94';                      // a lumpy boulder
+        ctx.beginPath();
+        ctx.moveTo(x + s * 0.1,  y + s * 0.88);
+        ctx.lineTo(x + s * 0.16, y + s * 0.34);
+        ctx.lineTo(x + s * 0.44, y + s * 0.14);
+        ctx.lineTo(x + s * 0.8,  y + s * 0.26);
+        ctx.lineTo(x + s * 0.9,  y + s * 0.88);
+        ctx.closePath(); ctx.fill();
+        ctx.fillStyle = '#a7aab2';                      // light catching the top
+        ctx.beginPath();
+        ctx.moveTo(x + s * 0.16, y + s * 0.34);
+        ctx.lineTo(x + s * 0.44, y + s * 0.14);
+        ctx.lineTo(x + s * 0.8,  y + s * 0.26);
+        ctx.lineTo(x + s * 0.6,  y + s * 0.4);
+        ctx.closePath(); ctx.fill();
+        ctx.fillStyle = 'rgba(60, 62, 68, 0.55)';       // speckles
+        ctx.fillRect(x + s * 0.3, y + s * 0.58, s * 0.09, s * 0.07);
+        ctx.fillRect(x + s * 0.62, y + s * 0.68, s * 0.07, s * 0.06);
       } else if (kind === APT) {
         ctx.fillStyle = '#5a6a7a';                      // the tall tower
         ctx.fillRect(x + s * 0.12, y + s * 0.06, s * 0.76, s * 0.86);
         ctx.fillStyle = '#7a8a9a';                      // roof ledge
-        ctx.fillRect(x + s * 0.12, y + s * 0.06, s * 0.76, s * 0.1);
-        ctx.fillStyle = '#ffd23f';                      // lit windows
+        ctx.fillRect(x + s * 0.08, y + s * 0.06, s * 0.84, s * 0.1);
+        ctx.fillStyle = '#93a3b3';                      // rooftop water tank
+        ctx.fillRect(x + s * 0.6, y - s * 0.02, s * 0.14, s * 0.09);
+        // windows — a few are dark, because some people are out
         for (let wy2 = 0; wy2 < 3; wy2++) {
           for (let wx2 = 0; wx2 < 2; wx2++) {
-            ctx.fillRect(x + s * (0.24 + wx2 * 0.3), y + s * (0.24 + wy2 * 0.22),
+            const lit = hash(gx * 11 + gy * 5 + wy2 * 3 + wx2) > 0.28;
+            ctx.fillStyle = lit ? '#ffd23f' : '#33414e';
+            ctx.fillRect(x + s * (0.24 + wx2 * 0.3), y + s * (0.26 + wy2 * 0.21),
                          s * 0.16, s * 0.13);
           }
         }
+        ctx.fillStyle = '#33414e';                      // front door
+        ctx.fillRect(x + s * 0.42, y + s * 0.78, s * 0.16, s * 0.14);
       } else if (kind === BUNKER) {
         ctx.fillStyle = '#4a5548';                      // squat armored dome
         ctx.beginPath();
@@ -1046,8 +1123,17 @@ function draw() {
         ctx.fillRect(x + s * 0.1, y + s * 0.72, s * 0.8, s * 0.2);
         ctx.fillStyle = '#6a7a66';                      // top rim
         ctx.fillRect(x + s * 0.1, y + s * 0.72, s * 0.8, s * 0.06);
+        ctx.fillStyle = 'rgba(255,255,255,0.14)';       // shine on the dome
+        ctx.beginPath();
+        ctx.ellipse(x + s * 0.36, y + s * 0.52, s * 0.12, s * 0.06, -0.5, 0, Math.PI * 2);
+        ctx.fill();
         ctx.fillStyle = '#2c332b';                      // the sealed door
         ctx.fillRect(x + s * 0.4, y + s * 0.6, s * 0.2, s * 0.32);
+        ctx.fillStyle = '#8fd0ff';                      // tiny porthole
+        ctx.beginPath(); ctx.arc(x + s * 0.5, y + s * 0.68, s * 0.05, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#c8d4c4';                      // bolts
+        ctx.fillRect(x + s * 0.16, y + s * 0.8, s * 0.05, s * 0.05);
+        ctx.fillRect(x + s * 0.79, y + s * 0.8, s * 0.05, s * 0.05);
       }
     }
   }
@@ -1074,56 +1160,130 @@ function draw() {
   // The critters, bless them (the hiding ones are indoors, unseen).
   // Everyone is drawn relative to `u` — one grid square — so they stay the
   // right size next to the houses however big the squares are.
+  //
+  // When the sky is calm they're HAPPY: bouncing, smiling, humming little
+  // notes. The moment doom is on the way they're TERRIFIED: eyes like
+  // dinner plates, arms in the air, wobbling. Everyone pulls a slightly
+  // different face, so a crowd doesn't look like clones.
+  const doom = disasters.length > 0 || pendings.length > 0;
+  const HAPPY_EMOTE = ['♪', '♥', '☺'];
+  const PANIC_EMOTE = ['!!', '?!', 'AAA'];
+
   for (const p of people) {
     if (p.sheltering) continue;
     const u = s / 26;                                // one "unit" scaled to the square
     const step = Math.sin(p.walk) * 2 * u;
     const facing = Math.cos(p.angle) < 0 ? -1 : 1;   // which way are they pointed?
+    const hop = doom ? Math.abs(Math.sin(p.bob)) * 2.5 * u   // panicked jitter
+                     : Math.sin(p.bob) * 1.2 * u;            // happy sway
+    const eyeW = doom ? 2.3 * u : 1.1 * u;           // eyes go WIDE when scared
+
+    ctx.save();
+    ctx.translate(0, -hop);                          // bounce the whole critter
 
     if (p.kind === 'cow') {
-      ctx.fillStyle = '#3b2f2a';                     // four stumpy legs
+      ctx.fillStyle = '#3b2f2a';                     // stumpy legs
       ctx.fillRect(p.x - 7 * u, p.y - 1 * u + step, 2.4 * u, 6 * u - step);
       ctx.fillRect(p.x + 4.6 * u, p.y - 1 * u - step, 2.4 * u, 6 * u + step);
+      ctx.strokeStyle = '#f4f4f2'; ctx.lineWidth = 1.6 * u;   // tail with a tuft
+      ctx.beginPath();
+      ctx.moveTo(p.x - facing * 9 * u, p.y - 8 * u);
+      ctx.lineTo(p.x - facing * 11.5 * u, p.y - 4 * u + Math.sin(p.walk) * 1.5 * u);
+      ctx.stroke();
       ctx.fillStyle = '#f4f4f2';                     // big white body
-      ctx.fillRect(p.x - 9 * u, p.y - 10 * u, 18 * u, 10 * u);
+      rrect(p.x - 9 * u, p.y - 10 * u, 18 * u, 10 * u, 4 * u); ctx.fill();
       ctx.fillStyle = '#2f2a28';                     // cow patches
       ctx.beginPath(); ctx.ellipse(p.x - 4 * u, p.y - 7 * u, 3.2 * u, 2.4 * u, 0, 0, Math.PI * 2); ctx.fill();
       ctx.beginPath(); ctx.ellipse(p.x + 3 * u, p.y - 4.5 * u, 2.6 * u, 2 * u, 0, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = '#f4f4f2';                     // head out front
-      ctx.fillRect(p.x + facing * 8 * u - 3 * u, p.y - 13 * u, 6 * u, 6 * u);
+      const hx = p.x + facing * 9 * u;               // head out front
+      ctx.fillStyle = '#f4f4f2';
+      rrect(hx - 3.4 * u, p.y - 14 * u, 6.8 * u, 7 * u, 2.5 * u); ctx.fill();
+      ctx.fillStyle = '#2f2a28';                     // little horns
+      ctx.fillRect(hx - 3 * u, p.y - 15.5 * u, 1.4 * u, 2 * u);
+      ctx.fillRect(hx + 1.6 * u, p.y - 15.5 * u, 1.4 * u, 2 * u);
       ctx.fillStyle = '#f0a5b8';                     // pink snout
-      ctx.fillRect(p.x + facing * 9.5 * u - 2 * u, p.y - 9.5 * u, 4 * u, 2.4 * u);
+      rrect(hx - 2.4 * u, p.y - 9.5 * u, 4.8 * u, 3 * u, 1.4 * u); ctx.fill();
+      ctx.fillStyle = '#000';                        // eyes
+      ctx.beginPath(); ctx.arc(hx - 1.6 * u, p.y - 11.6 * u, eyeW * 0.8, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(hx + 1.6 * u, p.y - 11.6 * u, eyeW * 0.8, 0, Math.PI * 2); ctx.fill();
+      if (!doom) {                                   // chewing, always chewing
+        ctx.strokeStyle = '#7cb342'; ctx.lineWidth = 1.2 * u;
+        ctx.beginPath();
+        ctx.moveTo(hx + facing * 2.5 * u, p.y - 8 * u);
+        ctx.lineTo(hx + facing * 5 * u, p.y - 9.5 * u + Math.sin(p.walk * 3) * u);
+        ctx.stroke();
+      }
     } else if (p.kind === 'dog') {
       ctx.fillStyle = '#6b4b2a';                     // little legs
       ctx.fillRect(p.x - 5 * u, p.y - 1 * u + step, 2 * u, 5 * u - step);
       ctx.fillRect(p.x + 3 * u, p.y - 1 * u - step, 2 * u, 5 * u + step);
-      ctx.fillStyle = '#8a5c33';                     // body
-      ctx.fillRect(p.x - 6.5 * u, p.y - 8 * u, 13 * u, 7 * u);
-      ctx.fillStyle = '#8a5c33';                     // head
-      ctx.beginPath(); ctx.arc(p.x + facing * 7 * u, p.y - 10 * u, 3.6 * u, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = '#5e3d20';                     // floppy ear
-      ctx.beginPath(); ctx.ellipse(p.x + facing * 5.5 * u, p.y - 12 * u, 1.6 * u, 2.8 * u, 0, 0, Math.PI * 2); ctx.fill();
-      ctx.strokeStyle = '#8a5c33'; ctx.lineWidth = 2 * u;   // wagging tail
+      ctx.strokeStyle = '#8a5c33'; ctx.lineWidth = 2 * u;    // tail: wags happy, tucks scared
       ctx.beginPath();
       ctx.moveTo(p.x - facing * 6.5 * u, p.y - 7 * u);
-      ctx.lineTo(p.x - facing * 10 * u, p.y - 11 * u + Math.sin(p.walk * 2) * 2 * u);
+      if (doom) ctx.lineTo(p.x - facing * 8 * u, p.y - 2 * u);
+      else ctx.lineTo(p.x - facing * 10 * u, p.y - 11 * u + Math.sin(p.walk * 3) * 3 * u);
       ctx.stroke();
+      ctx.fillStyle = '#8a5c33';                     // body
+      rrect(p.x - 6.5 * u, p.y - 8 * u, 13 * u, 7 * u, 3 * u); ctx.fill();
+      const hx = p.x + facing * 7 * u;               // head
+      ctx.beginPath(); ctx.arc(hx, p.y - 10.5 * u, 3.8 * u, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#5e3d20';                     // floppy ear
+      ctx.beginPath();
+      ctx.ellipse(hx - facing * 2 * u, p.y - 12.5 * u, 1.7 * u, 3 * u, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#3b2a18';                     // snout
+      ctx.beginPath(); ctx.arc(hx + facing * 3 * u, p.y - 9.6 * u, 1.5 * u, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#000';                        // eye
+      ctx.beginPath(); ctx.arc(hx + facing * 1 * u, p.y - 11.4 * u, eyeW * 0.8, 0, Math.PI * 2); ctx.fill();
+      if (!doom) {                                   // happy lolling tongue
+        ctx.fillStyle = '#ff8fa3';
+        ctx.fillRect(hx + facing * 2.4 * u, p.y - 8.6 * u, 1.6 * u, 2.6 * u);
+      }
     } else {
       ctx.fillStyle = '#333';                        // busy little legs
       ctx.fillRect(p.x - 3 * u, p.y - 2 * u + step, 2 * u, 5 * u - step);
       ctx.fillRect(p.x + 1 * u, p.y - 2 * u - step, 2 * u, 5 * u + step);
       ctx.fillStyle = p.shirt;                       // shirt
-      ctx.fillRect(p.x - 4 * u, p.y - 10 * u, 8 * u, 9 * u);
-      ctx.fillStyle = '#f2c79b';                     // head
-      ctx.beginPath(); ctx.arc(p.x, p.y - 13 * u, 3.5 * u, 0, Math.PI * 2); ctx.fill();
+      rrect(p.x - 4 * u, p.y - 10 * u, 8 * u, 9 * u, 1.6 * u); ctx.fill();
+      // ARMS: straight up in a panic, swinging along when all is well
+      ctx.strokeStyle = '#f2c79b'; ctx.lineWidth = 1.8 * u;
+      ctx.beginPath();
+      if (doom) {
+        ctx.moveTo(p.x - 4 * u, p.y - 9 * u); ctx.lineTo(p.x - 6.5 * u, p.y - 15 * u);
+        ctx.moveTo(p.x + 4 * u, p.y - 9 * u); ctx.lineTo(p.x + 6.5 * u, p.y - 15 * u);
+      } else {
+        ctx.moveTo(p.x - 4 * u, p.y - 9 * u); ctx.lineTo(p.x - 6 * u, p.y - 5 * u + step);
+        ctx.moveTo(p.x + 4 * u, p.y - 9 * u); ctx.lineTo(p.x + 6 * u, p.y - 5 * u - step);
+      }
+      ctx.stroke();
+      const hy = p.y - 13.5 * u;                     // head
+      ctx.fillStyle = '#f2c79b';
+      ctx.beginPath(); ctx.arc(p.x, hy, 3.8 * u, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#000';                        // eyes
+      ctx.beginPath(); ctx.arc(p.x - 1.5 * u, hy - 0.5 * u, eyeW * 0.7, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(p.x + 1.5 * u, hy - 0.5 * u, eyeW * 0.7, 0, Math.PI * 2); ctx.fill();
+      if (doom) {                                    // a big round screaming mouth
+        ctx.fillStyle = '#7a2230';
+        ctx.beginPath(); ctx.ellipse(p.x, hy + 1.8 * u, 1.3 * u, 1.7 * u, 0, 0, Math.PI * 2); ctx.fill();
+      } else {                                       // a little smile + rosy cheeks
+        ctx.strokeStyle = '#7a4a2a'; ctx.lineWidth = 0.9 * u;
+        ctx.beginPath(); ctx.arc(p.x, hy + 0.6 * u, 1.9 * u, 0.25 * Math.PI, 0.75 * Math.PI); ctx.stroke();
+        ctx.fillStyle = 'rgba(255, 140, 140, 0.55)';
+        ctx.beginPath(); ctx.arc(p.x - 3 * u, hy + 1 * u, 1 * u, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(p.x + 3 * u, hy + 1 * u, 1 * u, 0, Math.PI * 2); ctx.fill();
+      }
     }
 
-    if (disasters.length > 0) {                      // screaming, obviously
+    // the little floating emote above their head
+    ctx.font = `bold ${Math.max(7, 9 * u)}px monospace`;
+    ctx.textAlign = 'center';
+    if (doom) {
       ctx.fillStyle = '#ff4757';
-      ctx.font = `bold ${Math.max(8, 10 * u)}px monospace`;
-      ctx.textAlign = 'center';
-      ctx.fillText('!!', p.x, p.y - 18 * u);
+      ctx.fillText(PANIC_EMOTE[p.fear], p.x, p.y - 19 * u + Math.sin(p.bob * 2) * u);
+    } else if (Math.sin(p.bob * 0.5 + p.mood) > 0.72) {   // only now and then
+      ctx.fillStyle = '#ffe9a8';
+      ctx.fillText(HAPPY_EMOTE[p.mood], p.x + 5 * u, p.y - 18 * u);
     }
+    ctx.restore();
   }
 
   // folk currently airborne (they're fine. probably.) — same scale as on foot
@@ -1266,6 +1426,24 @@ function draw() {
   ctx.textAlign = 'center';
   ctx.fillText(`💰 ${moneys}`, money.x + money.w / 2, money.y + money.h / 2 + 5);
 
+  // --- the FULLSCREEN button, top-right: four little corner brackets ---
+  const fb = fullBtnRect();
+  ctx.fillStyle = '#1c2530';
+  rrect(fb.x, fb.y, fb.w, fb.h, 8); ctx.fill();
+  ctx.strokeStyle = '#3a4654'; ctx.lineWidth = 2;
+  rrect(fb.x, fb.y, fb.w, fb.h, 8); ctx.stroke();
+  ctx.strokeStyle = '#cfe3ff'; ctx.lineWidth = 2;
+  const fcx = fb.x + fb.w / 2, fcy = fb.y + fb.h / 2;
+  const out = isFullscreen() ? -1 : 1;      // arrows point in when already fullscreen
+  for (const [sx, sy] of [[-1,-1],[1,-1],[-1,1],[1,1]]) {
+    const ax = fcx + sx * 8, ay = fcy + sy * 7;
+    ctx.beginPath();
+    ctx.moveTo(ax - sx * out * 5, ay);
+    ctx.lineTo(ax, ay);
+    ctx.lineTo(ax, ay - sy * out * 5);
+    ctx.stroke();
+  }
+
   // --- ROW 2: the three drop-down buttons: Build, Disasters, People ---
   const palette = {
     build:     { bg: '#24343a', border: '#4f9d6b' },
@@ -1329,7 +1507,7 @@ function draw() {
   }
 
   // --- the STATUS BOX at the bottom: a readable box for the latest news ---
-  if (statusTimer > 0 && statusText) {
+  if ((statusSticky || statusTimer > 0) && statusText) {
     // shrink the text just enough to always fit on a narrow phone
     let fs = 15;
     ctx.font = `bold ${fs}px monospace`;
@@ -1344,7 +1522,7 @@ function draw() {
     // sit above the Stop Building button when it's showing, so they never overlap
     const bottom = sb ? sb.y - 8 : canvas.height - 14;
     const bx = (canvas.width - boxW) / 2, by = bottom - boxH;
-    ctx.globalAlpha = Math.min(1, statusTimer / 0.5);   // fade out at the end
+    ctx.globalAlpha = statusSticky ? 1 : Math.min(1, statusTimer / 0.5);   // news fades, notes stay
     ctx.fillStyle = 'rgba(10, 14, 20, 0.9)';
     rrect(bx, by, boxW, boxH, 10); ctx.fill();
     ctx.strokeStyle = statusColor; ctx.lineWidth = 2;
