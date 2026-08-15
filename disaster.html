@@ -603,7 +603,39 @@ function beginDisaster(type) {
   } else if (type === 'meteors') {
     disasters.push({ type, life: 8, spawnTimer: 0, meteors: [] });
   } else if (type === 'quake') {
-    disasters.push({ type, life: 6, seed: Math.random() * 100 });
+    // THE GROUND TEARS OPEN. We work out the shape of the cracks up front —
+    // a few big ones splitting outward from the epicentre, each with a
+    // branch or two — then let them RIP open over the first second or so.
+    const ex = gridW() * (0.2 + Math.random() * 0.6);
+    const ey = TOPBAR + gridH() * (0.2 + Math.random() * 0.6);
+    const cracks = [];
+    const arms = 4 + Math.floor(Math.random() * 3);
+    for (let i = 0; i < arms; i++) {
+      const base = (i / arms) * Math.PI * 2 + Math.random() * 0.7;
+      const walk = (sx, sy, ang, steps, wide) => {
+        const pts = [{ x: sx, y: sy }];
+        let a = ang, px2 = sx, py2 = sy;
+        for (let k = 0; k < steps; k++) {
+          a += (Math.random() - 0.5) * 0.9;                 // it wanders as it tears
+          const step = gridH() * (0.035 + Math.random() * 0.03);
+          px2 += Math.cos(a) * step;
+          py2 += Math.sin(a) * step;
+          pts.push({ x: px2, y: py2 });
+        }
+        return { pts, wide };
+      };
+      const main = walk(ex, ey, base, 7 + Math.floor(Math.random() * 4), 1);
+      cracks.push(main);
+      // a branch splitting off partway along
+      if (Math.random() < 0.75) {
+        const j = 2 + Math.floor(Math.random() * (main.pts.length - 3));
+        const from = main.pts[j];
+        cracks.push(walk(from.x, from.y, base + (Math.random() < 0.5 ? 0.9 : -0.9),
+                         3 + Math.floor(Math.random() * 3), 0.55));
+      }
+    }
+    disasters.push({ type, life: 6, seed: Math.random() * 100,
+                     ex, ey, cracks, grow: 0 });
   } else if (type === 'flood') {
     disasters.push({ type, life: 10, waterY: TOPBAR + gridH() + 50 });
   } else if (type === 'balls') {
@@ -1429,6 +1461,7 @@ function update(dt) {
           }
         }
       }
+      D.grow = Math.min(1, (D.grow || 0) + dt * 1.1);   // the cracks rip open
       // slabs of ground heave up out of the cracks
       D.messTimer = (D.messTimer || 0.4) - dt;
       if (D.messTimer <= 0) {
@@ -1448,15 +1481,38 @@ function update(dt) {
       else frac = Math.max(0, 1 - (t2 - 6) / 4);
       const wasY = D.waterY;
       D.waterY = (TOPBAR + ROWS * s) - frac * (ROWS * s) * 0.72;
-      // AS IT DRAINS, the water leaves puddles on the ground it uncovers —
-      // somebody's going to have to mop all that up.
-      if (t2 > 6 && D.waterY > wasY) {
-        D.wetTimer = (D.wetTimer || 0) - dt;
-        if (D.wetTimer <= 0) {
-          D.wetTimer = 0.1;
-          for (let i = 0; i < 2; i++) {
-            dropLitter(10 + Math.random() * (COLS * s - 20),
-                       wasY + Math.random() * (D.waterY - wasY), 'puddle');
+      // AS IT DRAINS, the water can't all run away — it's left standing in
+      // POOLS. Each pool is a blob of whole squares joined together, so it
+      // reads as one big continuous puddle rather than a lot of dots.
+      // Somebody is going to have to mop all that up.
+      if (t2 > 6 && !D.pooled) {
+        D.pooled = true;
+        const lowest = Math.floor((TOPBAR + ROWS * s - TOPBAR) / s);   // = ROWS
+        const topRow = Math.max(0, Math.floor((wasY - TOPBAR) / s));
+        const taken = new Set();
+        const pools = 4 + Math.floor(Math.random() * 4);
+        for (let n = 0; n < pools; n++) {
+          // start each pool somewhere in the ground the water covered
+          let cx2 = Math.floor(Math.random() * COLS);
+          let cy2 = topRow + Math.floor(Math.random() * Math.max(1, lowest - topRow));
+          const blob = [];
+          const frontier = [[cx2, cy2]];
+          const want = 4 + Math.floor(Math.random() * 9);
+          while (frontier.length && blob.length < want) {
+            const [px2, py2] = frontier.splice(Math.floor(Math.random() * frontier.length), 1)[0];
+            const key = px2 + ',' + py2;
+            if (px2 < 0 || py2 < 0 || px2 >= COLS || py2 >= ROWS) continue;
+            if (taken.has(key)) continue;
+            taken.add(key);
+            blob.push([px2, py2]);
+            // water spreads to the squares next door
+            for (const [ox, oy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+              if (Math.random() < 0.72) frontier.push([px2 + ox, py2 + oy]);
+            }
+          }
+          for (const [px2, py2] of blob) {
+            const L = dropLitter(px2 * s + s / 2, TOPBAR + py2 * s + s / 2, 'puddle');
+            if (L) { L.gx = px2; L.gy = py2; }
           }
         }
       }
@@ -2449,28 +2505,60 @@ function draw() {
     ctx.fillText('🔧', bx2 + bs * 0.5, by2 - s * 0.22);
   }
 
+  // ---- STANDING WATER ----
+  // Every puddle square goes into ONE path and gets filled in a single go.
+  // Squares that touch therefore join up into a single continuous pool with
+  // no seams and no double-darkened overlaps.
+  {
+    const pools = litter.filter(L => L.kind === 'puddle');
+    if (pools.length) {
+      // Build the pool shape once and FILL it (never stroke it) — stroking
+      // would outline every square inside the pool and give the game away.
+      // The damp edge is done by filling a slightly bigger copy underneath.
+      const poolPath = (grow, r2) => {
+        ctx.beginPath();
+        for (const L of pools) {
+          const cx3 = (L.gx !== undefined ? L.gx * s : L.x - s / 2);
+          const cy3 = (L.gy !== undefined ? TOPBAR + L.gy * s : L.y - s / 2);
+          const px3 = cx3 - grow, py3 = cy3 - grow, w3 = s + grow * 2;
+          ctx.moveTo(px3 + r2, py3);
+          ctx.arcTo(px3 + w3, py3, px3 + w3, py3 + w3, r2);
+          ctx.arcTo(px3 + w3, py3 + w3, px3, py3 + w3, r2);
+          ctx.arcTo(px3, py3 + w3, px3, py3, r2);
+          ctx.arcTo(px3, py3, px3 + w3, py3, r2);
+          ctx.closePath();
+        }
+      };
+      poolPath(s * 0.16, s * 0.22);                    // wet ground round the edge
+      ctx.fillStyle = 'rgba(120, 170, 210, 0.32)';
+      ctx.fill();
+      poolPath(s * 0.08, s * 0.16);                    // the water itself
+      ctx.fillStyle = 'rgba(58, 126, 194, 0.72)';
+      ctx.fill();
+      // a few shifting glints of light on the surface
+      ctx.fillStyle = 'rgba(205, 238, 255, 0.3)';
+      for (const L of pools) {
+        const wob = Math.sin(elapsed * 1.6 + L.seed) * s * 0.07;
+        ctx.beginPath();
+        ctx.ellipse(L.x - s * 0.13 + wob, L.y - s * 0.13,
+                    s * 0.22, s * 0.07, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+
   // ---- THE MESS: rubble left by disasters, and, ahem, cow pies ----
   for (const L of litter) {
     const u = s / 26;
     const h1 = hash(L.seed), h2 = hash(L.seed + 3.1), h3 = hash(L.seed + 7.7);
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.18)';                 // a shadow on the grass
-    ctx.beginPath();
-    ctx.ellipse(L.x, L.y + 1.5 * u, 6 * u, 2.2 * u, 0, 0, Math.PI * 2);
-    ctx.fill();
+    if (L.kind !== 'puddle') {                             // a shadow on the grass
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.18)';
+      ctx.beginPath();
+      ctx.ellipse(L.x, L.y + 1.5 * u, 6 * u, 2.2 * u, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
     if (L.kind === 'puddle') {
-      // a shallow pool of floodwater, with a shine that shifts about
-      ctx.fillStyle = 'rgba(70, 140, 205, 0.55)';
-      ctx.beginPath();
-      ctx.ellipse(L.x, L.y, 7.5 * u, 3.4 * u, h1 * 3, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = 'rgba(150, 210, 255, 0.45)';
-      ctx.beginPath();
-      ctx.ellipse(L.x - 1.6 * u, L.y - 0.8 * u, 3 * u, 1.3 * u, h2 * 3, 0, Math.PI * 2); ctx.fill();
-      ctx.strokeStyle = 'rgba(215, 240, 255, 0.5)';
-      ctx.lineWidth = 0.7 * u;
-      ctx.beginPath();
-      ctx.ellipse(L.x, L.y, (6.5 + Math.sin(elapsed * 2 + L.seed) * 0.7) * u, 2.9 * u,
-                  h1 * 3, 0, Math.PI * 2);
-      ctx.stroke();
+      // drawn below, all together, so touching squares merge into one pool
     } else if (L.kind === 'ember') {
       // a chunk of the meteor, still glowing, still smoking
       const glow = 0.45 + Math.sin(elapsed * 3 + L.seed) * 0.2;
@@ -2537,15 +2625,45 @@ function draw() {
         ctx.fill();
       }
     } else {
-      // a little heap of broken bits
-      ctx.fillStyle = '#8b8378';
-      ctx.beginPath(); ctx.ellipse(L.x, L.y, 5 * u, 2.4 * u, 0, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = '#a09889';
-      ctx.fillRect(L.x - 3.6 * u + h1 * u, L.y - 3 * u, 2.6 * u, 2.4 * u);
-      ctx.fillStyle = '#77706a';
-      ctx.fillRect(L.x + 0.6 * u + h2 * u, L.y - 3.6 * u, 2.2 * u, 2.8 * u);
-      ctx.fillStyle = '#948b7e';
-      ctx.fillRect(L.x - 1 * u + h3 * u, L.y - 5 * u, 1.8 * u, 1.9 * u);
+      // A PROPER HEAP OF WRECKAGE: dust at the bottom, then broken bricks
+      // and slabs stacked up, each one lit on top and shaded down the side,
+      // with a snapped roof beam poking out of it.
+      ctx.fillStyle = 'rgba(120, 110, 96, 0.4)';        // dust spilling round the base
+      ctx.beginPath();
+      ctx.ellipse(L.x, L.y + 1.2 * u, 8 * u, 3 * u, 0, 0, Math.PI * 2); ctx.fill();
+
+      // a snapped beam sticking out at an angle
+      ctx.save();
+      ctx.translate(L.x + (h3 - 0.5) * 3 * u, L.y - 1 * u);
+      ctx.rotate(-0.5 - h2 * 0.6);
+      ctx.fillStyle = '#7d5c33';
+      ctx.fillRect(-5 * u, -0.9 * u, 11 * u, 1.8 * u);
+      ctx.fillStyle = '#9a7444';
+      ctx.fillRect(-5 * u, -0.9 * u, 11 * u, 0.7 * u);
+      ctx.restore();
+
+      // the chunks themselves — a little pyramid of rubble
+      const chunks = [
+        { dx: -4.4, dy:  0.4, w: 4.4, h: 3.0, t: '#a49a8a', f: '#8a8172', s: '#6f675c' },
+        { dx:  0.6, dy:  0.8, w: 5.0, h: 2.6, t: '#b3a998', f: '#968c7d', s: '#79705f' },
+        { dx: -1.8, dy: -2.4, w: 4.2, h: 2.8, t: '#a89e8d', f: '#8d8374', s: '#6f675c' },
+        { dx:  2.2, dy: -3.0, w: 3.2, h: 2.2, t: '#bdb3a1', f: '#9c9283', s: '#7c7364' },
+        { dx: -0.6, dy: -5.2, w: 3.0, h: 2.0, t: '#c2b8a6', f: '#a49a89', s: '#847b6c' },
+      ];
+      chunks.forEach((c, i) => {
+        const jx = (hash(L.seed + i * 2.7) - 0.5) * 1.6;
+        const x0 = L.x + (c.dx + jx) * u, y0 = L.y + c.dy * u;
+        ctx.fillStyle = c.f;                             // the face
+        ctx.fillRect(x0, y0 - c.h * u, c.w * u, c.h * u);
+        ctx.fillStyle = c.t;                             // sunlight on top
+        ctx.fillRect(x0, y0 - c.h * u, c.w * u, 0.9 * u);
+        ctx.fillStyle = c.s;                             // shadow down one side
+        ctx.fillRect(x0 + (c.w - 0.9) * u, y0 - c.h * u, 0.9 * u, c.h * u);
+        if (i % 2 === 0) {                               // mortar line, like a brick
+          ctx.fillStyle = 'rgba(90, 84, 74, 0.5)';
+          ctx.fillRect(x0 + 0.4 * u, y0 - c.h * 0.45 * u, (c.w - 1.2) * u, 0.5 * u);
+        }
+      });
     }
   }
 
@@ -2879,23 +2997,66 @@ function draw() {
     }
 
     if (D.type === 'quake') {
-      // jagged cracks tearing across the ground (seeded so they hold still)
-      const rnd = n => {
-        const v = Math.sin((D.seed + n) * 127.1) * 43758.55;
-        return v - Math.floor(v);
-      };
-      ctx.strokeStyle = 'rgba(20, 14, 8, 0.6)';
-      ctx.lineWidth = 4;
-      for (let c = 0; c < 6; c++) {
-        let cx2 = rnd(c * 3.3) * gridW();
-        let cy2 = TOPBAR + rnd(c * 7.7) * gridH() * 0.3;
+      // THE GROUND SPLITS APART. Each crack is drawn in layers: a pale ridge
+      // of earth shoved up along one side, then the dark gash itself, then a
+      // black core so you can see how DEEP it goes. They tear open outward
+      // from the epicentre rather than just appearing.
+      const g = D.grow || 0;
+      const cracks = D.cracks || [];
+      const drawCrack = (crack, width, style) => {
+        const pts = crack.pts;
+        const upto = 1 + g * (pts.length - 1);        // how far it's torn so far
+        const whole = Math.floor(upto);
         ctx.beginPath();
-        ctx.moveTo(cx2, cy2);
-        for (let seg = 0; seg < 8; seg++) {
-          cx2 += (rnd(c * 11 + seg) - 0.5) * 120;
-          cy2 += 40 + rnd(c * 13 + seg) * 60;
-          ctx.lineTo(cx2, cy2);
+        ctx.moveTo(pts[0].x, pts[0].y);
+        for (let i = 1; i <= Math.min(whole, pts.length - 1); i++) {
+          ctx.lineTo(pts[i].x, pts[i].y);
         }
+        if (whole < pts.length - 1) {                 // the ragged growing tip
+          const f = upto - whole, a = pts[whole], b = pts[whole + 1];
+          ctx.lineTo(a.x + (b.x - a.x) * f, a.y + (b.y - a.y) * f);
+        }
+        ctx.strokeStyle = style;
+        ctx.lineWidth = width * crack.wide;
+        ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+        ctx.stroke();
+      };
+      // 1. earth heaped up along the crack, offset a touch so it reads as 3D
+      ctx.save();
+      ctx.translate(-s * 0.06, -s * 0.09);
+      for (const c of cracks) drawCrack(c, s * 0.42, 'rgba(120, 96, 60, 0.55)');
+      ctx.restore();
+      // 2. the gash
+      for (const c of cracks) drawCrack(c, s * 0.34, 'rgba(46, 34, 20, 0.92)');
+      // 3. the black depths of it
+      for (const c of cracks) drawCrack(c, s * 0.16, 'rgba(6, 4, 2, 0.95)');
+      // 4. a hot glint far down, flickering
+      ctx.globalAlpha = 0.25 + Math.sin(elapsed * 9) * 0.12;
+      for (const c of cracks) drawCrack(c, s * 0.05, '#c25a1e');
+      ctx.globalAlpha = 1;
+
+      // dust thrown up along the cracks
+      for (const c of cracks) {
+        const pts = c.pts;
+        for (let i = 0; i < pts.length; i++) {
+          if (i / (pts.length - 1) > g) break;
+          const puff = (elapsed * 1.4 + i * 0.7 + D.seed) % 1.6;
+          if (puff > 1) continue;
+          ctx.fillStyle = `rgba(158, 138, 106, ${0.3 * (1 - puff)})`;
+          ctx.beginPath();
+          ctx.arc(pts[i].x + Math.sin(i * 2.3 + elapsed) * s * 0.12,
+                  pts[i].y - puff * s * 0.9,
+                  s * (0.14 + puff * 0.3), 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      // the shockwave rolling out from where it started
+      if (g < 1) {
+        ctx.strokeStyle = `rgba(220, 200, 160, ${0.35 * (1 - g)})`;
+        ctx.lineWidth = s * 0.12;
+        ctx.beginPath();
+        ctx.arc(D.ex, D.ey, g * gridH() * 0.55, 0, Math.PI * 2);
         ctx.stroke();
       }
     }
