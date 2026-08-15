@@ -55,6 +55,7 @@ let hasInfectedArmor = localStorage.getItem('explorer_infected_armor') === 'yes'
 let hasBeatSky = localStorage.getItem('explorer_beat_sky') === 'yes';   // Multi-Tasker defeated?
 let hasChippy = localStorage.getItem('explorer_chippy') === 'yes';      // has Chippy joined you?
 let hasBeatJr = localStorage.getItem('explorer_beat_jr') === 'yes';     // is the revenge... avenged?
+let hasBeatGeckoMan = localStorage.getItem('explorer_beat_geckoman') === 'yes';
 let armorRegenTimer = 0;       // the infection slowly knitting your armor back
 
 // how many armor points can you have? best armor wins.
@@ -135,7 +136,15 @@ const LEVELS = [
     worldH: 2600,
     start: { x: 1300, y: 2450 }, // the temple gates
   },
-  { name: 'Rise of the Geckos', unlocked: false },   // Level 7 — they've had ENOUGH
+  {
+    name: 'Rise of the Geckos',
+    kind: 'gecko',
+    unlocked: false,             // opens when Chippy Jr is beaten
+    grass: '#243a28',            // deep mossy green stone
+    worldW: 2600,
+    worldH: 2600,
+    start: { x: 1300, y: 2450 }, // the gecko temple gates
+  },
 ];
 // prizes you earned on past visits keep their doors open
 LEVELS[1].unlocked = hasArmor;
@@ -162,6 +171,8 @@ let webs = [];          // sticky spider webs (Chippy's dimension)
 let geckos = [];        // harmless, dramatic (Chippy's dimension)
 let axeBoss = null;     // Chippy himself. he seems so nice.
 let chippyJr = null;    // the son. he is NOT pretending to be nice.
+let geckoMan = null;    // the leader of the uprising
+let angryGeckos = [];   // small geckos who are DONE running away
 let miniAxes = [];      // his summoned mini axes
 let giantGeckos = [];   // his summoned VERY large geckos
 let emeralds = [];      // dropped treasure waiting to be grabbed
@@ -317,6 +328,21 @@ const JR_PATH = [
   { x: 1300, y: 380 },
 ];
 const jrChamber = { x: 1300, y: 300 };   // the boss chamber. HE waits.
+
+// ---------------------------------------------------------------------
+// THE GECKO TEMPLE — the geckos' ancient home, and the site of their
+// uprising. Gecko Man waits in the chamber at the top.
+// ---------------------------------------------------------------------
+const GECKO_PATH = [
+  { x: 1300, y: 2450 }, { x: 1300, y: 2200 }, { x: 1500, y: 2100 },
+  { x: 1550, y: 1900 }, { x: 1350, y: 1780 }, { x: 1100, y: 1830 },
+  { x: 900,  y: 1700 }, { x: 950,  y: 1450 }, { x: 1200, y: 1380 },
+  { x: 1450, y: 1430 }, { x: 1650, y: 1300 }, { x: 1650, y: 1080 },
+  { x: 1450, y: 980 },  { x: 1200, y: 1030 }, { x: 1000, y: 930 },
+  { x: 1050, y: 700 },  { x: 1250, y: 600 },  { x: 1300, y: 460 },
+  { x: 1300, y: 380 },
+];
+const geckoChamber = { x: 1300, y: 300 };   // where GECKO MAN stands
 
 // smallest distance to ANY of a list of paths
 function distToAnyPath(x, y, paths) {
@@ -1076,6 +1102,122 @@ function buildJr(lv) {
 }
 
 // ---------------------------------------------------------------------
+// BUILDING THE GECKO TEMPLE — Rise of the Geckos. They're done running.
+// ---------------------------------------------------------------------
+function buildGecko(lv) {
+  trees = [];
+
+  // sealed wall band, mossy green stone this time
+  for (let gx = 40; gx < lv.worldW - 40; gx += 34) {
+    for (let gy = 40; gy < lv.worldH - 40; gy += 34) {
+      const d = distToPath(gx, gy, GECKO_PATH);
+      if (d < 100 || d > 140) continue;
+      if (Math.hypot(gx - geckoChamber.x, gy - geckoChamber.y) < 190) continue;
+      trees.push({
+        x: gx + (noise(gx * 1.3 + gy) - 0.5) * 8,
+        y: gy + (noise(gy * 2.7 + gx) - 0.5) * 8,
+        size: 1, wall: true, gt: true,
+      });
+    }
+  }
+  // the boss chamber ring, one doorway to the south
+  for (let ang = 0; ang < Math.PI * 2; ang += 0.26) {
+    if (Math.abs(ang - Math.PI / 2) < 0.5) continue;
+    const wx = geckoChamber.x + Math.cos(ang) * 200;
+    const wy = geckoChamber.y + Math.sin(ang) * 200;
+    if (wx < 60 || wy < 60 || wx > lv.worldW - 60 || wy > lv.worldH - 60) continue;
+    trees.push({ x: wx, y: wy, size: 1, wall: true, gt: true });
+  }
+
+  // mossy floor tiles along the corridor
+  tiles = [];
+  let tn = 0;
+  for (let i = 0; i < GECKO_PATH.length - 1; i++) {
+    const a = GECKO_PATH[i], b = GECKO_PATH[i + 1];
+    const segLen = Math.hypot(b.x - a.x, b.y - a.y);
+    const ux = (b.x - a.x) / segLen, uy = (b.y - a.y) / segLen;
+    for (let d = 0; d < segLen; d += 24) {
+      tn++;
+      const off = (noise(tn * 3.7) - 0.5) * 130;
+      tiles.push({
+        x: a.x + ux * d + (-uy) * off,
+        y: a.y + uy * d + ux * off,
+        size: 15 + noise(tn * 5.1) * 13,
+        color: ['#39543f', '#2e4634', '#476a50'][Math.floor(noise(tn * 7.7) * 3)],
+      });
+    }
+  }
+
+  // torches along the corridor
+  torches = [];
+  for (let i = 0; i < GECKO_PATH.length - 1; i++) {
+    const a = GECKO_PATH[i], b = GECKO_PATH[i + 1];
+    torches.push({ x: (a.x + b.x) / 2 + 70, y: (a.y + b.y) / 2, torch: true });
+    torches.push({ x: (a.x + b.x) / 2 - 70, y: (a.y + b.y) / 2, torch: true });
+  }
+
+  // fireflies (real ones — the geckos like them)
+  fireflies = [];
+  for (let i = 0; i < 50; i++) {
+    fireflies.push({
+      x: noise(i * 21.3 + 9) * lv.worldW,
+      y: noise(i * 47.7 + 9) * lv.worldH,
+      phase: noise(i * 5.5) * 6.28,
+      speed: 0.5 + noise(i * 2.2),
+    });
+  }
+
+  // THE UPRISING — small geckos who are done being scared. They bite now.
+  angryGeckos = [];
+  for (let i = 0; i < 600 && angryGeckos.length < 24; i++) {
+    const x = noise(i * 53.9 + 43) * lv.worldW;
+    const y = noise(i * 29.3 + 43) * lv.worldH;
+    if (Math.hypot(x - lv.start.x, y - lv.start.y) < 350) continue;
+    if (distToPath(x, y, GECKO_PATH) > 60) continue;
+    if (Math.hypot(x - geckoChamber.x, y - geckoChamber.y) < 260) continue;
+    angryGeckos.push({
+      x, y,
+      color: ['#3f8a3f', '#b8862e', '#37a0a6', '#a85a92'][Math.floor(noise(i * 5.5) * 4)],
+    });
+  }
+
+  // the heavy troops
+  giantGeckos = [];
+  for (let i = 0; i < 500 && giantGeckos.length < 8; i++) {
+    const x = noise(i * 43.9 + 45) * lv.worldW;
+    const y = noise(i * 31.3 + 45) * lv.worldH;
+    if (Math.hypot(x - lv.start.x, y - lv.start.y) < 350) continue;
+    if (distToPath(x, y, GECKO_PATH) > 60) continue;
+    if (Math.hypot(x - geckoChamber.x, y - geckoChamber.y) < 260) continue;
+    giantGeckos.push({
+      x, y, hp: 3, hurtFlash: 0, lastHitSwing: 0,
+      color: ['#5fbf5f', '#e0a23c', '#4cc3c9'][Math.floor(noise(i * 5.5) * 3)],
+    });
+  }
+
+  // GECKO MAN — horns, red eyes, an axe, and a cause
+  geckoMan = {
+    x: geckoChamber.x, y: geckoChamber.y,
+    hp: 32,
+    active: false,
+    throwTimer: 5,       // counts down to the next thrown axe
+    summonTimer: 6,      // counts down to gecko reinforcements
+    lastHitSwing: 0,
+    hurtFlash: 0,
+  };
+
+  pond = { x: -9999, y: -9999, rx: 1, ry: 1, hidden: true };
+  stumps = []; flowers = []; scorches = []; logs = []; webs = []; geckos = [];
+  zombies = []; skeletons = []; creepers = []; miniAxes = [];
+
+  emeralds = [];
+  particles = [];
+  emeraldCount = 0;
+  player.hp = player.maxHp;
+  player.armor = armorMax();
+}
+
+// ---------------------------------------------------------------------
 // THE EXPLORER (you!)
 // ---------------------------------------------------------------------
 const player = {
@@ -1108,9 +1250,11 @@ function swingSword() {
 function startLevel(i) {
   current = LEVELS[i];
   logs = []; webs = []; geckos = [];   // only Chippy's dimension refills these
-  axeBoss = null; chippyJr = null; miniAxes = []; giantGeckos = [];
+  axeBoss = null; chippyJr = null; geckoMan = null;
+  miniAxes = []; giantGeckos = []; angryGeckos = [];
   if (current.kind === 'chippy') buildChippy(current);
   else if (current.kind === 'jr') buildJr(current);
+  else if (current.kind === 'gecko') buildGecko(current);
   else if (current.kind === 'temple') buildTemple(current);
   else if (current.kind === 'castle') buildCastle(current);
   else if (current.kind === 'sky') buildSky(current);
@@ -1541,6 +1685,110 @@ function update(dt) {
     }
   }
 
+  // ---- ANGRY GECKOS — small, fast, and DONE with being stepped near ----
+  for (const a of angryGeckos) {
+    const d = Math.hypot(player.x - a.x, player.y - a.y);
+    if (d < 340 && player.deathTimer <= 0) {
+      a.x += (player.x - a.x) / Math.max(1, d) * 170 * dt;
+      a.y += (player.y - a.y) / Math.max(1, d) * 170 * dt;
+    }
+    // one swat sends them flying
+    if (player.attackTime > 0 && d < 50 && (a.x - player.x) * player.facing > -10) {
+      a.dead = true;
+      for (let p = 0; p < 6; p++) {
+        particles.push({ x: a.x, y: a.y,
+          vx: (noise(p * 3.7 + elapsed) - 0.5) * 240,
+          vy: (noise(p * 6.1 + elapsed) - 0.8) * 200,
+          life: 0.4, color: a.color });
+      }
+    }
+    // the bite!
+    if (!a.dead && d < 18 && player.hurtTimer <= 0 && player.deathTimer <= 0) {
+      if (player.armor > 0) player.armor -= 1;
+      else player.hp -= 1;
+      player.hurtTimer = 1;
+      if (player.hp <= 0) player.deathTimer = 2.5;
+    }
+  }
+  angryGeckos = angryGeckos.filter(a => !a.dead);
+
+  // ---- GECKO MAN — he has an axe and a very good reason ----
+  if (geckoMan) {
+    const b = geckoMan;
+    if (b.hurtFlash > 0) b.hurtFlash -= dt;
+    const distToYou = Math.hypot(player.x - b.x, player.y - b.y);
+
+    if (!b.active && distToYou < 300) b.active = true;
+
+    if (b.active && player.deathTimer <= 0) {
+      // he stalks you at a steady, confident stomp
+      const stalk = 115 + Math.sin(elapsed * 2.4) * 45;
+      const bdx = (player.x - b.x) / Math.max(1, distToYou);
+      const bdy = (player.y - b.y) / Math.max(1, distToYou);
+      if (!blocked(b.x + bdx * stalk * dt, b.y, 14)) b.x += bdx * stalk * dt;
+      if (!blocked(b.x, b.y + bdy * stalk * dt, 14)) b.y += bdy * stalk * dt;
+
+      // THROW — he hurls a spinning axe across the chamber
+      b.throwTimer -= dt;
+      if (b.throwTimer <= 0) {
+        b.throwTimer = 5;
+        if (miniAxes.length < 4) miniAxes.push({ x: b.x, y: b.y - 20, spin: 0 });
+      }
+      // SUMMON — the uprising answers
+      b.summonTimer -= dt;
+      if (b.summonTimer <= 0) {
+        b.summonTimer = 6;
+        for (let i = 0; i < 2 && angryGeckos.length < 10; i++) {
+          angryGeckos.push({
+            x: b.x + (noise(elapsed + i) - 0.5) * 160,
+            y: b.y + (noise(elapsed * 2.2 + i) - 0.5) * 160,
+            color: ['#3f8a3f', '#b8862e', '#37a0a6'][Math.floor(noise(elapsed * 3.3 + i) * 3)],
+          });
+        }
+      }
+
+      // his axe swing catches you
+      if (distToYou < 42 && player.hurtTimer <= 0) {
+        if (player.armor > 0) player.armor -= 1;
+        else player.hp -= 1;
+        player.hurtTimer = 1;
+        const push = 65 / Math.max(1, distToYou);
+        const nx2 = player.x + (player.x - b.x) * push;
+        const ny2 = player.y + (player.y - b.y) * push;
+        if (!blocked(nx2, player.y)) player.x = nx2;
+        if (!blocked(player.x, ny2)) player.y = ny2;
+        if (player.hp <= 0) player.deathTimer = 2.5;
+      }
+    }
+
+    // your swing
+    if (b.active && player.attackTime > 0 && b.lastHitSwing !== player.swingId &&
+        distToYou < 70 && (b.x - player.x) * player.facing > -8) {
+      b.lastHitSwing = player.swingId;
+      b.hp -= hasChippy ? 3 : hasGoldSword ? 2 : 1;
+      b.hurtFlash = 0.15;
+
+      if (b.hp <= 0) {
+        // the rise... has set
+        for (let i = 0; i < 36; i++) {
+          particles.push({ x: b.x, y: b.y - 20,
+            vx: (noise(i * 3.3 + elapsed) - 0.5) * 360,
+            vy: (noise(i * 7.7 + elapsed) - 0.9) * 320,
+            life: 0.8, color: i % 2 ? '#3f8a3f' : '#8fce8f' });
+        }
+        for (let e = 0; e < 6; e++) {
+          emeralds.push({ x: b.x + (e - 3) * 15, y: b.y, born: elapsed });
+        }
+        geckoMan = null;
+        victoryNew = true;
+        victoryLevel = 7;
+        victoryTimer = 6;
+        hasBeatGeckoMan = true;
+        localStorage.setItem('explorer_beat_geckoman', 'yes');
+      }
+    }
+  }
+
   // ---- ZOMBIES ----
   for (const z of zombies) {
     if (z.hurtFlash > 0) z.hurtFlash -= dt;
@@ -1833,6 +2081,13 @@ function update(dt) {
         chippyJr.active = false;
         chippyJr.hp = 30;
       }
+      // Gecko Man too — back to his chamber, ready for round two
+      if (geckoMan) {
+        geckoMan.x = geckoChamber.x;
+        geckoMan.y = geckoChamber.y;
+        geckoMan.active = false;
+        geckoMan.hp = 32;
+      }
     }
   }
 
@@ -2000,10 +2255,11 @@ function drawGame() {
   // the walkway floors: sand base in the temple, cracked stone halls in
   // the castle (every branching passage gets floor), then the tiles/carpet
   if (current.kind === 'temple' || current.kind === 'castle' ||
-      current.kind === 'sky' || current.kind === 'jr') {
+      current.kind === 'sky' || current.kind === 'jr' || current.kind === 'gecko') {
     const walkways = current.kind === 'temple' ? [TEMPLE_PATH]
                    : current.kind === 'castle' ? CASTLE_PATHS
                    : current.kind === 'jr'     ? [JR_PATH]
+                   : current.kind === 'gecko'  ? [GECKO_PATH]
                    : SKY_PATHS;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
@@ -2014,9 +2270,20 @@ function drawGame() {
       ctx.strokeStyle = current.kind === 'temple' ? '#6e6248'
                       : current.kind === 'castle' ? '#46474d'
                       : current.kind === 'jr'     ? '#3d3649'
+                      : current.kind === 'gecko'  ? '#2f4634'
                       : '#4e5259';
       ctx.lineWidth = 175;
       ctx.stroke();
+    }
+    if (current.kind === 'gecko') {
+      // the gecko boss chamber floor
+      const jx = geckoChamber.x - cam.x, jy = geckoChamber.y - cam.y;
+      ctx.fillStyle = '#2f4634';
+      ctx.beginPath(); ctx.arc(jx, jy, 195, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = '#476a50';
+      ctx.lineWidth = 5;
+      ctx.beginPath(); ctx.arc(jx, jy, 170, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(jx, jy, 90, 0, Math.PI * 2); ctx.stroke();
     }
     if (current.kind === 'jr') {
       // the boss chamber floor
@@ -2222,6 +2489,60 @@ function drawGame() {
     ctx.fillRect(-8, -8, 3, 3); ctx.fillRect(1, -8, 3, 3);
     ctx.fillStyle = '#d43a2f';                   // RED eyes. he LIED to us.
     ctx.fillRect(-7.5, -7.5, 2, 2); ctx.fillRect(1.5, -7.5, 2, 2);
+    ctx.restore();
+  }
+
+  // the angry gecko swarm — small, fast, and coming right at you
+  for (const a of angryGeckos) {
+    const ax2 = a.x - cam.x, ay2 = a.y - cam.y;
+    if (ax2 < -20 || ay2 < -20 || ax2 > canvas.width + 20 || ay2 > canvas.height + 20) continue;
+    const flip = player.x < a.x ? -1 : 1;
+    const scurry = Math.abs(Math.sin(elapsed * 14 + a.x)) * 2;   // furious little legs
+    ctx.fillStyle = a.color;
+    ctx.fillRect(ax2 - 5, ay2 - 2 - scurry, 10, 5);
+    ctx.fillRect(ax2 + 5 * flip, ay2 - 3 - scurry, 4, 4);
+    ctx.fillRect(ax2 - 8 * flip, ay2 - 1 - scurry, 4, 2);
+    ctx.fillStyle = '#e03a2f';                                   // angry red eye
+    ctx.fillRect(ax2 + 6.5 * flip, ay2 - 2 - scurry, 1.5, 1.5);
+  }
+
+  // GECKO MAN — upright, horned, armed, and righteous
+  if (geckoMan) {
+    const b = geckoMan;
+    const bx = b.x - cam.x, by = b.y - cam.y;
+    const stomp = b.active ? Math.abs(Math.sin(elapsed * 7)) * 4 : 0;
+    const flip = player.x < b.x ? -1 : 1;
+    const gFlash = b.hurtFlash > 0;
+
+    ctx.fillStyle = 'rgba(0,0,0,0.3)';
+    ctx.beginPath(); ctx.ellipse(bx, by + 10, 24, 9, 0, 0, Math.PI * 2); ctx.fill();
+
+    ctx.fillStyle = gFlash ? '#ffffff' : '#3f8a3f';
+    ctx.fillRect(bx - 30 * flip, by - 12 - stomp, 18, 7);   // tail
+    ctx.fillRect(bx - 12, by - 34 - stomp, 24, 36);         // upright body
+    ctx.fillStyle = gFlash ? '#ffffff' : '#8fce8f';
+    ctx.fillRect(bx - 7, by - 26 - stomp, 14, 24);          // pale belly
+    ctx.fillStyle = gFlash ? '#ffffff' : '#3f8a3f';
+    ctx.fillRect(bx - 11, by - 52 - stomp, 22, 18);         // head
+    ctx.fillRect(bx + 8 * flip, by - 47 - stomp, 10, 9);    // snout
+    ctx.fillStyle = '#2a2118';                              // THE HORNS
+    ctx.fillRect(bx - 10, by - 60 - stomp, 5, 9);
+    ctx.fillRect(bx + 5, by - 60 - stomp, 5, 9);
+    ctx.fillStyle = '#e03a2f';                              // red eyes
+    ctx.fillRect(bx - 6 + 3 * flip, by - 48 - stomp, 4, 4);
+    ctx.fillRect(bx + 2 + 3 * flip, by - 48 - stomp, 4, 4);
+    ctx.fillStyle = gFlash ? '#ffffff' : '#2f6a2f';         // stompy legs
+    ctx.fillRect(bx - 10, by - 2 - stomp, 7, 8 + stomp);
+    ctx.fillRect(bx + 3, by - 2 - stomp, 7, 8 + stomp);
+
+    // HIS AXE — swinging with menace once the fight is on
+    ctx.save();
+    ctx.translate(bx + 16 * flip, by - 24 - stomp);
+    if (flip === -1) ctx.scale(-1, 1);
+    ctx.rotate(b.active ? Math.sin(elapsed * 6) * 0.8 : 0.5);
+    ctx.fillStyle = '#8a6b3f'; ctx.fillRect(0, -3, 26, 5);
+    ctx.fillStyle = '#c8ccd4'; ctx.fillRect(22, -12, 9, 20);
+    ctx.fillStyle = '#e8ecf2'; ctx.fillRect(29, -12, 3, 20);
     ctx.restore();
   }
 
@@ -2514,6 +2835,23 @@ function drawGame() {
     }
   }
 
+  // BOSS BAR for Gecko Man
+  if (current.kind === 'gecko' && geckoMan && geckoMan.active) {
+    const bw = Math.min(500, canvas.width - 80);
+    const bx = canvas.width / 2 - bw / 2, by = 30;
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#b8e8b8';
+    ctx.font = 'bold 16px monospace';
+    ctx.fillText('GECKO MAN', canvas.width / 2, by - 8);
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(bx, by, bw, 14);
+    ctx.fillStyle = '#3f8a3f';
+    ctx.fillRect(bx + 2, by + 2, (bw - 4) * (geckoMan.hp / 32), 10);
+    ctx.strokeStyle = '#b8e8b8';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(bx, by, bw, 14);
+  }
+
   // BOSS BAR for Chippy Jr
   if (current.kind === 'jr' && chippyJr && chippyJr.active) {
     const bw = Math.min(500, canvas.width - 80);
@@ -2589,6 +2927,7 @@ function drawGame() {
                : current.kind === 'sky'    ? 'The storm got you!'
                : current.kind === 'chippy' ? 'Chippy got you! (He was evil the WHOLE time!)'
                : current.kind === 'jr'     ? 'Chippy Jr got his revenge!'
+               : current.kind === 'gecko'  ? 'The geckos rose. You fell!'
                : 'The zombies got you!',
                  canvas.width / 2, canvas.height / 2 - 10);
     ctx.font = '18px monospace';
@@ -2622,7 +2961,26 @@ function drawGame() {
     ctx.fillStyle = '#ffd23f';
     ctx.font = 'bold 40px monospace';
     ctx.fillText(`LEVEL ${victoryLevel} COMPLETE!`, canvas.width / 2, canvas.height / 2 - 60);
-    if (victoryLevel === 6) {
+    if (victoryLevel === 7) {
+      // Gecko Man's horned silhouette, head bowed
+      const vx = canvas.width / 2, vy = canvas.height / 2 + 8;
+      ctx.fillStyle = '#3f8a3f';
+      ctx.fillRect(vx - 16, vy - 14, 32, 26);          // head, bowed
+      ctx.fillRect(vx - 4, vy + 8, 8, 12);
+      ctx.fillStyle = '#2a2118';
+      ctx.fillRect(vx - 15, vy - 25, 7, 12);           // the horns
+      ctx.fillRect(vx + 8, vy - 25, 7, 12);
+      ctx.fillStyle = '#555';                          // eyes dimmed
+      ctx.fillRect(vx - 9, vy - 6, 5, 5);
+      ctx.fillRect(vx + 4, vy - 6, 5, 5);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 22px monospace';
+      ctx.fillText('GECKO MAN IS DEFEATED!', canvas.width / 2, canvas.height / 2 + 62);
+      ctx.fillStyle = '#b8e8b8';
+      ctx.font = '16px monospace';
+      ctx.fillText('The rise is over... but the geckos will remember this.',
+                   canvas.width / 2, canvas.height / 2 + 90);
+    } else if (victoryLevel === 6) {
       // Chippy Jr, defeated — drawn one last time, eyes out
       ctx.save();
       ctx.translate(canvas.width / 2, canvas.height / 2 + 4);
@@ -3237,10 +3595,10 @@ function drawWall(w, cam) {
   ctx.ellipse(x + 5, y + 5, 23, 8, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // sandstone in the temple, gray stone in the castle, purple in Jr's
-  const base = w.jr ? '#332c40' : w.castle ? '#4a4b50' : '#6d6250';
-  const face = w.jr ? '#453e54' : w.castle ? '#5d5f66' : '#8a7c5e';
-  const top  = w.jr ? '#5d5470' : w.castle ? '#787a82' : '#9c8e6e';
+  // sandstone temple, gray castle, purple Jr temple, mossy gecko temple
+  const base = w.gt ? '#22331f' : w.jr ? '#332c40' : w.castle ? '#4a4b50' : '#6d6250';
+  const face = w.gt ? '#3c5442' : w.jr ? '#453e54' : w.castle ? '#5d5f66' : '#8a7c5e';
+  const top  = w.gt ? '#527a5c' : w.jr ? '#5d5470' : w.castle ? '#787a82' : '#9c8e6e';
 
   if (w.broken) {
     // a crumbled stub — smashed down to knee height, jagged on top
