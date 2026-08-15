@@ -472,6 +472,7 @@ function popCar(car) {
   carsPopped++;
   const s = cellSize();
   blasts.push({ x: car.x, y: car.y, t: 0, life: 0.55, r: s * 0.42 });
+  scatterRubble(car.x, car.y, 2);     // burnt-out bits left on the road
   for (let i = 0; i < 8; i++) {
     const a = Math.random() * Math.PI * 2, sp = 40 + Math.random() * 90;
     debris.push({
@@ -488,6 +489,35 @@ function popCar(car) {
 let destroyed = 0;
 let repaired = 0;
 const REPAIR_TIME = 3.4;      // seconds of hammering per damage level — slow, so you can watch
+
+// ---------------------------------------------------------------------
+// MESS. Two kinds, and somebody has to deal with both of them.
+//   'rubble' — the broken bits a disaster leaves lying about
+//   'pie'    — exactly what you think. Cows are not house-trained.
+// A person sweeps one up at a time. It's a nicer job than rebuilding, so
+// it's quicker, but the town does get filthy if you keep summoning doom.
+// ---------------------------------------------------------------------
+let litter = [];
+let tidied = 0;
+const CLEAN_TIME = 1.5;       // seconds of sweeping per piece of mess
+const MAX_LITTER = 260;       // stop the whole town turning into a landfill
+
+function dropLitter(x, y, kind) {
+  if (litter.length >= MAX_LITTER) return;
+  litter.push({
+    x, y, kind,
+    seed: Math.random() * 100,          // so each one looks a bit different
+    born: elapsed,
+  });
+}
+
+// scatter a few piles of rubble around where something just got flattened
+function scatterRubble(bx, by, howMany) {
+  for (let i = 0; i < howMany; i++) {
+    const a = Math.random() * Math.PI * 2, r = Math.random() * cellSize() * 0.45;
+    dropLitter(bx + Math.cos(a) * r, by + Math.sin(a) * r, 'rubble');
+  }
+}
 
 // THE ECONOMY. You start with 30 MONEYS. Disasters cost MONEYS.
 // Every block a disaster smashes pays you 1 MONEY. Yes, really.
@@ -664,6 +694,9 @@ function smashBlock(gx, gy, bx, by, splash) {
            : kind === TOWER ? '#9aa0a8' : '#b5563c',
     });
   }
+  // ...and once the dust settles, RUBBLE is left lying on the ground for
+  // somebody to sweep up. A bigger building leaves a bigger heap.
+  scatterRubble(bx, by, sp);          // 1 pile for a house, 3 for a skyscraper
 }
 
 // ---------------------------------------------------------------------
@@ -1515,6 +1548,11 @@ function update(dt) {
   const cs = cellSize();
 
   // which broken buildings already have a worker on them (one each, no crowding)
+  // when doom arrives, everybody drops the broom and abandons their mess
+  if (panicking) {
+    for (const L of litter) L.by = null;
+    for (const p of people) { p.mess = null; p.messT = 0; p.sweeping = false; }
+  }
   const claimed = new Set();
   for (const p of people) {
     if (p.job) {
@@ -1676,13 +1714,54 @@ function update(dt) {
           }
         } else {
           p.fixing = false;
-          strollAbout(p, dt, cs);           // nothing to fix — go for a wander
+          // NOTHING TO REBUILD? Then get the broom out. Find the nearest bit
+          // of mess nobody else has claimed and go and sweep it up.
+          if (p.mess && (p.mess.gone || p.mess.by !== p)) p.mess = null;
+          if (!p.mess) {
+            let best = 1e9, found = null;
+            for (const L of litter) {
+              if (L.gone || (L.by && L.by !== p)) continue;
+              const d4 = Math.hypot(L.x - p.x, L.y - p.y);
+              if (d4 < best) { best = d4; found = L; }
+            }
+            if (found) { found.by = p; p.mess = found; p.messT = 0; }
+          }
+          if (p.mess) {
+            const near = Math.hypot(p.mess.x - p.x, p.mess.y - p.y);
+            if (near > cs * 0.3) {          // walking over, broom in hand
+              p.angle = Math.atan2(p.mess.y - p.y, p.mess.x - p.x);
+              p.sweeping = false;
+            } else {                        // SWEEP SWEEP SWEEP
+              p.sweeping = true;
+              p.workSide = p.mess.x >= p.x ? 1 : -1;
+              p.messT += dt;
+              p.broom = (p.broom || 0) + dt * 7;
+              if (p.messT >= CLEAN_TIME) {  // all gone!
+                p.mess.gone = true;
+                tidied++;
+                p.mess = null; p.messT = 0; p.sweeping = false;
+              }
+            }
+          } else {
+            p.sweeping = false;
+            strollAbout(p, dt, cs);         // town's spotless — go for a wander
+          }
         }
       } else {
         strollAbout(p, dt, cs);             // cows and dogs are always just wandering
       }
     }
-    if (p.fixing) continue;               // a worker mid-repair stands still
+
+    // COWS. There is no polite way to put this: every so often, a cow leaves
+    // a pie behind it, and a person will have to come and scoop it up.
+    if (p.kind === 'cow' && !p.sheltering) {
+      p.pieTimer = (p.pieTimer || 14 + Math.random() * 20) - dt;
+      if (p.pieTimer <= 0) {
+        p.pieTimer = 22 + Math.random() * 28;
+        dropLitter(p.x, p.y + cs * 0.1, 'pie');
+      }
+    }
+    if (p.fixing || p.sweeping) continue;   // mid-repair or mid-sweep: stand still
 
     // dogs scamper, cows plod, people are in between
     const pace = p.kind === 'dog' ? 1.35 : p.kind === 'cow' ? 0.6 : 1;
@@ -1725,6 +1804,8 @@ function update(dt) {
         vy: -400 - Math.random() * 300, spin: 0, life: 1.4, shirt: p.shirt });
     }
   }
+  // anyone launched into the air lets go of the mess they'd claimed
+  for (const p of people) if (p.gone && p.mess) p.mess.by = null;
   people = people.filter(p => !p.gone);
 
   // ---- CARS ON THE ROADS ----
@@ -1856,6 +1937,7 @@ function update(dt) {
   cars = cars.filter(c => !c.gone);
   for (const b of blasts) b.t += dt;            // fireballs bloom then fade
   blasts = blasts.filter(b => b.t < b.life);
+  litter = litter.filter(L => !L.gone);         // swept-up mess is gone for good
 
   // airborne folk tumble gracefully out of frame
   for (const f of launchedFolk) {
@@ -2250,6 +2332,44 @@ function draw() {
     ctx.fillText('🔧', bx2 + bs * 0.5, by2 - s * 0.22);
   }
 
+  // ---- THE MESS: rubble left by disasters, and, ahem, cow pies ----
+  for (const L of litter) {
+    const u = s / 26;
+    const h1 = hash(L.seed), h2 = hash(L.seed + 3.1), h3 = hash(L.seed + 7.7);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.18)';                 // a shadow on the grass
+    ctx.beginPath();
+    ctx.ellipse(L.x, L.y + 1.5 * u, 6 * u, 2.2 * u, 0, 0, Math.PI * 2);
+    ctx.fill();
+    if (L.kind === 'pie') {
+      // a splat, in three shades of... let's call it brown
+      ctx.fillStyle = '#6b4a24';
+      ctx.beginPath(); ctx.ellipse(L.x, L.y, 5.4 * u, 2.9 * u, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#7d5a2c';
+      ctx.beginPath(); ctx.ellipse(L.x - 1 * u, L.y - 1.1 * u, 3.6 * u, 2.1 * u, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#8d6733';
+      ctx.beginPath(); ctx.ellipse(L.x + 0.6 * u, L.y - 2.2 * u, 2.1 * u, 1.4 * u, 0, 0, Math.PI * 2); ctx.fill();
+      // two flies, doing laps. because of course there are flies.
+      ctx.fillStyle = '#22242a';
+      for (let f = 0; f < 2; f++) {
+        const a = elapsed * (3.4 + f) + L.seed + f * 2.6;
+        ctx.beginPath();
+        ctx.arc(L.x + Math.cos(a) * 6 * u, L.y - 4.5 * u + Math.sin(a * 1.7) * 2.4 * u,
+                0.7 * u, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else {
+      // a little heap of broken bits
+      ctx.fillStyle = '#8b8378';
+      ctx.beginPath(); ctx.ellipse(L.x, L.y, 5 * u, 2.4 * u, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#a09889';
+      ctx.fillRect(L.x - 3.6 * u + h1 * u, L.y - 3 * u, 2.6 * u, 2.4 * u);
+      ctx.fillStyle = '#77706a';
+      ctx.fillRect(L.x + 0.6 * u + h2 * u, L.y - 3.6 * u, 2.2 * u, 2.8 * u);
+      ctx.fillStyle = '#948b7e';
+      ctx.fillRect(L.x - 1 * u + h3 * u, L.y - 5 * u, 1.8 * u, 1.9 * u);
+    }
+  }
+
   // tiny heads peeking out of every occupied shelter
   const peek = {};
   for (const p of people) {
@@ -2284,9 +2404,9 @@ function draw() {
   for (const p of people) {
     if (p.sheltering) continue;
     const u = s / 26;                                // one "unit" scaled to the square
-    const step = p.fixing ? 0 : Math.sin(p.walk) * 2 * u;   // planted feet while working
+    const step = (p.fixing || p.sweeping) ? 0 : Math.sin(p.walk) * 2 * u;  // planted while working
     const facing = Math.cos(p.angle) < 0 ? -1 : 1;   // which way are they pointed?
-    const hop = p.fixing ? 0
+    const hop = (p.fixing || p.sweeping) ? 0
               : doom ? Math.abs(Math.sin(p.bob)) * 2.5 * u   // panicked jitter
                      : Math.sin(p.bob) * 1.2 * u;            // happy sway
     const eyeW = doom ? 2.3 * u : 1.1 * u;           // eyes go WIDE when scared
@@ -2363,6 +2483,31 @@ function draw() {
       if (doom) {
         ctx.moveTo(p.x - 4 * u, p.y - 9 * u); ctx.lineTo(p.x - 6.5 * u, p.y - 15 * u);
         ctx.moveTo(p.x + 4 * u, p.y - 9 * u); ctx.lineTo(p.x + 6.5 * u, p.y - 15 * u);
+      } else if (p.sweeping) {
+        // SWEEPING UP. Both hands on the broom, pushing it back and forth
+        // over the mess, with little puffs of dust coming off it.
+        const k = p.workSide || 1;
+        const push = Math.sin(p.broom || 0);            // -1 back, +1 forward
+        const hx = p.x + k * (4 + push * 2.5) * u, hy = p.y - 7 * u;
+        const bx3 = p.x + k * (10 + push * 3.5) * u, by3 = p.y - 0.5 * u;
+        ctx.moveTo(p.x + k * 3 * u, p.y - 9 * u); ctx.lineTo(hx, hy);
+        ctx.moveTo(p.x - k * 3 * u, p.y - 9 * u); ctx.lineTo(hx - k * 1.5 * u, hy + 1.5 * u);
+        ctx.stroke();
+        ctx.strokeStyle = '#8a6a3a'; ctx.lineWidth = 1.3 * u;      // broom handle
+        ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(bx3, by3); ctx.stroke();
+        ctx.fillStyle = '#d8b45c';                                  // bristles
+        ctx.save();
+        ctx.translate(bx3, by3);
+        ctx.rotate(Math.atan2(by3 - hy, bx3 - hx));
+        ctx.fillRect(0, -2.2 * u, 3.4 * u, 4.4 * u);
+        ctx.restore();
+        if (push > 0.6) {                                           // puff of dust
+          ctx.fillStyle = 'rgba(210, 200, 180, 0.45)';
+          ctx.beginPath();
+          ctx.arc(bx3 + k * 3 * u, by3 - 1 * u, 2.2 * u, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.beginPath();                             // (restart path for the stroke below)
       } else if (p.fixing) {
         // Hammer on whichever side the building is — so a worker on the
         // right of a house swings to their LEFT, and vice versa.
@@ -2702,11 +2847,11 @@ function draw() {
 
   // the destruction scoreboard, tucked top-left under the bar
   // (hidden while a drop-down is open so it can't show through the menu)
-  if ((destroyed > 0 || peopleLaunched > 0 || repaired > 0 || carsPopped > 0) && !openMenu) {
+  if ((destroyed > 0 || peopleLaunched > 0 || repaired > 0 || carsPopped > 0 || tidied > 0) && !openMenu) {
     ctx.fillStyle = 'rgba(255, 159, 67, 0.9)';
     ctx.font = 'bold 12px monospace';
     ctx.textAlign = 'left';
-    ctx.fillText(`💥 ${destroyed}   🚀 ${peopleLaunched}   🔧 ${repaired}   🚗 ${carsPopped}`,
+    ctx.fillText(`💥 ${destroyed}  🚀 ${peopleLaunched}  🔧 ${repaired}  🚗 ${carsPopped}  🧹 ${tidied}`,
                  12, TOPBAR + 18);
   }
 }
