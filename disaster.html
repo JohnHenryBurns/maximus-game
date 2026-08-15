@@ -58,7 +58,7 @@ let cell = 34;                      // pixel size of one grid square
 // Room at the top for the toolbar. It's two tiers now (money + THE MACHINE
 // on top, the build palette in a full-width row below) so everything fits on
 // a phone instead of running off the side.
-const TOPBAR = 82;                   // two rows: Arcade+money on top, the buttons below
+const TOPBAR = 108;                  // two roomy rows: Arcade+money on top, buttons below
 
 // ---------------------------------------------------------------------
 // THE CAMERA — lets you zoom in to build with detail, then slide around.
@@ -324,60 +324,72 @@ function rrect(x, y, w, h, r) {
 // frame, so things placed with it (like fog clouds) hold still instead of flickering
 function hash(n) { const v = Math.sin(n * 127.1) * 43758.5453; return v - Math.floor(v); }
 
+// Pick the biggest font size (up to `size`) that makes `text` fit in `maxW`,
+// and set it. Emoji are extra-wide, so words like "🌪 Disasters ▾" used to
+// spill outside their button — this stops that on any screen.
+function fitFont(text, maxW, size, min) {
+  let fs = size;
+  ctx.font = `bold ${fs}px monospace`;
+  while (fs > (min || 10) && ctx.measureText(text).width > maxW) {
+    fs -= 1;
+    ctx.font = `bold ${fs}px monospace`;
+  }
+  return fs;
+}
+
 // the emoji of whatever build item is currently picked
 function iconFor(type) {
   const b = buttons.find(b => b.type === type);
   return b ? b.icon : '🏠';
 }
-// what the Build button shows: a hand when you're in pan mode (nothing to
-// place), otherwise the icon of the thing you're placing.
+// what the Build button shows: a hand when you're NOT building (so you're
+// free to drag the map), otherwise the icon of the thing you're placing.
 function buildIcon() { return selected == null ? '✋' : iconFor(selected); }
 
-// Leave building and go back to just moving the map around.
-function setPanMode() {
+// Stop building. There's no "pan mode" to switch on — dragging the map is
+// simply what happens whenever you're not placing something.
+function stopBuilding() {
   selected = null;
   openMenu = null;
-  setStatus('✋ Pan mode — drag to move, pinch/scroll to zoom', '#7dd3ff');
+  setStatus('✋ Drag to move the map, pinch to zoom', '#7dd3ff');
 }
 
 // ROW 1 (top): the gold money chip, pinned to the RIGHT edge (the ← Arcade
 // pill sits on the left, so the money gets the opposite corner).
 function moneyChipRect() {
   const narrow = canvas.width < 480;
-  const w = narrow ? 96 : 150;
-  return { x: canvas.width - w - 10, y: 10, w, h: 28, narrow };
+  const w = narrow ? 104 : 150;
+  return { x: canvas.width - w - 10, y: 12, w, h: 32, narrow };
 }
 
-// ROW 2 (below): the three big buttons, spread across the FULL width so their
-// words always fit — Build, Disasters, People.
+// ROW 2 (below): the three big buttons across the full width, with room to
+// breathe — Build, People, then Disasters last (it's the dangerous one).
 function topButtons() {
-  const gap = 8, pad = 8, y = 44, h = 30;
+  const gap = 10, pad = 10, y = 58, h = 38;
   const x0 = pad, x1 = canvas.width - pad;
   const w = (x1 - x0 - gap * 2) / 3;
-  const compact = w < 104;                 // only a very tiny phone hides the words
   const defs = [
     { key: 'build',     icon: buildIcon(), word: 'Build',     menu: true },
-    { key: 'disasters', icon: '🌪',        word: 'Disasters', menu: true },
     { key: 'people',    icon: '🧍',        word: 'People',    menu: false },
+    { key: 'disasters', icon: '🌪',        word: 'Disasters', menu: true },
   ];
-  return defs.map((d, i) => ({ ...d, x: x0 + i * (w + gap), y, w, h, compact }));
+  return defs.map((d, i) => ({ ...d, x: x0 + i * (w + gap), y, w, h }));
 }
 
-// A small floating button, shown only WHILE you're placing, that drops you
-// back into pan/zoom mode. This is the clear "stop building" exit.
-function exitBtnRect() {
-  if (selected == null || openMenu) return null;
-  const w = 116, h = 32;
-  return { x: canvas.width - w - 10, y: TOPBAR + 8, w, h };
+// The "Stop Building" button, parked at the BOTTOM CENTRE and shown only
+// while you're actually placing something. Tap it and you're back to
+// dragging the map around.
+function stopBuildRect() {
+  if (selected == null) return null;
+  const w = 190, h = 40;
+  return { x: (canvas.width - w) / 2, y: canvas.height - h - 16, w, h };
 }
 
 // The list that drops down under an open button. Kept on-screen at the right edge.
 function menuRects(kind) {
   const btn = topButtons().find(b => b.key === kind);
-  // the Build menu starts with a "Move / Pan" choice, then all the buildables
   const items = kind === 'build'
-    ? [{ label: '✋ Move / Pan', type: null, cost: 0 },
-       ...buttons.map(b => ({ label: b.icon + ' ' + b.short, type: b.type, cost: 0 }))]
+    ? buttons.map(b => ({ label: b.icon + ' ' + b.short, type: b.type, cost: 0 }))
     : MACHINE_MENU.map(m => ({ ...m }));
   // disasters need extra room so the name never crowds its price tag
   const minW = kind === 'disasters' ? 214 : 172;
@@ -401,7 +413,6 @@ function handleTopButton(b) {
 // tapping a row inside an open menu
 function chooseFromMenu(kind, r) {
   if (kind === 'build') {
-    if (r.type == null) { setPanMode(); return; }     // the "Move / Pan" choice
     selected = r.type;
     setStatus('Now placing ' + r.label, '#7ddf8f');
     openMenu = null;
@@ -424,11 +435,11 @@ function pressAt(px, py) {
   // no menu open: check the top buttons
   const tb = topButtons().find(b => inside(px, py, b));
   if (tb) { handleTopButton(tb); return true; }
-  // the floating "stop building" exit button
-  const xb = exitBtnRect();
-  if (xb && inside(px, py, xb)) { setPanMode(); return true; }
+  // the bottom-centre STOP BUILDING button
+  const sb = stopBuildRect();
+  if (sb && inside(px, py, sb)) { stopBuilding(); return true; }
   if (py <= TOPBAR) return true;    // tapped an empty part of the bar — do nothing
-  return false;                     // tapped the world — paint, or pan if in pan mode
+  return false;                     // tapped the world — paint, or drag the map
 }
 
 // ---------------------------------------------------------------------
@@ -522,7 +533,7 @@ addEventListener('keydown', e => {
   if (e.key.toLowerCase() === 'd') openMenu = openMenu === 'disasters' ? null : 'disasters';  // D for Disasters menu
   if (e.key.toLowerCase() === 'b') openMenu = openMenu === 'build' ? null : 'build';          // B for Build menu
   if (e.key.toLowerCase() === 'p') { spawnPeople(); setStatus('🧍 New folk wander in!', '#7ddf8f'); }
-  if (e.key === 'Escape') setPanMode();                         // Esc stops building -> pan mode
+  if (e.key === 'Escape') stopBuilding();                        // Esc stops building
   if (e.key === '0') { zoom = 1; panX = 0; panY = 0; }           // 0 zooms back out to the whole town
 });
 
@@ -1174,15 +1185,20 @@ function draw() {
     const col = palette[b.key];
     const open = openMenu === b.key;
     ctx.fillStyle = open ? col.border : col.bg;
-    rrect(b.x, b.y, b.w, b.h, 8); ctx.fill();
+    rrect(b.x, b.y, b.w, b.h, 9); ctx.fill();
     ctx.strokeStyle = col.border; ctx.lineWidth = 2;
-    rrect(b.x, b.y, b.w, b.h, 8); ctx.stroke();
+    rrect(b.x, b.y, b.w, b.h, 9); ctx.stroke();
     ctx.fillStyle = open ? '#10161d' : '#ffffff';
     ctx.textAlign = 'center';
-    const caret = b.menu ? ' ▾' : '';
-    const cap = b.compact ? b.icon + caret : b.icon + ' ' + b.word + caret;
-    ctx.font = 'bold 15px monospace';
-    ctx.fillText(cap, b.x + b.w / 2, b.y + b.h / 2 + 5);
+    // full label if it fits; otherwise shrink, and only drop the word as a
+    // last resort on a really tiny screen
+    let cap = b.icon + ' ' + b.word + (b.menu ? ' ▾' : '');
+    let fs = fitFont(cap, b.w - 14, 16, 11);
+    if (ctx.measureText(cap).width > b.w - 14) {
+      cap = b.icon + (b.menu ? ' ▾' : '');
+      fs = fitFont(cap, b.w - 14, 16, 10);
+    }
+    ctx.fillText(cap, b.x + b.w / 2, b.y + b.h / 2 + fs * 0.35);
   }
 
   // --- the open drop-down list, if any ---
@@ -1208,17 +1224,17 @@ function draw() {
     }
   }
 
-  // --- the floating "stop building" exit button (only while placing) ---
-  const xb = exitBtnRect();
-  if (xb) {
+  // --- STOP BUILDING, bottom centre, only while you're placing something ---
+  const sb = stopBuildRect();
+  if (sb) {
     ctx.fillStyle = '#1d3a4a';
-    rrect(xb.x, xb.y, xb.w, xb.h, 8); ctx.fill();
+    rrect(sb.x, sb.y, sb.w, sb.h, 10); ctx.fill();
     ctx.strokeStyle = '#7dd3ff'; ctx.lineWidth = 2;
-    rrect(xb.x, xb.y, xb.w, xb.h, 8); ctx.stroke();
+    rrect(sb.x, sb.y, sb.w, sb.h, 10); ctx.stroke();
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 14px monospace';
+    ctx.font = 'bold 15px monospace';
     ctx.textAlign = 'center';
-    ctx.fillText('✋ Pan mode', xb.x + xb.w / 2, xb.y + xb.h / 2 + 5);
+    ctx.fillText('✋ Stop Building', sb.x + sb.w / 2, sb.y + sb.h / 2 + 5);
   }
 
   // --- the STATUS BOX at the bottom: a readable box for the latest news ---
@@ -1234,7 +1250,9 @@ function draw() {
       tw = ctx.measureText(statusText).width;
     }
     const boxW = tw + 30, boxH = 34;
-    const bx = (canvas.width - boxW) / 2, by = canvas.height - boxH - 14;
+    // sit above the Stop Building button when it's showing, so they never overlap
+    const bottom = sb ? sb.y - 8 : canvas.height - 14;
+    const bx = (canvas.width - boxW) / 2, by = bottom - boxH;
     ctx.globalAlpha = Math.min(1, statusTimer / 0.5);   // fade out at the end
     ctx.fillStyle = 'rgba(10, 14, 20, 0.9)';
     rrect(bx, by, boxW, boxH, 10); ctx.fill();
