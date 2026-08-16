@@ -2393,8 +2393,16 @@ function update(dt) {
               const d4 = Math.hypot(L.x - p.x, L.y - p.y);
               if (d4 < best) { best = d4; found = L; }
             }
+            // A POOP PERSON counts as a mess too. Somebody has to go and give
+            // them a good scrub, and afterwards there's nothing left of them.
+            for (const pp of poopPeople) {
+              if (pp.gone || (pp.by && pp.by !== p)) continue;
+              const d4 = Math.hypot(pp.x - p.x, pp.y - p.y);
+              if (d4 < best) { best = d4; found = pp; }
+            }
             if (found) { found.by = p; p.mess = found; p.messT = 0;
-                         p.mopping = found.kind === 'puddle'; }   // water needs a MOP
+                         // water and poop people both want a MOP
+                         p.mopping = found.kind === 'puddle' || found.kind === 'poop'; }
           }
           if (p.mess) {
             const near = Math.hypot(p.mess.x - p.x, p.mess.y - p.y);
@@ -2406,7 +2414,19 @@ function update(dt) {
               p.workSide = p.mess.x >= p.x ? 1 : -1;
               p.messT += dt;
               p.broom = (p.broom || 0) + dt * 7;
-              if (p.messT >= CLEAN_TIME) {  // all gone!
+              const need = p.mess.kind === 'poop' ? CLEAN_TIME * 1.8 : CLEAN_TIME;
+              if (p.messT >= need) {          // all gone!
+                if (p.mess.kind === 'poop') {
+                  // scrubbed away to nothing, in a burst of soap bubbles
+                  for (let i = 0; i < 12; i++) {
+                    debris.push({ x: p.mess.x, y: p.mess.y - 6,
+                      vx: (Math.random() - 0.5) * 160, vy: -Math.random() * 150 - 30,
+                      spin: Math.random() * 6, life: 0.7,
+                      color: i % 2 ? '#dff2ff' : '#b7ddf2' });
+                  }
+                  setStatus('Scrubbed a poop person away! (' +
+                            (poopPeople.filter(q => !q.gone).length - 1) + ' left)', '#7ddf8f');
+                }
                 p.mess.gone = true;
                 tidied++;
                 p.mess = null; p.messT = 0; p.sweeping = false; p.mopping = false;
@@ -2471,7 +2491,7 @@ function update(dt) {
           p.trackT = 2.6;                     // and now they're tracking it around
           // ...and from the squished pie, SOMETHING RISES
           if (poopPeople.length < 12) {
-            poopPeople.push({ x: L.x, y: L.y, angle: Math.random() * 6.28,
+            poopPeople.push({ kind: 'poop', x: L.x, y: L.y, angle: Math.random() * 6.28,
                               walk: Math.random() * 6.28, born: elapsed });
             setStatus('THE PIE GOT UP. A poop person is born!! (' + (poopPeople.length) + ' in town)', '#c98a3d');
           } else if (piesSteppedIn % 3 === 1) {
@@ -2748,16 +2768,24 @@ function update(dt) {
   // ---- POOP PEOPLE — they waddle. they smile. they are avoided. ----
   for (const pp of poopPeople) {
     pp.walk += dt * 7;
-    if (Math.random() < dt * 0.9) pp.angle = Math.random() * 6.28;
-    const nx = pp.x + Math.cos(pp.angle) * 26 * dt;
-    const ny = pp.y + Math.sin(pp.angle) * 26 * dt;
-    if (!blockedAt(nx, pp.y)) pp.x = nx; else pp.angle += 2;
-    if (!blockedAt(pp.x, ny)) pp.y = ny;
-    pp.x = Math.max(8, Math.min(gridW() - 8, pp.x));
-    pp.y = Math.max(TOPBAR + 8, Math.min(TOPBAR + gridH() - 8, pp.y));
-    // anyone who wanders too close is instantly, deeply grossed out
+    // ONCE SOMEBODY HAS COME TO CLEAN THEM they stop and stand still for it —
+    // they know the game is up. Otherwise they waddle about as usual.
+    const beingCleaned = pp.by && pp.by.mess === pp && pp.by.sweeping;
+    if (!beingCleaned) {
+      if (Math.random() < dt * 0.9) pp.angle = Math.random() * 6.28;
+      const nx = pp.x + Math.cos(pp.angle) * 26 * dt;
+      const ny = pp.y + Math.sin(pp.angle) * 26 * dt;
+      if (!blockedAt(nx, pp.y)) pp.x = nx; else pp.angle += 2;
+      if (!blockedAt(pp.x, ny)) pp.y = ny;
+      pp.x = Math.max(8, Math.min(gridW() - 8, pp.x));
+      pp.y = Math.max(TOPBAR + 8, Math.min(TOPBAR + gridH() - 8, pp.y));
+    }
+    pp.scrub = beingCleaned;          // the drawing shows suds while it's happening
+    // anyone who wanders too close is instantly, deeply grossed out — except
+    // the poor soul who's been sent to deal with them
     for (const p of people) {
       if (p.kind !== 'person' || p.sheltering || p.gone) continue;
+      if (p === pp.by) continue;
       if (!(p.ick > 0) && elapsed > (p.ickCool || 0) &&
           Math.hypot(p.x - pp.x, p.y - pp.y) < 20) {
         p.ick = 1.0;
@@ -2765,6 +2793,7 @@ function update(dt) {
       }
     }
   }
+  poopPeople = poopPeople.filter(pp => !pp.gone);   // scrubbed ones are gone for good
 
   // airborne folk tumble gracefully out of frame
   for (const f of launchedFolk) {
@@ -4002,6 +4031,17 @@ function draw() {
 
   // ---- THE POOP PEOPLE — waddling, smiling, hoping for friendship ----
   for (const pp of poopPeople) {
+    if (pp.scrub) {                  // mid-scrub: a lather of soap bubbles
+      for (let i = 0; i < 7; i++) {
+        const a = elapsed * 2.4 + i * 0.9 + pp.walk * 0.1;
+        ctx.fillStyle = `rgba(226, 244, 255, ${0.45 + Math.sin(a * 3) * 0.2})`;
+        ctx.beginPath();
+        ctx.arc(pp.x + Math.cos(a) * s * 0.28,
+                pp.y - s * 0.28 + Math.sin(a * 1.7) * s * 0.2,
+                s * (0.07 + (i % 3) * 0.03), 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
     const step = Math.sin(pp.walk) * 1.5;
     ctx.fillStyle = 'rgba(0,0,0,0.18)';
     ctx.beginPath(); ctx.ellipse(pp.x, pp.y + 3, 6, 2.4, 0, 0, Math.PI * 2); ctx.fill();
