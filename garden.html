@@ -44,6 +44,9 @@ const CROPS = {
   carrot:    { name: 'Carrot',    icon: '🥕', cost: 5,  sell: 9,   grow: 30 },
   sunflower: { name: 'Sunflower', icon: '🌻', cost: 12, sell: 22,  grow: 90 },
   pumpkin:   { name: 'Pumpkin',   icon: '🎃', cost: 25, sell: 50,  grow: 240 },
+  // ---- the FANTASY aisle: seeds that don't exist. except here. ----
+  huckle:    { name: 'Spicy Huckleberry', icon: '🌶', cost: 40, sell: 88,  grow: 180 },
+  flame:     { name: 'Flame Sprout',      icon: '🔥', cost: 60, sell: 135, grow: 300 },
 };
 
 // ---------------------------------------------------------------------
@@ -288,6 +291,84 @@ function drawPlant(plot, r) {
       }
       ctx.fillStyle = '#6d4a26';                 // the middle
       ctx.beginPath(); ctx.arc(cx, base - h, head * 0.55, 0, Math.PI * 2); ctx.fill();
+    }
+  } else if (plot.type === 'flame') {
+    // a plant whose leaves are little FLAMES. do not touch. do not sniff.
+    const h = r.s * (0.12 + g * 0.35);
+    const flick = Math.sin(elapsed * 8 + cx) * 0.2;
+    ctx.strokeStyle = '#5a3a2a'; ctx.lineWidth = 3;    // charcoal stem
+    ctx.beginPath(); ctx.moveTo(cx, base); ctx.lineTo(cx, base - h); ctx.stroke();
+    for (let f = 0; f < 2 + Math.floor(g * 3); f++) {  // flame-leaves flicker
+      const fy = base - h * (0.3 + f * 0.22);
+      const side = f % 2 ? 1 : -1;
+      const fs = r.s * (0.06 + g * 0.06);
+      ctx.fillStyle = '#ff8f2b';
+      ctx.beginPath();
+      ctx.moveTo(cx + side * 2, fy);
+      ctx.quadraticCurveTo(cx + side * fs * 2, fy - fs * (1.5 + flick),
+                           cx + side * fs * 1.2, fy - fs * 2.4);
+      ctx.quadraticCurveTo(cx + side * fs * 0.4, fy - fs * 1.2, cx + side * 2, fy);
+      ctx.fill();
+      ctx.fillStyle = '#ffd23f';
+      ctx.beginPath();
+      ctx.ellipse(cx + side * fs, fy - fs, fs * 0.4, fs * 0.7, side * 0.4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    if (g >= 1) {
+      // the FLAME BLOOM — a fire flower with a white-hot heart
+      const fh = base - h;
+      const blaze = r.s * (0.16 + Math.sin(elapsed * 6) * 0.02);
+      ctx.fillStyle = '#ff6b2b';
+      ctx.beginPath();
+      ctx.moveTo(cx - blaze * 0.8, fh);
+      ctx.quadraticCurveTo(cx - blaze, fh - blaze * 1.4, cx, fh - blaze * 2);
+      ctx.quadraticCurveTo(cx + blaze, fh - blaze * 1.4, cx + blaze * 0.8, fh);
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#ffd23f';
+      ctx.beginPath(); ctx.ellipse(cx, fh - blaze * 0.7, blaze * 0.45, blaze * 0.8, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#fff6e0';
+      ctx.beginPath(); ctx.ellipse(cx, fh - blaze * 0.5, blaze * 0.2, blaze * 0.4, 0, 0, Math.PI * 2); ctx.fill();
+      for (let e = 0; e < 3; e++) {                    // embers rising
+        const ea = (elapsed * 1.4 + e * 2.1) % 2;
+        ctx.fillStyle = `rgba(255, 160, 60, ${1 - ea / 2})`;
+        ctx.fillRect(cx + Math.sin(elapsed * 3 + e * 4) * blaze,
+                     fh - blaze * 1.6 - ea * r.s * 0.2, 3, 3);
+      }
+    }
+  } else if (plot.type === 'huckle') {
+    // a bush of huckleberries so spicy they GLOW
+    const bs = r.s * (0.08 + g * 0.2);
+    ctx.fillStyle = '#3f7a34';
+    ctx.beginPath(); ctx.arc(cx, base - bs * 0.6, bs, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(cx - bs * 0.8, base - bs * 0.3, bs * 0.7, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(cx + bs * 0.8, base - bs * 0.3, bs * 0.7, 0, Math.PI * 2); ctx.fill();
+    if (g > 0.4) {
+      // the berries arrive... and then they start to SMOULDER
+      const n = Math.floor((g - 0.4) / 0.6 * 6) + 1;
+      for (let b = 0; b < n; b++) {
+        const bx = cx + Math.sin(b * 2.7) * bs * 1.1;
+        const by = base - bs * 0.5 - Math.cos(b * 1.9) * bs * 0.5;
+        if (g >= 1) {                                  // ripe = glowing like coals
+          const hot = 0.5 + Math.sin(elapsed * 6 + b) * 0.5;
+          ctx.fillStyle = `rgba(255, 80, 40, ${0.35 * hot})`;
+          ctx.beginPath(); ctx.arc(bx, by, r.s * 0.06, 0, Math.PI * 2); ctx.fill();
+        }
+        ctx.fillStyle = g >= 1 ? '#e8453c' : '#8a3a5a';
+        ctx.beginPath(); ctx.arc(bx, by, r.s * 0.032, 0, Math.PI * 2); ctx.fill();
+      }
+      if (g >= 1) {
+        // spicy heat squiggles, rising off the bush
+        ctx.strokeStyle = 'rgba(255, 120, 60, 0.5)';
+        ctx.lineWidth = 1.5;
+        for (let q = 0; q < 2; q++) {
+          const qx = cx + (q ? bs * 0.6 : -bs * 0.6);
+          ctx.beginPath();
+          ctx.moveTo(qx, base - bs * 1.6);
+          ctx.quadraticCurveTo(qx + Math.sin(elapsed * 5 + q * 3) * 4, base - bs * 2,
+                               qx, base - bs * 2.4);
+          ctx.stroke();
+        }
+      }
     }
   } else if (plot.type === 'pumpkin') {
     // a creeping vine, then the pumpkin swells up big and proud
