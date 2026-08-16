@@ -163,7 +163,9 @@ const CHAPTERS = [
   { name: 'The Overseer', unlocked: ch1Done },
   { name: 'The Machine', unlocked: ch2Done },
   { name: 'The Truth', unlocked: ch3Done },
+  { name: '???', unlocked: false },
 ];
+let ch4Done = localStorage.getItem('robot_ch4') === 'yes';
 let chapter = 0;
 
 // the story card shown when a chapter begins
@@ -204,6 +206,11 @@ let machineAwake = false;
 let awakeSeq = 0;         // seconds since the awakening began
 let zapGrace = 0;         // brief safety after a shock
 let stun = 0;             // you, frozen and buzzing, after a shock
+
+// CHAPTER 4: THE FAULT — the dark thing from outside, alive inside the
+// memory. It spreads. That is all it does. That is enough.
+let fault = null;
+let faultFlash = 0;      // the memory jolts when you touch what it remembers
 
 // THE OVERSEER — a giant with no legs, hanging from a ceiling rail by a
 // great metal bar at its waist. It glides right over everything.
@@ -329,11 +336,19 @@ function buildFactory() {
       downTimer: 0,          // the powering-down finale
       swing: 0,
     };
+  } else if (chapter === 3) {
+    // CHAPTER 4: the MEMORY of the factory, alive... with the Fault inside
+    leverPulled = true;
+    powered = 4;
+    for (const sw of switches) sw.on = true;
+    overseer = null;
+    fault = { x: 2050, y: 1560, r: 140 };    // it starts small. it doesn't stay small.
   } else {
     leverPulled = false;
     powered = 0;
     overseer = null;
   }
+  if (chapter !== 3) fault = null;
   wokeTimer = 0;
   endTimer = 0;
   grace = 0;
@@ -429,11 +444,6 @@ function startChapter(i) {
     lockedTimer = 2;
     return;
   }
-  if (i === 3) {
-    lockedText = 'THE TRUTH is still being written... only the author knows it.';
-    lockedTimer = 3;
-    return;
-  }
   chapter = i;
   buildFactory();
   if (i === 0) {
@@ -450,6 +460,22 @@ function startChapter(i) {
       'Somewhere in this factory there is power. Find it.',
       '',
       '( press anything to begin )',
+    ];
+  } else if (i === 3) {
+    storyLines = [
+      'CHAPTER 4: THE TRUTH',
+      '',
+      'The Machine holds your memory core in its socket.',
+      '"Little one," it says. "You gave me your memories to keep."',
+      '"Let me show you the night you gave them up."',
+      '',
+      'The vault dissolves into blue light.',
+      'You are standing in the factory — but long ago.',
+      'Everything is running. Everything is alive.',
+      '',
+      'And something dark is spreading across the floor.',
+      '',
+      '( press anything to remember )',
     ];
   } else if (i === 2) {
     storyLines = [
@@ -545,7 +571,8 @@ function update(dt) {
           vy: (noise(i * 7.7 + elapsed) - 0.9) * 280,
           life: 0.7, color: i % 2 ? '#ffd23f' : '#7dd3ff' });
       }
-    } else if (chapter === 1 && sw.on && near && overseer && overseer.caught <= 0) {
+    } else if (((chapter === 1 && overseer && overseer.caught <= 0) || chapter === 3) &&
+               sw.on && near) {
       sw.on = false;
       powered--;
       for (let i = 0; i < 14; i++) {
@@ -554,7 +581,7 @@ function update(dt) {
           vy: (noise(i * 7.7 + elapsed) - 0.9) * 280,
           life: 0.7, color: i % 2 ? '#e8453c' : '#ffd23f' });
       }
-      if (powered <= 0 && overseer.downTimer <= 0) {
+      if (chapter === 1 && powered <= 0 && overseer.downTimer <= 0) {
         // the last switch dies — and so does the giant's power
         overseer.downTimer = 6;
         endTimer = 11;
@@ -562,6 +589,35 @@ function update(dt) {
         localStorage.setItem('robot_ch2', 'yes');
         CHAPTERS[2].unlocked = true;         // THE MACHINE awaits
       }
+    }
+  }
+
+  // ---- CHAPTER 4: the memory of the night everything went dark ----
+  if (chapter === 3 && fault) {
+    if (faultFlash > 0) faultFlash -= dt;
+    // the Fault spreads. slowly. always.
+    fault.r = Math.min(950, fault.r + 20 * dt);
+    // touch it and the memory JOLTS — it can't hurt you. it remembers you.
+    const fd = Math.hypot(player.x - fault.x, player.y - fault.y);
+    if (fd < fault.r + 12) {
+      faultFlash = 0.8;
+      const push = (fault.r + 60 - fd) / Math.max(1, fd);
+      const nx = player.x + (player.x - fault.x) * push;
+      const ny = player.y + (player.y - fault.y) * push;
+      if (!blocked(nx, player.y)) player.x = nx;
+      if (!blocked(player.x, ny)) player.y = ny;
+    }
+    // all four down — now walk to where you fell asleep, one last time
+    if (powered <= 0 &&
+        Math.hypot(player.x - START.x, player.y - START.y) < 44) {
+      fault = null;                         // the memory releases you
+      endTimer = 21;
+      ch4Done = true;
+      localStorage.setItem('robot_ch4', 'yes');
+      sayDeep(['the fault came from outside.',
+               'you turned everything off... to starve it.',
+               'you saved us all, little one.',
+               'but the fault... is still out there.'], 18);
     }
   }
 
@@ -766,6 +822,9 @@ function draw() {
   // the Machine's great face, decorated over its wall-body (chapter 3)
   if (chapter === 2) drawMachineFace(c);
 
+  // THE FAULT, spreading through the memory (chapter 4)
+  if (chapter === 3 && fault) drawFault(c);
+
   // the part you're carrying hovers proudly over your head
   if (carrying) {
     drawPiece(carrying.kind, player.x - c.x,
@@ -790,6 +849,7 @@ function draw() {
   // every switch you CUT drags the factory back toward blackness. ----
   const darkAmt = chapter === 0 ? (powerOn ? 0 : 1)
                 : chapter === 1 ? (4 - powered) / 4
+                : chapter === 3 ? (4 - powered) / 4 * 0.85   // the memory dims as you relive the shutdown
                 : machineAwake ? Math.max(0, 1 - awakeSeq / 3) : 1;
   if (darkAmt > 0) {
     const px = player.x - c.x, py = player.y - c.y;
@@ -844,6 +904,48 @@ function draw() {
     if (overseer) drawOverseer(c);
   }
 
+  // the whole world seen through memory-blue (chapter 4)
+  if (chapter === 3) {
+    ctx.fillStyle = 'rgba(110, 150, 255, 0.10)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    if (Math.random() < 0.06) {              // old-recording flicker lines
+      ctx.fillStyle = 'rgba(200, 220, 255, 0.08)';
+      ctx.fillRect(0, Math.random() * canvas.height, canvas.width, 3);
+    }
+    if (faultFlash > 0) {
+      ctx.fillStyle = `rgba(255, 60, 40, ${faultFlash * 0.3})`;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#ffb3ab';
+      ctx.font = 'bold 18px monospace';
+      ctx.fillText('IT IS ONLY A MEMORY. KEEP GOING.', canvas.width / 2, 120);
+    }
+    if (powered <= 0 && endTimer <= 0) {
+      // the glowing spot where you fell asleep, all those years ago
+      const mx = START.x - c.x, my = START.y - c.y;
+      ctx.strokeStyle = `rgba(125, 211, 255, ${0.5 + Math.sin(elapsed * 3) * 0.4})`;
+      ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(mx, my, 34, 0, Math.PI * 2); ctx.stroke();
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#9fb4ff';
+      ctx.font = '15px monospace';
+      ctx.fillText('return to where you fell asleep...', mx, my - 46);
+    }
+  }
+
+  // the Machine narrating the memory's ending (chapter 4)
+  if (chapter === 3 && endTimer > 3) {
+    const t = 21 - endTimer;
+    const line = t < 5.5 ? '" THE FAULT CAME FROM OUTSIDE. "'
+               : t < 10 ? '" YOU TURNED EVERYTHING OFF... TO STARVE IT. "'
+               : t < 14.5 ? '" YOU SAVED US ALL, LITTLE ONE. "'
+               : '" BUT THE FAULT... IS STILL OUT THERE. "';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(255, 226, 150, 0.95)';
+    ctx.font = 'bold 24px monospace';
+    ctx.fillText(line, canvas.width / 2, canvas.height / 2 - 120);
+  }
+
   // ---- HUD ----
   ctx.textAlign = 'left';
   ctx.fillStyle = '#7dd3ff';
@@ -852,7 +954,10 @@ function draw() {
   ctx.fillStyle = chapter === 2 ? (machineAwake ? '#7ddf8f' : '#ffd23f')
                 : chapter === 1 ? (powered === 0 ? '#7ddf8f' : '#ff6b5e')
                 : powered >= 4 ? '#7ddf8f' : '#ffd23f';
-  ctx.fillText(chapter === 2
+  ctx.fillText(chapter === 3
+      ? (powered > 0 ? `THE MEMORY — shut it all down: ${powered}/4 still on`
+                     : 'go back to sleep, little one...')
+      : chapter === 2
       ? (machineAwake ? 'IT IS AWAKE'
          : `PARTS ${machineParts}/3` + (carrying ? '  — carrying the ' + carrying.kind.toUpperCase() : ''))
       : chapter === 1
@@ -906,12 +1011,18 @@ function draw() {
     ctx.textAlign = 'center';
     ctx.fillStyle = '#ffd23f';
     ctx.font = 'bold 30px monospace';
-    ctx.fillText(chapter === 2 ? 'CHAPTER 3 COMPLETE'
+    ctx.fillText(chapter === 3 ? 'CHAPTER 4 COMPLETE'
+               : chapter === 2 ? 'CHAPTER 3 COMPLETE'
                : chapter === 1 ? 'CHAPTER 2 COMPLETE' : 'CHAPTER 1 COMPLETE',
                  canvas.width / 2, canvas.height / 2 - 10);
     ctx.fillStyle = '#9fb4ff';
     ctx.font = '16px monospace';
-    if (chapter === 2) {
+    if (chapter === 3) {
+      ctx.fillText('You are the robot who saved everyone. That is the truth.',
+                   canvas.width / 2, canvas.height / 2 + 26);
+      ctx.fillText('Chapter 5 is unwritten... and the Fault is still out there.',
+                   canvas.width / 2, canvas.height / 2 + 50);
+    } else if (chapter === 2) {
       ctx.fillText('The Machine is awake. It built you. It remembers EVERYTHING.',
                    canvas.width / 2, canvas.height / 2 + 26);
       ctx.fillText('Chapter 4 is unwritten... what does your maker tell you, UNIT-13?',
@@ -927,6 +1038,26 @@ function draw() {
     }
   }
 
+}
+
+// THE FAULT — the dark thing, drawn as a slow-boiling stain with a
+// burning red rim. it doesn't have a face. it doesn't need one.
+function drawFault(c) {
+  const x = fault.x - c.x, y = fault.y - c.y;
+  ctx.fillStyle = '#0a0508';
+  ctx.beginPath();
+  for (let k = 0; k <= 26; k++) {
+    const ang = (k / 26) * Math.PI * 2;
+    const r = fault.r * (0.92 + noise(k * 3.3 + Math.floor(elapsed * 2)) * 0.16);
+    const px = x + Math.cos(ang) * r;
+    const py = y + Math.sin(ang) * r;
+    if (k === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = `rgba(255, 46, 31, ${0.5 + Math.sin(elapsed * 3) * 0.3})`;
+  ctx.lineWidth = 4;
+  ctx.stroke();
 }
 
 // one of the Machine's three parts, drawn wherever it's needed
