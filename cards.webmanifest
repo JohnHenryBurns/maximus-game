@@ -1,0 +1,18 @@
+{
+  "name": "Monster Duel",
+  "short_name": "Monster Duel",
+  "start_url": "cards.html",
+  "scope": "./",
+  "display": "fullscreen",
+  "orientation": "any",
+  "background_color": "#151020",
+  "theme_color": "#151020",
+  "icons": [
+    {
+      "src": "icon-cards.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
