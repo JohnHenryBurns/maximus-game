@@ -682,7 +682,7 @@ function beginDisaster(type) {
                                     : TOPBAR + Math.random() * gridH(),
         angle: 0, face: 1,
         walk: Math.random() * 6.28,
-        hp: 7,                   // knights and bandits CAN bring one down
+        hp: DINO_HP,             // knights and bandits CAN bring one down
         hurt: 0,                 // flashes red when it takes a hit
         life: 22,                // how long it hunts before wandering off
         meal: null,              // whoever is currently in its jaws
@@ -729,6 +729,14 @@ let dinos = [];
 let eaten = 0;
 let dinosFelled = 0;
 const EAT_LUNGE = 0.32, EAT_CHOMP = 0.38, EAT_GULP = 0.42;
+// How much punishment a dinosaur takes before it goes down. One fighter on
+// their own has no chance — they'll end up as lunch. Three working together
+// can do it, but it's a long fight and it will cost them.
+// Tuned by measurement: two fighters land at most 6 hits before they're all
+// eaten, three land at least 9. Eight means one or two NEVER win, and three
+// always do — but they'll lose most of their number doing it.
+const DINO_HP = 8;
+const DINO_LUNGE = 185;      // the burst of speed it uses to close on prey
 
 // SOMETHING HIT A BUILDING. It doesn't just vanish any more — it takes
 // damage and gets uglier: pristine -> lightly damaged -> heavily damaged ->
@@ -1745,14 +1753,29 @@ function update(dt) {
       const d2 = Math.hypot(D4.x - b.x, (D4.y - 40) - b.y) - 26;
       if (d2 < dBest) { dBest = d2; nearDino = D4; }
     }
-    if (nearDino && dBest < 130) {
-      if (dBest > 34) {                      // out of reach — back away from it
+    if (b.recoil > 0) b.recoil -= dt;
+    // You can see a dinosaur coming from a long way off, and a bandit who's
+    // decided to fight one STAYS in the fight rather than wandering away.
+    if (nearDino && dBest < 260) {
+      if (b.recoil > 0) {
+        // just swung — hop back out of reach, but only for a moment
         b.angle = Math.atan2(b.y - nearDino.y, b.x - nearDino.x);
-        b.x += Math.cos(b.angle) * 70 * dt;
-        b.y += Math.sin(b.angle) * 70 * dt;
-      } else if (!(b.swing > 0)) {
-        b.swing = 1.1;                       // WHACK (slower than a knight's blade)
+        b.x += Math.cos(b.angle) * 135 * dt;
+        b.y += Math.sin(b.angle) * 135 * dt;
+      } else if (dBest > 42) {               // out of reach — close the gap
+        b.angle = Math.atan2(nearDino.y - b.y, nearDino.x - b.x);
+        b.x += Math.cos(b.angle) * 135 * dt;
+        b.y += Math.sin(b.angle) * 135 * dt;
+      } else if (b.swing > 0) {
+        // between swings, hold your nerve just out of the way
+        b.angle = Math.atan2(b.y - nearDino.y, b.x - nearDino.x);
+        b.x += Math.cos(b.angle) * 40 * dt;
+        b.y += Math.sin(b.angle) * 40 * dt;
+      } else {
+        b.swing = 0.72;                      // WHACK (slower than a knight's blade)
+        b.recoil = 0.4;
         nearDino.hp -= 1;
+        if (nearDino.meal) nearDino.hp -= 1;  // it can't fight back with its mouth full
         nearDino.hurt = 0.35;
         shake = Math.max(shake, 0.2);
         for (let i = 0; i < 5; i++) {
@@ -1895,7 +1918,7 @@ function update(dt) {
         setStatus(preyIsBandit ? '🦖 The dinosaur ate a bad guy!'
                                : '🦖 CHOMP! One less citizen.', '#ff9f43');
       } else {
-        spd = 92;                      // thundering after them
+        spd = pBest < 120 ? DINO_LUNGE : 92;   // thunder in, then LUNGE
       }
     } else if (D2.life <= 0) {
       spd = 120;                       // full and bored — off it goes
@@ -1971,7 +1994,14 @@ function update(dt) {
 
       let spd = 45;   // patrol pace
       if (foe) {
-        if (fBest > 18) {
+        // a sword outreaches a bandit's arm, and REALLY outreaches jaws —
+        // fighting a dinosaur means darting in, striking, and getting out
+        const reach = foeIsDino ? 42 : 18;
+        if (foeIsDino && p.clash > 0) {
+          // just landed a blow — back off out of range before it turns
+          p.angle = Math.atan2(p.y - foe.y, p.x - foe.x);
+          spd = 165;
+        } else if (fBest > reach) {
           // CHARGE — faster than a bandit can run
           p.angle = Math.atan2(foe.y - p.y, foe.x - p.x);
           spd = 170;
@@ -1989,6 +2019,9 @@ function update(dt) {
             }
             if (foeIsDino) {
               // you don't knock a dinosaur back. It just gets CROSS.
+              // But one with its mouth full can't defend itself, so blows
+              // landed while it's eating hurt it twice as much.
+              if (foe.meal) foe.hp -= 1;
               foe.hurt = 0.4;
               shake = Math.max(shake, 0.25);
               if (foe.hp <= 0) {
