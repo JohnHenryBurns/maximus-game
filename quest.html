@@ -14,10 +14,11 @@
 <canvas id="game"></canvas>
 <script>
 // =====================================================================
-// DICE QUEST — a roleplaying game, chapter zero: THE DIE ITSELF.
-// In games like D&D, everything starts with one move: you roll a die
-// and hold your breath. So that's the first thing we build — and we
-// build it to FEEL good. Story comes next.
+// DICE QUEST — a roleplaying game where the d20 decides EVERYTHING.
+// You are SIR TAPALOT, a knight. The story shows you choices; each
+// choice says what you need to roll. Tap it, the die tumbles, and
+// fate does the rest. Natural 20 always succeeds. Natural 1 always
+// fails. That's the oldest rule in roleplaying, and it's a good one.
 // =====================================================================
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
@@ -52,13 +53,12 @@ function clack(when, pitch) {
   o.connect(g); g.connect(audio.destination);
   o.start(when); o.stop(when + 0.07);
 }
-// a little rising fanfare for a natural 20
+// a little rising fanfare for success
 function fanfare() {
   if (!audio) return;
-  const notes = [523, 659, 784, 1047];        // do-mi-so-DO!
-  notes.forEach((n, i) => clack(audio.currentTime + i * 0.09, n));
+  [523, 659, 784, 1047].forEach((n, i) => clack(audio.currentTime + i * 0.09, n));
 }
-// a sad slide-down for a natural 1 (wah, waaah...)
+// a sad slide-down for failure (wah, waaah...)
 function sadTrombone() {
   if (!audio) return;
   const o = audio.createOscillator(), g = audio.createGain();
@@ -72,93 +72,280 @@ function sadTrombone() {
 }
 
 // ---------------------------------------------------------------------
-// THE DIE — all the numbers that describe one rolling d20
+// THE ADVENTURE — every scene is: some story, then some choices.
+// A choice with a "dc" needs a roll that high or higher to succeed.
+// (dc is what D&D calls it — "difficulty class". Bigger = harder.)
+// A choice with dc 0 just happens — no roll, no risk.
 // ---------------------------------------------------------------------
-let rolling = 0;        // seconds of tumble left (0 = die is resting)
+const SCENES = {
+  start: {
+    text: ['You are SIR TAPALOT, bravest knight in the land.',
+           'The king is sobbing on the castle steps.',
+           '',
+           'A DRAGON has stolen his GOLDEN THRONE.',
+           '(Yes. That throne. The bathroom one.)',
+           '',
+           '"Bring it back," he sniffles. "Before lunch."'],
+    choices: [
+      { label: 'Ride your horse to Dragon Mountain', dc: 8, success: 'ride_ok', fail: 'trough' },
+      { label: 'Walk. Heroically. It is very far.', dc: 0, go: 'walk' },
+    ],
+  },
+  ride_ok: {
+    text: ['Your horse, Sir Clompsalot, feels FAST today.',
+           'You thunder across the kingdom like a legend.',
+           'Peasants cheer. A goose salutes you.',
+           '',
+           'Dragon Mountain rises ahead, smoking gently.'],
+    choices: [{ label: 'Onward, to the bridge!', dc: 0, go: 'bridge' }],
+  },
+  trough: {
+    text: ['Sir Clompsalot takes two steps, then stops',
+           'to eat a daisy. You fly over his head...',
+           '',
+           '...and land in a pig trough. SPLOOSH.',
+           'The pigs are delighted. You smell incredible.',
+           'One pig follows you now. He believes in you.'],
+    choices: [{ label: 'Squelch onward to Dragon Mountain', dc: 0, go: 'bridge' }],
+  },
+  walk: {
+    text: ['You walk. And walk. AND WALK.',
+           'Your armor squeaks the entire way.',
+           'By the time Dragon Mountain rises ahead,',
+           'your feet feel like two angry potatoes.',
+           '',
+           'But heroes walk. Everyone knows that.'],
+    choices: [{ label: 'Limp bravely to the bridge', dc: 0, go: 'bridge' }],
+  },
+  bridge: {
+    text: ['A rickety bridge crosses a deep gorge.',
+           'A TROLL blocks the way, arms folded.',
+           '',
+           '"NONE SHALL PASS," he booms, "unless ye',
+           'know the SECRET PASSWORD."'],
+    choices: [
+      { label: 'Guess the password', dc: 12, success: 'pass_ok', fail: 'pass_no' },
+      { label: 'Sneak under the bridge', dc: 10, success: 'sneak_ok', fail: 'sneak_no' },
+      { label: 'Challenge him to a BURPING contest', dc: 6, success: 'burp_ok', fail: 'burp_no' },
+    ],
+  },
+  pass_ok: {
+    text: ['You clear your throat and try:',
+           '"...pretty please, with a troll on top?"',
+           '',
+           'The troll GASPS. "That... is correct."',
+           'He wipes away a tear and waves you through.'],
+    choices: [{ label: 'Cross the bridge', dc: 0, go: 'cave' }],
+  },
+  pass_no: {
+    text: ['You guess "swordfish." Then "fish sword."',
+           'Then "swishford." The troll sighs, picks',
+           'you up, and bonks you gently over the gorge.',
+           '',
+           'You land on the far side anyway.',
+           'Rude. But helpful.'],
+    choices: [{ label: 'Dust yourself off and go on', dc: 0, go: 'cave' }],
+  },
+  sneak_ok: {
+    text: ['You tiptoe under the bridge like a',
+           'very sneaky crab. The troll never sees you.',
+           '',
+           'You even find three lost coins down there.',
+           'Riches AND glory.'],
+    choices: [{ label: 'Climb up the far side', dc: 0, go: 'cave' }],
+  },
+  sneak_no: {
+    text: ['Halfway under, your armor squeaks LOUDLY.',
+           '"I CAN HEAR YE," says the troll, unimpressed.',
+           'He lifts you out by one leg and sets you',
+           'down on the far side.',
+           '',
+           '"Just ask nicely next time," he mutters.'],
+    choices: [{ label: 'Nod politely and go on', dc: 0, go: 'cave' }],
+  },
+  burp_ok: {
+    text: ['You summon a burp from your very soul.',
+           'BRAAAAAP. Birds scatter. The bridge wobbles.',
+           '',
+           'The troll bows, weeping with joy.',
+           '"MAGNIFICENT. Cross freely, noble one."'],
+    choices: [{ label: 'Cross like the champion you are', dc: 0, go: 'cave' }],
+  },
+  burp_no: {
+    text: ['Your burp is a tiny, polite "brip."',
+           'The troll burps back and your hair blows flat.',
+           '',
+           'He wins. But he pats your head kindly and',
+           'lets you cross anyway.',
+           'Trolls love a good try.'],
+    choices: [{ label: 'Cross the bridge, hair flat', dc: 0, go: 'cave' }],
+  },
+  cave: {
+    text: ['The dragon cave glitters with hoarded gold.',
+           'And there, snoring on a treasure pile,',
+           'sits the dragon... right ON the golden throne.',
+           '',
+           'Smoke rings puff from its nose.',
+           'It is very, very asleep.'],
+    choices: [
+      { label: 'Tiptoe in and slide the throne out', dc: 14, success: 'steal_ok', fail: 'chase' },
+      { label: 'Wake it up and ask POLITELY', dc: 10, success: 'ask_ok', fail: 'chase' },
+      { label: 'Yell "YOUR TAIL IS ON FIRE!!"', dc: 12, success: 'trick_ok', fail: 'chase' },
+    ],
+  },
+  steal_ok: {
+    text: ['With the gentleness of a legend, you lift',
+           'the sleeping dragon with ONE FINGER, slide',
+           'the throne out, and set it down on a barrel.',
+           '',
+           'The dragon hugs the barrel. Adorable.',
+           'The GOLDEN THRONE is yours.'],
+    choices: [{ label: 'Carry it home in triumph', dc: 0, go: 'home' }],
+  },
+  ask_ok: {
+    text: ['You tap its nose. One giant eye opens.',
+           '"Excuse me," you say. "That is the king\'s',
+           'potty throne. May I have it back?"',
+           '',
+           'The dragon BLUSHES. "Oh dear. I thought it',
+           'was a fancy chair. Take it. Please."'],
+    choices: [{ label: 'Thank the dragon and head home', dc: 0, go: 'home' }],
+  },
+  trick_ok: {
+    text: ['"YOUR TAIL IS ON FIRE!!"',
+           '',
+           'The dragon LEAPS up, spins three circles,',
+           'and gallops outside to find a lake.',
+           '',
+           'You grab the throne and scoot.'],
+    choices: [{ label: 'Scoot faster', dc: 0, go: 'home' }],
+  },
+  chase: {
+    text: ['The dragon\'s eyes SNAP open.',
+           '"MY FANCY CHAIR!" it roars — and the chase',
+           'is ON. Down the mountain, over the bridge,',
+           'past the troll (he cheers for you).',
+           '',
+           'RUN, SIR TAPALOT. RUN.'],
+    choices: [{ label: 'RUN with the throne!', dc: 8, success: 'escape_ok', fail: 'escape_no' }],
+  },
+  escape_ok: {
+    text: ['You are faster. You were BORN for this.',
+           'You leap the gorge with the throne held',
+           'over your head, and the dragon pulls up,',
+           'puffing smoke rings of defeat.',
+           '',
+           '"...fine," it grumbles. "But I want visits."'],
+    choices: [{ label: 'Promise Tuesday visits. Head home.', dc: 0, go: 'home' }],
+  },
+  escape_no: {
+    text: ['The dragon catches you in two wing-flaps...',
+           'then sets you down gently on the castle road.',
+           '',
+           '"I am not a MONSTER," it sniffs. "I just',
+           'miss having somewhere nice to sit."',
+           '',
+           'You promise it a royal outhouse of its own.',
+           'It sniffles, and lets you keep the throne.'],
+    choices: [{ label: 'Shake claws on the deal', dc: 0, go: 'home' }],
+  },
+  home: {
+    text: ['You return before lunch, throne held high.',
+           'The king weeps with joy and knights you TWICE.',
+           '',
+           'A royal outhouse is built for the dragon.',
+           'It visits every Tuesday.',
+           'The pig from the trough moved into the castle.',
+           '',
+           'THE END... of Quest One.'],
+    choices: [{ label: 'Play again from the beginning', dc: 0, go: 'start' }],
+  },
+};
+
+// ---------------------------------------------------------------------
+// GAME STATE — where we are and what the die is doing
+// ---------------------------------------------------------------------
+let sceneId = 'start';
+let mode = 'scene';     // 'scene' = reading & choosing, 'rolling' = die
+                        // tumbling, 'result' = showing success/failure
+let pending = null;     // the choice we're rolling for
+let rolling = 0;        // seconds of tumble left
 let face = 20;          // the number showing on the die right now
-let result = 0;         // the final answer of the last roll (0 = none yet)
-let resultGlow = 0;     // how bright the landing flash is
-let wobble = 0;         // the die's tilt angle while it tumbles
-let history = [];       // the last few rolls, oldest first
+let result = 0;         // the final roll
+let resultGlow = 0;
+let wobble = 0;
+let success = false;
+let buttons = [];       // this frame's tappable choice rectangles
 let elapsed = 0;
 
-function startRoll() {
-  if (rolling > 0) return;         // one roll at a time, adventurer
-  ensureAudio();
+function startRoll(choice) {
+  pending = choice;
+  mode = 'rolling';
   rolling = 1.1;
   result = 0;
-  // schedule the clatter of the die bouncing across the table
   if (audio) for (let i = 0; i < 6; i++) {
     clack(audio.currentTime + i * 0.15, 700 + Math.random() * 500);
   }
 }
 
-// tap ANYWHERE to roll — phone or mouse, same magic
-addEventListener('pointerdown', startRoll);
-addEventListener('keydown', e => { if (e.key === ' ') startRoll(); });
+// ---------------------------------------------------------------------
+// INPUT — one tap does everything, phone or mouse
+// ---------------------------------------------------------------------
+addEventListener('pointerdown', e => {
+  ensureAudio();
+  if (mode === 'scene') {
+    for (const b of buttons) {
+      if (e.clientX > b.x && e.clientX < b.x + b.w &&
+          e.clientY > b.y && e.clientY < b.y + b.h) {
+        if (b.choice.dc > 0) startRoll(b.choice);
+        else { sceneId = b.choice.go; clack(audio.currentTime, 500); }
+        return;
+      }
+    }
+  } else if (mode === 'result') {
+    // the story turns the page to wherever fate pointed
+    sceneId = success ? pending.success : pending.fail;
+    mode = 'scene';
+    clack(audio.currentTime, 500);
+  }
+});
 
 // ---------------------------------------------------------------------
-// UPDATE — the die's tumble, frame by frame
+// UPDATE — only the die needs updating; stories hold still
 // ---------------------------------------------------------------------
 function update(dt) {
   elapsed += dt;
   if (resultGlow > 0) resultGlow -= dt;
-  if (rolling > 0) {
+  if (mode === 'rolling' && rolling > 0) {
     rolling -= dt;
-    wobble = Math.sin(elapsed * 40) * 0.4 * rolling;   // shakes less as it slows
-    // while tumbling, the face flickers through random numbers.
-    // near the end it flickers slower — like a real die settling.
+    wobble = Math.sin(elapsed * 40) * 0.4 * rolling;
     if (Math.random() < rolling * 0.9 + 0.15) {
       face = 1 + Math.floor(Math.random() * 20);
     }
     if (rolling <= 0) {
-      // THE MOMENT OF TRUTH — this is the real roll, fair and square
+      // THE MOMENT OF TRUTH — one fair roll of a twenty-sided die
       face = 1 + Math.floor(Math.random() * 20);
       result = face;
       resultGlow = 1.6;
       wobble = 0;
-      history.push(result);
-      if (history.length > 10) history.shift();
-      if (result === 20) fanfare();
-      else if (result === 1) sadTrombone();
-      else if (audio) clack(audio.currentTime, 350);   // a solid landing thunk
+      // the oldest rule: nat 20 always wins, nat 1 always loses
+      success = result === 20 ? true
+              : result === 1 ? false
+              : result >= pending.dc;
+      mode = 'result';
+      if (success) fanfare(); else sadTrombone();
     }
   }
 }
 
 // ---------------------------------------------------------------------
-// DRAWING — the table, the die, and the drama
+// DRAWING
 // ---------------------------------------------------------------------
-function draw() {
-  const W = canvas.width, H = canvas.height;
-  const cx = W / 2, cy = H / 2;
-
-  // a candle-lit table: dark purple night with a warm pool of light
-  ctx.fillStyle = '#14101c';
-  ctx.fillRect(0, 0, W, H);
-  const pool = ctx.createRadialGradient(cx, cy, 40, cx, cy, Math.max(W, H) * 0.6);
-  pool.addColorStop(0, 'rgba(255, 190, 110, 0.14)');
-  pool.addColorStop(1, 'rgba(255, 190, 110, 0)');
-  ctx.fillStyle = pool;
-  ctx.fillRect(0, 0, W, H);
-
-  // the landing flash — gold for glory, red for doom, blue for normal
-  if (resultGlow > 0) {
-    const col = result === 20 ? '255, 210, 63'
-              : result === 1 ? '232, 69, 60' : '125, 211, 255';
-    const g = ctx.createRadialGradient(cx, cy, 20, cx, cy, 340);
-    g.addColorStop(0, `rgba(${col}, ${0.25 * resultGlow})`);
-    g.addColorStop(1, `rgba(${col}, 0)`);
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, W, H);
-  }
-
-  // ---- THE D20 ----
-  const size = Math.min(W, H) * 0.19;
+function drawDie(cx, cy, size) {
   ctx.save();
   ctx.translate(cx, cy);
   ctx.rotate(wobble);
-  // a d20 seen from the front is a hexagon with a triangle inside
+  // a d20 seen from the front: a hexagon with a triangle of facets
   ctx.beginPath();
   for (let i = 0; i < 6; i++) {
     const a = Math.PI / 6 + i * Math.PI / 3;
@@ -174,7 +361,6 @@ function draw() {
   ctx.strokeStyle = '#9b7bd8';
   ctx.lineWidth = 3;
   ctx.stroke();
-  // the facet lines that make it look 3D — a triangle around the number
   ctx.beginPath();
   for (let i = 0; i < 3; i++) {
     const a = -Math.PI / 2 + i * (Math.PI * 2 / 3);
@@ -185,16 +371,14 @@ function draw() {
   ctx.strokeStyle = 'rgba(155, 123, 216, 0.55)';
   ctx.lineWidth = 2;
   ctx.stroke();
-  // and spokes out to the corners
   for (let i = 0; i < 6; i++) {
     const a = Math.PI / 6 + i * Math.PI / 3;
     ctx.beginPath();
-    ctx.moveTo(Math.cos(a) * size * 0.62 * 0.0, Math.sin(a) * 0);
+    ctx.moveTo(0, 0);
     ctx.lineTo(Math.cos(a) * size, Math.sin(a) * size);
     ctx.strokeStyle = 'rgba(155, 123, 216, 0.18)';
     ctx.stroke();
   }
-  // THE NUMBER — the whole point of everything
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = rolling > 0 ? '#c9b8ef'
@@ -203,41 +387,105 @@ function draw() {
   ctx.font = `bold ${size * 0.62}px Georgia, serif`;
   ctx.fillText(face, 0, size * 0.04);
   ctx.restore();
-
-  // ---- WORDS ----
-  ctx.textAlign = 'center';
   ctx.textBaseline = 'alphabetic';
+}
+
+function draw() {
+  const W = canvas.width, H = canvas.height;
+  const cx = W / 2;
+  const fs = Math.max(13, Math.min(18, W / 30));   // story letters shrink on phones
+
+  // a candle-lit table: dark purple night with a warm pool of light
+  ctx.fillStyle = '#14101c';
+  ctx.fillRect(0, 0, W, H);
+  const pool = ctx.createRadialGradient(cx, H / 2, 40, cx, H / 2, Math.max(W, H) * 0.6);
+  pool.addColorStop(0, 'rgba(255, 190, 110, 0.12)');
+  pool.addColorStop(1, 'rgba(255, 190, 110, 0)');
+  ctx.fillStyle = pool;
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.textAlign = 'center';
   ctx.fillStyle = '#c9a15a';
-  ctx.font = `bold ${Math.min(40, W / 14)}px Georgia, serif`;
-  ctx.fillText('DICE QUEST', cx, H * 0.12);
+  ctx.font = `bold ${Math.min(30, W / 16)}px Georgia, serif`;
+  ctx.fillText('DICE QUEST', cx, 44);
 
-  if (resultGlow > 0 && result === 20) {
-    ctx.fillStyle = `rgba(255, 210, 63, ${Math.min(1, resultGlow)})`;
-    ctx.font = `bold ${Math.min(34, W / 16)}px Georgia, serif`;
-    ctx.fillText('NATURAL 20!! CRITICAL!', cx, cy + size * 2.1);
-  } else if (resultGlow > 0 && result === 1) {
-    ctx.fillStyle = `rgba(232, 69, 60, ${Math.min(1, resultGlow)})`;
-    ctx.font = `bold ${Math.min(30, W / 18)}px Georgia, serif`;
-    ctx.fillText('critical fail...', cx, cy + size * 2.1);
-  } else if (rolling <= 0) {
-    ctx.fillStyle = 'rgba(201, 161, 90, 0.75)';
-    ctx.font = '17px Georgia, serif';
-    ctx.fillText('tap anywhere to roll the d20', cx, cy + size * 2.1);
-  }
+  buttons = [];
+  if (mode === 'scene') {
+    // ---- the story so far ----
+    const scene = SCENES[sceneId];
+    ctx.fillStyle = '#e8dcc0';
+    ctx.font = `${fs}px Georgia, serif`;
+    let y = Math.max(90, H * 0.14);
+    for (const line of scene.text) {
+      ctx.fillText(line, cx, y);
+      y += fs * 1.55;
+    }
+    // ---- the choices, stacked as parchment buttons ----
+    const bw = Math.min(W - 30, 560), bh = Math.max(46, fs * 3);
+    let by = H - 24 - scene.choices.length * (bh + 12);
+    for (const choice of scene.choices) {
+      const bx = cx - bw / 2;
+      buttons.push({ x: bx, y: by, w: bw, h: bh, choice });
+      ctx.fillStyle = choice.dc > 0 ? '#2a2040' : '#252031';
+      ctx.fillRect(bx, by, bw, bh);
+      ctx.strokeStyle = choice.dc > 0 ? '#9b7bd8' : '#5a5470';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(bx, by, bw, bh);
+      ctx.fillStyle = '#e8dcc0';
+      ctx.font = `${fs}px Georgia, serif`;
+      ctx.textAlign = 'left';
+      ctx.fillText(choice.label, bx + 16, by + bh / 2 + fs * 0.35);
+      if (choice.dc > 0) {
+        // the little dice-badge that says how hard this attempt is
+        ctx.textAlign = 'right';
+        ctx.fillStyle = '#ffd23f';
+        ctx.font = `bold ${fs * 0.9}px Georgia, serif`;
+        ctx.fillText('roll ' + choice.dc + '+', bx + bw - 14, by + bh / 2 + fs * 0.3);
+      }
+      ctx.textAlign = 'center';
+      by += bh + 12;
+    }
+  } else {
+    // ---- the die holds the whole screen while fate decides ----
+    const size = Math.min(W, H) * 0.17;
+    if (resultGlow > 0) {
+      const col = result === 20 ? '255, 210, 63'
+                : success ? '125, 223, 143'
+                : '232, 69, 60';
+      const g = ctx.createRadialGradient(cx, H / 2, 20, cx, H / 2, 340);
+      g.addColorStop(0, `rgba(${col}, ${0.25 * resultGlow})`);
+      g.addColorStop(1, `rgba(${col}, 0)`);
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H);
+    }
+    ctx.fillStyle = '#9b8db8';
+    ctx.font = `${fs}px Georgia, serif`;
+    ctx.fillText(pending.label, cx, H * 0.22);
+    ctx.fillStyle = '#ffd23f';
+    ctx.font = `bold ${fs * 1.2}px Georgia, serif`;
+    ctx.fillText('need ' + pending.dc + ' or higher', cx, H * 0.22 + fs * 2);
 
-  // the roll history — a little trail of fate along the bottom
-  ctx.font = 'bold 15px Georgia, serif';
-  for (let i = 0; i < history.length; i++) {
-    const hx = cx + (i - (history.length - 1) / 2) * 44;
-    const n = history[i];
-    ctx.fillStyle = n === 20 ? 'rgba(255, 210, 63, 0.9)'
-                  : n === 1 ? 'rgba(232, 69, 60, 0.9)' : 'rgba(155, 123, 216, 0.7)';
-    ctx.strokeStyle = ctx.fillStyle;
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(hx, H - 46, 16, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.fillText(n, hx, H - 41);
+    drawDie(cx, H / 2, size);
+
+    if (mode === 'result') {
+      ctx.font = `bold ${Math.min(36, W / 14)}px Georgia, serif`;
+      if (result === 20) {
+        ctx.fillStyle = '#ffd23f';
+        ctx.fillText('NATURAL 20!! CRITICAL!', cx, H / 2 + size * 1.8);
+      } else if (result === 1) {
+        ctx.fillStyle = '#ff6b5e';
+        ctx.fillText('NATURAL 1... oh no.', cx, H / 2 + size * 1.8);
+      } else if (success) {
+        ctx.fillStyle = '#7ddf8f';
+        ctx.fillText('SUCCESS!', cx, H / 2 + size * 1.8);
+      } else {
+        ctx.fillStyle = '#ff6b5e';
+        ctx.fillText('FAILED...', cx, H / 2 + size * 1.8);
+      }
+      ctx.fillStyle = 'rgba(201, 161, 90, 0.75)';
+      ctx.font = `${fs}px Georgia, serif`;
+      ctx.fillText('tap to see what happens', cx, H / 2 + size * 1.8 + fs * 2.2);
+    }
   }
 }
 
