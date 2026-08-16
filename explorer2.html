@@ -99,10 +99,12 @@ let lockedText = '';
 let menuCards = [];      // filled each frame so taps know where the cards are
 
 let hasBeatInsane = localStorage.getItem('explorer2_insane') === 'yes';
+let hasEndSave = localStorage.getItem('explorer2_end') === 'yes';
 const LEVELS2 = [
   { name: 'Abyssal Madness', unlocked: true },
   { name: 'Going Insane', unlocked: foundDoor },
-  { name: 'Behind the Door...', unlocked: hasBeatInsane },   // the answer. finally.
+  { name: 'Behind the Door...', unlocked: hasBeatInsane },
+  { name: 'Escaping the Abyss', unlocked: hasEndSave },      // RUN.
 ];
 
 // ---------------------------------------------------------------------
@@ -173,6 +175,25 @@ const T3_PATHS = [
   ],
 ];
 const T3_CHAMBER = { x: 1500, y: 260 };   // where it sleeps
+
+// ---------------------------------------------------------------------
+// LEVEL 4: ESCAPING THE ABYSS — one long climb UP, with the whole deep
+// collapsing behind you. No boss. The level itself is chasing you.
+// ---------------------------------------------------------------------
+const T4_PATH = [
+  { x: 1000, y: 3450 }, { x: 1000, y: 3200 }, { x: 780,  y: 3080 },
+  { x: 820,  y: 2850 }, { x: 1050, y: 2740 }, { x: 1250, y: 2800 },
+  { x: 1420, y: 2680 }, { x: 1380, y: 2450 }, { x: 1150, y: 2360 },
+  { x: 900,  y: 2420 }, { x: 700,  y: 2300 }, { x: 680,  y: 2080 },
+  { x: 880,  y: 1960 }, { x: 1120, y: 2020 }, { x: 1350, y: 1930 },
+  { x: 1420, y: 1710 }, { x: 1240, y: 1580 }, { x: 1000, y: 1640 },
+  { x: 780,  y: 1540 }, { x: 760,  y: 1320 }, { x: 960,  y: 1200 },
+  { x: 1200, y: 1260 }, { x: 1380, y: 1150 }, { x: 1360, y: 930 },
+  { x: 1160, y: 820 },  { x: 940,  y: 880 },  { x: 780,  y: 760 },
+  { x: 800,  y: 540 },  { x: 1000, y: 430 },  { x: 1150, y: 470 },
+  { x: 1200, y: 300 },  { x: 1100, y: 180 },
+];
+let collapse = null;      // the rising wall of falling abyss
 
 function distToAnyPath(x, y, paths) {
   let best = 999999;
@@ -375,12 +396,14 @@ function startLevel(i) {
   if (!LEVELS2[i] || !LEVELS2[i].unlocked) {
     lockedText = i === 1 ? 'Beat Abyssal Madness first — find the Door!'
                : i === 2 ? 'Defeat the Abyssal Multi-Tasker first!'
+               : i === 3 ? 'Defeat the Thing behind the Door first!'
                : "You haven't invented that level yet!";
     lockedTimer = 2;
     return;
   }
   currentLevel = i;
-  if (i === 2) buildFinale();
+  if (i === 3) buildEscape();
+  else if (i === 2) buildFinale();
   else if (i === 1) buildTemple2();
   else buildCavern();
   roarTimer = 8;
@@ -618,6 +641,81 @@ function buildFinale() {
   glitchTimer = 0;
   glitchWait = 8;
 
+  emeralds = [];
+  particles = [];
+  emeraldCount = 0;
+  player.x = START.x;
+  player.y = START.y;
+  player.hp = player.maxHp;
+  player.armor = armorMax();
+}
+
+// ---------------------------------------------------------------------
+// BUILD THE ESCAPE — up, up, UP, and don't look down
+// ---------------------------------------------------------------------
+function buildEscape() {
+  worldW = 2000; worldH = 3600;
+  START = { x: T4_PATH[0].x, y: T4_PATH[0].y - 30 };
+
+  // walls seal the climb — one way up, no shortcuts
+  rocks = [];
+  for (let gx = 40; gx < worldW - 40; gx += 34) {
+    for (let gy = 40; gy < worldH - 40; gy += 34) {
+      const d = distToPath(gx, gy, T4_PATH);
+      if (d < 100 || d > 140) continue;
+      rocks.push({
+        x: gx + (noise(gx * 1.3 + gy) - 0.5) * 8,
+        y: gy + (noise(gy * 2.7 + gx) - 0.5) * 8,
+        size: 1, wall: true,
+      });
+    }
+  }
+
+  // crystals flicker along the climb — the deep is dying, so are they
+  crystals = [];
+  for (let i = 0; i < T4_PATH.length - 1; i += 2) {
+    const a = T4_PATH[i], b = T4_PATH[i + 1];
+    crystals.push({ x: (a.x + b.x) / 2 + 62, y: (a.y + b.y) / 2,
+                    size: 0.7 + noise(i * 5.5) * 0.4,
+                    hue: noise(i * 9.9) < 0.5 ? 'cyan' : 'violet' });
+    crystals.push({ x: (a.x + b.x) / 2 - 62, y: (a.y + b.y) / 2,
+                    size: 0.7 + noise(i * 7.7) * 0.4,
+                    hue: noise(i * 3.3) < 0.5 ? 'violet' : 'cyan' });
+  }
+
+  mushrooms = [];
+  for (let i = 0; i < 300; i++) {
+    const x = noise(i * 31.7 + 39) * worldW;
+    const y = noise(i * 77.1 + 39) * worldH;
+    if (distToPath(x, y, T4_PATH) > 90) continue;
+    mushrooms.push({ x, y, glow: noise(i * 3.3) });
+  }
+
+  // only a few monsters — everything smart is ALSO running for its life.
+  // the ones that stayed are the stubborn ones.
+  bats = []; crawlers = []; zombies = []; skeletons = []; creepers = [];
+  for (let i = 0; i < 6; i++) {
+    for (let tries = 0; tries < 40; tries++) {
+      const x = noise((i + 401) * 17.9 + tries * 3.3) * worldW;
+      const y = noise((i + 401) * 31.1 + tries * 7.1) * worldH;
+      if (distToPath(x, y, T4_PATH) > 60) continue;
+      if (Math.hypot(x - START.x, y - START.y) < 400) continue;
+      if (y < 500) continue;
+      if (blocked(x, y, 12)) continue;
+      if (i < 3) crawlers.push({ x, y, hp: 3, wander: noise(i) * 6.28,
+                                 lastHitSwing: 0, hurtFlash: 0 });
+      else creepers.push({ x, y, hp: 2, fuse: 0, wander: noise(i) * 6.28,
+                           lastHitSwing: 0, hurtFlash: 0 });
+      break;
+    }
+  }
+
+  // THE COLLAPSE — it starts below you, and it does not stop
+  collapse = { y: worldH + 250, speed: 85 };
+
+  boss = null;
+  sleeper = null;
+  glitchTimer = 0;
   emeralds = [];
   particles = [];
   emeraldCount = 0;
@@ -1182,8 +1280,39 @@ function update(dt) {
           glitchTimer = 3;
           hasEnd = true;
           localStorage.setItem('explorer2_end', 'yes');
+          LEVELS2[3].unlocked = true;        // now RUN.
         }
       }
+    }
+  }
+
+  // ---- THE COLLAPSE — the abyss is coming apart behind you ----
+  if (currentLevel === 3 && collapse) {
+    collapse.y -= collapse.speed * dt;             // rising. always rising.
+    // rumble harder the closer it gets
+    const gap = player.y < collapse.y ? collapse.y - player.y : 0;
+    if (gap < 600) roarShake = Math.max(roarShake, 0.5 + (1 - gap / 600));
+    // debris rains along the collapse line
+    for (let i = 0; i < 3; i++) {
+      particles.push({
+        x: Math.random() * worldW,
+        y: collapse.y - 30 - Math.random() * 80,
+        vx: (Math.random() - 0.5) * 120,
+        vy: 100 + Math.random() * 200,
+        life: 0.8,
+        color: Math.random() < 0.5 ? '#3d3050' : '#ff4757',
+      });
+    }
+    // caught by the collapse = swallowed. start the climb over.
+    if (player.y > collapse.y - 16 && player.deathTimer <= 0) {
+      player.hp = 0;
+      player.deathTimer = 2.5;
+    }
+    // THE SURFACE — you made it OUT
+    if (player.y < 260 && bossBanner <= 0 && player.deathTimer <= 0) {
+      bossBanner = 12;
+      localStorage.setItem('explorer2_escape', 'yes');
+      collapse = null;                             // the deep goes quiet behind you
     }
   }
 
@@ -1203,6 +1332,8 @@ function update(dt) {
         boss.x = T2_CHAMBER.x; boss.y = T2_CHAMBER.y;
         boss.active = false; boss.hp = 50;
       }
+      // the collapse resets too — a fresh chance to outrun it
+      if (currentLevel === 3) collapse = { y: worldH + 250, speed: 85 };
     }
   }
 
@@ -1249,10 +1380,14 @@ function draw() {
   ctx.fillStyle = '#17161f';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // levels 2 and 3: ancient paved passage floors
-  if (currentLevel === 1 || currentLevel === 2) {
-    const walkways = currentLevel === 1 ? [T2_PATH] : T3_PATHS;
-    const chamber = currentLevel === 1 ? T2_CHAMBER : T3_CHAMBER;
+  // levels 2, 3 and 4: ancient paved passage floors
+  if (currentLevel >= 1) {
+    const walkways = currentLevel === 1 ? [T2_PATH]
+                   : currentLevel === 2 ? T3_PATHS
+                   : [T4_PATH];
+    const chamber = currentLevel === 1 ? T2_CHAMBER
+                  : currentLevel === 2 ? T3_CHAMBER
+                  : null;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     for (const wp of walkways) {
@@ -1264,13 +1399,15 @@ function draw() {
       ctx.stroke();
     }
     // the boss chamber floor, and rings worn into the stone
-    const chx = chamber.x - c.x, chy = chamber.y - c.y;
-    ctx.fillStyle = currentLevel === 2 ? '#241620' : '#221a2e';
-    ctx.beginPath(); ctx.arc(chx, chy, 200, 0, Math.PI * 2); ctx.fill();
-    ctx.strokeStyle = currentLevel === 2 ? '#3d2030' : '#322645';
-    ctx.lineWidth = 5;
-    ctx.beginPath(); ctx.arc(chx, chy, 170, 0, Math.PI * 2); ctx.stroke();
-    ctx.beginPath(); ctx.arc(chx, chy, 90, 0, Math.PI * 2); ctx.stroke();
+    if (chamber) {
+      const chx = chamber.x - c.x, chy = chamber.y - c.y;
+      ctx.fillStyle = currentLevel === 2 ? '#241620' : '#221a2e';
+      ctx.beginPath(); ctx.arc(chx, chy, 200, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = currentLevel === 2 ? '#3d2030' : '#322645';
+      ctx.lineWidth = 5;
+      ctx.beginPath(); ctx.arc(chx, chy, 170, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(chx, chy, 90, 0, Math.PI * 2); ctx.stroke();
+    }
   }
 
   // glowing mushrooms, scattered like tiny stars on the floor
@@ -1335,6 +1472,41 @@ function draw() {
 
   // THE THING AT THE END OF THE ABYSS (level 3) — sleeping, or not
   if (sleeper) drawSleeper(c);
+
+  // THE COLLAPSE (level 4) — everything below this line is ENDING
+  if (currentLevel === 3 && collapse) {
+    const cy2 = collapse.y - c.y;
+    if (cy2 < canvas.height + 100) {
+      const grad = ctx.createLinearGradient(0, cy2 - 60, 0, cy2 + 200);
+      grad.addColorStop(0, 'rgba(20, 8, 16, 0)');
+      grad.addColorStop(0.3, 'rgba(20, 8, 16, 0.9)');
+      grad.addColorStop(1, 'rgba(5, 2, 6, 1)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, cy2 - 60, canvas.width, canvas.height - cy2 + 160);
+      // the jagged, churning edge of the end of the world
+      ctx.fillStyle = '#0a040c';
+      ctx.beginPath();
+      ctx.moveTo(0, cy2 + 40);
+      for (let x = 0; x <= canvas.width; x += 40) {
+        ctx.lineTo(x, cy2 + Math.sin(x * 0.05 + elapsed * 9) * 22
+                        + noise(Math.floor(x / 40) + Math.floor(elapsed * 7)) * 24);
+      }
+      ctx.lineTo(canvas.width, canvas.height);
+      ctx.lineTo(0, canvas.height);
+      ctx.closePath();
+      ctx.fill();
+      // red cracks flickering along the collapse line
+      ctx.strokeStyle = `rgba(255, 70, 40, ${0.5 + Math.sin(elapsed * 11) * 0.3})`;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      for (let x = 0; x <= canvas.width; x += 60) {
+        const yy = cy2 + Math.sin(x * 0.05 + elapsed * 9) * 22;
+        ctx.moveTo(x, yy);
+        ctx.lineTo(x + 20 - noise(x + Math.floor(elapsed * 5)) * 40, yy + 30);
+      }
+      ctx.stroke();
+    }
+  }
 
   // ---- THE DARK — heavier than any night above ----
   const px = player.x - c.x, py = player.y - c.y;
@@ -1419,6 +1591,19 @@ function draw() {
       g.addColorStop(1, 'rgba(255, 46, 31, 0)');
       ctx.fillStyle = g;
       ctx.fillRect(sx + side * 22 - 60, sy - 76, 120, 120);
+    }
+  }
+
+  // DAYLIGHT (level 4) — the higher you climb, the more the world above
+  // reaches down to meet you. you'd almost forgotten what it looks like.
+  if (currentLevel === 3) {
+    const sunAmt = Math.max(0, 1 - (player.y - 300) / 1400);
+    if (sunAmt > 0) {
+      const sun = ctx.createLinearGradient(0, 0, 0, canvas.height * 0.6);
+      sun.addColorStop(0, `rgba(255, 240, 200, ${0.55 * sunAmt})`);
+      sun.addColorStop(1, 'rgba(255, 240, 200, 0)');
+      ctx.fillStyle = sun;
+      ctx.fillRect(0, 0, canvas.width, canvas.height * 0.6);
     }
   }
 
@@ -1973,6 +2158,14 @@ function drawHUD() {
     ctx.fillText('⚔', canvas.width - 70, canvas.height - 60);
   }
 
+  // the collapse warning, pulsing while doom gains on you
+  if (currentLevel === 3 && collapse && collapse.y - player.y < 700 && player.deathTimer <= 0) {
+    ctx.textAlign = 'center';
+    ctx.fillStyle = `rgba(255, 70, 40, ${0.6 + Math.sin(elapsed * 8) * 0.4})`;
+    ctx.font = 'bold 24px monospace';
+    ctx.fillText('THE ABYSS IS COLLAPSING — CLIMB!!', canvas.width / 2, 110);
+  }
+
   // the roar's message, while the world trembles
   if (roarShake > 0.3) {
     ctx.textAlign = 'center';
@@ -2056,7 +2249,27 @@ function drawHUD() {
     ctx.fillStyle = 'rgba(15, 5, 20, 0.75)';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.textAlign = 'center';
-    if (currentLevel === 2) {
+    if (currentLevel === 3) {
+      // THE TRUE ENDING
+      ctx.fillStyle = '#fff3c0';
+      ctx.font = 'bold 40px monospace';
+      ctx.fillText('☀ YOU ESCAPED THE ABYSS ☀', canvas.width / 2, canvas.height / 2 - 70);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 20px monospace';
+      ctx.fillText('You climb out into the light. The sun. The actual SUN.',
+                   canvas.width / 2, canvas.height / 2 - 20);
+      ctx.fillStyle = '#cfe8cf';
+      ctx.font = '17px monospace';
+      ctx.fillText('Behind you the deep goes quiet, sealed under its own stone.',
+                   canvas.width / 2, canvas.height / 2 + 14);
+      ctx.fillStyle = '#ffd23f';
+      ctx.font = 'bold 26px monospace';
+      ctx.fillText('THE EXPLORER SAGA: TRULY COMPLETE', canvas.width / 2, canvas.height / 2 + 60);
+      ctx.fillStyle = '#9fb4ff';
+      ctx.font = '15px monospace';
+      ctx.fillText('two games. thirteen levels. one explorer. THE END.',
+                   canvas.width / 2, canvas.height / 2 + 92);
+    } else if (currentLevel === 2) {
       ctx.fillStyle = '#ffd23f';
       ctx.font = 'bold 34px monospace';
       ctx.fillText('THE THING IS DEFEATED', canvas.width / 2, canvas.height / 2 - 70);
