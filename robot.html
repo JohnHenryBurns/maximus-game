@@ -129,7 +129,7 @@ let ch2Done = localStorage.getItem('robot_ch2') === 'yes';
 const CHAPTERS = [
   { name: 'The Factory', unlocked: true },
   { name: 'The Overseer', unlocked: ch1Done },
-  { name: '???', unlocked: false },
+  { name: 'The Machine', unlocked: ch2Done },
 ];
 let chapter = 0;
 
@@ -319,8 +319,14 @@ addEventListener('touchend', e => {
 function startChapter(i) {
   if (!CHAPTERS[i] || !CHAPTERS[i].unlocked) {
     lockedText = i === 1 ? 'Finish Chapter 1 first — turn the power on!'
-                         : "That chapter hasn't been written yet...";
+               : i === 2 ? 'Finish Chapter 2 first — silence the Overseer!'
+               : "That chapter hasn't been written yet...";
     lockedTimer = 2;
+    return;
+  }
+  if (i === 2) {
+    lockedText = 'THE MACHINE is still being written — tell the author what it is!';
+    lockedTimer = 3;
     return;
   }
   chapter = i;
@@ -430,6 +436,7 @@ function update(dt) {
         endTimer = 11;
         ch2Done = true;
         localStorage.setItem('robot_ch2', 'yes');
+        CHAPTERS[2].unlocked = true;         // THE MACHINE awaits
       }
     }
   }
