@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-<title>JUMP GUY</title>
+<title>A FART IN A CAVE</title>
 <style>
-  html, body { margin: 0; padding: 0; overflow: hidden; background: #6ec6ff; }
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #171310; }
   canvas { display: block; touch-action: none; }
 </style>
 </head>
@@ -13,11 +13,10 @@
 <canvas id="game"></canvas>
 <script>
 // =====================================================================
-// JUMP GUY — a 2D side-scroller, Mario-style. Run right. Jump the
-// gaps. Stomp the baddies. Grab the coins. Reach the flag.
-//
-// The hero is a placeholder guy for now — the real designer gets to
-// decide who he is, what world this is, and what the game is called.
+// A FART IN A CAVE — a 2D side-scroller. You are a small green fart,
+// deep underground, and you want OUT. Run right. Toot over the pits.
+// Bounce on the SNIFFERS (walking noses that want to sniff you up).
+// Eat the beans (fuel). Reach the shaft of daylight and be FREE.
 // =====================================================================
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
@@ -50,11 +49,31 @@ function beep(freq, dur, type, vol) {
   o.connect(g); g.connect(audio.destination);
   o.start(); o.stop(audio.currentTime + dur + 0.02);
 }
-function jumpSound() { beep(300, 0.12, 'square', 0.08); beep(500, 0.18, 'square', 0.05); }
-function coinSound() { beep(988, 0.08, 'square', 0.08); setTimeout(() => beep(1319, 0.2, 'square', 0.08), 60); }
-function stompSound() { beep(180, 0.15, 'triangle', 0.15); }
-function hurtSound() { beep(200, 0.3, 'sawtooth', 0.1); }
-function winSound() { [523, 659, 784, 1047, 1319].forEach((n, i) => setTimeout(() => beep(n, 0.25, 'square', 0.09), i * 130)); }
+// THE FART SOUND — a low sawtooth sliding downward, with a fast
+// wobble on the volume. That wobble is the secret: it's the flutter.
+function fart(len, base) {
+  if (!audio) return;
+  const t = audio.currentTime;
+  const o = audio.createOscillator(), g = audio.createGain();
+  const lfo = audio.createOscillator(), lg = audio.createGain();
+  o.type = 'sawtooth';
+  o.frequency.setValueAtTime(base, t);
+  o.frequency.exponentialRampToValueAtTime(base * 0.55, t + len);
+  lfo.type = 'square';
+  lfo.frequency.value = 26;
+  lg.gain.value = 0.06;
+  lfo.connect(lg); lg.connect(g.gain);
+  g.gain.setValueAtTime(0.13, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + len);
+  o.connect(g); g.connect(audio.destination);
+  o.start(t); o.stop(t + len + 0.05);
+  lfo.start(t); lfo.stop(t + len + 0.05);
+}
+function jumpSound() { fart(0.22, 120 + Math.random() * 40); }
+function coinSound() { beep(700, 0.06, 'square', 0.08); setTimeout(() => beep(1100, 0.15, 'square', 0.08), 50); }
+function stompSound() { beep(520, 0.08, 'triangle', 0.15); setTimeout(() => beep(290, 0.14, 'triangle', 0.15), 60); }  // HONK
+function hurtSound() { fart(0.7, 90); }               // the long, sad pffffft
+function winSound() { [110, 145, 185, 235, 300].forEach((n, i) => setTimeout(() => fart(0.3, n), i * 200)); }
 
 // ---------------------------------------------------------------------
 // THE LEVEL — built from solid blocks. x, y, w, h are in world pixels.
@@ -137,6 +156,8 @@ const player = {
 };
 let coins = [];
 let baddies = [];
+let puffs = [];         // the toot-trail
+let puffTimer = 0;
 let hearts = 3;
 let coinCount = 0;
 let won = false;
@@ -226,6 +247,13 @@ function update(dt) {
     player.coyote = 0;
     player.buffer = 0;
     jumpSound();
+    // every jump is powered by a proud little toot
+    for (let i = 0; i < 8; i++) {
+      puffs.push({ x: player.x + player.w / 2 + (Math.random() - 0.5) * 20,
+                   y: player.y + player.h,
+                   vx: (Math.random() - 0.5) * 80, vy: 40 + Math.random() * 60,
+                   r: 6 + Math.random() * 6, life: 1 });
+    }
   }
   // letting go of jump early cuts the jump short — that's how you
   // do small hops AND big leaps with one button
@@ -253,6 +281,22 @@ function update(dt) {
   if (player.y > FLOOR + 500) hurt(true);
 
   if (player.invuln > 0) player.invuln -= dt;
+
+  // a gentle puff-trail while scooting along the ground
+  puffTimer -= dt;
+  if (player.onGround && player.vx !== 0 && puffTimer <= 0) {
+    puffTimer = 0.12;
+    puffs.push({ x: player.x + player.w / 2 - player.facing * 14,
+                 y: player.y + player.h - 8,
+                 vx: -player.facing * 30, vy: -10 - Math.random() * 20,
+                 r: 4 + Math.random() * 4, life: 0.8 });
+  }
+  for (const p of puffs) {
+    p.x += p.vx * dt; p.y += p.vy * dt;
+    p.vy -= 30 * dt;                     // puffs drift upward. obviously.
+    p.life -= dt * 1.4;
+  }
+  puffs = puffs.filter(p => p.life > 0);
 
   // ---- coins ----
   for (const c of coins) {
@@ -314,17 +358,17 @@ function hurt(fell) {
 function draw() {
   const W = canvas.width, H = canvas.height;
 
-  // sky, with a soft gradient down to the horizon
-  const sky = ctx.createLinearGradient(0, 0, 0, H);
-  sky.addColorStop(0, '#6ec6ff');
-  sky.addColorStop(1, '#b8e4ff');
-  ctx.fillStyle = sky;
+  // deep-cave gloom, lighter near the floor where the crystals glow
+  const cave = ctx.createLinearGradient(0, 0, 0, H);
+  cave.addColorStop(0, '#0f0b09');
+  cave.addColorStop(1, '#2b2119');
+  ctx.fillStyle = cave;
   ctx.fillRect(0, 0, W, H);
 
-  // faraway hills slide slower than the world — that's "parallax",
+  // faraway rock humps slide slower than the world — that's "parallax",
   // and it's what makes flat drawings feel deep.
   // (the +span %span dance keeps them wrapping around forever)
-  ctx.fillStyle = '#8fd48f';
+  ctx.fillStyle = '#211a15';
   const hillSpan = 700 * 10;
   for (let i = 0; i < 12; i++) {
     const hx = ((i * 700 - camX * 0.3) % hillSpan + hillSpan) % hillSpan - 200;
@@ -332,16 +376,33 @@ function draw() {
     ctx.arc(hx, H - 8, 120 + (i % 3) * 40, Math.PI, 0);
     ctx.fill();
   }
-  // clouds drift even slower
-  ctx.fillStyle = 'rgba(255,255,255,0.9)';
-  const cloudSpan = 1100 * 8;
-  for (let i = 0; i < 8; i++) {
-    const cxx = ((i * 1100 + 300 - camX * 0.15) % cloudSpan + cloudSpan) % cloudSpan - 100;
-    const cy = 80 + (i % 3) * 70;
+  // stalactites hang from the cave roof, drifting at their own pace
+  ctx.fillStyle = '#241d18';
+  const stalSpan = 160 * 30;
+  for (let i = 0; i < 30; i++) {
+    const sx = ((i * 160 - camX * 0.45) % stalSpan + stalSpan) % stalSpan - 80;
+    const len = 40 + ((i * 37) % 70);
     ctx.beginPath();
-    ctx.arc(cxx, cy, 34, 0, Math.PI * 2);
-    ctx.arc(cxx + 38, cy + 8, 26, 0, Math.PI * 2);
-    ctx.arc(cxx - 38, cy + 10, 24, 0, Math.PI * 2);
+    ctx.moveTo(sx - 22, 0);
+    ctx.lineTo(sx + 22, 0);
+    ctx.lineTo(sx, len);
+    ctx.fill();
+  }
+  // glowing crystals stud the walls — the cave's night-lights
+  const crysSpan = 500 * 12;
+  for (let i = 0; i < 12; i++) {
+    const cxx = ((i * 500 + 200 - camX * 0.55) % crysSpan + crysSpan) % crysSpan - 100;
+    const cy = H * 0.25 + ((i * 53) % 100) / 100 * H * 0.4;
+    const col = ['125, 211, 255', '180, 130, 255', '125, 223, 143'][i % 3];
+    const g = ctx.createRadialGradient(cxx, cy, 2, cxx, cy, 60);
+    g.addColorStop(0, `rgba(${col}, 0.5)`);
+    g.addColorStop(1, `rgba(${col}, 0)`);
+    ctx.fillStyle = g;
+    ctx.fillRect(cxx - 60, cy - 60, 120, 120);
+    ctx.fillStyle = `rgba(${col}, 0.9)`;
+    ctx.beginPath();
+    ctx.moveTo(cxx, cy - 10); ctx.lineTo(cxx + 7, cy);
+    ctx.lineTo(cxx, cy + 10); ctx.lineTo(cxx - 7, cy);
     ctx.fill();
   }
 
@@ -354,14 +415,16 @@ function draw() {
   for (const s of solids) {
     if (s.x + s.w < camX - 50 || s.x > camX + W + 50) continue;
     if (s.y === FLOOR) {
-      ctx.fillStyle = '#8a5a2b';                       // dirt
+      ctx.fillStyle = '#3d362f';                       // cave rock
       ctx.fillRect(s.x, s.y, s.w, s.h);
-      ctx.fillStyle = '#3faf4f';                       // grass lid
-      ctx.fillRect(s.x, s.y, s.w, 18);
+      ctx.fillStyle = '#4f7a4a';                       // glowing moss lid
+      ctx.fillRect(s.x, s.y, s.w, 14);
+      ctx.fillStyle = 'rgba(160, 255, 150, 0.25)';     // the moss's shine
+      ctx.fillRect(s.x, s.y, s.w, 4);
     } else {
-      ctx.fillStyle = '#c8722e';                       // brick shelf
+      ctx.fillStyle = '#544b42';                       // stone shelf
       ctx.fillRect(s.x, s.y, s.w, s.h);
-      ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+      ctx.strokeStyle = 'rgba(0,0,0,0.35)';
       ctx.lineWidth = 2;
       for (let bx = s.x; bx < s.x + s.w; bx += TILE) {
         ctx.strokeRect(bx, s.y, Math.min(TILE, s.x + s.w - bx), s.h);
@@ -369,67 +432,118 @@ function draw() {
     }
   }
 
-  // coins — spinning by squashing their width with a sine wave
+  // beans — fart fuel, gently bobbing where jumping is worth it
   for (const c of coins) {
     if (c.taken) continue;
-    const squash = Math.abs(Math.sin(elapsed * 5 + c.x));
-    ctx.fillStyle = '#ffd23f';
+    const bob = Math.sin(elapsed * 3 + c.x) * 4;
+    ctx.fillStyle = '#b5651d';
     ctx.beginPath();
-    ctx.ellipse(c.x, c.y + Math.sin(elapsed * 3 + c.x) * 4,
-                11 * squash + 2, 13, 0, 0, Math.PI * 2);
+    ctx.ellipse(c.x, c.y + bob, 12, 8, 0.5, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = '#c8931f';
+    ctx.fillStyle = '#d98c3f';                          // the bean's shine
+    ctx.beginPath();
+    ctx.ellipse(c.x - 3, c.y + bob - 3, 4, 2.5, 0.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // THE SNIFFERS — walking noses that want to sniff you right up.
+  // bounce on one and it honks.
+  for (const b of baddies) {
+    if (b.squish > 0) continue;
+    const sniff = 1 + Math.sin(elapsed * 6 + b.x) * 0.06;   // sniffing pulse
+    ctx.fillStyle = '#e8a4a4';
+    ctx.beginPath();                                    // the nose itself
+    ctx.moveTo(b.x + 4, b.y + b.h - 8);
+    ctx.lineTo(b.x + b.w / 2, b.y + 2 - 6 * (sniff - 1) * 10);
+    ctx.lineTo(b.x + b.w - 4, b.y + b.h - 8);
+    ctx.quadraticCurveTo(b.x + b.w / 2, b.y + b.h + 6, b.x + 4, b.y + b.h - 8);
+    ctx.fill();
+    ctx.fillStyle = '#7a3a3a';                          // nostrils, hunting you
+    ctx.beginPath();
+    ctx.ellipse(b.x + b.w / 2 - 8 + b.dir * 3, b.y + b.h - 14, 4, 6 * sniff, 0, 0, Math.PI * 2);
+    ctx.ellipse(b.x + b.w / 2 + 8 + b.dir * 3, b.y + b.h - 14, 4, 6 * sniff, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#5a2a2a';                          // sneaky little feet
+    ctx.fillRect(b.x + 4, b.y + b.h - 4, 10, 4);
+    ctx.fillRect(b.x + b.w - 14, b.y + b.h - 4, 10, 4);
+  }
+
+  // the way out — a crack of DAYLIGHT in the cave wall
+  const shine = 0.7 + Math.sin(elapsed * 2) * 0.2;
+  const day = ctx.createLinearGradient(FLAG.x - 40, 0, FLAG.x + 60, 0);
+  day.addColorStop(0, 'rgba(255, 250, 200, 0)');
+  day.addColorStop(0.5, `rgba(255, 250, 200, ${0.35 * shine})`);
+  day.addColorStop(1, 'rgba(255, 250, 200, 0)');
+  ctx.fillStyle = day;
+  ctx.fillRect(FLAG.x - 40, FLAG.y - 400, 100, 400);
+  ctx.fillStyle = `rgba(255, 252, 230, ${shine})`;      // the crack itself
+  ctx.beginPath();
+  ctx.moveTo(FLAG.x, FLAG.y);
+  ctx.lineTo(FLAG.x + 14, FLAG.y - 150);
+  ctx.lineTo(FLAG.x + 4, FLAG.y - 290);
+  ctx.lineTo(FLAG.x + 34, FLAG.y - 160);
+  ctx.lineTo(FLAG.x + 22, FLAG.y);
+  ctx.fill();
+
+  // the toot-trail puffs, fading as they rise
+  for (const p of puffs) {
+    ctx.fillStyle = `rgba(150, 230, 120, ${p.life * 0.4})`;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r * (2 - p.life), 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // ---- THE HERO — a small green fart with big dreams ----
+  if (player.invuln <= 0 || Math.floor(elapsed * 10) % 2 === 0) {
+    const px = player.x + player.w / 2, py = player.y + player.h / 2;
+    // the cloud: overlapping blobs that each wobble on their own beat
+    const blobs = [[0, -8, 17], [13, 2, 13], [-13, 2, 13], [0, 8, 15], [7, -12, 10], [-8, -13, 9]];
+    ctx.fillStyle = 'rgba(140, 220, 110, 0.92)';
+    ctx.beginPath();
+    for (const [ox, oy, r] of blobs) {
+      const wob = r * (1 + Math.sin(elapsed * 6 + ox + oy) * 0.1);
+      ctx.moveTo(px + ox + wob, py + oy);
+      ctx.arc(px + ox, py + oy, wob, 0, Math.PI * 2);
+    }
+    ctx.fill();
+    ctx.fillStyle = 'rgba(190, 245, 160, 0.8)';         // lighter core
+    ctx.beginPath();
+    ctx.arc(px, py - 2, 10, 0, Math.PI * 2);
+    ctx.fill();
+    // stink lines rising proudly off the top
+    ctx.strokeStyle = 'rgba(170, 230, 140, 0.5)';
     ctx.lineWidth = 2;
+    for (let i = -1; i <= 1; i++) {
+      ctx.beginPath();
+      ctx.moveTo(px + i * 9, py - 22);
+      ctx.quadraticCurveTo(px + i * 9 + Math.sin(elapsed * 5 + i) * 5, py - 32,
+                           px + i * 9, py - 42);
+      ctx.stroke();
+    }
+    // the cheeky face
+    const look = player.facing * 4;
+    ctx.fillStyle = '#183a10';
+    ctx.beginPath();
+    ctx.arc(px - 6 + look, py - 6, 3.2, 0, Math.PI * 2);
+    ctx.arc(px + 6 + look, py - 6, 3.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#183a10';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.arc(px + look, py + 3, 7, 0.15 * Math.PI, 0.85 * Math.PI);
     ctx.stroke();
   }
 
-  // baddies — grumpy little walkers
-  for (const b of baddies) {
-    if (b.squish > 0) continue;
-    ctx.fillStyle = '#a0522d';
-    ctx.fillRect(b.x, b.y + 6, b.w, b.h - 6);
-    ctx.fillStyle = '#7a3a1d';
-    ctx.fillRect(b.x - 4, b.y + b.h - 10, b.w + 8, 10);   // grumpy feet
-    // angry eyes that look where it walks
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(b.x + 8, b.y + 12, 9, 9);
-    ctx.fillRect(b.x + 23, b.y + 12, 9, 9);
-    ctx.fillStyle = '#000000';
-    ctx.fillRect(b.x + 10 + b.dir * 2, b.y + 15, 4, 4);
-    ctx.fillRect(b.x + 25 + b.dir * 2, b.y + 15, 4, 4);
-  }
-
-  // the flag — reach it and the level is yours
-  ctx.fillStyle = '#666';
-  ctx.fillRect(FLAG.x, FLAG.y - 290, 8, 290);
-  ctx.fillStyle = won ? '#ffd23f' : '#e8453c';
-  ctx.beginPath();
-  ctx.moveTo(FLAG.x + 8, FLAG.y - 290);
-  ctx.lineTo(FLAG.x + 90, FLAG.y - 262);
-  ctx.lineTo(FLAG.x + 8, FLAG.y - 234);
-  ctx.fill();
-
-  // ---- THE HERO (a placeholder guy — the designer will decide!) ----
-  if (player.invuln <= 0 || Math.floor(elapsed * 10) % 2 === 0) {
-    const px = player.x, py = player.y;
-    ctx.fillStyle = '#3a6ea5';                          // overalls
-    ctx.fillRect(px, py + 20, player.w, player.h - 20);
-    ctx.fillStyle = '#ffcc99';                          // face
-    ctx.fillRect(px + 4, py, player.w - 8, 24);
-    ctx.fillStyle = '#e8453c';                          // cap
-    ctx.fillRect(px, py - 6, player.w, 10);
-    ctx.fillRect(px + (player.facing > 0 ? player.w - 6 : -8), py - 2, 14, 6);
-    ctx.fillStyle = '#000';                             // eye
-    ctx.fillRect(px + (player.facing > 0 ? player.w - 12 : 8), py + 8, 4, 6);
-    // little walk-bounce feet
-    const step = player.onGround && player.vx !== 0
-               ? Math.sin(player.walk * 14) * 4 : 0;
-    ctx.fillStyle = '#5a3a1a';
-    ctx.fillRect(px + 2, py + player.h - 6 + step, 12, 6);
-    ctx.fillRect(px + player.w - 14, py + player.h - 6 - step, 12, 6);
-  }
-
   ctx.restore();
+
+  // the cave is DARK — the fart glows, and lights his own way.
+  const hx = player.x + player.w / 2 - camX;
+  const hy = player.y + player.h / 2 - camY;
+  const dark = ctx.createRadialGradient(hx, hy, 90, hx, hy, Math.max(W, H) * 0.65);
+  dark.addColorStop(0, 'rgba(8, 5, 3, 0)');
+  dark.addColorStop(1, 'rgba(8, 5, 3, 0.62)');
+  ctx.fillStyle = dark;
+  ctx.fillRect(0, 0, W, H);
 
   // ---- HUD ----
   ctx.textAlign = 'left';
@@ -437,7 +551,7 @@ function draw() {
   ctx.fillStyle = '#fff';
   ctx.strokeStyle = 'rgba(0,0,0,0.4)';
   ctx.lineWidth = 4;
-  const hud = '❤'.repeat(hearts) + '   🪙 ' + coinCount;
+  const hud = '❤'.repeat(hearts) + '   beans: ' + coinCount;
   ctx.strokeText(hud, 16, 36);
   ctx.fillText(hud, 16, 36);
 
@@ -458,11 +572,12 @@ function draw() {
     ctx.textAlign = 'center';
     ctx.fillStyle = '#ffd23f';
     ctx.font = `bold ${Math.min(54, W / 12)}px monospace`;
-    ctx.fillText('LEVEL COMPLETE!', W / 2, H / 2 - 20);
+    ctx.fillText('YOU ESCAPED THE CAVE!', W / 2, H / 2 - 20);
     ctx.fillStyle = '#fff';
     ctx.font = '20px monospace';
-    ctx.fillText('coins: ' + coinCount + ' / ' + COIN_SPOTS.length, W / 2, H / 2 + 24);
-    ctx.fillText('space or tap to play again', W / 2, H / 2 + 56);
+    ctx.fillText('the fart is FREE. smell ya later, cave.', W / 2, H / 2 + 24);
+    ctx.fillText('beans: ' + coinCount + ' / ' + COIN_SPOTS.length +
+                 '  —  space or tap to play again', W / 2, H / 2 + 56);
   }
 }
 
