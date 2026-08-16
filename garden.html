@@ -122,7 +122,7 @@ function shopItems() {
   items.push({
     kind: 'gear', key: 'can',
     label: '🚿 Watering Can',
-    info: ownCan ? 'OWNED — select it, tap plants to water' : 'water makes plants grow 2x faster',
+    info: ownCan ? 'OWNED — just tap growing plants to water!' : 'water makes plants grow 2x faster',
     cost: ownCan ? 0 : 30,
   });
   return items;
@@ -148,9 +148,8 @@ function buyOrPick(item) {
     } else if (coins >= 30) {
       coins -= 30;
       ownCan = true;
-      selected = 'can';
       shopOpen = false;
-      setStatus('You bought the watering can! Tap plants to water them.');
+      setStatus('You bought the watering can! Now tapping any growing plant waters it.');
       save();
     } else {
       setStatus("Not enough coins for the can yet — keep farming!");
@@ -182,7 +181,9 @@ function tapPlot(i) {
     return;
   }
 
-  if (plot && selected === 'can' && ownCan && !plot.watered) {
+  // own the watering can? then clicking ANY growing plant waters it —
+  // no need to put your seeds away. The can lives in your back pocket.
+  if (plot && ownCan && !plot.watered) {
     // WATER — the plant keeps the progress it has, then grows 2x from here
     const done = growthOf(plot) * CROPS[plot.type].grow;   // seconds "already grown"
     plot.watered = true;
