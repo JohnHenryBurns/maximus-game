@@ -233,11 +233,53 @@ function press(px, py) {
   }
 }
 
-addEventListener('mousedown', e => press(e.clientX, e.clientY));
+// which plot is under this point? (-1 for none)
+function plotAt(px, py) {
+  for (let i = 0; i < plots.length; i++) {
+    if (inside(px, py, plotRect(i))) return i;
+  }
+  return -1;
+}
+
+// LEFT CLICK plants (and harvests, and waters). Hold it down and DRAG
+// to sweep across a whole row — every plot you pass over gets a tap.
+let dragging = false;
+let lastPlot = -1;
+
+addEventListener('mousedown', e => {
+  if (e.button !== 0) return;          // left button only — the planting hand
+  dragging = true;
+  lastPlot = -1;
+  press(e.clientX, e.clientY);
+  const i = plotAt(e.clientX, e.clientY);
+  if (i >= 0) lastPlot = i;            // remember it so the drag doesn't double-tap
+});
+addEventListener('mousemove', e => {
+  if (!dragging || shopOpen) return;
+  const i = plotAt(e.clientX, e.clientY);
+  if (i >= 0 && i !== lastPlot) { lastPlot = i; tapPlot(i); }
+});
+addEventListener('mouseup', () => { dragging = false; lastPlot = -1; });
+addEventListener('contextmenu', e => e.preventDefault());   // right-click stays out of it
+
+// fingers get the same drag-to-plant powers
 addEventListener('touchstart', e => {
   e.preventDefault();
-  press(e.changedTouches[0].clientX, e.changedTouches[0].clientY);
+  const t = e.changedTouches[0];
+  dragging = true;
+  lastPlot = -1;
+  press(t.clientX, t.clientY);
+  const i = plotAt(t.clientX, t.clientY);
+  if (i >= 0) lastPlot = i;
 }, { passive: false });
+addEventListener('touchmove', e => {
+  e.preventDefault();
+  if (!dragging || shopOpen) return;
+  const t = e.changedTouches[0];
+  const i = plotAt(t.clientX, t.clientY);
+  if (i >= 0 && i !== lastPlot) { lastPlot = i; tapPlot(i); }
+}, { passive: false });
+addEventListener('touchend', () => { dragging = false; lastPlot = -1; });
 
 // ---------------------------------------------------------------------
 // DRAWING
