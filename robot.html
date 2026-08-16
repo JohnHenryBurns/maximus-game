@@ -82,6 +82,37 @@ function setScreech(target) {
     screech.vol.gain.setTargetAtTime(target, audioCtx.currentTime, 0.1);
   }
 }
+// the deep machine voice, for any words — queued lines play in order
+function sayDeep(lines, droneSecs) {
+  try {
+    const voices = speechSynthesis.getVoices();
+    const deep = voices.find(v => /david|male|daniel|george|mark/i.test(v.name)) || voices[0];
+    for (const line of lines) {
+      const u = new SpeechSynthesisUtterance(line);
+      if (deep) u.voice = deep;
+      u.pitch = 0;
+      u.rate = 0.4;
+      u.volume = 1;
+      speechSynthesis.speak(u);
+    }
+  } catch (e) {}
+  if (audioCtx) {
+    const t = audioCtx.currentTime;
+    const o = audioCtx.createOscillator();
+    const o2 = audioCtx.createOscillator();
+    const vol = audioCtx.createGain();
+    o.type = 'square';    o.frequency.value = 55;
+    o2.type = 'sawtooth'; o2.frequency.value = 27.5;
+    vol.gain.setValueAtTime(0.0001, t);
+    vol.gain.exponentialRampToValueAtTime(0.12, t + 0.15);
+    vol.gain.setValueAtTime(0.12, t + droneSecs - 1);
+    vol.gain.exponentialRampToValueAtTime(0.0001, t + droneSecs);
+    o.connect(vol); o2.connect(vol); vol.connect(audioCtx.destination);
+    o.start(t); o.stop(t + droneSecs + 0.2);
+    o2.start(t); o2.stop(t + droneSecs + 0.2);
+  }
+}
+
 function sayUnit13() {
   // the browser's built-in voice — dragged down to the absolute floor,
   // spoken in machine-chopped pieces, over a sub-bass drone
@@ -125,11 +156,13 @@ let lockedTimer = 0, lockedText = '';
 let menuCards = [];
 let ch1Done = localStorage.getItem('robot_ch1') === 'yes';
 let ch2Done = localStorage.getItem('robot_ch2') === 'yes';
+let ch3Done = localStorage.getItem('robot_ch3') === 'yes';
 
 const CHAPTERS = [
   { name: 'The Factory', unlocked: true },
   { name: 'The Overseer', unlocked: ch1Done },
   { name: 'The Machine', unlocked: ch2Done },
+  { name: '???', unlocked: false },
 ];
 let chapter = 0;
 
@@ -160,6 +193,18 @@ let endTimer = 0;             // chapter-complete countdown
 let sparks = [];
 let elapsed = 0;
 
+// CHAPTER 3: THE MACHINE — the dead creator, deep below the floor.
+// Bring it its three lost parts and it will wake... and it will be glad.
+const MACHINE_POS = { x: 1100, y: 300 };
+let pieces = [];          // the three parts, waiting in far corners
+let cables = [];          // broken cables, sparking across the floor
+let carrying = null;      // the part currently hovering over your head
+let machineParts = 0;     // how many sockets are filled
+let machineAwake = false;
+let awakeSeq = 0;         // seconds since the awakening began
+let zapGrace = 0;         // brief safety after a shock
+let stun = 0;             // you, frozen and buzzing, after a shock
+
 // THE OVERSEER — a giant with no legs, hanging from a ceiling rail by a
 // great metal bar at its waist. It glides right over everything.
 let overseer = null;
@@ -170,6 +215,65 @@ const RAILS = [
 let grace = 0;                // a moment of safety after it catches you
 
 function buildFactory() {
+  // CHAPTER 3 gets its own map: the Machine's vault below the factory
+  if (chapter === 2) {
+    blocks = [];
+    // great stone pillars holding up the factory above
+    for (let row = 0; row < 3; row++) {
+      for (let col = 0; col < 5; col++) {
+        blocks.push({
+          x: 380 + col * 380, y: 640 + row * 400,
+          w: 90, h: 90, kind: 'machine',
+        });
+      }
+    }
+    // the vault walls
+    blocks.push({ x: WORLD_W / 2, y: 30, w: WORLD_W, h: 60, kind: 'wall' });
+    blocks.push({ x: WORLD_W / 2, y: WORLD_H - 30, w: WORLD_W, h: 60, kind: 'wall' });
+    blocks.push({ x: 30, y: WORLD_H / 2, w: 60, h: WORLD_H, kind: 'wall' });
+    blocks.push({ x: WORLD_W - 30, y: WORLD_H / 2, w: 60, h: WORLD_H, kind: 'wall' });
+    // the Machine's vast body, filling the north wall
+    blocks.push({ x: MACHINE_POS.x, y: 170, w: 1100, h: 220, kind: 'wall' });
+
+    belts = [];
+    switches = [];
+    lamps = [];
+
+    // its three lost parts, in the far corners of the vault
+    pieces = [
+      { x: 220,  y: 380,  kind: 'cell', taken: false },
+      { x: 2000, y: 420,  kind: 'core', taken: false },
+      { x: 2000, y: 1580, kind: 'gear', taken: false },
+    ];
+    // broken cables spark across the floor between you and the sockets
+    cables = [];
+    for (let i = 0; i < 9; i++) {
+      cables.push({
+        x: 300 + noise(i * 7.7) * (WORLD_W - 600),
+        y: 400 + noise(i * 3.3) * (WORLD_H - 700),
+        r: 55,
+      });
+    }
+    carrying = null;
+    machineParts = 0;
+    machineAwake = false;
+    awakeSeq = 0;
+    zapGrace = 0;
+    stun = 0;
+    overseer = null;
+    leverPulled = false;
+    powered = 0;
+    wokeTimer = 0;
+    endTimer = 0;
+    grace = 0;
+    saidName = false;
+    setScreech(0);
+    sparks = [];
+    player.x = START.x;
+    player.y = START.y;
+    return;
+  }
+
   blocks = [];
   // big machine hulks in rows, like a real factory floor
   for (let row = 0; row < 4; row++) {
@@ -324,11 +428,6 @@ function startChapter(i) {
     lockedTimer = 2;
     return;
   }
-  if (i === 2) {
-    lockedText = 'THE MACHINE is still being written — tell the author what it is!';
-    lockedTimer = 3;
-    return;
-  }
   chapter = i;
   buildFactory();
   if (i === 0) {
@@ -345,6 +444,24 @@ function startChapter(i) {
       'Somewhere in this factory there is power. Find it.',
       '',
       '( press anything to begin )',
+    ];
+  } else if (i === 2) {
+    storyLines = [
+      'CHAPTER 3: THE MACHINE',
+      '',
+      'Below the factory floor there is a vault.',
+      'And in the vault there is the thing that built everything —',
+      'the machines. The Overseer. You.',
+      '',
+      'It has been dead a long, long time.',
+      '',
+      'Its three parts are scattered in the dark:',
+      'the POWER CELL. the MEMORY CORE. the HEART-GEAR.',
+      '',
+      'Carry them home. Mind the sparking cables.',
+      'Wake your maker. It will help you. It has been waiting to.',
+      '',
+      '( press anything to descend )',
     ];
   } else {
     storyLines = [
@@ -376,6 +493,7 @@ function update(dt) {
   if (endTimer > 0) {
     endTimer -= dt;
     setScreech(0);                            // the rail falls silent
+    if (machineAwake) awakeSeq += dt;         // the warm light spreading
     if (chapter === 1 && !saidName && endTimer < 9) {
       saidName = true;
       sayUnit13();                            // its last words. YOUR name.
@@ -396,7 +514,7 @@ function update(dt) {
   }
   const len = Math.hypot(dx, dy);
   if (len > 1) { dx /= len; dy /= len; }
-  player.moving = len > 0.1;
+  player.moving = len > 0.1 && stun <= 0;   // no walking while BZZT
   if (player.moving) {
     player.walkTime += dt;
     if (dx > 0.1) player.facing = 1;
@@ -437,6 +555,67 @@ function update(dt) {
         ch2Done = true;
         localStorage.setItem('robot_ch2', 'yes');
         CHAPTERS[2].unlocked = true;         // THE MACHINE awaits
+      }
+    }
+  }
+
+  // ---- CHAPTER 3: parts, cables, and the great awakening ----
+  if (chapter === 2 && !machineAwake) {
+    if (stun > 0) stun -= dt;
+    if (zapGrace > 0) zapGrace -= dt;
+
+    // pick up a part — one at a time; you only have one head to carry on
+    for (const p of pieces) {
+      if (!p.taken && !carrying && Math.hypot(player.x - p.x, player.y - p.y) < 32) {
+        p.taken = true;
+        carrying = p;
+        for (let i = 0; i < 10; i++) {
+          sparks.push({ x: p.x, y: p.y - 10,
+            vx: (noise(i * 3.3 + elapsed) - 0.5) * 240,
+            vy: (noise(i * 7.7 + elapsed) - 0.9) * 200,
+            life: 0.6, color: '#7dd3ff' });
+        }
+      }
+    }
+
+    // sparking cables — a shock freezes you and knocks the part loose
+    for (const cb of cables) {
+      if (zapGrace <= 0 && Math.hypot(player.x - cb.x, player.y - cb.y) < cb.r * 0.55) {
+        zapGrace = 2;
+        stun = 0.6;
+        for (let i = 0; i < 12; i++) {
+          sparks.push({ x: player.x, y: player.y - 14,
+            vx: (noise(i * 3.3 + elapsed) - 0.5) * 320,
+            vy: (noise(i * 7.7 + elapsed) - 0.9) * 280,
+            life: 0.6, color: i % 2 ? '#ffd23f' : '#ffffff' });
+        }
+        if (carrying) {                       // the part clatters to the floor
+          carrying.taken = false;
+          carrying.x = player.x + (noise(elapsed) - 0.5) * 90;
+          carrying.y = Math.min(WORLD_H - 120, player.y + 70 + noise(elapsed * 2) * 40);
+          carrying = null;
+        }
+      }
+    }
+
+    // deliver to the Machine's sockets, along its great face
+    if (carrying && player.y < 380 && Math.abs(player.x - MACHINE_POS.x) < 560) {
+      machineParts++;
+      carrying = null;
+      for (let i = 0; i < 18; i++) {
+        sparks.push({ x: player.x, y: player.y - 30,
+          vx: (noise(i * 3.3 + elapsed) - 0.5) * 360,
+          vy: (noise(i * 7.7 + elapsed) - 0.9) * 320,
+          life: 0.8, color: i % 2 ? '#ffd23f' : '#7dd3ff' });
+      }
+      if (machineParts >= 3) {
+        // ---- THE AWAKENING ----
+        machineAwake = true;
+        awakeSeq = 0;
+        endTimer = 16;
+        ch3Done = true;
+        localStorage.setItem('robot_ch3', 'yes');
+        sayDeep(['unit. thirteen.', 'my little one.', 'you came back.'], 11);
       }
     }
   }
@@ -541,6 +720,28 @@ function draw() {
     }
   }
 
+  // chapter 3's floor extras: sparking cables and waiting parts
+  if (chapter === 2) {
+    for (const cb of cables) {
+      const x = cb.x - c.x, y = cb.y - c.y;
+      if (x < -80 || y < -80 || x > canvas.width + 80 || y > canvas.height + 80) continue;
+      ctx.strokeStyle = '#20242c';                 // the dead cable itself
+      ctx.lineWidth = 6;
+      ctx.beginPath();
+      ctx.moveTo(x - cb.r, y - 10);
+      ctx.quadraticCurveTo(x - 10, y + 18, x + 12, y - 4);
+      ctx.quadraticCurveTo(x + 30, y - 18, x + cb.r * 0.7, y + 8);
+      ctx.stroke();
+      if (Math.random() < 0.35) {                  // and its angry sparks
+        ctx.fillStyle = Math.random() < 0.5 ? '#ffd23f' : '#ffffff';
+        ctx.fillRect(x + (Math.random() - 0.5) * 30, y + (Math.random() - 0.5) * 16, 4, 4);
+      }
+    }
+    for (const p of pieces) {
+      if (!p.taken) drawPiece(p.kind, p.x - c.x, p.y - c.y, 1 + Math.sin(elapsed * 3 + p.x) * 0.06);
+    }
+  }
+
   // sorted world: machines, crates, walls, switches, lever, robot
   const things = [];
   for (const b of blocks) things.push({ y: b.y + b.h / 2, kind: 'block', it: b });
@@ -555,6 +756,22 @@ function draw() {
     else drawRobot(c);
   }
 
+  // the Machine's great face, decorated over its wall-body (chapter 3)
+  if (chapter === 2) drawMachineFace(c);
+
+  // the part you're carrying hovers proudly over your head
+  if (carrying) {
+    drawPiece(carrying.kind, player.x - c.x,
+              player.y - c.y - 56 + Math.sin(elapsed * 4) * 3, 0.9);
+  }
+  // BZZT
+  if (stun > 0) {
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#ffd23f';
+    ctx.font = 'bold 16px monospace';
+    ctx.fillText('BZZT!!', player.x - c.x, player.y - c.y - 64 + (Math.random() - 0.5) * 6);
+  }
+
   for (const p of sparks) {
     ctx.globalAlpha = Math.max(0, p.life);
     ctx.fillStyle = p.color;
@@ -564,7 +781,9 @@ function draw() {
 
   // ---- THE DARK — chapter 1: full dark until the lever. chapter 2:
   // every switch you CUT drags the factory back toward blackness. ----
-  const darkAmt = chapter === 0 ? (powerOn ? 0 : 1) : (4 - powered) / 4;
+  const darkAmt = chapter === 0 ? (powerOn ? 0 : 1)
+                : chapter === 1 ? (4 - powered) / 4
+                : machineAwake ? Math.max(0, 1 - awakeSeq / 3) : 1;
   if (darkAmt > 0) {
     const px = player.x - c.x, py = player.y - c.y;
     const night = ctx.createRadialGradient(px, py - 12, 30, px, py - 12, 210);
@@ -623,13 +842,28 @@ function draw() {
   ctx.fillStyle = '#7dd3ff';
   ctx.font = 'bold 18px monospace';
   ctx.fillText('UNIT-??? ', 14, 30);
-  ctx.fillStyle = chapter === 1 ? (powered === 0 ? '#7ddf8f' : '#ff6b5e')
+  ctx.fillStyle = chapter === 2 ? (machineAwake ? '#7ddf8f' : '#ffd23f')
+                : chapter === 1 ? (powered === 0 ? '#7ddf8f' : '#ff6b5e')
                 : powered >= 4 ? '#7ddf8f' : '#ffd23f';
-  ctx.fillText(chapter === 1
+  ctx.fillText(chapter === 2
+      ? (machineAwake ? 'IT IS AWAKE'
+         : `PARTS ${machineParts}/3` + (carrying ? '  — carrying the ' + carrying.kind.toUpperCase() : ''))
+      : chapter === 1
       ? (powered === 0 ? 'POWER OFFLINE' : `CUT THE POWER — ${powered}/4 STILL ON`)
       : powered >= 4 && !leverPulled ? 'POWER 4/4 — find the MASTER LEVER'
       : leverPulled ? 'POWER ONLINE'
       : `POWER ${powered}/4`, 130, 30);
+
+  // the Machine's spoken words, captioned as the light spreads
+  if (chapter === 2 && machineAwake && endTimer > 3) {
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(255, 226, 150, 0.95)';
+    ctx.font = 'bold 24px monospace';
+    const line = awakeSeq < 3.5 ? '" UNIT... THIRTEEN. "'
+               : awakeSeq < 7 ? '" MY LITTLE ONE. "'
+               : '" YOU CAME BACK. "';
+    ctx.fillText(line, canvas.width / 2, canvas.height / 2 - 120);
+  }
 
   // being carried by a giant claw deserves a caption
   if (overseer && overseer.caught > 0) {
@@ -665,19 +899,122 @@ function draw() {
     ctx.textAlign = 'center';
     ctx.fillStyle = '#ffd23f';
     ctx.font = 'bold 30px monospace';
-    ctx.fillText(chapter === 1 ? 'CHAPTER 2 COMPLETE' : 'CHAPTER 1 COMPLETE',
+    ctx.fillText(chapter === 2 ? 'CHAPTER 3 COMPLETE'
+               : chapter === 1 ? 'CHAPTER 2 COMPLETE' : 'CHAPTER 1 COMPLETE',
                  canvas.width / 2, canvas.height / 2 - 10);
     ctx.fillStyle = '#9fb4ff';
     ctx.font = '16px monospace';
-    if (chapter === 1) {
+    if (chapter === 2) {
+      ctx.fillText('The Machine is awake. It built you. It remembers EVERYTHING.',
+                   canvas.width / 2, canvas.height / 2 + 26);
+      ctx.fillText('Chapter 4 is unwritten... what does your maker tell you, UNIT-13?',
+                   canvas.width / 2, canvas.height / 2 + 50);
+    } else if (chapter === 1) {
       ctx.fillText('As its eyes went dark, it said a name. YOUR name. It KNEW you.',
                    canvas.width / 2, canvas.height / 2 + 26);
-      ctx.fillText('Chapter 3 is unwritten... UNIT-13.',
+      ctx.fillText('Chapter 3 awaits... UNIT-13.',
                    canvas.width / 2, canvas.height / 2 + 50);
     } else {
       ctx.fillText('Chapter 2 is unlocked... the red eyes are waiting.',
                    canvas.width / 2, canvas.height / 2 + 26);
     }
+  }
+
+}
+
+// one of the Machine's three parts, drawn wherever it's needed
+function drawPiece(kind, x, y, s) {
+  s = s || 1;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(s, s);
+  if (kind === 'cell') {                       // the POWER CELL
+    ctx.fillStyle = '#20242c';
+    ctx.fillRect(-9, -13, 18, 26);
+    ctx.fillStyle = '#ffd23f';
+    ctx.fillRect(-6, -10, 12, 20);
+    ctx.fillStyle = '#20242c';
+    ctx.fillRect(-3, -16, 6, 4);               // the terminal
+    ctx.fillStyle = '#fff6c8';                 // charge glint
+    ctx.fillRect(-3, -6, 3, 8);
+  } else if (kind === 'core') {                // the MEMORY CORE
+    ctx.fillStyle = '#3a2a4e';
+    ctx.beginPath(); ctx.arc(0, 0, 13, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#b482ff';
+    ctx.beginPath(); ctx.arc(0, 0, 8, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#e8d8ff';
+    ctx.beginPath(); ctx.arc(-2, -3, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#7a5aa8';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(0, 0, 13, 0, Math.PI * 2); ctx.stroke();
+  } else {                                     // the HEART-GEAR
+    ctx.fillStyle = '#8a8d94';
+    for (let t = 0; t < 8; t++) {
+      ctx.save();
+      ctx.rotate(t / 8 * Math.PI * 2 + elapsed * 0.5);
+      ctx.fillRect(-3, -16, 6, 7);
+      ctx.restore();
+    }
+    ctx.beginPath(); ctx.arc(0, 0, 11, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#e8453c';                 // the heart part of heart-gear
+    ctx.beginPath(); ctx.arc(0, 0, 5, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+}
+
+// the Machine's face, drawn across its great body on the north wall
+function drawMachineFace(c) {
+  const x = MACHINE_POS.x - c.x;
+  const y = 170 - c.y;                          // its wall-body's center line
+  if (y < -260 || y > canvas.height + 260) return;
+  const glow = machineAwake ? Math.min(1, awakeSeq / 2.5) : 0;
+
+  // plating and pipes across the whole face
+  ctx.fillStyle = '#2c313c';
+  ctx.fillRect(x - 550, y - 110, 1100, 220);
+  ctx.fillStyle = '#353b48';
+  for (let i = 0; i < 6; i++) ctx.fillRect(x - 540 + i * 190, y - 110, 22, 220);
+  ctx.fillStyle = '#20242a';
+  ctx.fillRect(x - 550, y - 30, 1100, 12);
+
+  // THE CORE — a great round heart in the middle of the face
+  ctx.fillStyle = '#171a20';
+  ctx.beginPath(); ctx.arc(x, y + 10, 62, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = glow > 0
+    ? `rgba(255, 200, 90, ${0.25 + glow * 0.75})`
+    : 'rgba(70, 76, 90, 0.6)';
+  ctx.beginPath(); ctx.arc(x, y + 10, 44 + Math.sin(elapsed * 2) * glow * 4, 0, Math.PI * 2); ctx.fill();
+
+  // TWO EYES above the core — dark sockets... until they aren't
+  for (const side of [-1, 1]) {
+    ctx.fillStyle = '#14171d';
+    ctx.fillRect(x + side * 160 - 26, y - 78, 52, 24);
+    if (glow > 0) {
+      ctx.fillStyle = `rgba(125, 211, 255, ${glow})`;     // warm cyan. NOT red.
+      ctx.fillRect(x + side * 160 - 18, y - 72, 36, 12);
+    }
+  }
+
+  // the three sockets along the bottom lip, filling as you deliver
+  for (let i = 0; i < 3; i++) {
+    const sx = x - 220 + i * 220;
+    ctx.fillStyle = '#171a20';
+    ctx.fillRect(sx - 24, y + 86, 48, 34);
+    ctx.strokeStyle = i < machineParts ? '#7ddf8f' : '#454c5a';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(sx - 24, y + 86, 48, 34);
+    if (i < machineParts) {
+      drawPiece(['cell', 'core', 'gear'][i], sx, y + 103, 0.7);
+    }
+  }
+
+  // and when it wakes, warm light floods out of it
+  if (glow > 0) {
+    const g = ctx.createRadialGradient(x, y + 10, 20, x, y + 10, 700);
+    g.addColorStop(0, `rgba(255, 214, 130, ${0.3 * glow})`);
+    g.addColorStop(1, 'rgba(255, 214, 130, 0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(x - 700, y - 400, 1400, 1100);
   }
 }
 
