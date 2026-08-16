@@ -196,9 +196,25 @@ let armorRegen = 0;
 // one hit. ROCK CRAWLERS: armored beetles of living stone. Slow. Tough.
 let bats = [];
 let crawlers = [];
+let zombies = [];       // all three kinds, plus the nine-eyed giants
+let skeletons = [];
+let creepers = [];
 let emeralds = [];
 let particles = [];
 let emeraldCount = 0;
+
+// a random spot in the cavern, away from the start, the Door, and rocks
+function wildSpot(seed) {
+  for (let tries = 0; tries < 40; tries++) {
+    const x = 100 + noise(seed * 13.7 + tries * 3.1) * (WORLD_W - 200);
+    const y = 100 + noise(seed * 29.3 + tries * 7.7) * (WORLD_H - 200);
+    if (Math.hypot(x - START.x, y - START.y) < 380) continue;
+    if (Math.hypot(x - DOOR.x, y - DOOR.y) < 320) continue;
+    if (blocked(x, y, 12)) continue;
+    return { x, y };
+  }
+  return null;
+}
 
 // fill the cavern fresh — called every time you enter the level
 function buildCavern() {
@@ -221,6 +237,41 @@ function buildCavern() {
     crawlers.push({ x, y, hp: 3, wander: noise(i * 1.7) * 6.28,
                     lastHitSwing: 0, hurtFlash: 0 });
   }
+  // ---- EVERY CREATURE FROM THE WHOLE SAGA fell down here too ----
+  zombies = [];
+  for (let i = 0; i < 3; i++) {
+    const p = wildSpot(i + 101);
+    if (p) zombies.push({ x: p.x, y: p.y, hp: 2, wander: noise(i) * 6.28,
+                          lastHitSwing: 0, hurtFlash: 0 });
+  }
+  for (let i = 0; i < 3; i++) {
+    const p = wildSpot(i + 111);
+    if (p) zombies.push({ x: p.x, y: p.y, sand: true, hp: 3, wander: noise(i) * 6.28,
+                          lastHitSwing: 0, hurtFlash: 0 });
+  }
+  for (let i = 0; i < 3; i++) {
+    const p = wildSpot(i + 121);
+    if (p) zombies.push({ x: p.x, y: p.y, black: true, hp: 3, speed: 95,
+                          wander: noise(i) * 6.28, lastHitSwing: 0, hurtFlash: 0 });
+  }
+  for (let i = 0; i < 2; i++) {
+    const p = wildSpot(i + 131);
+    if (p) zombies.push({ x: p.x, y: p.y, black: true, giant: true, hp: 6, speed: 60,
+                          wander: noise(i) * 6.28, lastHitSwing: 0, hurtFlash: 0 });
+  }
+  skeletons = [];
+  for (let i = 0; i < 4; i++) {
+    const p = wildSpot(i + 141);
+    if (p) skeletons.push({ x: p.x, y: p.y, hp: 2, facing: 1,
+                            wander: noise(i * 1.7) * 6.28, lastHitSwing: 0, hurtFlash: 0 });
+  }
+  creepers = [];
+  for (let i = 0; i < 5; i++) {
+    const p = wildSpot(i + 151);
+    if (p) creepers.push({ x: p.x, y: p.y, hp: 2, fuse: 0,
+                           wander: noise(i) * 6.28, lastHitSwing: 0, hurtFlash: 0 });
+  }
+
   emeralds = [];
   particles = [];
   emeraldCount = 0;
@@ -443,6 +494,150 @@ function update(dt) {
   }
   crawlers = crawlers.filter(c => c.hp > 0);
 
+  // one shared helper for "a monster touched you"
+  function hurtPlayer(fromX, fromY, push) {
+    if (player.hurtTimer > 0 || player.deathTimer > 0) return;
+    if (player.armor > 0) player.armor--;
+    else player.hp--;
+    player.hurtTimer = 1;
+    const d = Math.max(1, Math.hypot(player.x - fromX, player.y - fromY));
+    const nx = player.x + (player.x - fromX) / d * (push || 40);
+    const ny = player.y + (player.y - fromY) / d * (push || 40);
+    if (!blocked(nx, player.y)) player.x = nx;
+    if (!blocked(player.x, ny)) player.y = ny;
+    if (player.hp <= 0) player.deathTimer = 2.5;
+  }
+
+  // ---- ZOMBIES of every kind, giants included ----
+  for (const z of zombies) {
+    if (z.hurtFlash > 0) z.hurtFlash -= dt;
+    const d = Math.hypot(player.x - z.x, player.y - z.y);
+    let zdx, zdy, spd;
+    if (d < 240 && player.deathTimer <= 0) {
+      zdx = (player.x - z.x) / d; zdy = (player.y - z.y) / d;
+      spd = z.speed || 75;
+    } else {
+      z.wander += (noise(Math.floor(elapsed) + z.x) - 0.5) * dt * 4;
+      zdx = Math.cos(z.wander); zdy = Math.sin(z.wander); spd = 22;
+    }
+    const zr = z.giant ? 16 : 10;
+    const nx = z.x + zdx * spd * dt, ny = z.y + zdy * spd * dt;
+    if (!blocked(nx, z.y, zr)) z.x = nx;
+    if (!blocked(z.x, ny, zr)) z.y = ny;
+
+    if (player.attackTime > 0 && z.lastHitSwing !== player.swingId &&
+        d < (z.giant ? 68 : 55) && (z.x - player.x) * player.facing > -8) {
+      z.lastHitSwing = player.swingId;
+      z.hp -= swordDamage();
+      z.hurtFlash = 0.15;
+      const push = 40 / Math.max(1, d);
+      if (!blocked(z.x + (z.x - player.x) * push, z.y, zr)) z.x += (z.x - player.x) * push;
+      if (!blocked(z.x, z.y + (z.y - player.y) * push, zr)) z.y += (z.y - player.y) * push;
+      if (z.hp <= 0) {
+        const bits = z.giant ? 26 : 12;
+        for (let i = 0; i < bits; i++) {
+          particles.push({ x: z.x, y: z.y - 14,
+            vx: (noise(i * 3.3 + elapsed) - 0.5) * 280,
+            vy: (noise(i * 7.7 + elapsed) - 0.9) * 240, life: 0.6,
+            color: z.black ? (i % 2 ? '#26262e' : '#b06cff')
+                 : z.sand  ? (i % 2 ? '#cbb06a' : '#a3854a')
+                 : (i % 2 ? '#4a9e4a' : '#2e6e8e') });
+        }
+        const loot = z.giant ? 3 : 1;
+        for (let e = 0; e < loot; e++) emeralds.push({ x: z.x + (e - 1) * 14, y: z.y, born: elapsed });
+      }
+    }
+    if (d < (z.giant ? 42 : 26) && z.hp > 0) hurtPlayer(z.x, z.y, 50);
+  }
+  zombies = zombies.filter(z => z.hp > 0);
+
+  // ---- SKELETONS — quick, with that long spear reach ----
+  for (const s of skeletons) {
+    if (s.hurtFlash > 0) s.hurtFlash -= dt;
+    const d = Math.hypot(player.x - s.x, player.y - s.y);
+    let sdx, sdy, spd;
+    if (d < 260 && player.deathTimer <= 0) {
+      sdx = (player.x - s.x) / d; sdy = (player.y - s.y) / d; spd = 95;
+    } else {
+      s.wander += (noise(Math.floor(elapsed) + s.x) - 0.5) * dt * 4;
+      sdx = Math.cos(s.wander); sdy = Math.sin(s.wander); spd = 26;
+    }
+    if (sdx > 0.1) s.facing = 1;
+    if (sdx < -0.1) s.facing = -1;
+    const nx = s.x + sdx * spd * dt, ny = s.y + sdy * spd * dt;
+    if (!blocked(nx, s.y, 10)) s.x = nx;
+    if (!blocked(s.x, ny, 10)) s.y = ny;
+
+    if (player.attackTime > 0 && s.lastHitSwing !== player.swingId &&
+        d < 55 && (s.x - player.x) * player.facing > -8) {
+      s.lastHitSwing = player.swingId;
+      s.hp -= swordDamage();
+      s.hurtFlash = 0.15;
+      if (s.hp <= 0) {
+        for (let i = 0; i < 12; i++) {
+          particles.push({ x: s.x, y: s.y - 14,
+            vx: (noise(i * 3.3 + elapsed) - 0.5) * 240,
+            vy: (noise(i * 7.7 + elapsed) - 0.9) * 220, life: 0.6,
+            color: i % 2 ? '#e8e8e2' : '#b8b8b0' });
+        }
+        emeralds.push({ x: s.x, y: s.y, born: elapsed });
+      }
+    }
+    if (d < 38 && s.hp > 0) hurtPlayer(s.x, s.y, 50);   // the spear pokes FAR
+  }
+  skeletons = skeletons.filter(s => s.hp > 0);
+
+  // ---- CREEPERS — hissing in the dark is SO much worse ----
+  for (const cr of creepers) {
+    if (cr.hurtFlash > 0) cr.hurtFlash -= dt;
+    const d = Math.hypot(player.x - cr.x, player.y - cr.y);
+    if (cr.fuse > 0) {
+      cr.fuse -= dt;
+      if (d > 120) cr.fuse = 0;
+      else if (cr.fuse <= 0) {
+        for (let i = 0; i < 26; i++) {
+          particles.push({ x: cr.x, y: cr.y - 10,
+            vx: (noise(i * 3.7 + elapsed) - 0.5) * 400,
+            vy: (noise(i * 8.1 + elapsed) - 0.6) * 360, life: 0.7,
+            color: ['#ff9f43', '#ffd23f', '#7f8c8d', '#4a9e4a'][i % 4] });
+        }
+        cr.hp = 0;
+        if (d < 100) hurtPlayer(cr.x, cr.y, 120);
+      }
+    } else if (d < 60 && player.deathTimer <= 0) {
+      cr.fuse = 1.1;
+    } else {
+      let cdx, cdy, spd;
+      if (d < 230 && player.deathTimer <= 0) {
+        cdx = (player.x - cr.x) / d; cdy = (player.y - cr.y) / d; spd = 85;
+      } else {
+        cr.wander += (noise(Math.floor(elapsed) + cr.x) - 0.5) * dt * 4;
+        cdx = Math.cos(cr.wander); cdy = Math.sin(cr.wander); spd = 24;
+      }
+      const nx = cr.x + cdx * spd * dt, ny = cr.y + cdy * spd * dt;
+      if (!blocked(nx, cr.y, 10)) cr.x = nx;
+      if (!blocked(cr.x, ny, 10)) cr.y = ny;
+    }
+    if (player.attackTime > 0 && cr.lastHitSwing !== player.swingId &&
+        d < 55 && (cr.x - player.x) * player.facing > -8 && cr.hp > 0) {
+      cr.lastHitSwing = player.swingId;
+      cr.hp -= swordDamage();
+      cr.hurtFlash = 0.15;
+      cr.fuse = 0;                              // bonked mid-hiss!
+      if (cr.hp <= 0) {
+        for (let i = 0; i < 12; i++) {
+          particles.push({ x: cr.x, y: cr.y - 14,
+            vx: (noise(i * 3.3 + elapsed) - 0.5) * 240,
+            vy: (noise(i * 7.7 + elapsed) - 0.9) * 220, life: 0.6,
+            color: i % 2 ? '#3faf3f' : '#2e8b57' });
+        }
+        emeralds.push({ x: cr.x - 10, y: cr.y, born: elapsed });
+        emeralds.push({ x: cr.x + 10, y: cr.y, born: elapsed });
+      }
+    }
+  }
+  creepers = creepers.filter(cr => cr.hp > 0);
+
   // respawn back at the drop point
   if (player.deathTimer > 0) {
     player.deathTimer -= dt;
@@ -508,6 +703,9 @@ function draw() {
   for (const r of rocks) things.push({ y: r.y, kind: 'rock', it: r });
   for (const cr of crystals) things.push({ y: cr.y, kind: 'crystal', it: cr });
   for (const cw of crawlers) things.push({ y: cw.y, kind: 'crawler', it: cw });
+  for (const z of zombies) things.push({ y: z.y, kind: 'zombie', it: z });
+  for (const s of skeletons) things.push({ y: s.y, kind: 'skeleton', it: s });
+  for (const cp of creepers) things.push({ y: cp.y, kind: 'creeper', it: cp });
   things.push({ y: player.y, kind: 'player' });
   things.sort((a, b) => a.y - b.y);
 
@@ -515,6 +713,9 @@ function draw() {
     if (th.kind === 'rock') drawRock(th.it, c);
     else if (th.kind === 'crystal') drawCrystal(th.it, c);
     else if (th.kind === 'crawler') drawCrawler(th.it, c);
+    else if (th.kind === 'zombie') drawZombie(th.it, c);
+    else if (th.kind === 'skeleton') drawSkeleton(th.it, c);
+    else if (th.kind === 'creeper') drawCreeper(th.it, c);
     else drawPlayer(c);
   }
 
@@ -565,6 +766,39 @@ function draw() {
     ctx.fillStyle = g;
     ctx.fillRect(gx - 90 * cr.size, gy - 90 * cr.size, 180 * cr.size, 180 * cr.size);
   }
+  // monster eyes glow through the deep dark — count them before you commit
+  for (const z of zombies) {
+    const zx = z.x - c.x, zy = z.y - c.y;
+    if (zx < -20 || zy < -20 || zx > canvas.width + 20 || zy > canvas.height + 20) continue;
+    if (z.giant) {
+      ctx.fillStyle = 'rgba(176, 108, 255, 0.85)';
+      for (let row = 0; row < 3; row++)
+        for (let col = 0; col < 3; col++)
+          ctx.fillRect(zx - 8 + col * 7, zy - 47 + row * 7, 3, 3);
+    } else if (z.black) {
+      ctx.fillStyle = 'rgba(176, 108, 255, 0.75)';
+      for (let e = 0; e < 3; e++) {
+        ctx.fillRect(zx - 5 + e * 4, zy - 27, 2, 2);
+        ctx.fillRect(zx - 5 + e * 4, zy - 23, 2, 2);
+      }
+    } else {
+      ctx.fillStyle = 'rgba(150, 255, 150, 0.5)';
+      ctx.fillRect(zx - 5, zy - 26, 3, 3);
+      ctx.fillRect(zx + 2, zy - 26, 3, 3);
+    }
+  }
+  // bat eyes and crawler eyes glint too — the dark is FULL of eyes
+  ctx.fillStyle = 'rgba(255, 210, 63, 0.7)';
+  for (const b of bats) {
+    ctx.fillRect(b.x - c.x - 3, b.y - c.y - 2, 2, 2);
+    ctx.fillRect(b.x - c.x + 1, b.y - c.y - 2, 2, 2);
+  }
+  ctx.fillStyle = 'rgba(255, 159, 67, 0.7)';
+  for (const cw of crawlers) {
+    ctx.fillRect(cw.x - c.x - 5, cw.y - c.y - 6, 3, 3);
+    ctx.fillRect(cw.x - c.x + 2, cw.y - c.y - 6, 3, 3);
+  }
+
   // and the door's cracks burn through everything
   const dxp = DOOR.x - c.x, dyp = DOOR.y - c.y;
   const dg = ctx.createRadialGradient(dxp, dyp, 10, dxp, dyp, 260);
@@ -659,6 +893,117 @@ function drawCrawler(cw, c) {
   ctx.fillStyle = '#ff9f43';                       // two smouldering eyes
   ctx.fillRect(x - 5, y - 6, 3, 3);
   ctx.fillRect(x + 2, y - 6, 3, 3);
+}
+
+function drawZombie(z, c) {
+  const x = z.x - c.x, y = z.y - c.y;
+  if (x < -60 || y < -80 || x > canvas.width + 60 || y > canvas.height + 80) return;
+  const flash = z.hurtFlash > 0;
+
+  // the GIANT: nine eyes and spider legs, right at home down here
+  if (z.giant) {
+    const stomp = Math.abs(Math.sin(elapsed * 4 + z.x)) * 4;
+    ctx.strokeStyle = '#141418';
+    ctx.lineWidth = 3;
+    for (let leg = 0; leg < 4; leg++) {
+      for (const side of [-1, 1]) {
+        const wiggle = Math.sin(elapsed * 6 + leg * 1.7 + z.x) * 4;
+        const spread = 14 + leg * 9;
+        ctx.beginPath();
+        ctx.moveTo(x + 6 * side, y - 38 - stomp);
+        ctx.lineTo(x + spread * side, y - 52 - leg * 3 + wiggle);
+        ctx.lineTo(x + (spread + 12) * side, y - 20 + wiggle);
+        ctx.stroke();
+      }
+    }
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.beginPath(); ctx.ellipse(x, y + 10, 20, 8, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = flash ? '#ffffff' : '#26262e';
+    ctx.fillRect(x - 14, y - 26 - stomp, 28, 30);
+    ctx.fillStyle = flash ? '#ffffff' : '#1c1c22';
+    ctx.fillRect(x - 12, y - 52 - stomp, 24, 26);
+    ctx.fillStyle = '#b06cff';
+    for (let row = 0; row < 3; row++)
+      for (let col = 0; col < 3; col++)
+        ctx.fillRect(x - 8 + col * 7, y - 47 + row * 7 - stomp, 3, 3);
+    ctx.fillStyle = flash ? '#ffffff' : '#1c1c22';
+    ctx.fillRect(x - 20, y - 22 - stomp, 6, 16);
+    ctx.fillRect(x + 14, y - 22 - stomp, 6, 16);
+    return;
+  }
+
+  const stomp = Math.abs(Math.sin(elapsed * 6 + z.x)) * 3;
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.beginPath(); ctx.ellipse(x, y + 8, 11, 5, 0, 0, Math.PI * 2); ctx.fill();
+  const shirt = z.black ? '#26262e' : z.sand ? '#a3854a' : '#2e6e8e';
+  const skin  = z.black ? '#1c1c22' : z.sand ? '#cbb06a' : '#4a9e4a';
+  ctx.fillStyle = flash ? '#ffffff' : shirt;
+  ctx.fillRect(x - 8, y - 14 - stomp, 16, 16);
+  ctx.fillStyle = flash ? '#ffffff' : skin;
+  ctx.fillRect(x - 7, y - 30 - stomp, 14, 14);
+  if (z.black) {
+    ctx.fillStyle = '#b06cff';
+    for (let e = 0; e < 3; e++) {
+      ctx.fillRect(x - 5 + e * 4, y - 27 - stomp, 2, 2);
+      ctx.fillRect(x - 5 + e * 4, y - 23 - stomp, 2, 2);
+    }
+  } else {
+    ctx.fillStyle = z.sand ? '#4a3b1c' : '#1c3b1c';
+    ctx.fillRect(x - 5, y - 25 - stomp, 3, 3);
+    ctx.fillRect(x + 2, y - 25 - stomp, 3, 3);
+  }
+  ctx.fillStyle = flash ? '#ffffff' : skin;
+  ctx.fillRect(x - 12, y - 12 - stomp, 4, 9);
+  ctx.fillRect(x + 8, y - 12 - stomp, 4, 9);
+}
+
+function drawSkeleton(s, c) {
+  const x = s.x - c.x, y = s.y - c.y;
+  if (x < -40 || y < -60 || x > canvas.width + 40 || y > canvas.height + 60) return;
+  const stomp = Math.abs(Math.sin(elapsed * 8 + s.x)) * 3;
+  const bone = s.hurtFlash > 0 ? '#ff9a9a' : '#e8e8e2';
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.beginPath(); ctx.ellipse(x, y + 8, 10, 5, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = bone;
+  ctx.fillRect(x - 6, y - 14 - stomp, 12, 16);
+  ctx.fillStyle = s.hurtFlash > 0 ? '#e07a7a' : '#b0b0a8';
+  ctx.fillRect(x - 6, y - 10 - stomp, 12, 2);
+  ctx.fillRect(x - 6, y - 5 - stomp, 12, 2);
+  ctx.fillStyle = bone;
+  ctx.fillRect(x - 7, y - 30 - stomp, 14, 14);
+  ctx.fillStyle = '#222';
+  ctx.fillRect(x - 5, y - 25 - stomp, 4, 4);
+  ctx.fillRect(x + 1, y - 25 - stomp, 4, 4);
+  ctx.save();
+  ctx.translate(x + 8 * s.facing, y - 12 - stomp);
+  if (s.facing === -1) ctx.scale(-1, 1);
+  ctx.rotate(-0.35);
+  ctx.fillStyle = '#8a6b3f';
+  ctx.fillRect(-6, -1.5, 30, 3);
+  ctx.fillStyle = '#c8c8c8';
+  ctx.fillRect(24, -3, 8, 6);
+  ctx.restore();
+}
+
+function drawCreeper(cr, c) {
+  const x = cr.x - c.x, y = cr.y - c.y;
+  if (x < -40 || y < -60 || x > canvas.width + 40 || y > canvas.height + 60) return;
+  const lit = cr.fuse > 0;
+  const swell = lit ? 1 + (1.1 - cr.fuse) * 0.25 : 1;
+  const flash = cr.hurtFlash > 0 || (lit && Math.floor(elapsed * 12) % 2 === 0);
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.beginPath(); ctx.ellipse(x, y + 8, 11 * swell, 5 * swell, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = flash ? '#ffffff' : '#3faf3f';
+  ctx.fillRect(x - 8 * swell, y - 16 * swell, 16 * swell, 18 * swell);
+  ctx.fillRect(x - 8 * swell, y - 33 * swell, 16 * swell, 16 * swell);
+  ctx.fillRect(x - 9 * swell, y - 2, 7, 5);
+  ctx.fillRect(x + 2 * swell, y - 2, 7, 5);
+  ctx.fillStyle = '#143814';
+  ctx.fillRect(x - 6 * swell, y - 29 * swell, 4, 4);
+  ctx.fillRect(x + 2 * swell, y - 29 * swell, 4, 4);
+  ctx.fillRect(x - 3 * swell, y - 24 * swell, 6, 4);
+  ctx.fillRect(x - 5 * swell, y - 21 * swell, 4, 5);
+  ctx.fillRect(x + 1 * swell, y - 21 * swell, 4, 5);
 }
 
 function drawPlayer(c) {
