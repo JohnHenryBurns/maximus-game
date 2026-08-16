@@ -49,12 +49,14 @@ let screen = 'menu';
 let lockedTimer = 0, lockedText = '';
 let menuCards = [];
 let ch1Done = localStorage.getItem('robot_ch1') === 'yes';
+let ch2Done = localStorage.getItem('robot_ch2') === 'yes';
 
 const CHAPTERS = [
   { name: 'The Factory', unlocked: true },
-  { name: '???', unlocked: false },
+  { name: 'The Overseer', unlocked: ch1Done },
   { name: '???', unlocked: false },
 ];
+let chapter = 0;
 
 // the story card shown when a chapter begins
 let storyLines = [];
@@ -82,6 +84,15 @@ let wokeTimer = 0;            // the "something else woke up" moment
 let endTimer = 0;             // chapter-complete countdown
 let sparks = [];
 let elapsed = 0;
+
+// THE OVERSEER — a giant with no legs, hanging from a ceiling rail by a
+// great metal bar at its waist. It glides right over everything.
+let overseer = null;
+// the overhead rails it travels on, drawn as ceiling beams
+const RAILS = [
+  { y: 420 },  { y: 900 },  { y: 1380 },
+];
+let grace = 0;                // a moment of safety after it catches you
 
 function buildFactory() {
   blocks = [];
@@ -128,10 +139,25 @@ function buildFactory() {
     }
   }
 
-  leverPulled = false;
-  powered = 0;
+  if (chapter === 1) {
+    // CHAPTER 2: the power is ON... and so is the thing it woke.
+    leverPulled = true;
+    powered = 4;
+    for (const sw of switches) sw.on = true;
+    overseer = {
+      x: 1600, y: 500,
+      caught: 0,             // > 0 while it's holding you in its claw
+      downTimer: 0,          // the powering-down finale
+      swing: 0,
+    };
+  } else {
+    leverPulled = false;
+    powered = 0;
+    overseer = null;
+  }
   wokeTimer = 0;
   endTimer = 0;
+  grace = 0;
   sparks = [];
   player.x = START.x;
   player.y = START.y;
@@ -216,21 +242,41 @@ function startChapter(i) {
     lockedTimer = 2;
     return;
   }
+  chapter = i;
   buildFactory();
-  storyLines = [
-    'CHAPTER 1: THE FACTORY',
-    '',
-    'You wake up on a cold metal floor.',
-    'The dark goes on forever in every direction.',
-    'You do not remember your name.',
-    'You do not remember anything at all.',
-    '',
-    'The only light in the world is the glow of your own eyes.',
-    '',
-    'Somewhere in this factory there is power. Find it.',
-    '',
-    '( press anything to begin )',
-  ];
+  if (i === 0) {
+    storyLines = [
+      'CHAPTER 1: THE FACTORY',
+      '',
+      'You wake up on a cold metal floor.',
+      'The dark goes on forever in every direction.',
+      'You do not remember your name.',
+      'You do not remember anything at all.',
+      '',
+      'The only light in the world is the glow of your own eyes.',
+      '',
+      'Somewhere in this factory there is power. Find it.',
+      '',
+      '( press anything to begin )',
+    ];
+  } else {
+    storyLines = [
+      'CHAPTER 2: THE OVERSEER',
+      '',
+      'The lights are on now. You did that.',
+      'And in the light, you finally see it:',
+      '',
+      'A giant. No legs. Its waist bolted to a great metal bar',
+      'that runs up into the ceiling rails, so it can glide',
+      'anywhere in the factory it wants to go.',
+      '',
+      'Its two red eyes are looking at you.',
+      '',
+      'The power woke it. CUT THE POWER. All four switches. GO.',
+      '',
+      '( press anything to run )',
+    ];
+  }
   screen = 'story';
 }
 
@@ -271,9 +317,10 @@ function update(dt) {
     player.y = Math.max(80, Math.min(WORLD_H - 80, player.y));
   }
 
-  // ---- FLIPPING SWITCHES — just walk into them ----
+  // ---- SWITCHES — chapter 1 turns them ON, chapter 2 turns them OFF ----
   for (const sw of switches) {
-    if (!sw.on && Math.hypot(player.x - sw.x, player.y - sw.y) < 34) {
+    const near = Math.hypot(player.x - sw.x, player.y - sw.y) < 34;
+    if (chapter === 0 && !sw.on && near) {
       sw.on = true;
       powered++;
       for (let i = 0; i < 14; i++) {
@@ -282,17 +329,64 @@ function update(dt) {
           vy: (noise(i * 7.7 + elapsed) - 0.9) * 280,
           life: 0.7, color: i % 2 ? '#ffd23f' : '#7dd3ff' });
       }
+    } else if (chapter === 1 && sw.on && near && overseer && overseer.caught <= 0) {
+      sw.on = false;
+      powered--;
+      for (let i = 0; i < 14; i++) {
+        sparks.push({ x: sw.x, y: sw.y - 14,
+          vx: (noise(i * 3.3 + elapsed) - 0.5) * 320,
+          vy: (noise(i * 7.7 + elapsed) - 0.9) * 280,
+          life: 0.7, color: i % 2 ? '#e8453c' : '#ffd23f' });
+      }
+      if (powered <= 0 && overseer.downTimer <= 0) {
+        // the last switch dies — and so does the giant's power
+        overseer.downTimer = 6;
+        endTimer = 11;
+        ch2Done = true;
+        localStorage.setItem('robot_ch2', 'yes');
+      }
     }
   }
 
-  // ---- THE MASTER LEVER — only answers when all four are on ----
-  if (!leverPulled && powered >= 4 &&
+  // ---- THE OVERSEER — gliding overhead, reaching down ----
+  if (overseer) {
+    const O = overseer;
+    O.swing += dt * 2;
+    if (grace > 0) grace -= dt;
+
+    if (O.caught > 0) {
+      // it has you in its claw, dangling. it is deciding what you are.
+      O.caught -= dt;
+      player.x = O.x;
+      player.y = O.y + 30;
+      if (O.caught <= 0) {
+        // ...and it drops you back where you started. a warning.
+        player.x = START.x;
+        player.y = START.y;
+        grace = 2.5;
+      }
+    } else if (O.downTimer <= 0) {
+      // gliding toward you — power makes it FAST, cut power to slow it
+      const spd = 35 + powered * 48;
+      const d = Math.hypot(player.x - O.x, player.y - O.y);
+      if (d > 4) {
+        O.x += (player.x - O.x) / d * spd * dt;
+        O.y += (player.y - O.y) / d * spd * dt;
+      }
+      // the claw closes
+      if (d < 36 && grace <= 0) O.caught = 1.8;
+    }
+  }
+
+  // ---- THE MASTER LEVER — chapter 1 only, once all four are on ----
+  if (chapter === 0 && !leverPulled && powered >= 4 &&
       Math.hypot(player.x - LEVER.x, player.y - LEVER.y) < 40) {
     leverPulled = true;
     wokeTimer = 5;                            // the factory ROARS to life...
     endTimer = 9;                             // ...and the chapter closes
     ch1Done = true;
     localStorage.setItem('robot_ch1', 'yes');
+    CHAPTERS[1].unlocked = true;              // the Overseer is waiting
     for (let i = 0; i < 30; i++) {
       sparks.push({ x: LEVER.x, y: LEVER.y - 20,
         vx: (noise(i * 3.3 + elapsed) - 0.5) * 420,
@@ -370,13 +464,15 @@ function draw() {
   }
   ctx.globalAlpha = 1;
 
-  // ---- THE DARK — pushed back only by eye-glow, lamps, and progress ----
-  if (!powerOn) {
+  // ---- THE DARK — chapter 1: full dark until the lever. chapter 2:
+  // every switch you CUT drags the factory back toward blackness. ----
+  const darkAmt = chapter === 0 ? (powerOn ? 0 : 1) : (4 - powered) / 4;
+  if (darkAmt > 0) {
     const px = player.x - c.x, py = player.y - c.y;
     const night = ctx.createRadialGradient(px, py - 12, 30, px, py - 12, 210);
     night.addColorStop(0, 'rgba(1, 2, 5, 0)');
-    night.addColorStop(0.55, 'rgba(1, 2, 5, 0.6)');
-    night.addColorStop(1, 'rgba(1, 2, 5, 0.95)');
+    night.addColorStop(0.55, `rgba(1, 2, 5, ${0.6 * darkAmt})`);
+    night.addColorStop(1, `rgba(1, 2, 5, ${0.95 * darkAmt})`);
     ctx.fillStyle = night;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
@@ -391,15 +487,17 @@ function draw() {
       ctx.fillStyle = g;
       ctx.fillRect(lx - 150, ly - 150, 300, 300);
     }
-    // switches beckon faintly through the dark
+    // switches beckon through the dark — your targets, either chapter
     for (const sw of switches) {
-      if (sw.on) continue;
+      if (chapter === 0 ? sw.on : !sw.on) continue;
       const sx = sw.x - c.x, sy = sw.y - c.y;
-      ctx.fillStyle = `rgba(255, 80, 60, ${0.4 + Math.sin(elapsed * 4 + sw.x) * 0.3})`;
+      ctx.fillStyle = chapter === 0
+        ? `rgba(255, 80, 60, ${0.4 + Math.sin(elapsed * 4 + sw.x) * 0.3})`
+        : `rgba(125, 223, 143, ${0.4 + Math.sin(elapsed * 4 + sw.x) * 0.3})`;
       ctx.fillRect(sx - 2, sy - 22, 4, 4);
     }
     // the lever glows when it's ready for you
-    if (powered >= 4) {
+    if (chapter === 0 && powered >= 4) {
       const lx = LEVER.x - c.x, ly = LEVER.y - c.y;
       const g = ctx.createRadialGradient(lx, ly, 5, lx, ly, 180);
       g.addColorStop(0, 'rgba(125, 211, 255, 0.4)');
@@ -409,15 +507,39 @@ function draw() {
     }
   }
 
+  // ---- THE CEILING RAILS, and the giant that rides them (chapter 2) ----
+  if (chapter === 1) {
+    for (const r of RAILS) {
+      const ry = r.y - c.y;
+      if (ry < -20 || ry > canvas.height + 20) continue;
+      ctx.fillStyle = 'rgba(8, 10, 14, 0.5)';        // the beam's shadow-presence
+      ctx.fillRect(0, ry - 10, canvas.width, 20);
+      ctx.fillStyle = 'rgba(70, 76, 90, 0.55)';      // the rail itself
+      ctx.fillRect(0, ry - 2, canvas.width, 4);
+    }
+    if (overseer) drawOverseer(c);
+  }
+
   // ---- HUD ----
   ctx.textAlign = 'left';
   ctx.fillStyle = '#7dd3ff';
   ctx.font = 'bold 18px monospace';
   ctx.fillText('UNIT-??? ', 14, 30);
-  ctx.fillStyle = powered >= 4 ? '#7ddf8f' : '#ffd23f';
-  ctx.fillText(powered >= 4 && !leverPulled ? 'POWER 4/4 — find the MASTER LEVER'
-             : leverPulled ? 'POWER ONLINE'
-             : `POWER ${powered}/4`, 130, 30);
+  ctx.fillStyle = chapter === 1 ? (powered === 0 ? '#7ddf8f' : '#ff6b5e')
+                : powered >= 4 ? '#7ddf8f' : '#ffd23f';
+  ctx.fillText(chapter === 1
+      ? (powered === 0 ? 'POWER OFFLINE' : `CUT THE POWER — ${powered}/4 STILL ON`)
+      : powered >= 4 && !leverPulled ? 'POWER 4/4 — find the MASTER LEVER'
+      : leverPulled ? 'POWER ONLINE'
+      : `POWER ${powered}/4`, 130, 30);
+
+  // being carried by a giant claw deserves a caption
+  if (overseer && overseer.caught > 0) {
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#ff6b5e';
+    ctx.font = 'bold 26px monospace';
+    ctx.fillText('IT CAUGHT YOU!!', canvas.width / 2, canvas.height / 2 - 110);
+  }
 
   if (wokeTimer > 0 && wokeTimer < 4) {
     // ...the lights come up, and the story lands its first twist
@@ -430,17 +552,101 @@ function draw() {
     ctx.fillText('Far across the factory, two red eyes switch on... and turn toward you.',
                  canvas.width / 2, canvas.height / 2 - 58);
   }
+  // the Overseer's dying words, as its eyes fade (chapter 2 ending)
+  if (chapter === 1 && endTimer > 4 && endTimer < 9 && overseer && overseer.downTimer > 0) {
+    ctx.textAlign = 'center';
+    const flick = Math.random() < 0.8 ? 1 : 0.2;    // its screen is failing
+    ctx.fillStyle = `rgba(255, 80, 60, ${flick * Math.min(1, (9 - endTimer))})`;
+    ctx.font = 'bold 28px monospace';
+    ctx.fillText('. . . UNIT-13 . . . ?', canvas.width / 2, canvas.height / 2 - 100);
+  }
+
   if (endTimer > 0 && endTimer < 3) {
     ctx.fillStyle = `rgba(0, 0, 0, ${Math.min(0.8, 3 - endTimer)})`;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.textAlign = 'center';
     ctx.fillStyle = '#ffd23f';
     ctx.font = 'bold 30px monospace';
-    ctx.fillText('CHAPTER 1 COMPLETE', canvas.width / 2, canvas.height / 2 - 10);
+    ctx.fillText(chapter === 1 ? 'CHAPTER 2 COMPLETE' : 'CHAPTER 1 COMPLETE',
+                 canvas.width / 2, canvas.height / 2 - 10);
     ctx.fillStyle = '#9fb4ff';
     ctx.font = '16px monospace';
-    ctx.fillText('Chapter 2 is unwritten... what happens next is up to the author.',
-                 canvas.width / 2, canvas.height / 2 + 26);
+    if (chapter === 1) {
+      ctx.fillText('As its eyes went dark, it said a name. YOUR name. It KNEW you.',
+                   canvas.width / 2, canvas.height / 2 + 26);
+      ctx.fillText('Chapter 3 is unwritten... UNIT-13.',
+                   canvas.width / 2, canvas.height / 2 + 50);
+    } else {
+      ctx.fillText('Chapter 2 is unlocked... the red eyes are waiting.',
+                   canvas.width / 2, canvas.height / 2 + 26);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------
+// THE OVERSEER — a giant with no legs, riding the ceiling on a bar
+// ---------------------------------------------------------------------
+function drawOverseer(c) {
+  const O = overseer;
+  // clamp its bar to the nearest ceiling rail
+  let rail = RAILS[0];
+  for (const r of RAILS) if (Math.abs(r.y - O.y) < Math.abs(rail.y - O.y)) rail = r;
+  const x = O.x - c.x, y = O.y - c.y, ry = rail.y - c.y;
+  const sway = Math.sin(O.swing) * 4;
+  // eyes fade out during the power-down ending
+  const dying = O.downTimer > 0;
+  const eyeGlow = dying ? Math.max(0, (endTimer - 5) / 6) : 1;
+
+  // its shadow, cast wide across the floor
+  ctx.fillStyle = 'rgba(0,0,0,0.4)';
+  ctx.beginPath(); ctx.ellipse(x, y + 55, 70, 18, 0, 0, Math.PI * 2); ctx.fill();
+
+  // the trolley gripping the rail, and the great bar down to its waist
+  ctx.fillStyle = '#20242c';
+  ctx.fillRect(x - 22, ry - 12, 44, 24);
+  ctx.fillStyle = '#454c5a';
+  ctx.fillRect(x - 8 + sway * 0.3, ry, 16, Math.max(0, y - 55 - ry));
+
+  // THE GIANT — all torso, no legs. the bar IS its legs.
+  ctx.save();
+  ctx.translate(x + sway, y);
+  ctx.fillStyle = '#39404e';                       // waist coupling
+  ctx.fillRect(-20, -60, 40, 18);
+  ctx.fillStyle = '#4a5364';                       // the huge chest
+  ctx.fillRect(-45, -150, 90, 95);
+  ctx.fillStyle = '#5b6578';                       // chest plating lines
+  ctx.fillRect(-45, -150, 90, 14);
+  ctx.fillRect(-45, -105, 90, 8);
+  ctx.fillStyle = dying ? '#3a2a2a' : '#e8453c';   // warning stripe
+  ctx.fillRect(-45, -78, 90, 6);
+  // shoulders and hanging arms with claws
+  ctx.fillStyle = '#39404e';
+  ctx.fillRect(-70, -150, 25, 40);
+  ctx.fillRect(45, -150, 25, 40);
+  ctx.fillStyle = '#4a5364';
+  ctx.fillRect(-66, -110, 16, 70 + sway * 2);      // arms sway as it glides
+  ctx.fillRect(50, -110, 16, 70 - sway * 2);
+  ctx.fillStyle = '#20242c';                       // the claws
+  ctx.fillRect(-70, -40 + sway * 2, 24, 14);
+  ctx.fillRect(46, -40 - sway * 2, 24, 14);
+  // the head
+  ctx.fillStyle = '#39404e';
+  ctx.fillRect(-28, -185, 56, 38);
+  ctx.fillStyle = '#2c313c';
+  ctx.fillRect(-28, -185, 56, 8);
+  // TWO GLOWING RED EYES
+  ctx.fillStyle = `rgba(255, 46, 31, ${eyeGlow})`;
+  ctx.fillRect(-18, -172, 12, 8);
+  ctx.fillRect(6, -172, 12, 8);
+  ctx.restore();
+
+  // eye-glow washing the floor in red, while it still has power
+  if (eyeGlow > 0.05) {
+    const g = ctx.createRadialGradient(x, y - 100, 10, x, y - 40, 190);
+    g.addColorStop(0, `rgba(255, 46, 31, ${0.22 * eyeGlow})`);
+    g.addColorStop(1, 'rgba(255, 46, 31, 0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(x - 190, y - 230, 380, 380);
   }
 }
 
