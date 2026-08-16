@@ -509,6 +509,8 @@ let tidied = 0;
 let footprints = [];       // the brown trail of somebody's worst afternoon
 let piesSteppedIn = 0;     // the town keeps count. the town never forgets.
 let poopPeople = [];       // born when a pie gets stepped on. they mean no harm.
+const POOP_ODDS = 0.05;    // only about 1 squished pie in 20 brings one to life
+const POOP_MAX = 3;        // and never more than a handful in town at once
 const CLEAN_TIME = 1.5;       // seconds of sweeping per piece of mess
 const MAX_LITTER = 260;       // stop the whole town turning into a landfill
 
@@ -2489,8 +2491,10 @@ function update(dt) {
           p.ick = 1.2;                        // the full-body EWWW
           p.ickCool = elapsed + 5;            // one catastrophe per shoe, please
           p.trackT = 2.6;                     // and now they're tracking it around
-          // ...and from the squished pie, SOMETHING RISES
-          if (poopPeople.length < 12) {
+          // ...and just occasionally, from the squished pie, SOMETHING RISES.
+          // This is meant to be a RARE and special horror, not an everyday
+          // event — most squished pies are simply squished pies.
+          if (poopPeople.length < POOP_MAX && Math.random() < POOP_ODDS) {
             poopPeople.push({ kind: 'poop', x: L.x, y: L.y, angle: Math.random() * 6.28,
                               walk: Math.random() * 6.28, born: elapsed });
             setStatus('THE PIE GOT UP. A poop person is born!! (' + (poopPeople.length) + ' in town)', '#c98a3d');
