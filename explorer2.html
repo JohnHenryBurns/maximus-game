@@ -140,6 +140,46 @@ const T2_PATH = [
 ];
 const T2_CHAMBER = { x: 1500, y: 240 };   // where the sixteen eyes wait
 
+// ---------------------------------------------------------------------
+// LEVEL 3: BEHIND THE DOOR... — winding passageways that split and
+// rejoin, and at the very end, the thing that has been roaring since
+// the first game. It is asleep. The roars were SNORES.
+// ---------------------------------------------------------------------
+const T3_PATHS = [
+  [ // the main way
+    { x: 1500, y: 2850 }, { x: 1500, y: 2600 }, { x: 1280, y: 2500 },
+    { x: 1300, y: 2250 }, { x: 1550, y: 2150 }, { x: 1800, y: 2230 },
+    { x: 2020, y: 2120 }, { x: 2050, y: 1900 }, { x: 1850, y: 1760 },
+    { x: 1600, y: 1830 }, { x: 1350, y: 1760 }, { x: 1120, y: 1830 },
+    { x: 900,  y: 1720 }, { x: 870,  y: 1490 }, { x: 1060, y: 1360 },
+    { x: 1320, y: 1420 }, { x: 1560, y: 1350 }, { x: 1800, y: 1420 },
+    { x: 2010, y: 1300 }, { x: 2040, y: 1080 }, { x: 1860, y: 950 },
+    { x: 1600, y: 1010 }, { x: 1340, y: 950 },  { x: 1100, y: 1010 },
+    { x: 920,  y: 880 },  { x: 950,  y: 660 },  { x: 1150, y: 540 },
+    { x: 1400, y: 600 },  { x: 1500, y: 430 },  { x: 1500, y: 330 },
+  ],
+  [ // west loop
+    { x: 1300, y: 2250 }, { x: 1050, y: 2150 }, { x: 950, y: 1930 }, { x: 900, y: 1720 },
+  ],
+  [ // east loop
+    { x: 1800, y: 2230 }, { x: 2100, y: 2350 }, { x: 2300, y: 2150 },
+    { x: 2200, y: 1900 }, { x: 2050, y: 1900 },
+  ],
+  [ // a middle shortcut
+    { x: 1560, y: 1350 }, { x: 1560, y: 1100 }, { x: 1600, y: 1010 },
+  ],
+  [ // west upper passage
+    { x: 1060, y: 1360 }, { x: 800, y: 1200 }, { x: 850, y: 950 }, { x: 920, y: 880 },
+  ],
+];
+const T3_CHAMBER = { x: 1500, y: 260 };   // where it sleeps
+
+function distToAnyPath(x, y, paths) {
+  let best = 999999;
+  for (const p of paths) best = Math.min(best, distToPath(x, y, p));
+  return best;
+}
+
 function distToPath(x, y, path) {
   let best = 999999;
   for (let i = 0; i < path.length - 1; i++) {
@@ -321,6 +361,7 @@ function buildCavern() {
   }
 
   boss = null;                       // no sixteen-eyed anything in level 1
+  sleeper = null;
   emeralds = [];
   particles = [];
   emeraldCount = 0;
@@ -338,14 +379,9 @@ function startLevel(i) {
     lockedTimer = 2;
     return;
   }
-  if (i === 2) {
-    // the level exists... but what's IN it hasn't been decided yet
-    lockedText = "Behind the Door is still being built — tell me what the ROARING THING is!";
-    lockedTimer = 3;
-    return;
-  }
   currentLevel = i;
-  if (i === 1) buildTemple2();
+  if (i === 2) buildFinale();
+  else if (i === 1) buildTemple2();
   else buildCavern();
   roarTimer = 8;
   doorDone = false;
@@ -359,8 +395,14 @@ function startLevel(i) {
 // winds and winds and WINDS, walled in abyssal stone, lit by crystals,
 // with every creature waiting... and sixteen eyes at the end of it.
 // ---------------------------------------------------------------------
-let boss = null;          // THE ABYSSAL MULTI-TASKER
+let boss = null;          // THE ABYSSAL MULTI-TASKER (level 2)
 let bossBanner = 0;
+
+// LEVEL 3's sleeper — the thing at the end of the abyss
+let sleeper = null;
+let glitchTimer = 0;      // while > 0, reality is having a bad moment
+let glitchWait = 8;       // seconds until reality's next bad moment
+let hasEnd = localStorage.getItem('explorer2_end') === 'yes';
 
 function buildTemple2() {
   worldW = 3000; worldH = 3000;
@@ -458,6 +500,123 @@ function buildTemple2() {
     teleportTimer: 4.5, summonTimer: 7,
     lastHitSwing: 0, hurtFlash: 0,
   };
+  sleeper = null;
+
+  emeralds = [];
+  particles = [];
+  emeraldCount = 0;
+  player.x = START.x;
+  player.y = START.y;
+  player.hp = player.maxHp;
+  player.armor = armorMax();
+}
+
+// spots along the finale's passage network
+function t3Spot(seed) {
+  for (let tries = 0; tries < 60; tries++) {
+    const x = noise(seed * 19.3 + tries * 3.7) * worldW;
+    const y = noise(seed * 37.7 + tries * 7.3) * worldH;
+    if (distToAnyPath(x, y, T3_PATHS) > 65) continue;
+    if (Math.hypot(x - START.x, y - START.y) < 350) continue;
+    if (Math.hypot(x - T3_CHAMBER.x, y - T3_CHAMBER.y) < 300) continue;
+    if (blocked(x, y, 12)) continue;
+    return { x, y };
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------
+// BUILD THE FINALE — Behind the Door...
+// ---------------------------------------------------------------------
+function buildFinale() {
+  worldW = 3000; worldH = 3000;
+  START = { x: T3_PATHS[0][0].x, y: T3_PATHS[0][0].y - 40 };
+
+  // walls hug every winding passage — the whole network is sealed
+  rocks = [];
+  for (let gx = 40; gx < worldW - 40; gx += 34) {
+    for (let gy = 40; gy < worldH - 40; gy += 34) {
+      const d = distToAnyPath(gx, gy, T3_PATHS);
+      if (d < 100 || d > 140) continue;
+      if (Math.hypot(gx - T3_CHAMBER.x, gy - T3_CHAMBER.y) < 200) continue;
+      rocks.push({
+        x: gx + (noise(gx * 1.3 + gy) - 0.5) * 8,
+        y: gy + (noise(gy * 2.7 + gx) - 0.5) * 8,
+        size: 1, wall: true,
+      });
+    }
+  }
+  // its chamber: one ring, one doorway
+  for (let ang = 0; ang < Math.PI * 2; ang += 0.26) {
+    if (Math.abs(ang - Math.PI / 2) < 0.5) continue;
+    const wx = T3_CHAMBER.x + Math.cos(ang) * 210;
+    const wy = T3_CHAMBER.y + Math.sin(ang) * 210;
+    if (wx < 60 || wy < 60 || wx > worldW - 60 || wy > worldH - 60) continue;
+    rocks.push({ x: wx, y: wy, size: 1, wall: true });
+  }
+
+  // crystals light the passages — and near ITS chamber, they turn RED
+  crystals = [];
+  for (const path of T3_PATHS) {
+    for (let i = 0; i < path.length - 1; i += 2) {
+      const a = path[i], b = path[i + 1];
+      const nearIt = Math.hypot(a.x - T3_CHAMBER.x, a.y - T3_CHAMBER.y) < 700;
+      crystals.push({ x: (a.x + b.x) / 2 + 62, y: (a.y + b.y) / 2,
+                      size: 0.8 + noise(i * 5.5) * 0.4,
+                      hue: nearIt ? 'red' : noise(i * 9.9) < 0.6 ? 'violet' : 'cyan' });
+      crystals.push({ x: (a.x + b.x) / 2 - 62, y: (a.y + b.y) / 2,
+                      size: 0.8 + noise(i * 7.7) * 0.4,
+                      hue: nearIt ? 'red' : noise(i * 3.3) < 0.6 ? 'cyan' : 'violet' });
+    }
+  }
+
+  mushrooms = [];
+  for (let i = 0; i < 500; i++) {
+    const x = noise(i * 31.7 + 29) * worldW;
+    const y = noise(i * 77.1 + 29) * worldH;
+    if (distToAnyPath(x, y, T3_PATHS) > 90) continue;
+    mushrooms.push({ x, y, glow: noise(i * 3.3) });
+  }
+
+  // ---- EVERY CREATURE, EVERYWHERE ----
+  bats = []; crawlers = []; zombies = []; skeletons = []; creepers = [];
+  for (let i = 0; i < 12; i++) { const p = t3Spot(i + 301);
+    if (p) bats.push({ x: p.x, y: p.y, hp: 1, wander: noise(i) * 6.28,
+                       flap: noise(i * 2) * 6.28, lastHitSwing: 0, hurtFlash: 0 }); }
+  for (let i = 0; i < 8; i++) { const p = t3Spot(i + 311);
+    if (p) crawlers.push({ x: p.x, y: p.y, hp: 3, wander: noise(i * 1.7) * 6.28,
+                           lastHitSwing: 0, hurtFlash: 0 }); }
+  for (let i = 0; i < 4; i++) { const p = t3Spot(i + 321);
+    if (p) zombies.push({ x: p.x, y: p.y, hp: 2, wander: noise(i) * 6.28,
+                          lastHitSwing: 0, hurtFlash: 0 }); }
+  for (let i = 0; i < 4; i++) { const p = t3Spot(i + 331);
+    if (p) zombies.push({ x: p.x, y: p.y, sand: true, hp: 3, wander: noise(i) * 6.28,
+                          lastHitSwing: 0, hurtFlash: 0 }); }
+  for (let i = 0; i < 4; i++) { const p = t3Spot(i + 341);
+    if (p) zombies.push({ x: p.x, y: p.y, black: true, hp: 3, speed: 95,
+                          wander: noise(i) * 6.28, lastHitSwing: 0, hurtFlash: 0 }); }
+  for (let i = 0; i < 3; i++) { const p = t3Spot(i + 351);
+    if (p) zombies.push({ x: p.x, y: p.y, black: true, giant: true, hp: 6, speed: 60,
+                          wander: noise(i) * 6.28, lastHitSwing: 0, hurtFlash: 0 }); }
+  for (let i = 0; i < 6; i++) { const p = t3Spot(i + 361);
+    if (p) skeletons.push({ x: p.x, y: p.y, hp: 2, facing: 1,
+                            wander: noise(i * 1.7) * 6.28, lastHitSwing: 0, hurtFlash: 0 }); }
+  for (let i = 0; i < 8; i++) { const p = t3Spot(i + 371);
+    if (p) creepers.push({ x: p.x, y: p.y, hp: 2, fuse: 0,
+                           wander: noise(i) * 6.28, lastHitSwing: 0, hurtFlash: 0 }); }
+
+  // AND THE THING ITSELF — asleep in its chamber, snoring the roars
+  // that have echoed through two whole games
+  sleeper = {
+    x: T3_CHAMBER.x, y: T3_CHAMBER.y,
+    hp: 60, state: 'asleep',        // 'asleep' -> 'waking' -> 'awake'
+    wakeHits: 0, wakeTimer: 0,
+    blinkTimer: 3, summonTimer: 8,
+    lastHitSwing: 0, hurtFlash: 0,
+  };
+  boss = null;
+  glitchTimer = 0;
+  glitchWait = 8;
 
   emeralds = [];
   particles = [];
@@ -913,6 +1072,121 @@ function update(dt) {
     if (bossBanner <= 0) screen = 'menu';   // GOING INSANE: beaten
   }
 
+  // ---- REALITY GLITCHES (level 3) — the closer to IT, the worse ----
+  if (currentLevel === 2) {
+    if (glitchTimer > 0) glitchTimer -= dt;
+    glitchWait -= dt;
+    if (glitchWait <= 0) {
+      const fighting = sleeper && sleeper.state === 'awake';
+      glitchWait = fighting ? 3 + noise(elapsed * 5.1) * 3
+                            : 6 + noise(elapsed * 5.1) * 8;
+      glitchTimer = 1;                       // one full second of static
+    }
+  }
+
+  // ---- THE THING AT THE END OF THE ABYSS ----
+  if (sleeper) {
+    const S = sleeper;
+    if (S.hurtFlash > 0) S.hurtFlash -= dt;
+    const d = Math.hypot(player.x - S.x, player.y - S.y);
+
+    if (S.state === 'asleep') {
+      // it sleeps. it snores. it has always been snoring.
+      // hitting it — ON PURPOSE — is the only way to wake it.
+      if (player.attackTime > 0 && S.lastHitSwing !== player.swingId &&
+          d < 85 && (S.x - player.x) * player.facing > -8) {
+        S.lastHitSwing = player.swingId;
+        S.wakeHits++;
+        S.hurtFlash = 0.2;
+        glitchTimer = 0.6;                   // reality flinches with every hit
+        roarShake = 1.2;
+        if (S.wakeHits >= 5) {
+          S.state = 'waking';
+          S.wakeTimer = 2.4;
+          glitchTimer = 2.4;                 // reality has a full breakdown
+          roarShake = 4;
+          deepRoar();
+        }
+      }
+    } else if (S.state === 'waking') {
+      S.wakeTimer -= dt;
+      if (S.wakeTimer <= 0) S.state = 'awake';
+    } else {
+      // AWAKE. and it remembers every single snore you interrupted.
+      if (player.deathTimer <= 0) {
+        const spd = 95 + Math.sin(elapsed * 2.4) * 40;
+        const sdx = (player.x - S.x) / Math.max(1, d);
+        const sdy = (player.y - S.y) / Math.max(1, d);
+        if (!blocked(S.x + sdx * spd * dt, S.y, 16)) S.x += sdx * spd * dt;
+        if (!blocked(S.x, S.y + sdy * spd * dt, 16)) S.y += sdy * spd * dt;
+
+        // GLITCH-BLINK: it doesn't teleport. it just... stops being
+        // where it was, in a burst of static.
+        S.blinkTimer -= dt;
+        if (S.blinkTimer <= 0) {
+          S.blinkTimer = 3;
+          glitchTimer = Math.max(glitchTimer, 0.4);
+          for (let attempt = 0; attempt < 10; attempt++) {
+            const ang = noise(elapsed * 7.7 + attempt) * 6.28;
+            const nx = player.x + Math.cos(ang) * 170;
+            const ny = player.y + Math.sin(ang) * 170;
+            if (!blocked(nx, ny, 16)) { S.x = nx; S.y = ny; break; }
+          }
+        }
+
+        // and it still multi-tasks: two summons at a time
+        S.summonTimer -= dt;
+        if (S.summonTimer <= 0) {
+          S.summonTimer = 8;
+          for (let s = 0; s < 2; s++) {
+            const pick = Math.floor(noise(elapsed * 9.9 + s * 3.7) * 7);
+            const sx = S.x + (noise(elapsed + s) - 0.5) * 180;
+            const sy = S.y + (noise(elapsed * 2.2 + s) - 0.5) * 180;
+            if (pick === 0 && bats.length < 18) {
+              bats.push({ x: sx, y: sy, hp: 1, wander: 0, flap: 0, lastHitSwing: 0, hurtFlash: 0 });
+            } else if (pick === 1 && crawlers.length < 12) {
+              crawlers.push({ x: sx, y: sy, hp: 3, wander: 0, lastHitSwing: 0, hurtFlash: 0 });
+            } else if (pick <= 3 && zombies.length < 18) {
+              zombies.push({ x: sx, y: sy, black: pick === 3, hp: pick === 3 ? 3 : 2,
+                             speed: pick === 3 ? 95 : undefined,
+                             wander: 0, lastHitSwing: 0, hurtFlash: 0 });
+            } else if (pick === 4 && skeletons.length < 10) {
+              skeletons.push({ x: sx, y: sy, hp: 2, facing: 1, wander: 0, lastHitSwing: 0, hurtFlash: 0 });
+            } else if (creepers.length < 10) {
+              creepers.push({ x: sx, y: sy, hp: 2, fuse: 0, wander: 0, lastHitSwing: 0, hurtFlash: 0 });
+            }
+          }
+        }
+
+        if (d < 60) hurtPlayer(S.x, S.y, 90);
+      }
+
+      // the last swings of two whole games
+      if (player.attackTime > 0 && S.lastHitSwing !== player.swingId &&
+          d < 85 && (S.x - player.x) * player.facing > -8) {
+        S.lastHitSwing = player.swingId;
+        S.hp -= swordDamage();
+        S.hurtFlash = 0.15;
+        if (S.hp <= 0) {
+          for (let i = 0; i < 60; i++) {
+            particles.push({ x: S.x, y: S.y - 14,
+              vx: (noise(i * 3.3 + elapsed) - 0.5) * 460,
+              vy: (noise(i * 7.7 + elapsed) - 0.9) * 420, life: 1,
+              color: i % 3 === 0 ? '#1a1a20' : i % 3 === 1 ? '#ff4757' : '#ffffff' });
+          }
+          for (let e = 0; e < 16; e++) {
+            emeralds.push({ x: S.x + (e - 8) * 12, y: S.y, born: elapsed });
+          }
+          sleeper = null;
+          bossBanner = 12;
+          glitchTimer = 3;
+          hasEnd = true;
+          localStorage.setItem('explorer2_end', 'yes');
+        }
+      }
+    }
+  }
+
   // respawn back at the drop point
   if (player.deathTimer > 0) {
     player.deathTimer -= dt;
@@ -920,6 +1194,15 @@ function update(dt) {
       player.x = START.x; player.y = START.y;
       player.hp = player.maxHp;
       player.armor = armorMax();
+      // the thing goes back to sleep. it can wait. it's very good at waiting.
+      if (sleeper) {
+        sleeper.x = T3_CHAMBER.x; sleeper.y = T3_CHAMBER.y;
+        sleeper.state = 'asleep'; sleeper.wakeHits = 0; sleeper.hp = 60;
+      }
+      if (boss) {
+        boss.x = T2_CHAMBER.x; boss.y = T2_CHAMBER.y;
+        boss.active = false; boss.hp = 50;
+      }
     }
   }
 
@@ -966,21 +1249,25 @@ function draw() {
   ctx.fillStyle = '#17161f';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // level 2: the temple corridor's ancient paved floor
-  if (currentLevel === 1) {
+  // levels 2 and 3: ancient paved passage floors
+  if (currentLevel === 1 || currentLevel === 2) {
+    const walkways = currentLevel === 1 ? [T2_PATH] : T3_PATHS;
+    const chamber = currentLevel === 1 ? T2_CHAMBER : T3_CHAMBER;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    ctx.beginPath();
-    ctx.moveTo(T2_PATH[0].x - c.x, T2_PATH[0].y - c.y);
-    for (const p of T2_PATH) ctx.lineTo(p.x - c.x, p.y - c.y);
-    ctx.strokeStyle = '#221a2e';
-    ctx.lineWidth = 175;
-    ctx.stroke();
+    for (const wp of walkways) {
+      ctx.beginPath();
+      ctx.moveTo(wp[0].x - c.x, wp[0].y - c.y);
+      for (const p of wp) ctx.lineTo(p.x - c.x, p.y - c.y);
+      ctx.strokeStyle = currentLevel === 2 ? '#241620' : '#221a2e';
+      ctx.lineWidth = 175;
+      ctx.stroke();
+    }
     // the boss chamber floor, and rings worn into the stone
-    const chx = T2_CHAMBER.x - c.x, chy = T2_CHAMBER.y - c.y;
-    ctx.fillStyle = '#221a2e';
+    const chx = chamber.x - c.x, chy = chamber.y - c.y;
+    ctx.fillStyle = currentLevel === 2 ? '#241620' : '#221a2e';
     ctx.beginPath(); ctx.arc(chx, chy, 200, 0, Math.PI * 2); ctx.fill();
-    ctx.strokeStyle = '#322645';
+    ctx.strokeStyle = currentLevel === 2 ? '#3d2030' : '#322645';
     ctx.lineWidth = 5;
     ctx.beginPath(); ctx.arc(chx, chy, 170, 0, Math.PI * 2); ctx.stroke();
     ctx.beginPath(); ctx.arc(chx, chy, 90, 0, Math.PI * 2); ctx.stroke();
@@ -1046,6 +1333,9 @@ function draw() {
   // THE ABYSSAL MULTI-TASKER, in all its sixteen-eyed glory (level 2)
   if (boss) drawBoss(c);
 
+  // THE THING AT THE END OF THE ABYSS (level 3) — sleeping, or not
+  if (sleeper) drawSleeper(c);
+
   // ---- THE DARK — heavier than any night above ----
   const px = player.x - c.x, py = player.y - c.y;
   const night = ctx.createRadialGradient(px, py - 14, 35, px, py - 14, 230);
@@ -1059,7 +1349,8 @@ function draw() {
   for (const cr of crystals) {
     const gx = cr.x - c.x, gy = cr.y - c.y - 14;
     if (gx < -150 || gy < -150 || gx > canvas.width + 150 || gy > canvas.height + 150) continue;
-    const col = cr.hue === 'cyan' ? '110, 220, 240' : '180, 130, 255';
+    const col = cr.hue === 'cyan' ? '110, 220, 240'
+              : cr.hue === 'red' ? '255, 90, 60' : '180, 130, 255';
     const g = ctx.createRadialGradient(gx, gy, 4, gx, gy, 90 * cr.size);
     g.addColorStop(0, `rgba(${col}, 0.30)`);
     g.addColorStop(1, `rgba(${col}, 0)`);
@@ -1119,8 +1410,40 @@ function draw() {
       }
     }
   }
+  // and when IT is awake, two red suns burn through everything (level 3)
+  if (sleeper && sleeper.state === 'awake') {
+    const sx = sleeper.x - c.x, sy = sleeper.y - c.y;
+    for (const side of [-1, 1]) {
+      const g = ctx.createRadialGradient(sx + side * 22, sy - 16, 3, sx + side * 22, sy - 16, 60);
+      g.addColorStop(0, 'rgba(255, 46, 31, 0.6)');
+      g.addColorStop(1, 'rgba(255, 46, 31, 0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(sx + side * 22 - 60, sy - 76, 120, 120);
+    }
+  }
 
   drawHUD();
+
+  // ---- THE GLITCH — for one second, reality forgets how to draw itself.
+  // We slice the finished screen into strips and shove them sideways,
+  // ghost the whole picture, and sprinkle static over everything. ----
+  if (glitchTimer > 0 && currentLevel === 2) {
+    const strength = Math.min(1, glitchTimer * 2);
+    for (let i = 0; i < 10; i++) {
+      const sy = Math.random() * canvas.height;
+      const h = 8 + Math.random() * 34;
+      const off = (Math.random() - 0.5) * 46 * strength;
+      ctx.drawImage(canvas, 0, sy, canvas.width, h, off, sy, canvas.width, h);
+    }
+    ctx.globalAlpha = 0.15 * strength;
+    ctx.drawImage(canvas, (Math.random() - 0.5) * 14, (Math.random() - 0.5) * 8);
+    ctx.globalAlpha = 1;
+    for (let i = 0; i < 140 * strength; i++) {
+      ctx.fillStyle = Math.random() < 0.5 ? 'rgba(255,255,255,0.25)' : 'rgba(255,60,60,0.2)';
+      ctx.fillRect(Math.random() * canvas.width, Math.random() * canvas.height,
+                   2 + Math.random() * 4, 2 + Math.random() * 3);
+    }
+  }
 }
 
 function drawRock(r, c) {
@@ -1160,8 +1483,8 @@ function drawCrystal(cr, c) {
   const x = cr.x - c.x, y = cr.y - c.y;
   if (x < -60 || y < -90 || x > canvas.width + 60 || y > canvas.height + 90) return;
   const s = cr.size;
-  const main = cr.hue === 'cyan' ? '#6edcf0' : '#b482ff';
-  const lite = cr.hue === 'cyan' ? '#c8f4fa' : '#dcc8ff';
+  const main = cr.hue === 'cyan' ? '#6edcf0' : cr.hue === 'red' ? '#ff5f4a' : '#b482ff';
+  const lite = cr.hue === 'cyan' ? '#c8f4fa' : cr.hue === 'red' ? '#ffb0a0' : '#dcc8ff';
   ctx.fillStyle = main;
   ctx.beginPath();
   ctx.moveTo(x - 10 * s, y);
@@ -1471,6 +1794,108 @@ function drawBoss(c) {
   }
 }
 
+// THE THING — a vast glitchy multi-tasker. Its whole body jitters like a
+// broken TV signal, because it is older than the rules of this place.
+function drawSleeper(c) {
+  const S = sleeper;
+  // the fuzz: its body never draws in quite the same place twice
+  const jx = (Math.random() - 0.5) * (S.state === 'awake' ? 6 : 2);
+  const jy = (Math.random() - 0.5) * (S.state === 'awake' ? 6 : 2);
+  const bx = S.x - c.x + jx, by = S.y - c.y + jy;
+  if (bx < -200 || by < -200 || bx > canvas.width + 200 || by > canvas.height + 200) return;
+  const flash = S.hurtFlash > 0;
+  const wob = elapsed * (S.state === 'asleep' ? 0.9 : 2.4);
+  const breathe = S.state === 'asleep' ? Math.sin(elapsed * 0.9) * 5 : 0;
+
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.beginPath(); ctx.ellipse(bx, by + 50, 80, 20, 0, 0, Math.PI * 2); ctx.fill();
+
+  // eight arms — folded and still in sleep, GRASPING when awake
+  ctx.strokeStyle = flash ? '#ffffff' : '#0c0a12';
+  ctx.lineWidth = 7;
+  ctx.lineCap = 'round';
+  for (let t = 0; t < 8; t++) {
+    const baseAng = (t / 8) * Math.PI * 2 + (S.state === 'awake' ? Math.sin(wob + t) * 0.2 : 0);
+    const reach = S.state === 'awake' ? 3 : 1.6;
+    ctx.beginPath();
+    let tx = bx + Math.cos(baseAng) * 36, ty = by + Math.sin(baseAng) * 28;
+    ctx.moveTo(tx, ty);
+    for (let seg = 1; seg <= reach; seg++) {
+      tx += Math.cos(baseAng + Math.sin(wob * 1.6 + t + seg) * 0.4) * 26;
+      ty += Math.sin(baseAng + Math.cos(wob * 1.4 + t + seg) * 0.4) * 22;
+      ctx.lineTo(tx, ty);
+    }
+    ctx.stroke();
+  }
+
+  // the huge body — near-black, breathing in sleep, seething awake
+  ctx.fillStyle = flash ? '#ffffff' : '#100c16';
+  ctx.beginPath();
+  for (let k = 0; k <= 24; k++) {
+    const ang = (k / 24) * Math.PI * 2;
+    const r = 66 + breathe + Math.sin(wob * 1.4 + k * 1.9) * 6;
+    const px = bx + Math.cos(ang) * r;
+    const py = by + Math.sin(ang) * r * 0.82;
+    if (k === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  ctx.fill();
+
+  // static patches crawl across its skin — parts of it don't quite exist
+  for (let i = 0; i < (S.state === 'awake' ? 8 : 3); i++) {
+    ctx.fillStyle = `rgba(255, 255, 255, ${0.06 + Math.random() * 0.1})`;
+    ctx.fillRect(bx - 50 + Math.random() * 100, by - 40 + Math.random() * 80,
+                 8 + Math.random() * 22, 3 + Math.random() * 5);
+  }
+
+  if (S.state === 'asleep') {
+    // eyes CLOSED — two long lids, dreaming. do not disturb. (disturb it.)
+    ctx.strokeStyle = '#3d2030';
+    ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.moveTo(bx - 34, by - 18); ctx.lineTo(bx - 8, by - 14); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(bx + 8, by - 14); ctx.lineTo(bx + 34, by - 18); ctx.stroke();
+    // Zzz drifting up with every snore
+    ctx.fillStyle = 'rgba(180, 180, 220, 0.6)';
+    ctx.font = 'bold 18px monospace';
+    ctx.textAlign = 'center';
+    const zr = (elapsed * 0.6) % 1;
+    ctx.fillText('Z', bx + 50 + zr * 20, by - 60 - zr * 40);
+    ctx.fillText('z', bx + 66 + zr * 14, by - 84 - zr * 30);
+  } else {
+    // AWAKE. two huge red eyes... and smaller ones that flicker in and
+    // out of existence around them, like the idea of eyes.
+    const lk = Math.hypot(player.x - S.x, player.y - S.y) || 1;
+    const ex = (player.x - S.x) / lk * 3, ey = (player.y - S.y) / lk * 3;
+    for (const side of [-1, 1]) {
+      ctx.fillStyle = '#ff2e1f';
+      ctx.beginPath(); ctx.arc(bx + side * 22, by - 16, 11, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#7a0c06';
+      ctx.beginPath(); ctx.arc(bx + side * 22 + ex, by - 16 + ey, 5, 0, Math.PI * 2); ctx.fill();
+    }
+    for (let i = 0; i < 5; i++) {
+      if (Math.random() < 0.5) continue;         // flickering ghost-eyes
+      ctx.fillStyle = 'rgba(255, 46, 31, 0.6)';
+      ctx.beginPath();
+      ctx.arc(bx - 45 + noise(i * 7.7 + Math.floor(elapsed * 6)) * 90,
+              by - 40 + noise(i * 3.3 + Math.floor(elapsed * 6)) * 40,
+              3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // the mouth, which has been roaring for two games
+    ctx.fillStyle = '#070409';
+    ctx.beginPath();
+    ctx.ellipse(bx, by + 22, 30, 11 + Math.sin(wob * 2) * 4, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#f4f0e8';
+    for (let tt = 0; tt < 6; tt++) {
+      const tx = bx - 24 + tt * 9;
+      ctx.beginPath();
+      ctx.moveTo(tx, by + 15); ctx.lineTo(tx + 7, by + 15); ctx.lineTo(tx + 3.5, by + 23);
+      ctx.closePath(); ctx.fill();
+    }
+  }
+}
+
 function drawDoor(c) {
   const x = DOOR.x - c.x, y = DOOR.y - c.y;
   if (x < -300 || y < -300 || x > canvas.width + 300 || y > canvas.height + 300) return;
@@ -1577,6 +2002,38 @@ function drawHUD() {
     ctx.font = '17px monospace';
     ctx.fillText('Waking up at the drop point...', canvas.width / 2, canvas.height / 2 + 24);
   }
+  // the sleeper's prompt — the most important choice in two games
+  if (sleeper && sleeper.state === 'asleep' &&
+      Math.hypot(player.x - sleeper.x, player.y - sleeper.y) < 280) {
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#ffb3ab';
+    ctx.font = 'bold 18px monospace';
+    ctx.fillText('IT IS ASLEEP. The roars were snores. It has been dreaming this whole time.',
+                 canvas.width / 2, 120);
+    ctx.fillStyle = '#ff6b5e';
+    ctx.fillText(sleeper.wakeHits > 0
+        ? `WAKE IT: ${sleeper.wakeHits} / 5 hits...`
+        : 'Hit it five times to WAKE IT UP. (Are you sure?)',
+        canvas.width / 2, 148);
+  }
+
+  // the last boss bar of the saga
+  if (sleeper && sleeper.state === 'awake') {
+    const bw = Math.min(500, canvas.width - 80);
+    const bx = canvas.width / 2 - bw / 2, by = 30;
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#ffb3ab';
+    ctx.font = 'bold 16px monospace';
+    ctx.fillText('THE THING AT THE END OF THE ABYSS', canvas.width / 2, by - 8);
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(bx, by, bw, 14);
+    ctx.fillStyle = '#ff2e1f';
+    ctx.fillRect(bx + 2, by + 2, (bw - 4) * (sleeper.hp / 60), 10);
+    ctx.strokeStyle = '#ffb3ab';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(bx, by, bw, 14);
+  }
+
   // the boss bar, once the sixteen eyes have noticed you
   if (boss && boss.active) {
     const bw = Math.min(500, canvas.width - 80);
@@ -1594,24 +2051,43 @@ function drawHUD() {
     ctx.strokeRect(bx, by, bw, 14);
   }
 
-  // GOING INSANE: CONQUERED
+  // GOING INSANE: CONQUERED... or, on level 3, THE END OF EVERYTHING
   if (bossBanner > 0) {
     ctx.fillStyle = 'rgba(15, 5, 20, 0.75)';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.textAlign = 'center';
-    ctx.fillStyle = '#ffd23f';
-    ctx.font = 'bold 34px monospace';
-    ctx.fillText('LEVEL 2 COMPLETE — GOING INSANE', canvas.width / 2, canvas.height / 2 - 50);
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 20px monospace';
-    ctx.fillText('Sixteen eyes... closed.', canvas.width / 2, canvas.height / 2);
-    ctx.fillStyle = '#d8c2ff';
-    ctx.font = '16px monospace';
-    ctx.fillText('But the roars have not stopped. That was never the thing roaring.',
-                 canvas.width / 2, canvas.height / 2 + 32);
-    ctx.fillStyle = '#9fb4ff';
-    ctx.fillText('Level 3 waits to be invented... TO BE CONTINUED',
-                 canvas.width / 2, canvas.height / 2 + 64);
+    if (currentLevel === 2) {
+      ctx.fillStyle = '#ffd23f';
+      ctx.font = 'bold 34px monospace';
+      ctx.fillText('THE THING IS DEFEATED', canvas.width / 2, canvas.height / 2 - 70);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 20px monospace';
+      ctx.fillText('The roaring has stopped. For the first time in two games... silence.',
+                   canvas.width / 2, canvas.height / 2 - 20);
+      ctx.fillStyle = '#ffb3ab';
+      ctx.font = '17px monospace';
+      ctx.fillText('You woke it. You faced it. You won.', canvas.width / 2, canvas.height / 2 + 14);
+      ctx.fillStyle = '#ffd23f';
+      ctx.font = 'bold 26px monospace';
+      ctx.fillText('THE EXPLORER SAGA: COMPLETE', canvas.width / 2, canvas.height / 2 + 60);
+      ctx.fillStyle = '#9fb4ff';
+      ctx.font = '15px monospace';
+      ctx.fillText('( unless...? )', canvas.width / 2, canvas.height / 2 + 92);
+    } else {
+      ctx.fillStyle = '#ffd23f';
+      ctx.font = 'bold 34px monospace';
+      ctx.fillText('LEVEL 2 COMPLETE — GOING INSANE', canvas.width / 2, canvas.height / 2 - 50);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 20px monospace';
+      ctx.fillText('Sixteen eyes... closed.', canvas.width / 2, canvas.height / 2);
+      ctx.fillStyle = '#d8c2ff';
+      ctx.font = '16px monospace';
+      ctx.fillText('But the roars have not stopped. That was never the thing roaring.',
+                   canvas.width / 2, canvas.height / 2 + 32);
+      ctx.fillStyle = '#9fb4ff';
+      ctx.fillText('One card remains... Behind the Door...',
+                   canvas.width / 2, canvas.height / 2 + 64);
+    }
   }
 
   // CHAPTER COMPLETE — you found the door
