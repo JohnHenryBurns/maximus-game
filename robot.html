@@ -1818,7 +1818,11 @@ function drawMenu(dt) {
   ctx.fillText(robotName ? robotName.toUpperCase() : 'UNIT-???', W / 2, H * 0.22);
   ctx.fillStyle = '#9fb4ff';
   ctx.font = '17px monospace';
-  ctx.fillText(robotName ? 'once known as UNIT-13 — a story in chapters'
+  // if the player kept the old name, that's a CHOICE — honor it
+  const keptName = robotName &&
+    robotName.toLowerCase().replace(/[\s\-]/g, '') === 'unit13';
+  ctx.fillText(keptName ? 'it was offered any name. it kept its own.'
+             : robotName ? 'once known as UNIT-13 — a story in chapters'
                          : 'a story in chapters', W / 2, H * 0.22 + 34);
 
   const count = CHAPTERS.length;
