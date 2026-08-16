@@ -2,17 +2,24 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport"
-      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>MONSTER DUEL</title>
 
-<link rel="manifest" href="manifest.webmanifest">
+<!-- ADD TO HOME SCREEN / CAST TO THE TELLY
+     This game has its OWN manifest, so "Add to Home Screen" gives it its own
+     icon that opens straight into this game - not the arcade menu. display is
+     "fullscreen", so it launches with no browser bar at all, which is also
+     what makes it look right mirrored onto a TV. -->
+<link rel="manifest" href="cards.webmanifest">
 <meta name="theme-color" content="#151020">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Monster Duel">
-<link rel="apple-touch-icon" href="icon-192.png">
-<link rel="icon" href="icon-192.png">
+<link rel="icon" href="icon-cards.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-cards.svg">
+
+
 
 <style>
   html, body {
