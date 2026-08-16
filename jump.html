@@ -172,11 +172,13 @@ let specPlatforms = []; // where the gliding platforms run
 let specTurds = [];     // where the flying turds take wing
 let specCrumbles = [];  // where the untrustworthy blocks wait
 let specBouncers = [];  // where the springy mushrooms grow, and where they aim
+let specDrops = [];     // where the ceiling spikes lurk
 let spikes = [];
 let platforms = [];
 let turds = [];
 let crumbles = [];
 let bouncers = [];
+let dropSpikes = [];
 let FLAG = { x: 6100, y: FLOOR };
 let startPos = { x: 100, y: FLOOR - 60 };
 let worldW = STORY_W;
@@ -192,6 +194,7 @@ function loadStory() {
   specPlatforms = [];
   specCrumbles = [];
   specBouncers = [];
+  specDrops = [];
   specTurds = TURD_SPOTS.map(t => ({ x: t[0], y: t[1] }));
   FLAG = { x: 6100, y: FLOOR };
   startPos = { x: 100, y: FLOOR - 60 };
@@ -211,6 +214,7 @@ let edit = {
   spikes: [],
   turds: [],
   crumbles: [],         // blocks that shake, then fall away under your feet
+  dropspikes: [],       // ceiling spikes that fall when you walk beneath
   platforms: [],        // each one: { a: [cx, cy], b: [cx, cy] } — it glides a→b→a
   bouncers: [],         // { a: pad cell, b: where it flings you }
   start: [2, 12],
@@ -223,8 +227,8 @@ function saveCustom() {
   localStorage.setItem('fartcave_custom', JSON.stringify({
     tiles: [...edit.tiles], beans: edit.beans, sniffers: edit.sniffers,
     spikes: edit.spikes, turds: edit.turds, crumbles: edit.crumbles,
-    platforms: edit.platforms, bouncers: edit.bouncers,
-    start: edit.start, exit: edit.exit,
+    dropspikes: edit.dropspikes, platforms: edit.platforms,
+    bouncers: edit.bouncers, start: edit.start, exit: edit.exit,
   }));
 }
 try {
@@ -233,6 +237,7 @@ try {
     edit = { tiles: new Set(saved.tiles), beans: saved.beans || [],
              sniffers: saved.sniffers || [], spikes: saved.spikes || [],
              turds: saved.turds || [], crumbles: saved.crumbles || [],
+             dropspikes: saved.dropspikes || [],
              platforms: saved.platforms || [], bouncers: saved.bouncers || [],
              start: saved.start || [2, 12], exit: saved.exit || [16, 12] };
   }
@@ -277,6 +282,10 @@ function loadCustomLevel() {
     x: b.a[0] * TILE + 3, y: b.a[1] * TILE + 26,
     tx: b.b[0] * TILE + TILE / 2, ty: b.b[1] * TILE + TILE / 2,
   }));
+  specDrops = edit.dropspikes.map(k => {
+    const [cx, cy] = k.split(',').map(Number);
+    return { x: cx * TILE, y: cy * TILE };
+  });
   FLAG = { x: edit.exit[0] * TILE + TILE / 2, y: (edit.exit[1] + 1) * TILE };
   startPos = { x: edit.start[0] * TILE + 6, y: edit.start[1] * TILE - 8 };
   worldW = Math.max(maxX + 300, 2000);
@@ -337,6 +346,10 @@ function resetLevel() {
   bouncers = specBouncers.map(b => ({
     x: b.x, y: b.y, w: 40, h: 20, tx: b.tx, ty: b.ty, anim: 0,
   }));
+  dropSpikes = specDrops.map(d => ({
+    x: d.x, y: d.y, ox: d.x, oy: d.y, w: TILE, h: 40,
+    state: 'hang', timer: 0, vy: 0, respawn: 0,
+  }));
   player.ride = null;
   player.boostVx = 0;
 }
@@ -394,7 +407,7 @@ let resetArmUntil = 0;    // RESET asks "REALLY?" — this is its deadline
 
 function freshLevel() {
   edit = { tiles: new Set(), beans: [], sniffers: [], spikes: [], turds: [],
-           crumbles: [], platforms: [], bouncers: [],
+           crumbles: [], dropspikes: [], platforms: [], bouncers: [],
            start: [2, 12], exit: [16, 12] };
   for (let i = 0; i < 19; i++) edit.tiles.add(i + ',13');
   saveCustom();
@@ -439,6 +452,7 @@ function applyTool(sx, sy) {
     edit.spikes = edit.spikes.filter(k => k !== key);
     edit.turds = edit.turds.filter(k => k !== key);
     edit.crumbles = edit.crumbles.filter(k => k !== key);
+    edit.dropspikes = edit.dropspikes.filter(k => k !== key);
   } else if (tool === 'bean') {
     if (!edit.tiles.has(key) && !edit.beans.includes(key)) edit.beans.push(key);
   } else if (tool === 'nose') {
@@ -449,6 +463,8 @@ function applyTool(sx, sy) {
     if (!edit.tiles.has(key) && !edit.turds.includes(key)) edit.turds.push(key);
   } else if (tool === 'crumble') {
     if (!edit.tiles.has(key) && !edit.crumbles.includes(key)) edit.crumbles.push(key);
+  } else if (tool === 'drop') {
+    if (!edit.tiles.has(key) && !edit.dropspikes.includes(key)) edit.dropspikes.push(key);
   } else if (tool === 'plat') {
     // two taps: first sets where it starts, second sets where it glides to
     if (!pendingPlat) pendingPlat = [cx, cy];
@@ -472,6 +488,7 @@ function applyTool(sx, sy) {
     edit.spikes = edit.spikes.filter(k => k !== key);
     edit.turds = edit.turds.filter(k => k !== key);
     edit.crumbles = edit.crumbles.filter(k => k !== key);
+    edit.dropspikes = edit.dropspikes.filter(k => k !== key);
     edit.platforms = edit.platforms.filter(p =>
       !(p.a[0] === cx && p.a[1] === cy) && !(p.b[0] === cx && p.b[1] === cy));
     edit.bouncers = edit.bouncers.filter(p =>
@@ -776,6 +793,46 @@ function update(dt) {
     } else if (player.invuln <= 0) hurt(false);
   }
 
+  // ---- ceiling spikes: they watch. they wait. they DROP. ----
+  for (const t of dropSpikes) {
+    if (t.state === 'hang') {
+      // is someone walking underneath? (below it, roughly lined up)
+      const px = player.x + player.w / 2, tx2 = t.x + TILE / 2;
+      if (Math.abs(px - tx2) < 46 && player.y > t.y &&
+          player.y - t.y < 620) {
+        t.state = 'shake';
+        t.timer = 0.4;
+        beep(180, 0.06, 'square', 0.1);              // a warning crackle
+      }
+    } else if (t.state === 'shake') {
+      t.timer -= dt;
+      if (t.timer <= 0) { t.state = 'fall'; t.vy = 0; }
+    } else if (t.state === 'fall') {
+      t.vy += GRAVITY * dt;
+      t.y += t.vy * dt;
+      if (player.invuln <= 0 && overlaps(player, t)) {
+        hurt(false);
+        t.state = 'gone'; t.respawn = 4;
+      } else {
+        for (const s of solids) {
+          if (!overlaps(t, s)) continue;
+          t.state = 'gone'; t.respawn = 4;
+          beep(140, 0.1, 'square', 0.12);            // the shatter
+          for (let k = 0; k < 8; k++) {
+            puffs.push({ x: t.x + TILE / 2, y: t.y + t.h,
+                         vx: (Math.random() - 0.5) * 180, vy: -Math.random() * 120,
+                         r: 3 + Math.random() * 4, life: 0.6, color: '190, 185, 175' });
+          }
+          break;
+        }
+        if (t.y > levelBottom + 400) { t.state = 'gone'; t.respawn = 4; }
+      }
+    } else if (t.state === 'gone') {
+      t.respawn -= dt;
+      if (t.respawn <= 0) { t.state = 'hang'; t.y = t.oy; t.vy = 0; }
+    }
+  }
+
   // ---- the flag ----
   if (Math.abs(player.x - FLAG.x) < 40 && player.y > FLAG.y - 300) {
     won = true;
@@ -898,6 +955,11 @@ function draw() {
   for (const b of bouncers) {
     drawBouncePad(b.x, b.y, b.anim);
   }
+  // ceiling spikes: hanging, trembling, or on their way down
+  for (const t of dropSpikes) {
+    if (t.state === 'gone') continue;
+    drawDropSpike(t.x, t.y, t.state === 'shake');
+  }
   // gliding platforms, each with a faint dotted rail showing its path
   for (const p of platforms) {
     ctx.strokeStyle = 'rgba(125, 211, 255, 0.15)';
@@ -970,9 +1032,9 @@ function draw() {
   ctx.lineTo(FLAG.x + 22, FLAG.y);
   ctx.fill();
 
-  // the toot-trail puffs, fading as they rise
+  // the toot-trail puffs (and any stone dust), fading as they rise
   for (const p of puffs) {
-    ctx.fillStyle = `rgba(150, 230, 120, ${p.life * 0.4})`;
+    ctx.fillStyle = `rgba(${p.color || '150, 230, 120'}, ${p.life * 0.4})`;
     ctx.beginPath();
     ctx.arc(p.x, p.y, p.r * (2 - p.life), 0, Math.PI * 2);
     ctx.fill();
@@ -1085,8 +1147,8 @@ function draw() {
 // ---------------------------------------------------------------------
 const TOOLS = [
   ['ground', 'GROUND'], ['bean', 'BEAN'], ['nose', 'NOSE'],
-  ['turd', 'TURD'], ['spike', 'SPIKE'], ['crumble', 'CRUMBLE'],
-  ['plat', 'PLATFORM'], ['bounce', 'BOUNCY'],
+  ['turd', 'TURD'], ['spike', 'SPIKE'], ['drop', 'DROPSPIKE'],
+  ['crumble', 'CRUMBLE'], ['plat', 'PLATFORM'], ['bounce', 'BOUNCY'],
   ['start', 'START'], ['exit', 'EXIT'], ['erase', 'ERASE'], ['pan', 'PAN'],
 ];
 
@@ -1141,6 +1203,19 @@ function drawTurd(x, y, flap) {
   ctx.arc(cx - 5, y + 14, 1.8, 0, Math.PI * 2);
   ctx.arc(cx + 7, y + 14, 1.8, 0, Math.PI * 2);
   ctx.fill();
+}
+
+// a ceiling spike: a stone dart hanging tip-down, waiting for a victim
+function drawDropSpike(x, y, wobble) {
+  const jx = wobble ? (Math.random() - 0.5) * 5 : 0;
+  ctx.fillStyle = '#7a7268';
+  ctx.beginPath();
+  ctx.moveTo(x + jx + 6, y);
+  ctx.lineTo(x + jx + TILE - 6, y);
+  ctx.lineTo(x + jx + TILE / 2, y + 40);
+  ctx.fill();
+  ctx.fillStyle = '#d8d2c8';                          // the mean glinting tip
+  ctx.fillRect(x + jx + TILE / 2 - 2, y + 30, 4, 10);
 }
 
 // a bouncy mushroom: springy teal cap, glowing spots, endless optimism
@@ -1259,6 +1334,10 @@ function drawEditor() {
   for (const key of edit.crumbles) {
     const [cx, cy] = key.split(',').map(Number);
     drawCrumbleCell(cx * TILE, cy * TILE, false);
+  }
+  for (const key of edit.dropspikes) {
+    const [cx, cy] = key.split(',').map(Number);
+    drawDropSpike(cx * TILE, cy * TILE, false);
   }
   for (const b of edit.bouncers) {
     drawBouncePad(b.a[0] * TILE + 3, b.a[1] * TILE + 26, 0);
