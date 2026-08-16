@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>DICE QUEST</title>
+<style>
+  /* fill the whole window, no scrollbars, no white edges */
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #14101c; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+// =====================================================================
+// DICE QUEST — a roleplaying game, chapter zero: THE DIE ITSELF.
+// In games like D&D, everything starts with one move: you roll a die
+// and hold your breath. So that's the first thing we build — and we
+// build it to FEEL good. Story comes next.
+// =====================================================================
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+function fit() { canvas.width = innerWidth; canvas.height = innerHeight; }
+addEventListener('resize', fit);
+fit();
+
+// if anything breaks, show the error in red instead of a frozen screen
+window.onerror = (msg, src, line) => {
+  const d = document.createElement('div');
+  d.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#c0392b;' +
+    'color:#fff;font:14px monospace;padding:8px;z-index:9';
+  d.textContent = '🐛 BUG on line ' + line + ': ' + msg;
+  document.body.appendChild(d);
+};
+
+// ---------------------------------------------------------------------
+// SOUND — tiny sound effects made from pure math, no files needed
+// ---------------------------------------------------------------------
+let audio = null;
+function ensureAudio() {
+  if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)();
+}
+// one short "tick" — we play a few of these while the die tumbles
+function clack(when, pitch) {
+  if (!audio) return;
+  const o = audio.createOscillator(), g = audio.createGain();
+  o.type = 'square';
+  o.frequency.value = pitch;
+  g.gain.setValueAtTime(0.12, when);
+  g.gain.exponentialRampToValueAtTime(0.001, when + 0.06);
+  o.connect(g); g.connect(audio.destination);
+  o.start(when); o.stop(when + 0.07);
+}
+// a little rising fanfare for a natural 20
+function fanfare() {
+  if (!audio) return;
+  const notes = [523, 659, 784, 1047];        // do-mi-so-DO!
+  notes.forEach((n, i) => clack(audio.currentTime + i * 0.09, n));
+}
+// a sad slide-down for a natural 1 (wah, waaah...)
+function sadTrombone() {
+  if (!audio) return;
+  const o = audio.createOscillator(), g = audio.createGain();
+  o.type = 'sawtooth';
+  o.frequency.setValueAtTime(300, audio.currentTime);
+  o.frequency.linearRampToValueAtTime(150, audio.currentTime + 0.7);
+  g.gain.setValueAtTime(0.15, audio.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + 0.8);
+  o.connect(g); g.connect(audio.destination);
+  o.start(); o.stop(audio.currentTime + 0.85);
+}
+
+// ---------------------------------------------------------------------
+// THE DIE — all the numbers that describe one rolling d20
+// ---------------------------------------------------------------------
+let rolling = 0;        // seconds of tumble left (0 = die is resting)
+let face = 20;          // the number showing on the die right now
+let result = 0;         // the final answer of the last roll (0 = none yet)
+let resultGlow = 0;     // how bright the landing flash is
+let wobble = 0;         // the die's tilt angle while it tumbles
+let history = [];       // the last few rolls, oldest first
+let elapsed = 0;
+
+function startRoll() {
+  if (rolling > 0) return;         // one roll at a time, adventurer
+  ensureAudio();
+  rolling = 1.1;
+  result = 0;
+  // schedule the clatter of the die bouncing across the table
+  if (audio) for (let i = 0; i < 6; i++) {
+    clack(audio.currentTime + i * 0.15, 700 + Math.random() * 500);
+  }
+}
+
+// tap ANYWHERE to roll — phone or mouse, same magic
+addEventListener('pointerdown', startRoll);
+addEventListener('keydown', e => { if (e.key === ' ') startRoll(); });
+
+// ---------------------------------------------------------------------
+// UPDATE — the die's tumble, frame by frame
+// ---------------------------------------------------------------------
+function update(dt) {
+  elapsed += dt;
+  if (resultGlow > 0) resultGlow -= dt;
+  if (rolling > 0) {
+    rolling -= dt;
+    wobble = Math.sin(elapsed * 40) * 0.4 * rolling;   // shakes less as it slows
+    // while tumbling, the face flickers through random numbers.
+    // near the end it flickers slower — like a real die settling.
+    if (Math.random() < rolling * 0.9 + 0.15) {
+      face = 1 + Math.floor(Math.random() * 20);
+    }
+    if (rolling <= 0) {
+      // THE MOMENT OF TRUTH — this is the real roll, fair and square
+      face = 1 + Math.floor(Math.random() * 20);
+      result = face;
+      resultGlow = 1.6;
+      wobble = 0;
+      history.push(result);
+      if (history.length > 10) history.shift();
+      if (result === 20) fanfare();
+      else if (result === 1) sadTrombone();
+      else if (audio) clack(audio.currentTime, 350);   // a solid landing thunk
+    }
+  }
+}
+
+// ---------------------------------------------------------------------
+// DRAWING — the table, the die, and the drama
+// ---------------------------------------------------------------------
+function draw() {
+  const W = canvas.width, H = canvas.height;
+  const cx = W / 2, cy = H / 2;
+
+  // a candle-lit table: dark purple night with a warm pool of light
+  ctx.fillStyle = '#14101c';
+  ctx.fillRect(0, 0, W, H);
+  const pool = ctx.createRadialGradient(cx, cy, 40, cx, cy, Math.max(W, H) * 0.6);
+  pool.addColorStop(0, 'rgba(255, 190, 110, 0.14)');
+  pool.addColorStop(1, 'rgba(255, 190, 110, 0)');
+  ctx.fillStyle = pool;
+  ctx.fillRect(0, 0, W, H);
+
+  // the landing flash — gold for glory, red for doom, blue for normal
+  if (resultGlow > 0) {
+    const col = result === 20 ? '255, 210, 63'
+              : result === 1 ? '232, 69, 60' : '125, 211, 255';
+    const g = ctx.createRadialGradient(cx, cy, 20, cx, cy, 340);
+    g.addColorStop(0, `rgba(${col}, ${0.25 * resultGlow})`);
+    g.addColorStop(1, `rgba(${col}, 0)`);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  // ---- THE D20 ----
+  const size = Math.min(W, H) * 0.19;
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(wobble);
+  // a d20 seen from the front is a hexagon with a triangle inside
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const a = Math.PI / 6 + i * Math.PI / 3;
+    const x = Math.cos(a) * size, y = Math.sin(a) * size;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  const body = ctx.createLinearGradient(-size, -size, size, size);
+  body.addColorStop(0, result === 20 && resultGlow > 0 ? '#8a6d1a' : '#3b2a5e');
+  body.addColorStop(1, result === 20 && resultGlow > 0 ? '#4a3a0e' : '#1d1435');
+  ctx.fillStyle = body;
+  ctx.fill();
+  ctx.strokeStyle = '#9b7bd8';
+  ctx.lineWidth = 3;
+  ctx.stroke();
+  // the facet lines that make it look 3D — a triangle around the number
+  ctx.beginPath();
+  for (let i = 0; i < 3; i++) {
+    const a = -Math.PI / 2 + i * (Math.PI * 2 / 3);
+    const x = Math.cos(a) * size * 0.62, y = Math.sin(a) * size * 0.62;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.strokeStyle = 'rgba(155, 123, 216, 0.55)';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  // and spokes out to the corners
+  for (let i = 0; i < 6; i++) {
+    const a = Math.PI / 6 + i * Math.PI / 3;
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(a) * size * 0.62 * 0.0, Math.sin(a) * 0);
+    ctx.lineTo(Math.cos(a) * size, Math.sin(a) * size);
+    ctx.strokeStyle = 'rgba(155, 123, 216, 0.18)';
+    ctx.stroke();
+  }
+  // THE NUMBER — the whole point of everything
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = rolling > 0 ? '#c9b8ef'
+                : result === 20 ? '#ffd23f'
+                : result === 1 ? '#ff6b5e' : '#ffffff';
+  ctx.font = `bold ${size * 0.62}px Georgia, serif`;
+  ctx.fillText(face, 0, size * 0.04);
+  ctx.restore();
+
+  // ---- WORDS ----
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = '#c9a15a';
+  ctx.font = `bold ${Math.min(40, W / 14)}px Georgia, serif`;
+  ctx.fillText('DICE QUEST', cx, H * 0.12);
+
+  if (resultGlow > 0 && result === 20) {
+    ctx.fillStyle = `rgba(255, 210, 63, ${Math.min(1, resultGlow)})`;
+    ctx.font = `bold ${Math.min(34, W / 16)}px Georgia, serif`;
+    ctx.fillText('NATURAL 20!! CRITICAL!', cx, cy + size * 2.1);
+  } else if (resultGlow > 0 && result === 1) {
+    ctx.fillStyle = `rgba(232, 69, 60, ${Math.min(1, resultGlow)})`;
+    ctx.font = `bold ${Math.min(30, W / 18)}px Georgia, serif`;
+    ctx.fillText('critical fail...', cx, cy + size * 2.1);
+  } else if (rolling <= 0) {
+    ctx.fillStyle = 'rgba(201, 161, 90, 0.75)';
+    ctx.font = '17px Georgia, serif';
+    ctx.fillText('tap anywhere to roll the d20', cx, cy + size * 2.1);
+  }
+
+  // the roll history — a little trail of fate along the bottom
+  ctx.font = 'bold 15px Georgia, serif';
+  for (let i = 0; i < history.length; i++) {
+    const hx = cx + (i - (history.length - 1) / 2) * 44;
+    const n = history[i];
+    ctx.fillStyle = n === 20 ? 'rgba(255, 210, 63, 0.9)'
+                  : n === 1 ? 'rgba(232, 69, 60, 0.9)' : 'rgba(155, 123, 216, 0.7)';
+    ctx.strokeStyle = ctx.fillStyle;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(hx, H - 46, 16, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillText(n, hx, H - 41);
+  }
+}
+
+// ---------------------------------------------------------------------
+// THE GAME LOOP — update, draw, repeat forever
+// ---------------------------------------------------------------------
+let lastTime = 0;
+function loop(time) {
+  const dt = Math.min(0.05, (time - lastTime) / 1000);
+  lastTime = time;
+  update(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
