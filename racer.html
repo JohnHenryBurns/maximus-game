@@ -2,8 +2,23 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover">
 <title>MAX'S RACER</title>
+
+<!-- ADD TO HOME SCREEN / CAST TO THE TELLY
+     This game has its OWN manifest, so "Add to Home Screen" gives it its own
+     icon that opens straight into this game - not the arcade menu. display is
+     "fullscreen", so it launches with no browser bar at all, which is also
+     what makes it look right mirrored onto a TV. -->
+<link rel="manifest" href="racer.webmanifest">
+<meta name="theme-color" content="#10131c">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Racer">
+<link rel="icon" href="icon-racer.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-racer.svg">
+
 <style>
   html, body {
     margin: 0; padding: 0; height: 100%;
@@ -18,8 +33,61 @@
     transition: opacity .4s;
   }
 </style>
+
+<style>
+/* ==== THE ARCADE PILL — every game in the arcade wears this ============
+   One look, one place, one way home. The appearance is forced (!important)
+   because these pages were written separately and each has its own ideas
+   about what a link should look like; this is the one thing they agree on. */
+a.arcade-pill {
+  display: inline-flex !important; align-items: center !important; gap: 6px !important;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif !important;
+  font-size: 13px !important; font-weight: 600 !important; letter-spacing: 0.3px !important;
+  line-height: 1 !important; text-decoration: none !important; text-transform: none !important;
+  color: #ffe0c4 !important;
+  background: rgba(24, 14, 28, 0.62) !important;
+  border: 1px solid rgba(255, 200, 150, 0.42) !important;
+  padding: 7px 13px !important; border-radius: 999px !important;
+  cursor: pointer !important; white-space: nowrap !important;
+  -webkit-backdrop-filter: blur(5px) !important; backdrop-filter: blur(5px) !important;
+  -webkit-tap-highlight-color: transparent !important;
+  transition: transform 0.12s, border-color 0.12s, background 0.12s !important;
+}
+a.arcade-pill:hover, a.arcade-pill:active, a.arcade-pill:focus-visible {
+  transform: scale(1.05) !important;
+  border-color: rgba(255, 200, 150, 0.9) !important;
+  background: rgba(40, 22, 44, 0.78) !important;
+  color: #fff5e8 !important;
+}
+a.arcade-pill .ah-arrow { font-size: 14px !important; opacity: 0.9 !important; }
+/* the floating version, for games that had nowhere to put it */
+a.arcade-pill.arcade-float {
+  position: fixed !important;
+  top: calc(8px + env(safe-area-inset-top, 0px)) !important;
+  left: calc(10px + env(safe-area-inset-left, 0px)) !important;
+  z-index: 2147483000 !important;
+}
+</style>
 </head>
 <body>
+<!-- THE WAY HOME. Every game in the arcade has this same pill in the same
+     corner, so wherever you are you can always get back to the menu. -->
+<a id="back" class="arcade-pill arcade-float" href="index.html"
+   aria-label="Back to Max's Arcade"><span class="ah-arrow">&larr;</span>Arcade</a>
+<script>
+/* Games grab every touch on the window and call preventDefault, which would
+   swallow a tap on this link. So the pill handles its own tap first and
+   stops the event going any further. */
+(function () {
+  var pill = document.getElementById('back');
+  if (!pill) return;
+  var go = function (e) { e.stopPropagation(); e.preventDefault(); location.href = 'index.html'; };
+  ['click', 'touchend'].forEach(function (t) { pill.addEventListener(t, go, { passive: false }); });
+  ['mousedown', 'touchstart', 'pointerdown'].forEach(function (t) {
+    pill.addEventListener(t, function (e) { e.stopPropagation(); }, { passive: false });
+  });
+})();
+</script>
 <canvas id="screen"></canvas>
 <div id="hud">MOUSE or A D = steer &nbsp;&nbsp; W = go &nbsp;&nbsp; S = brake &nbsp;&nbsp; <b>B = look behind you</b> &nbsp;&nbsp; R = restart</div>
 

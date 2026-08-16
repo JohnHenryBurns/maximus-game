@@ -2,8 +2,23 @@
 <html>
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>Amos's Disaster Builder</title>
+
+<!-- ADD TO HOME SCREEN / CAST TO THE TELLY
+     This game has its OWN manifest, so "Add to Home Screen" gives it its own
+     icon that opens straight into this game - not the arcade menu. display is
+     "fullscreen", so it launches with no browser bar at all, which is also
+     what makes it look right mirrored onto a TV. -->
+<link rel="manifest" href="disaster.webmanifest">
+<meta name="theme-color" content="#1a2530">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Disaster">
+<link rel="icon" href="icon-disaster.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-disaster.svg">
+
 <style>
   html, body { margin: 0; background: #1a2530; height: 100%; overflow: hidden; }
   canvas { display: block; }
@@ -21,10 +36,62 @@
     transform: scale(1.05); border-color: rgba(255, 200, 150, 0.85); background: rgba(40, 22, 44, 0.75);
   }
 </style>
+
+<style>
+/* ==== THE ARCADE PILL — every game in the arcade wears this ============
+   One look, one place, one way home. The appearance is forced (!important)
+   because these pages were written separately and each has its own ideas
+   about what a link should look like; this is the one thing they agree on. */
+a.arcade-pill {
+  display: inline-flex !important; align-items: center !important; gap: 6px !important;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif !important;
+  font-size: 13px !important; font-weight: 600 !important; letter-spacing: 0.3px !important;
+  line-height: 1 !important; text-decoration: none !important; text-transform: none !important;
+  color: #ffe0c4 !important;
+  background: rgba(24, 14, 28, 0.62) !important;
+  border: 1px solid rgba(255, 200, 150, 0.42) !important;
+  padding: 7px 13px !important; border-radius: 999px !important;
+  cursor: pointer !important; white-space: nowrap !important;
+  -webkit-backdrop-filter: blur(5px) !important; backdrop-filter: blur(5px) !important;
+  -webkit-tap-highlight-color: transparent !important;
+  transition: transform 0.12s, border-color 0.12s, background 0.12s !important;
+}
+a.arcade-pill:hover, a.arcade-pill:active, a.arcade-pill:focus-visible {
+  transform: scale(1.05) !important;
+  border-color: rgba(255, 200, 150, 0.9) !important;
+  background: rgba(40, 22, 44, 0.78) !important;
+  color: #fff5e8 !important;
+}
+a.arcade-pill .ah-arrow { font-size: 14px !important; opacity: 0.9 !important; }
+/* the floating version, for games that had nowhere to put it */
+a.arcade-pill.arcade-float {
+  position: fixed !important;
+  top: calc(8px + env(safe-area-inset-top, 0px)) !important;
+  left: calc(10px + env(safe-area-inset-left, 0px)) !important;
+  z-index: 2147483000 !important;
+}
+</style>
 </head>
 <body>
+<!-- THE WAY HOME. Every game in the arcade has this same pill in the same
+     corner, so wherever you are you can always get back to the menu. -->
+<a id="back" class="arcade-pill arcade-float" href="index.html"
+   aria-label="Back to Max's Arcade"><span class="ah-arrow">&larr;</span>Arcade</a>
+<script>
+/* Games grab every touch on the window and call preventDefault, which would
+   swallow a tap on this link. So the pill handles its own tap first and
+   stops the event going any further. */
+(function () {
+  var pill = document.getElementById('back');
+  if (!pill) return;
+  var go = function (e) { e.stopPropagation(); e.preventDefault(); location.href = 'index.html'; };
+  ['click', 'touchend'].forEach(function (t) { pill.addEventListener(t, go, { passive: false }); });
+  ['mousedown', 'touchstart', 'pointerdown'].forEach(function (t) {
+    pill.addEventListener(t, function (e) { e.stopPropagation(); }, { passive: false });
+  });
+})();
+</script>
 <canvas id="game"></canvas>
-<a id="back" href="index.html">&larr; Arcade</a>
 <script>
 // =====================================================================
 // AMOS'S DISASTER BUILDER
@@ -53,7 +120,11 @@ addEventListener('resize', fitCanvas);
 // upright almost perfectly, so the whole town shows at once with no wasted
 // space. Zoom in to build the little details.
 // ---------------------------------------------------------------------
-const COLS = 20, ROWS = 40;
+// The town is 20 across and 40 down. Turn the phone on its side and these
+// two SWAP over: the whole town rotates a quarter turn so its long side
+// runs along the long side of the screen. It's the same town either way —
+// the same squares, the same buildings, just turned round. See rotateWorld.
+let COLS = 20, ROWS = 40;
 let cell = 34;                      // pixel size of one grid square
 // Room at the top for the toolbar. It's two tiers now (money + THE MACHINE
 // on top, the build palette in a full-width row below) so everything fits on
@@ -509,6 +580,8 @@ let tidied = 0;
 let footprints = [];       // the brown trail of somebody's worst afternoon
 let piesSteppedIn = 0;     // the town keeps count. the town never forgets.
 let poopPeople = [];       // born when a pie gets stepped on. they mean no harm.
+const POOP_ODDS = 0.05;    // only about 1 squished pie in 20 brings one to life
+const POOP_MAX = 3;        // and never more than a handful in town at once
 const CLEAN_TIME = 1.5;       // seconds of sweeping per piece of mess
 const MAX_LITTER = 260;       // stop the whole town turning into a landfill
 
@@ -884,6 +957,123 @@ function clampPan() {
   panX = loX > hiX ? (PW - gw) / 2 : Math.min(hiX, Math.max(loX, panX));
   panY = loY > hiY ? (PH - gh) / 2 : Math.min(hiY, Math.max(loY, panY));
 }
+// ---------------------------------------------------------------------
+// TURNING THE PHONE ON ITS SIDE
+//
+// Rather than squashing the tall town into a wide screen, we turn the whole
+// WORLD a quarter turn. COLS and ROWS swap over, every square of the town
+// moves round to where it now belongs, and everybody standing on it comes
+// with it. Because we rotate the DATA and not the picture, every house,
+// tree and person is still drawn the right way up automatically, and the
+// roads work out their own new lane directions from scratch.
+//   dir = +1 turns it clockwise (going into landscape)
+//   dir = -1 turns it back again (going into portrait)
+// ---------------------------------------------------------------------
+function rotateWorld(dir) {
+  const oldCols = COLS, oldRows = ROWS, oldCs = cellSize();
+
+  // ---- the town itself ----
+  const ng = [], nd = [], nh = [], nr = [];
+  for (let y = 0; y < oldCols; y++) {           // new grid is oldCols tall
+    ng.push(new Array(oldRows).fill(EMPTY));
+    nd.push(new Array(oldRows).fill(PRISTINE));
+    nh.push(new Array(oldRows).fill(0));
+    nr.push(new Array(oldRows).fill(null));
+  }
+  // where does old square (gx,gy) end up?
+  const cellTo = (gx, gy) => dir > 0 ? { x: oldRows - 1 - gy, y: gx }
+                                     : { x: gy, y: oldCols - 1 - gx };
+  for (let gy = 0; gy < oldRows; gy++) {
+    for (let gx = 0; gx < oldCols; gx++) {
+      const n = cellTo(gx, gy);
+      ng[n.y][n.x] = grid[gy][gx];
+      nd[n.y][n.x] = damage[gy][gx];
+      nh[n.y][n.x] = hitCool[gy][gx];
+      const rt = rootAt[gy][gx];
+      if (rt) {
+        // A big building stays a square, so its new top-left corner is just
+        // the smallest x and y of the block once it's been turned.
+        const sp = spanOf(grid[rt.ry][rt.rx]);
+        nr[n.y][n.x] = dir > 0
+          ? { rx: oldRows - sp - rt.ry, ry: rt.rx }
+          : { rx: rt.ry,                ry: oldCols - sp - rt.rx };
+      }
+    }
+  }
+  COLS = oldRows; ROWS = oldCols;
+  grid.length = 0;    for (const r of ng) grid.push(r);
+  damage.length = 0;  for (const r of nd) damage.push(r);
+  hitCool.length = 0; for (const r of nh) hitCool.push(r);
+  rootAt.length = 0;  for (const r of nr) rootAt.push(r);
+
+  // the road bookkeeping arrays have to change shape too
+  for (const arr of [roadConn, roadDual, roadOne, roadJunc, roadTurn]) {
+    arr.length = 0;
+    for (let y = 0; y < ROWS; y++) arr.push(new Array(COLS).fill(null));
+  }
+  roadsDirty = true;
+
+  // ---- and now everything standing on the town ----
+  const newCs = cellSize();
+  const pt = (o, xk, yk) => {
+    if (!o || typeof o[xk] !== 'number') return;
+    const fx = o[xk] / oldCs, fy = (o[yk] - TOPBAR) / oldCs;
+    const nfx = dir > 0 ? oldRows - fy : fy;
+    const nfy = dir > 0 ? fx : oldCols - fx;
+    o[xk] = nfx * newCs; o[yk] = TOPBAR + nfy * newCs;
+  };
+  const vec = (o, xk, yk) => {
+    if (!o || typeof o[xk] !== 'number') return;
+    const dx = o[xk], dy = o[yk];
+    o[xk] = dir > 0 ? -dy : dy;
+    o[yk] = dir > 0 ? dx : -dx;
+  };
+  const cellOf = (o, xk, yk) => {
+    if (!o || typeof o[xk] !== 'number') return;
+    const n = cellTo(o[xk], o[yk]);
+    o[xk] = n.x; o[yk] = n.y;
+  };
+  const spin = o => { if (o && typeof o.angle === 'number') o.angle += dir * Math.PI / 2; };
+
+  for (const p of people) {
+    pt(p, 'x', 'y'); spin(p);
+    pt(p.stand, 'x', 'y');
+    if (p.job)    { cellOf(p.job, 'gx', 'gy');    pt(p.job, 'x', 'y'); }
+    if (p.errand) { cellOf(p.errand, 'gx', 'gy'); pt(p.errand, 'x', 'y'); }
+    if (p.inside) cellOf(p.inside, 'gx', 'gy');
+    if (p.sheltering) cellOf(p.sheltering, 'gx', 'gy');
+    if (p.shelterTarget) { cellOf(p.shelterTarget, 'gx', 'gy'); pt(p.shelterTarget, 'x', 'y'); }
+    if (p.site)   { cellOf(p.site, 'rx', 'ry');   pt(p.site, 'x', 'y'); }
+  }
+  for (const c of cars)  { pt(c, 'x', 'y'); vec(c, 'dx', 'dy'); }
+  for (const L of litter) { pt(L, 'x', 'y'); if (L.gx !== undefined) cellOf(L, 'gx', 'gy'); }
+  for (const q of poopPeople) { pt(q, 'x', 'y'); spin(q); }
+  for (const b of badGuys)    { pt(b, 'x', 'y'); spin(b); }
+  for (const d of dinos)      { pt(d, 'x', 'y'); spin(d); d.face = 1; }
+  for (const c of craters)    pt(c, 'x', 'y');
+  for (const D of disasters) {
+    pt(D, 'x', 'y'); pt(D, 'ex', 'ey');
+    if (D.meteors) for (const m of D.meteors) { pt(m, 'x', 'y'); }
+    if (D.balls)   for (const q of D.balls)   { pt(q, 'x', 'y'); vec(q, 'vx', 'vy'); }
+    if (D.cracks)  for (const k of D.cracks)  for (const q of k.pts) pt(q, 'x', 'y');
+  }
+  // Work sites find themselves again on their own the next time somebody
+  // clocks on, so we just forget the half-finished batches.
+  siteState.clear();
+  // things mid-flight aren't worth chasing round a corner
+  debris.length = 0; blasts.length = 0; coinPops.length = 0; launchedFolk.length = 0;
+
+  centerTown();
+}
+
+// Which way up should the town be for the screen we've got? Landscape means
+// the long side of the town runs along the long side of the screen.
+function fixOrientation() {
+  const wantLandscape = canvas.width > (canvas.height - TOPBAR);
+  const isLandscape = COLS > ROWS;
+  if (wantLandscape !== isLandscape) rotateWorld(wantLandscape ? 1 : -1);
+}
+
 // put the town in the middle of the view (used on first load)
 function centerTown() {
   panX = (canvas.width - gridW() * zoom) / 2;
@@ -892,8 +1082,9 @@ function centerTown() {
 }
 // after the window resizes (fitCanvas already ran), tidy the view so a
 // rotate or resize can't leave you staring at nothing but fog
-addEventListener('resize', clampPan);
-centerTown();   // centre the town on first load
+addEventListener('resize', () => { fixOrientation(); clampPan(); });
+fixOrientation();   // start the right way up for the screen we're on
+centerTown();       // and centre the town
 
 // Change the zoom while keeping one spot of the town pinned under a finger
 // (or the mouse). worldPt is that spot; (sx, sy) is where it should stay on
@@ -2393,8 +2584,16 @@ function update(dt) {
               const d4 = Math.hypot(L.x - p.x, L.y - p.y);
               if (d4 < best) { best = d4; found = L; }
             }
+            // A POOP PERSON counts as a mess too. Somebody has to go and give
+            // them a good scrub, and afterwards there's nothing left of them.
+            for (const pp of poopPeople) {
+              if (pp.gone || (pp.by && pp.by !== p)) continue;
+              const d4 = Math.hypot(pp.x - p.x, pp.y - p.y);
+              if (d4 < best) { best = d4; found = pp; }
+            }
             if (found) { found.by = p; p.mess = found; p.messT = 0;
-                         p.mopping = found.kind === 'puddle'; }   // water needs a MOP
+                         // water and poop people both want a MOP
+                         p.mopping = found.kind === 'puddle' || found.kind === 'poop'; }
           }
           if (p.mess) {
             const near = Math.hypot(p.mess.x - p.x, p.mess.y - p.y);
@@ -2406,7 +2605,19 @@ function update(dt) {
               p.workSide = p.mess.x >= p.x ? 1 : -1;
               p.messT += dt;
               p.broom = (p.broom || 0) + dt * 7;
-              if (p.messT >= CLEAN_TIME) {  // all gone!
+              const need = p.mess.kind === 'poop' ? CLEAN_TIME * 1.8 : CLEAN_TIME;
+              if (p.messT >= need) {          // all gone!
+                if (p.mess.kind === 'poop') {
+                  // scrubbed away to nothing, in a burst of soap bubbles
+                  for (let i = 0; i < 12; i++) {
+                    debris.push({ x: p.mess.x, y: p.mess.y - 6,
+                      vx: (Math.random() - 0.5) * 160, vy: -Math.random() * 150 - 30,
+                      spin: Math.random() * 6, life: 0.7,
+                      color: i % 2 ? '#dff2ff' : '#b7ddf2' });
+                  }
+                  setStatus('Scrubbed a poop person away! (' +
+                            (poopPeople.filter(q => !q.gone).length - 1) + ' left)', '#7ddf8f');
+                }
                 p.mess.gone = true;
                 tidied++;
                 p.mess = null; p.messT = 0; p.sweeping = false; p.mopping = false;
@@ -2469,9 +2680,11 @@ function update(dt) {
           p.ick = 1.2;                        // the full-body EWWW
           p.ickCool = elapsed + 5;            // one catastrophe per shoe, please
           p.trackT = 2.6;                     // and now they're tracking it around
-          // ...and from the squished pie, SOMETHING RISES
-          if (poopPeople.length < 12) {
-            poopPeople.push({ x: L.x, y: L.y, angle: Math.random() * 6.28,
+          // ...and just occasionally, from the squished pie, SOMETHING RISES.
+          // This is meant to be a RARE and special horror, not an everyday
+          // event — most squished pies are simply squished pies.
+          if (poopPeople.length < POOP_MAX && Math.random() < POOP_ODDS) {
+            poopPeople.push({ kind: 'poop', x: L.x, y: L.y, angle: Math.random() * 6.28,
                               walk: Math.random() * 6.28, born: elapsed });
             setStatus('THE PIE GOT UP. A poop person is born!! (' + (poopPeople.length) + ' in town)', '#c98a3d');
           } else if (piesSteppedIn % 3 === 1) {
@@ -2748,16 +2961,24 @@ function update(dt) {
   // ---- POOP PEOPLE — they waddle. they smile. they are avoided. ----
   for (const pp of poopPeople) {
     pp.walk += dt * 7;
-    if (Math.random() < dt * 0.9) pp.angle = Math.random() * 6.28;
-    const nx = pp.x + Math.cos(pp.angle) * 26 * dt;
-    const ny = pp.y + Math.sin(pp.angle) * 26 * dt;
-    if (!blockedAt(nx, pp.y)) pp.x = nx; else pp.angle += 2;
-    if (!blockedAt(pp.x, ny)) pp.y = ny;
-    pp.x = Math.max(8, Math.min(gridW() - 8, pp.x));
-    pp.y = Math.max(TOPBAR + 8, Math.min(TOPBAR + gridH() - 8, pp.y));
-    // anyone who wanders too close is instantly, deeply grossed out
+    // ONCE SOMEBODY HAS COME TO CLEAN THEM they stop and stand still for it —
+    // they know the game is up. Otherwise they waddle about as usual.
+    const beingCleaned = pp.by && pp.by.mess === pp && pp.by.sweeping;
+    if (!beingCleaned) {
+      if (Math.random() < dt * 0.9) pp.angle = Math.random() * 6.28;
+      const nx = pp.x + Math.cos(pp.angle) * 26 * dt;
+      const ny = pp.y + Math.sin(pp.angle) * 26 * dt;
+      if (!blockedAt(nx, pp.y)) pp.x = nx; else pp.angle += 2;
+      if (!blockedAt(pp.x, ny)) pp.y = ny;
+      pp.x = Math.max(8, Math.min(gridW() - 8, pp.x));
+      pp.y = Math.max(TOPBAR + 8, Math.min(TOPBAR + gridH() - 8, pp.y));
+    }
+    pp.scrub = beingCleaned;          // the drawing shows suds while it's happening
+    // anyone who wanders too close is instantly, deeply grossed out — except
+    // the poor soul who's been sent to deal with them
     for (const p of people) {
       if (p.kind !== 'person' || p.sheltering || p.gone) continue;
+      if (p === pp.by) continue;
       if (!(p.ick > 0) && elapsed > (p.ickCool || 0) &&
           Math.hypot(p.x - pp.x, p.y - pp.y) < 20) {
         p.ick = 1.0;
@@ -2765,6 +2986,7 @@ function update(dt) {
       }
     }
   }
+  poopPeople = poopPeople.filter(pp => !pp.gone);   // scrubbed ones are gone for good
 
   // airborne folk tumble gracefully out of frame
   for (const f of launchedFolk) {
@@ -4002,6 +4224,17 @@ function draw() {
 
   // ---- THE POOP PEOPLE — waddling, smiling, hoping for friendship ----
   for (const pp of poopPeople) {
+    if (pp.scrub) {                  // mid-scrub: a lather of soap bubbles
+      for (let i = 0; i < 7; i++) {
+        const a = elapsed * 2.4 + i * 0.9 + pp.walk * 0.1;
+        ctx.fillStyle = `rgba(226, 244, 255, ${0.45 + Math.sin(a * 3) * 0.2})`;
+        ctx.beginPath();
+        ctx.arc(pp.x + Math.cos(a) * s * 0.28,
+                pp.y - s * 0.28 + Math.sin(a * 1.7) * s * 0.2,
+                s * (0.07 + (i % 3) * 0.03), 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
     const step = Math.sin(pp.walk) * 1.5;
     ctx.fillStyle = 'rgba(0,0,0,0.18)';
     ctx.beginPath(); ctx.ellipse(pp.x, pp.y + 3, 6, 2.4, 0, 0, Math.PI * 2); ctx.fill();

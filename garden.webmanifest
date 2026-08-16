@@ -1,0 +1,18 @@
+{
+  "name": "Grow A Garden",
+  "short_name": "Grow A Garden",
+  "start_url": "garden.html",
+  "scope": "./",
+  "display": "fullscreen",
+  "orientation": "any",
+  "background_color": "#2e4a2a",
+  "theme_color": "#2e4a2a",
+  "icons": [
+    {
+      "src": "icon-garden.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
