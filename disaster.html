@@ -83,6 +83,12 @@ const ROAD = 6, PATH = 7;
 function isWay(k) { return k === ROAD || k === PATH; }   // "is this a road or a path?"
 // the BIG blocks: a 3x3 skyscraper and a 2x2 castle tower
 const SKY = 8, TOWER = 9;
+// THE MONEY-MAKERS. A field is 2x2 and needs one farmhand; a factory is 3x3
+// and needs a whole shift of three. They earn far more than odd jobs do —
+// but only while somebody is actually there working them.
+const FIELD = 10, FACTORY = 11;
+function isWorkplace(k) { return k === FIELD || k === FACTORY; }
+function staffNeeded(k) { return k === FACTORY ? 3 : 1; }
 // which blocks can people hide inside? (capacity is 3 per SQUARE, so a
 // 2x2 building holds 12 and the mighty skyscraper holds 27!)
 function isShelter(k) {
@@ -117,7 +123,7 @@ const HIT_COOLDOWN = 0.55;
 // but they all point back to the top-left one, the "root". The root is
 // where we draw the tower, keep its damage, and where the repair crew go.
 // ---------------------------------------------------------------------
-const SPAN = { [APT]: 2, [SKY]: 3, [TOWER]: 2 };   // how many squares wide/tall a kind is
+const SPAN = { [APT]: 2, [SKY]: 3, [TOWER]: 2, [FIELD]: 2, [FACTORY]: 3 };   // how many squares wide/tall a kind is
 function spanOf(kind) { return SPAN[kind] || 1; }
 const rootAt = [];                             // {rx,ry} for every square of a big building
 for (let y = 0; y < ROWS; y++) rootAt.push(new Array(COLS).fill(null));
@@ -158,7 +164,8 @@ let peopleLaunched = 0;
 function blocked(gx, gy) {
   if (gx < 0 || gy < 0 || gx >= COLS || gy >= ROWS) return true;   // off the map
   const k = grid[gy][gx];
-  return k !== EMPTY && !isWay(k);        // roads and paths are walk-through
+  // roads, paths and crop fields are all walk-through
+  return k !== EMPTY && !isWay(k) && k !== FIELD;
 }
 // is there a road or path on this square?
 function wayAt(gx, gy) {
@@ -528,6 +535,40 @@ function scatterRubble(bx, by, howMany) {
 // Every block a disaster smashes pays you 1 MONEY. Yes, really.
 // Destruction is a business.
 let moneys = 30;
+
+// ---------------------------------------------------------------------
+// THE ECONOMY. Nobody gets paid for wrecking things any more. Money comes
+// from the town actually WORKING: folk running errands in and out of the
+// buildings, tending the animals, trading with each other, traffic on the
+// roads — and above all from fields and factories, which pay properly but
+// only while somebody is stood there doing the job.
+// Every single payment pops a little coin up out of the ground, so you can
+// see exactly where your money is coming from.
+// ---------------------------------------------------------------------
+const ERRAND_PAY = 1, ERRAND_TIME = 1.2;   // nipping into a building
+const TEND_PAY = 2,  TEND_TIME = 2.0;      // grooming a cow or a dog
+const TRADE_PAY = 1, TRADE_COOL = 7;       // bumping into a neighbour
+const DRIVE_PAY = 1, DRIVE_TIME = 5;       // being out on the roads
+const FIELD_PAY = 5, FACTORY_PAY = 18;     // a full shift's output
+const PRODUCE_TIME = 3.0;                  // how long one batch takes
+let earned = 0;                            // lifetime takings, for the scoreboard
+let coinPops = [];                         // the little +£ that float up
+
+function earn(amount, x, y) {
+  moneys += amount;
+  earned += amount;
+  if (coinPops.length < 90) coinPops.push({ x, y, amount, t: 0 });
+}
+
+// Every field and factory keeps its own little production timer, remembered
+// between frames by where its top-left square is.
+const siteState = new Map();
+function siteAt(rx, ry) {
+  const k = rx + ',' + ry;
+  let st = siteState.get(k);
+  if (!st) { st = { t: 0, staff: 0 }; siteState.set(k, st); }
+  return st;
+}
 let brokeFlash = 0;    // flashes when you try to buy doom you can't afford
 
 // ---------------------------------------------------------------------
@@ -567,7 +608,7 @@ function pickDisaster(item) {
   const total = item.cost * qty;     // the amount dial multiplies the bill
   if (moneys < total) {              // can't afford this one — say so, leave the menu open
     brokeFlash = 1.5;
-    setStatus('Not enough MONEYS — smashed blocks pay you back!', '#ff6b5e');
+    setStatus('Not enough MONEYS — put your town to work!', '#ff6b5e');
     return;
   }
   moneys -= total;
@@ -777,8 +818,8 @@ function smashBlock(gx, gy, bx, by, splash) {
   clearCell(r.rx, r.ry);             // takes every square of a big building
   roadsDirty = true;                 // a road may have just been wiped out
   destroyed++;
-  // bigger building, bigger payout: skyscraper 8, apartment 3, tower 3
-  moneys += kind === SKY ? 8 : kind === APT ? 3 : kind === TOWER ? 3 : 1;
+  // NOTE: wrecking things doesn't pay a penny. The money comes from the
+  // town working — see the economy section up top.
   for (let i = 0; i < 6 * sp; i++) { // a bigger building makes a bigger mess
     debris.push({
       x: bx, y: by,
@@ -953,6 +994,8 @@ const buttons = [
   { icon: '🏢', short: 'Apt',    type: APT },
   { icon: '🏙', short: 'Sky',    type: SKY },
   { icon: '🏰', short: 'Tower',  type: TOWER },
+  { icon: '🌾', short: 'Field',  type: FIELD },
+  { icon: '🏭', short: 'Works',  type: FACTORY },
   { icon: '🌳', short: 'Tree',   type: TREE },
   { icon: '🪨', short: 'Stone',  type: STONE },
   { icon: '🛡', short: 'Bunker', type: BUNKER },
@@ -1348,6 +1391,129 @@ function drawWay(gx, gy, x, y, s, kind) {
 // they're near one, they drift toward it. But they still wander off now and
 // then, because they're not robots.
 const STEP4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+// ---------------------------------------------------------------------
+// EARNING A LIVING. Tried in order of how well it pays:
+//   1. a shift at a field or factory   (best money by far)
+//   2. tending a cow or a dog
+//   3. an errand in and out of a building
+// Returns true if this person is busy earning, false if there's nothing
+// going and they may as well go for a wander.
+// ---------------------------------------------------------------------
+function doWork(p, dt, cs, siteClaims) {
+  // ---- ALREADY INSIDE a building on an errand? Wait it out. ----
+  if (p.inside) {
+    p.inside.t -= dt;
+    if (p.inside.t <= 0) {
+      // back out through the door, a bit better off
+      p.x = p.inside.gx * cs + cs / 2;
+      p.y = TOPBAR + p.inside.gy * cs + cs * 1.05;
+      earn(ERRAND_PAY, p.x, p.y - cs * 0.4);
+      p.inside = null;
+    }
+    return true;
+  }
+
+  // ---- A SHIFT AT A FIELD OR FACTORY ----
+  // Is the job we picked still there and still ours to do?
+  if (p.site) {
+    const k = grid[p.site.ry] && grid[p.site.ry][p.site.rx];
+    if (!isWorkplace(k)) p.site = null;
+  }
+  if (!p.site) {
+    let best = 1e9, found = null;
+    for (let gy = 0; gy < ROWS; gy++) {
+      for (let gx = 0; gx < COLS; gx++) {
+        const k = grid[gy][gx];
+        if (!isWorkplace(k)) continue;
+        const rt = rootAt[gy][gx];
+        if (rt && (rt.rx !== gx || rt.ry !== gy)) continue;      // one entry per site
+        const key = gx + ',' + gy;
+        if ((siteClaims.get(key) || 0) >= staffNeeded(k)) continue;   // fully staffed
+        const sp = spanOf(k);
+        const wx = gx * cs + sp * cs / 2, wy = TOPBAR + gy * cs + sp * cs / 2;
+        const d = Math.hypot(wx - p.x, wy - p.y);
+        if (d < best) { best = d; found = { rx: gx, ry: gy, x: wx, y: wy, span: sp, kind: k }; }
+      }
+    }
+    if (found) {
+      p.site = found;
+      siteClaims.set(found.rx + ',' + found.ry, (siteClaims.get(found.rx + ',' + found.ry) || 0) + 1);
+    }
+  }
+  if (p.site) {
+    const reach = cs * (p.site.span / 2 + 0.55);
+    const d = Math.hypot(p.site.x - p.x, p.site.y - p.y);
+    if (d > reach) {
+      p.angle = Math.atan2(p.site.y - p.y, p.site.x - p.x);
+      p.working = false;
+    } else {
+      p.working = true;                       // clocked on
+      p.toil = (p.toil || 0) + dt * 6;        // the working animation
+      siteAt(p.site.rx, p.site.ry).staff++;
+    }
+    return true;
+  }
+
+  // ---- TENDING AN ANIMAL ----
+  if (p.tending && (p.tending.gone || p.tending.by !== p)) p.tending = null;
+  if (!p.tending && Math.random() < dt * 1.5) {
+    let best = 1e9, found = null;
+    for (const q of people) {
+      if (q.gone || q.sheltering) continue;
+      if (q.kind !== 'cow' && q.kind !== 'dog') continue;
+      if (q.by && q.by !== p) continue;
+      const d = Math.hypot(q.x - p.x, q.y - p.y);
+      if (d < best && d < cs * 9) { best = d; found = q; }
+    }
+    if (found) { found.by = p; p.tending = found; p.tendT = 0; }
+  }
+  if (p.tending) {
+    const d = Math.hypot(p.tending.x - p.x, p.tending.y - p.y);
+    if (d > cs * 0.7) {
+      p.angle = Math.atan2(p.tending.y - p.y, p.tending.x - p.x);
+      p.working = false;
+    } else {
+      p.working = true;
+      p.toil = (p.toil || 0) + dt * 5;
+      p.tendT += dt;
+      if (p.tendT >= TEND_TIME) {
+        earn(TEND_PAY, p.x, p.y - cs * 0.4);
+        p.tending.by = null; p.tending = null; p.tendT = 0;
+      }
+    }
+    return true;
+  }
+
+  // ---- AN ERRAND: pop into a building and come out again ----
+  if (!p.errand && Math.random() < dt * 0.9) {
+    let best = 1e9, found = null;
+    for (let gy = 0; gy < ROWS; gy++) {
+      for (let gx = 0; gx < COLS; gx++) {
+        if (!isShelter(grid[gy][gx])) continue;
+        const bx = gx * cs + cs / 2, by = TOPBAR + gy * cs + cs / 2;
+        const d = Math.hypot(bx - p.x, by - p.y);
+        if (d < best && d < cs * 10) { best = d; found = { gx, gy, x: bx, y: by }; }
+      }
+    }
+    if (found) p.errand = found;
+  }
+  if (p.errand) {
+    if (!isShelter(grid[p.errand.gy][p.errand.gx])) { p.errand = null; return false; }
+    const d = Math.hypot(p.errand.x - p.x, p.errand.y - p.y);
+    if (d > cs * 0.8) {
+      p.angle = Math.atan2(p.errand.y - p.y, p.errand.x - p.x);
+    } else {
+      p.inside = { gx: p.errand.gx, gy: p.errand.gy, t: ERRAND_TIME };   // in you go
+      p.errand = null;
+    }
+    p.working = false;
+    return true;
+  }
+
+  p.working = false;
+  return false;
+}
+
 function strollAbout(p, dt, cs) {
   const gx = Math.floor(p.x / cs), gy = Math.floor((p.y - TOPBAR) / cs);
   if (wayAt(gx, gy)) {
@@ -1952,9 +2118,22 @@ function update(dt) {
     for (const p of people) { p.mess = null; p.messT = 0; p.sweeping = false; p.mopping = false; }
   }
   const claimed = new Set();
+  // who has already bagged a shift where? (so a factory doesn't get 40 people)
+  const siteClaims = new Map();
+  for (const p of people) {
+    if (p.site) {
+      const key = p.site.rx + ',' + p.site.ry;
+      siteClaims.set(key, (siteClaims.get(key) || 0) + 1);
+    }
+  }
   for (const p of people) {
     if (p.job) {
-      if (panicking) { p.job = null; p.jobT = 0; p.fixing = false; p.stand = null; }  // drop tools and RUN
+      if (panicking) {                       // drop everything and RUN
+        p.job = null; p.jobT = 0; p.fixing = false; p.stand = null;
+        p.working = false; p.errand = null;
+        if (p.tending) { p.tending.by = null; p.tending = null; }
+        p.site = null;
+      }
       else claimed.add(p.job.gx + ',' + p.job.gy);
     }
   }
@@ -2235,7 +2414,8 @@ function update(dt) {
             }
           } else {
             p.sweeping = false;
-            strollAbout(p, dt, cs);         // town's spotless — go for a wander
+            // NOTHING BROKEN AND NOTHING DIRTY? Then go and earn a living.
+            if (!doWork(p, dt, cs, siteClaims)) strollAbout(p, dt, cs);
           }
         }
       } else {
@@ -2252,7 +2432,8 @@ function update(dt) {
         dropLitter(p.x, p.y + cs * 0.1, 'pie');
       }
     }
-    if (p.fixing || p.sweeping) continue;   // mid-repair or mid-sweep: stand still
+    if (p.inside) continue;                 // indoors on an errand — invisible
+    if (p.fixing || p.sweeping || p.working) continue;  // busy: stand still and work
 
     // dogs scamper, cows plod, people are in between
     const pace = p.kind === 'dog' ? 1.35 : p.kind === 'cow' ? 0.6 : 1;
@@ -2329,6 +2510,50 @@ function update(dt) {
         vy: -400 - Math.random() * 300, spin: 0, life: 1.4, shirt: p.shirt });
     }
   }
+  // ---- FIELDS AND FACTORIES PAY OUT ----
+  // Each site counted its workers during the people loop just above. A site
+  // with a full crew produces a batch every PRODUCE_TIME; a short-staffed one
+  // slowly winds back down.
+  for (const [key, st] of siteState) {
+    const parts = key.split(',');
+    const rx = +parts[0], ry = +parts[1];
+    const kind = grid[ry] && grid[ry][rx];
+    if (!isWorkplace(kind)) { siteState.delete(key); continue; }
+    const sp = spanOf(kind);
+    if (st.staff >= staffNeeded(kind)) {
+      st.t += dt;
+      if (st.t >= PRODUCE_TIME) {
+        st.t = 0;
+        earn(kind === FACTORY ? FACTORY_PAY : FIELD_PAY,
+             rx * cs + sp * cs / 2, TOPBAR + ry * cs + sp * cs * 0.25);
+      }
+    } else {
+      st.t = Math.max(0, st.t - dt * 0.6);   // the line idles back down
+    }
+    st.lastStaff = st.staff;                 // remembered so the drawing can show it
+    st.staff = 0;                            // ready to be counted again
+  }
+
+  // ---- A BIT OF COMMERCE ----
+  // Neighbours who bump into each other do a spot of business. We only check
+  // each person against the few after them in the list, so this stays cheap
+  // even with a town of hundreds.
+  if (!panicking) {
+    for (const p of people) if (p.tradeCool > 0) p.tradeCool -= dt;
+    for (let i = 0; i < people.length; i++) {
+      const a = people[i];
+      if (a.kind !== 'person' || a.inside || a.sheltering || a.tradeCool > 0) continue;
+      for (let j = i + 1; j < Math.min(people.length, i + 5); j++) {
+        const b2 = people[j];
+        if (b2.kind !== 'person' || b2.inside || b2.sheltering || b2.tradeCool > 0) continue;
+        if (Math.hypot(a.x - b2.x, a.y - b2.y) > cs * 0.9) continue;
+        a.tradeCool = TRADE_COOL; b2.tradeCool = TRADE_COOL;
+        earn(TRADE_PAY * 2, (a.x + b2.x) / 2, (a.y + b2.y) / 2 - cs * 0.4);
+        break;
+      }
+    }
+  }
+
   // anyone launched into the air lets go of the mess they'd claimed
   for (const p of people) if (p.gone && p.mess) p.mess.by = null;
   people = people.filter(p => !p.gone);
@@ -2449,6 +2674,10 @@ function update(dt) {
         }
       }
     }
+    // TRAFFIC IS GOOD FOR BUSINESS — a car out working the roads pays its way
+    car.fare = (car.fare || 0) + dt;
+    if (car.fare >= DRIVE_TIME) { car.fare = 0; earn(DRIVE_PAY, car.x, car.y - cs * 0.3); }
+
     // did a disaster catch it?
     for (const D of disasters) {
       if (D.type === 'tornado' && Math.hypot(D.x - car.x, D.y - car.y) < 60) popCar(car);
@@ -2463,6 +2692,8 @@ function update(dt) {
   for (const b of blasts) b.t += dt;            // fireballs bloom then fade
   blasts = blasts.filter(b => b.t < b.life);
   litter = litter.filter(L => !L.gone);         // swept-up mess is gone for good
+  for (const c of coinPops) c.t += dt;          // the little coins float up and fade
+  coinPops = coinPops.filter(c => c.t < 1.1);
   footprints = footprints.filter(f => elapsed - f.born < 5);   // tracks fade away
 
   // ---- THE VIRUS — coughing, spreading, and, er, the other thing ----
@@ -2792,6 +3023,62 @@ function draw() {
         ctx.arc(x + s2 * 0.5, y + s2 * 0.92, s2 * 0.14, Math.PI, 0);
         ctx.fill();
         ctx.fillRect(x + s2 * 0.36, y + s2 * 0.92, s2 * 0.28, s2 * 0.001);
+      } else if (kind === FIELD) {
+        // ploughed earth with rows of crop, and a scarecrow keeping watch
+        ctx.fillStyle = '#6b5433';
+        ctx.fillRect(x + s2 * 0.04, y + s2 * 0.06, s2 * 0.92, s2 * 0.88);
+        ctx.fillStyle = '#5b4629';                       // furrows
+        for (let r = 0; r < 6; r++)
+          ctx.fillRect(x + s2 * 0.06, y + s2 * (0.1 + r * 0.14), s2 * 0.88, s2 * 0.03);
+        // rows of green shoots, swaying a little
+        for (let r = 0; r < 5; r++) {
+          for (let c = 0; c < 7; c++) {
+            const sway = Math.sin(elapsed * 1.6 + r * 0.8 + c * 0.5) * s2 * 0.012;
+            ctx.fillStyle = ['#7fc14a', '#6fae40', '#8ccd57'][(r + c) % 3];
+            ctx.fillRect(x + s2 * (0.1 + c * 0.12) + sway,
+                         y + s2 * (0.14 + r * 0.14), s2 * 0.045, s2 * 0.09);
+          }
+        }
+        ctx.strokeStyle = '#8a6a3a'; ctx.lineWidth = Math.max(1, s2 * 0.02);
+        ctx.strokeRect(x + s2 * 0.04, y + s2 * 0.06, s2 * 0.92, s2 * 0.88);
+        // the scarecrow
+        ctx.strokeStyle = '#6d5330'; ctx.lineWidth = Math.max(1, s2 * 0.025);
+        ctx.beginPath();
+        ctx.moveTo(x + s2 * 0.8, y + s2 * 0.24); ctx.lineTo(x + s2 * 0.8, y + s2 * 0.62);
+        ctx.moveTo(x + s2 * 0.68, y + s2 * 0.36); ctx.lineTo(x + s2 * 0.92, y + s2 * 0.36);
+        ctx.stroke();
+        ctx.fillStyle = '#c9a06a';
+        ctx.beginPath(); ctx.arc(x + s2 * 0.8, y + s2 * 0.2, s2 * 0.06, 0, Math.PI * 2); ctx.fill();
+      } else if (kind === FACTORY) {
+        // a proper works: brick shed, saw-tooth roof and smoking chimneys
+        ctx.fillStyle = '#7d4a3a';
+        ctx.fillRect(x + s2 * 0.06, y + s2 * 0.34, s2 * 0.88, s2 * 0.58);
+        ctx.fillStyle = '#6b3e30';                       // brick courses
+        for (let r = 0; r < 5; r++)
+          ctx.fillRect(x + s2 * 0.06, y + s2 * (0.4 + r * 0.11), s2 * 0.88, s2 * 0.02);
+        // saw-tooth roof
+        ctx.fillStyle = '#5d6870';
+        for (let t2 = 0; t2 < 4; t2++) {
+          ctx.beginPath();
+          ctx.moveTo(x + s2 * (0.06 + t2 * 0.22), y + s2 * 0.34);
+          ctx.lineTo(x + s2 * (0.06 + t2 * 0.22), y + s2 * 0.2);
+          ctx.lineTo(x + s2 * (0.28 + t2 * 0.22), y + s2 * 0.34);
+          ctx.closePath(); ctx.fill();
+        }
+        ctx.fillStyle = '#9fd8ff';                       // skylights
+        for (let t2 = 0; t2 < 4; t2++)
+          ctx.fillRect(x + s2 * (0.075 + t2 * 0.22), y + s2 * 0.23, s2 * 0.03, s2 * 0.1);
+        // chimneys
+        ctx.fillStyle = '#5a3328';
+        ctx.fillRect(x + s2 * 0.7, y + s2 * 0.04, s2 * 0.1, s2 * 0.32);
+        ctx.fillStyle = '#8a5040';
+        ctx.fillRect(x + s2 * 0.7, y + s2 * 0.04, s2 * 0.1, s2 * 0.04);
+        // big doorway and lit windows
+        ctx.fillStyle = '#3a2620';
+        ctx.fillRect(x + s2 * 0.36, y + s2 * 0.66, s2 * 0.28, s2 * 0.26);
+        ctx.fillStyle = '#ffd23f';
+        for (let c = 0; c < 3; c++)
+          ctx.fillRect(x + s2 * (0.1 + c * 0.1), y + s2 * 0.46, s2 * 0.07, s2 * 0.09);
       } else if (kind === BUNKER) {
         ctx.fillStyle = '#4a5548';                      // squat armored dome
         ctx.beginPath();
@@ -2811,6 +3098,36 @@ function draw() {
         ctx.fillStyle = '#c8d4c4';                      // bolts
         ctx.fillRect(x + s * 0.16, y + s * 0.8, s * 0.05, s * 0.05);
         ctx.fillRect(x + s * 0.79, y + s * 0.8, s * 0.05, s * 0.05);
+      }
+
+      // ---- IS THIS WORKPLACE ACTUALLY RUNNING? ----
+      if (isWorkplace(kind)) {
+        const st = siteState.get(gx + ',' + gy);
+        const crew = st ? st.lastStaff || 0 : 0;
+        const need = staffNeeded(kind);
+        if (crew >= need) {
+          // hard at work: smoke from the chimney, or a shimmer over the crop
+          if (kind === FACTORY) {
+            for (let i = 0; i < 3; i++) {
+              const puff = (elapsed * 0.5 + i * 0.33) % 1;
+              ctx.fillStyle = `rgba(180, 180, 190, ${0.4 * (1 - puff)})`;
+              ctx.beginPath();
+              ctx.arc(x + s2 * 0.75 + Math.sin(puff * 5) * s2 * 0.05,
+                      y + s2 * 0.04 - puff * s2 * 0.45,
+                      s2 * (0.05 + puff * 0.09), 0, Math.PI * 2);
+              ctx.fill();
+            }
+          }
+        } else {
+          // SHORT-HANDED — nothing is being made. Say so.
+          ctx.fillStyle = 'rgba(10, 14, 20, 0.72)';
+          const bw = s2 * 0.62, bh = s2 * 0.2;
+          rrect(x + (s2 - bw) / 2, y - bh * 0.9, bw, bh, bh * 0.3); ctx.fill();
+          ctx.fillStyle = '#ffb454';
+          ctx.font = `bold ${Math.max(7, s2 * 0.13)}px monospace`;
+          ctx.textAlign = 'center';
+          ctx.fillText(`🧍${crew}/${need}`, x + s2 / 2, y - bh * 0.28);
+        }
       }
 
       // ---- BATTLE SCARS ----
@@ -3891,6 +4208,23 @@ function draw() {
         ctx.beginPath(); ctx.arc(ball.x - 5, ball.y - 5, 4.5, 0, Math.PI * 2); ctx.fill();
       }
     }
+  }
+
+  // ---- THE LITTLE COINS ----
+  // Every payment floats a gold +N up out of the ground and fades. This is
+  // how you can see at a glance which bits of your town are earning.
+  for (const c of coinPops) {
+    const f = c.t / 1.1;
+    ctx.globalAlpha = 1 - f * f;
+    const cy2 = c.y - f * s * 1.3;
+    ctx.font = `bold ${Math.max(9, s * 0.44)}px monospace`;
+    ctx.textAlign = 'center';
+    ctx.lineWidth = Math.max(2, s * 0.09);
+    ctx.strokeStyle = 'rgba(10, 14, 20, 0.85)';
+    ctx.strokeText('💰+' + c.amount, c.x, cy2);
+    ctx.fillStyle = '#ffd23f';
+    ctx.fillText('💰+' + c.amount, c.x, cy2);
+    ctx.globalAlpha = 1;
   }
 
   ctx.restore();   // stop shaking for the buttons — the UI stays calm
