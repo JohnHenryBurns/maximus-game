@@ -146,6 +146,10 @@ const BADDIE_SPOTS = [
 let solids = [];
 let specCoins = [];     // where beans belong (so restarting re-places them)
 let specBaddies = [];   // where sniffers wake up
+let specSpikes = [];    // where the pointy bits live
+let specPlatforms = []; // where the gliding platforms run
+let spikes = [];
+let platforms = [];
 let FLAG = { x: 6100, y: FLOOR };
 let startPos = { x: 100, y: FLOOR - 60 };
 let worldW = STORY_W;
@@ -157,6 +161,8 @@ function loadStory() {
   solids = STORY_SOLIDS.map(s => ({ ...s, lid: s.y === FLOOR }));
   specCoins = COIN_SPOTS.map(c => ({ x: c[0], y: c[1] }));
   specBaddies = BADDIE_SPOTS.map(b => ({ x: b[0], y: FLOOR - 40 }));
+  specSpikes = [];
+  specPlatforms = [];
   FLAG = { x: 6100, y: FLOOR };
   startPos = { x: 100, y: FLOOR - 60 };
   worldW = STORY_W;
@@ -172,6 +178,8 @@ let edit = {
   tiles: new Set(),
   beans: [],
   sniffers: [],
+  spikes: [],
+  platforms: [],        // each one: { a: [cx, cy], b: [cx, cy] } — it glides a→b→a
   start: [2, 12],
   exit: [16, 12],
 };
@@ -181,6 +189,7 @@ for (let i = 0; i < 19; i++) edit.tiles.add(i + ',13');
 function saveCustom() {
   localStorage.setItem('fartcave_custom', JSON.stringify({
     tiles: [...edit.tiles], beans: edit.beans, sniffers: edit.sniffers,
+    spikes: edit.spikes, platforms: edit.platforms,
     start: edit.start, exit: edit.exit,
   }));
 }
@@ -188,7 +197,8 @@ try {
   const saved = JSON.parse(localStorage.getItem('fartcave_custom'));
   if (saved && saved.tiles) {
     edit = { tiles: new Set(saved.tiles), beans: saved.beans || [],
-             sniffers: saved.sniffers || [], start: saved.start || [2, 12],
+             sniffers: saved.sniffers || [], spikes: saved.spikes || [],
+             platforms: saved.platforms || [], start: saved.start || [2, 12],
              exit: saved.exit || [16, 12] };
   }
 } catch (err) { /* a broken save just means a fresh start */ }
@@ -212,6 +222,14 @@ function loadCustomLevel() {
     const [cx, cy] = k.split(',').map(Number);
     return { x: cx * TILE + 3, y: cy * TILE + TILE - 40 };
   });
+  specSpikes = edit.spikes.map(k => {
+    const [cx, cy] = k.split(',').map(Number);
+    return { x: cx * TILE + 4, y: cy * TILE + TILE * 0.45, w: TILE - 8, h: TILE * 0.55 };
+  });
+  specPlatforms = edit.platforms.map(p => ({
+    ax: p.a[0] * TILE, ay: p.a[1] * TILE,
+    bx: p.b[0] * TILE, by: p.b[1] * TILE,
+  }));
   FLAG = { x: edit.exit[0] * TILE + TILE / 2, y: (edit.exit[1] + 1) * TILE };
   startPos = { x: edit.start[0] * TILE + 6, y: edit.start[1] * TILE - 8 };
   worldW = Math.max(maxX + 300, 2000);
@@ -256,6 +274,11 @@ function resetLevel() {
   baddies = specBaddies.map(b => ({
     x: b.x, y: b.y, w: 40, h: 40, dir: 1, squish: 0,
   }));
+  spikes = specSpikes.map(s => ({ ...s }));
+  platforms = specPlatforms.map(p => ({
+    ...p, x: p.ax, y: p.ay, w: TILE * 2, h: 16, t: 0, dir: 1, dx: 0, dy: 0,
+  }));
+  player.ride = null;
 }
 loadStory();
 
@@ -306,7 +329,10 @@ let panLast = null;
 let hoverPt = null;
 let uiRects = [];
 
+let pendingPlat = null;   // a platform waiting for its second tap
+
 function uiAction(id) {
+  pendingPlat = null;
   if (id === 'build') {
     mode = 'build';
     editCamX = edit.start[0] * TILE - canvas.width / 2;
@@ -330,16 +356,29 @@ function applyTool(sx, sy) {
     edit.tiles.add(key);
     edit.beans = edit.beans.filter(k => k !== key);
     edit.sniffers = edit.sniffers.filter(k => k !== key);
+    edit.spikes = edit.spikes.filter(k => k !== key);
   } else if (tool === 'bean') {
     if (!edit.tiles.has(key) && !edit.beans.includes(key)) edit.beans.push(key);
   } else if (tool === 'nose') {
     if (!edit.tiles.has(key) && !edit.sniffers.includes(key)) edit.sniffers.push(key);
+  } else if (tool === 'spike') {
+    if (!edit.tiles.has(key) && !edit.spikes.includes(key)) edit.spikes.push(key);
+  } else if (tool === 'plat') {
+    // two taps: first sets where it starts, second sets where it glides to
+    if (!pendingPlat) pendingPlat = [cx, cy];
+    else {
+      edit.platforms.push({ a: pendingPlat, b: [cx, cy] });
+      pendingPlat = null;
+    }
   } else if (tool === 'start') edit.start = [cx, cy];
   else if (tool === 'exit') edit.exit = [cx, cy];
   else if (tool === 'erase') {
     edit.tiles.delete(key);
     edit.beans = edit.beans.filter(k => k !== key);
     edit.sniffers = edit.sniffers.filter(k => k !== key);
+    edit.spikes = edit.spikes.filter(k => k !== key);
+    edit.platforms = edit.platforms.filter(p =>
+      !(p.a[0] === cx && p.a[1] === cy) && !(p.b[0] === cx && p.b[1] === cy));
   }
   saveCustom();                         // every change is saved instantly
 }
@@ -454,10 +493,29 @@ function update(dt) {
   // do small hops AND big leaps with one button
   if (!heldJump() && player.vy < -300) player.vy = -300;
 
+  // ---- moving platforms glide along their invisible rails ----
+  for (const p of platforms) {
+    const len = Math.hypot(p.bx - p.ax, p.by - p.ay) || 1;
+    p.t += p.dir * (75 / len) * dt;
+    if (p.t > 1) { p.t = 1; p.dir = -1; }
+    if (p.t < 0) { p.t = 0; p.dir = 1; }
+    const nx = p.ax + (p.bx - p.ax) * p.t;
+    const ny = p.ay + (p.by - p.ay) * p.t;
+    p.dx = nx - p.x; p.dy = ny - p.y;
+    p.x = nx; p.y = ny;
+  }
+  // if you were standing on one, it carries you with it
+  if (player.ride) {
+    player.x += player.ride.dx;
+    player.y += player.ride.dy;
+  }
+  player.ride = null;
+
   // ---- gravity, then collide with the world one axis at a time ----
+  const colliders = platforms.length ? solids.concat(platforms) : solids;
   player.vy += GRAVITY * dt;
   player.x += player.vx * dt;
-  for (const s of solids) {
+  for (const s of colliders) {
     if (!overlaps(player, s)) continue;
     if (player.vx > 0) player.x = s.x - player.w;
     else if (player.vx < 0) player.x = s.x + s.w;
@@ -466,13 +524,23 @@ function update(dt) {
 
   player.y += player.vy * dt;
   player.onGround = false;
-  for (const s of solids) {
+  for (const s of colliders) {
     if (!overlaps(player, s)) continue;
-    if (player.vy > 0) { player.y = s.y - player.h; player.vy = 0; player.onGround = true; }
-    else if (player.vy < 0) { player.y = s.y + s.h; player.vy = 0; }
+    if (player.vy > 0) {
+      player.y = s.y - player.h; player.vy = 0; player.onGround = true;
+      if (s.dx !== undefined) player.ride = s;   // platforms remember their rider
+    } else if (player.vy < 0) { player.y = s.y + s.h; player.vy = 0; }
   }
-  // remember the last spot of solid ground, for coming back after a fall
-  if (player.onGround) lastSafe = { x: player.x, y: player.y - 10 };
+  // remember the last spot of REAL ground for coming back after a fall —
+  // a moving platform doesn't count, it might have wandered over a pit
+  if (player.onGround && !player.ride) lastSafe = { x: player.x, y: player.y - 10 };
+
+  // ---- spikes are pointy. do not touch the pointy. ----
+  if (player.invuln <= 0) {
+    for (const sp of spikes) {
+      if (overlaps(player, sp)) { player.vy = -500; hurt(false); break; }
+    }
+  }
 
   // ---- falling into a pit ----
   if (player.y > levelBottom + 400) hurt(true);
@@ -635,6 +703,23 @@ function draw() {
         ctx.strokeRect(bx, s.y, Math.min(TILE, s.x + s.w - bx), s.h);
       }
     }
+  }
+
+  // spikes — the pointy furniture of ambitious builders
+  for (const sp of spikes) {
+    drawSpikeCell(sp.x - 4, sp.y - TILE * 0.45);
+  }
+  // gliding platforms, each with a faint dotted rail showing its path
+  for (const p of platforms) {
+    ctx.strokeStyle = 'rgba(125, 211, 255, 0.15)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([4, 8]);
+    ctx.beginPath();
+    ctx.moveTo(p.ax + TILE, p.ay + 8);
+    ctx.lineTo(p.bx + TILE, p.by + 8);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    drawPlatformSlab(p.x, p.y);
   }
 
   // beans — fart fuel, gently bobbing where jumping is worth it
@@ -805,8 +890,38 @@ function draw() {
 // ---------------------------------------------------------------------
 const TOOLS = [
   ['ground', 'GROUND'], ['bean', 'BEAN'], ['nose', 'NOSE'],
+  ['spike', 'SPIKE'], ['plat', 'PLATFORM'],
   ['start', 'START'], ['exit', 'EXIT'], ['erase', 'ERASE'], ['pan', 'PAN'],
 ];
+
+// spikes look the same in the builder and in the game — draw them once
+function drawSpikeCell(x, y) {
+  ctx.fillStyle = '#8a8378';
+  ctx.beginPath();
+  for (let i = 0; i < 3; i++) {
+    const sx = x + 4 + i * 13;
+    ctx.moveTo(sx, y + TILE);
+    ctx.lineTo(sx + 6.5, y + TILE * 0.2);
+    ctx.lineTo(sx + 13, y + TILE);
+  }
+  ctx.fill();
+  ctx.fillStyle = '#d8d2c8';                          // gleaming tips
+  for (let i = 0; i < 3; i++) {
+    const sx = x + 4 + i * 13;
+    ctx.fillRect(sx + 4.5, y + TILE * 0.2, 4, 8);
+  }
+}
+
+// a gliding platform: a mossy slab with faintly glowing crystal ends
+function drawPlatformSlab(x, y) {
+  ctx.fillStyle = '#544b42';
+  ctx.fillRect(x, y, TILE * 2, 16);
+  ctx.fillStyle = '#4f7a4a';
+  ctx.fillRect(x, y, TILE * 2, 5);
+  ctx.fillStyle = 'rgba(125, 211, 255, 0.8)';
+  ctx.fillRect(x, y, 5, 16);
+  ctx.fillRect(x + TILE * 2 - 5, y, 5, 16);
+}
 
 function drawEditor() {
   const W = canvas.width, H = canvas.height;
@@ -866,6 +981,39 @@ function drawEditor() {
     ctx.quadraticCurveTo(x + 20, y + 46, x + 4, y + 32);
     ctx.fill();
   }
+  for (const key of edit.spikes) {
+    const [cx, cy] = key.split(',').map(Number);
+    drawSpikeCell(cx * TILE, cy * TILE);
+  }
+  for (const p of edit.platforms) {
+    ctx.strokeStyle = 'rgba(125, 211, 255, 0.35)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([4, 8]);
+    ctx.beginPath();
+    ctx.moveTo(p.a[0] * TILE + TILE, p.a[1] * TILE + 8);
+    ctx.lineTo(p.b[0] * TILE + TILE, p.b[1] * TILE + 8);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    drawPlatformSlab(p.a[0] * TILE, p.a[1] * TILE);
+    ctx.globalAlpha = 0.35;                          // the ghost of where it goes
+    drawPlatformSlab(p.b[0] * TILE, p.b[1] * TILE);
+    ctx.globalAlpha = 1;
+  }
+  // a platform waiting for its second tap, tied to your pointer
+  if (pendingPlat) {
+    drawPlatformSlab(pendingPlat[0] * TILE, pendingPlat[1] * TILE);
+    if (hoverPt) {
+      ctx.strokeStyle = 'rgba(255, 210, 63, 0.6)';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([4, 8]);
+      ctx.beginPath();
+      ctx.moveTo(pendingPlat[0] * TILE + TILE, pendingPlat[1] * TILE + 8);
+      ctx.lineTo(hoverPt.x + editCamX, hoverPt.y + editCamY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
+
   // the start marker: a little ghost of the hero himself
   const stx = edit.start[0] * TILE + TILE / 2, sty = edit.start[1] * TILE + TILE / 2;
   ctx.fillStyle = 'rgba(140, 220, 110, 0.75)';
@@ -917,7 +1065,10 @@ function drawEditor() {
   ctx.textAlign = 'left';
   ctx.fillStyle = 'rgba(255,255,255,0.45)';
   ctx.font = '13px monospace';
-  ctx.fillText('tap or drag to place — swipe with TWO fingers (or right-drag, or arrow keys) to look around — everything saves itself',
+  ctx.fillText(tool === 'plat'
+    ? (pendingPlat ? 'now tap where it should glide TO — the platform will ride back and forth forever'
+                   : 'tap once where the platform STARTS...')
+    : 'tap or drag to place — swipe with TWO fingers (or right-drag, or arrow keys) to look around — everything saves itself',
                10, by + 60 > 90 ? by + 52 : 88);
 }
 
