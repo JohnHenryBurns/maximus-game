@@ -53,7 +53,11 @@ addEventListener('resize', fitCanvas);
 // upright almost perfectly, so the whole town shows at once with no wasted
 // space. Zoom in to build the little details.
 // ---------------------------------------------------------------------
-const COLS = 20, ROWS = 40;
+// The town is 20 across and 40 down. Turn the phone on its side and these
+// two SWAP over: the whole town rotates a quarter turn so its long side
+// runs along the long side of the screen. It's the same town either way —
+// the same squares, the same buildings, just turned round. See rotateWorld.
+let COLS = 20, ROWS = 40;
 let cell = 34;                      // pixel size of one grid square
 // Room at the top for the toolbar. It's two tiers now (money + THE MACHINE
 // on top, the build palette in a full-width row below) so everything fits on
@@ -886,6 +890,123 @@ function clampPan() {
   panX = loX > hiX ? (PW - gw) / 2 : Math.min(hiX, Math.max(loX, panX));
   panY = loY > hiY ? (PH - gh) / 2 : Math.min(hiY, Math.max(loY, panY));
 }
+// ---------------------------------------------------------------------
+// TURNING THE PHONE ON ITS SIDE
+//
+// Rather than squashing the tall town into a wide screen, we turn the whole
+// WORLD a quarter turn. COLS and ROWS swap over, every square of the town
+// moves round to where it now belongs, and everybody standing on it comes
+// with it. Because we rotate the DATA and not the picture, every house,
+// tree and person is still drawn the right way up automatically, and the
+// roads work out their own new lane directions from scratch.
+//   dir = +1 turns it clockwise (going into landscape)
+//   dir = -1 turns it back again (going into portrait)
+// ---------------------------------------------------------------------
+function rotateWorld(dir) {
+  const oldCols = COLS, oldRows = ROWS, oldCs = cellSize();
+
+  // ---- the town itself ----
+  const ng = [], nd = [], nh = [], nr = [];
+  for (let y = 0; y < oldCols; y++) {           // new grid is oldCols tall
+    ng.push(new Array(oldRows).fill(EMPTY));
+    nd.push(new Array(oldRows).fill(PRISTINE));
+    nh.push(new Array(oldRows).fill(0));
+    nr.push(new Array(oldRows).fill(null));
+  }
+  // where does old square (gx,gy) end up?
+  const cellTo = (gx, gy) => dir > 0 ? { x: oldRows - 1 - gy, y: gx }
+                                     : { x: gy, y: oldCols - 1 - gx };
+  for (let gy = 0; gy < oldRows; gy++) {
+    for (let gx = 0; gx < oldCols; gx++) {
+      const n = cellTo(gx, gy);
+      ng[n.y][n.x] = grid[gy][gx];
+      nd[n.y][n.x] = damage[gy][gx];
+      nh[n.y][n.x] = hitCool[gy][gx];
+      const rt = rootAt[gy][gx];
+      if (rt) {
+        // A big building stays a square, so its new top-left corner is just
+        // the smallest x and y of the block once it's been turned.
+        const sp = spanOf(grid[rt.ry][rt.rx]);
+        nr[n.y][n.x] = dir > 0
+          ? { rx: oldRows - sp - rt.ry, ry: rt.rx }
+          : { rx: rt.ry,                ry: oldCols - sp - rt.rx };
+      }
+    }
+  }
+  COLS = oldRows; ROWS = oldCols;
+  grid.length = 0;    for (const r of ng) grid.push(r);
+  damage.length = 0;  for (const r of nd) damage.push(r);
+  hitCool.length = 0; for (const r of nh) hitCool.push(r);
+  rootAt.length = 0;  for (const r of nr) rootAt.push(r);
+
+  // the road bookkeeping arrays have to change shape too
+  for (const arr of [roadConn, roadDual, roadOne, roadJunc, roadTurn]) {
+    arr.length = 0;
+    for (let y = 0; y < ROWS; y++) arr.push(new Array(COLS).fill(null));
+  }
+  roadsDirty = true;
+
+  // ---- and now everything standing on the town ----
+  const newCs = cellSize();
+  const pt = (o, xk, yk) => {
+    if (!o || typeof o[xk] !== 'number') return;
+    const fx = o[xk] / oldCs, fy = (o[yk] - TOPBAR) / oldCs;
+    const nfx = dir > 0 ? oldRows - fy : fy;
+    const nfy = dir > 0 ? fx : oldCols - fx;
+    o[xk] = nfx * newCs; o[yk] = TOPBAR + nfy * newCs;
+  };
+  const vec = (o, xk, yk) => {
+    if (!o || typeof o[xk] !== 'number') return;
+    const dx = o[xk], dy = o[yk];
+    o[xk] = dir > 0 ? -dy : dy;
+    o[yk] = dir > 0 ? dx : -dx;
+  };
+  const cellOf = (o, xk, yk) => {
+    if (!o || typeof o[xk] !== 'number') return;
+    const n = cellTo(o[xk], o[yk]);
+    o[xk] = n.x; o[yk] = n.y;
+  };
+  const spin = o => { if (o && typeof o.angle === 'number') o.angle += dir * Math.PI / 2; };
+
+  for (const p of people) {
+    pt(p, 'x', 'y'); spin(p);
+    pt(p.stand, 'x', 'y');
+    if (p.job)    { cellOf(p.job, 'gx', 'gy');    pt(p.job, 'x', 'y'); }
+    if (p.errand) { cellOf(p.errand, 'gx', 'gy'); pt(p.errand, 'x', 'y'); }
+    if (p.inside) cellOf(p.inside, 'gx', 'gy');
+    if (p.sheltering) cellOf(p.sheltering, 'gx', 'gy');
+    if (p.shelterTarget) { cellOf(p.shelterTarget, 'gx', 'gy'); pt(p.shelterTarget, 'x', 'y'); }
+    if (p.site)   { cellOf(p.site, 'rx', 'ry');   pt(p.site, 'x', 'y'); }
+  }
+  for (const c of cars)  { pt(c, 'x', 'y'); vec(c, 'dx', 'dy'); }
+  for (const L of litter) { pt(L, 'x', 'y'); if (L.gx !== undefined) cellOf(L, 'gx', 'gy'); }
+  for (const q of poopPeople) { pt(q, 'x', 'y'); spin(q); }
+  for (const b of badGuys)    { pt(b, 'x', 'y'); spin(b); }
+  for (const d of dinos)      { pt(d, 'x', 'y'); spin(d); d.face = 1; }
+  for (const c of craters)    pt(c, 'x', 'y');
+  for (const D of disasters) {
+    pt(D, 'x', 'y'); pt(D, 'ex', 'ey');
+    if (D.meteors) for (const m of D.meteors) { pt(m, 'x', 'y'); }
+    if (D.balls)   for (const q of D.balls)   { pt(q, 'x', 'y'); vec(q, 'vx', 'vy'); }
+    if (D.cracks)  for (const k of D.cracks)  for (const q of k.pts) pt(q, 'x', 'y');
+  }
+  // Work sites find themselves again on their own the next time somebody
+  // clocks on, so we just forget the half-finished batches.
+  siteState.clear();
+  // things mid-flight aren't worth chasing round a corner
+  debris.length = 0; blasts.length = 0; coinPops.length = 0; launchedFolk.length = 0;
+
+  centerTown();
+}
+
+// Which way up should the town be for the screen we've got? Landscape means
+// the long side of the town runs along the long side of the screen.
+function fixOrientation() {
+  const wantLandscape = canvas.width > (canvas.height - TOPBAR);
+  const isLandscape = COLS > ROWS;
+  if (wantLandscape !== isLandscape) rotateWorld(wantLandscape ? 1 : -1);
+}
+
 // put the town in the middle of the view (used on first load)
 function centerTown() {
   panX = (canvas.width - gridW() * zoom) / 2;
@@ -894,8 +1015,9 @@ function centerTown() {
 }
 // after the window resizes (fitCanvas already ran), tidy the view so a
 // rotate or resize can't leave you staring at nothing but fog
-addEventListener('resize', clampPan);
-centerTown();   // centre the town on first load
+addEventListener('resize', () => { fixOrientation(); clampPan(); });
+fixOrientation();   // start the right way up for the screen we're on
+centerTown();       // and centre the town
 
 // Change the zoom while keeping one spot of the town pinned under a finger
 // (or the mouse). worldPt is that spot; (sx, sy) is where it should stay on
