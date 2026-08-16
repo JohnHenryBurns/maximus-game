@@ -14,11 +14,14 @@
 <canvas id="game"></canvas>
 <script>
 // =====================================================================
-// DICE QUEST — a roleplaying game where the d20 decides EVERYTHING.
-// You are SIR TAPALOT, a knight. The story shows you choices; each
-// choice says what you need to roll. Tap it, the die tumbles, and
-// fate does the rest. Natural 20 always succeeds. Natural 1 always
-// fails. That's the oldest rule in roleplaying, and it's a good one.
+// DICE QUEST — a roleplaying game where the d20 decides EVERYTHING,
+// and the STORY ITSELF is rolled up fresh every playthrough.
+//
+// Real Dungeon Masters do this with "random tables": lists of quest
+// bits, where you roll dice to pick one from each list and smoosh
+// them together into tonight's adventure. That's exactly what this
+// file does. Who needs help, what got stolen, who took it, and what
+// stands in your way — all different, every single time.
 // =====================================================================
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
@@ -42,7 +45,6 @@ let audio = null;
 function ensureAudio() {
   if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)();
 }
-// one short "tick" — we play a few of these while the die tumbles
 function clack(when, pitch) {
   if (!audio) return;
   const o = audio.createOscillator(), g = audio.createGain();
@@ -53,12 +55,10 @@ function clack(when, pitch) {
   o.connect(g); g.connect(audio.destination);
   o.start(when); o.stop(when + 0.07);
 }
-// a little rising fanfare for success
 function fanfare() {
   if (!audio) return;
   [523, 659, 784, 1047].forEach((n, i) => clack(audio.currentTime + i * 0.09, n));
 }
-// a sad slide-down for failure (wah, waaah...)
 function sadTrombone() {
   if (!audio) return;
   const o = audio.createOscillator(), g = audio.createGain();
@@ -72,195 +72,349 @@ function sadTrombone() {
 }
 
 // ---------------------------------------------------------------------
-// THE ADVENTURE — every scene is: some story, then some choices.
-// A choice with a "dc" needs a roll that high or higher to succeed.
-// (dc is what D&D calls it — "difficulty class". Bigger = harder.)
-// A choice with dc 0 just happens — no roll, no risk.
+// THE RANDOM TABLES — the ingredients every quest is cooked from.
+// Add a line to any list and the game instantly knows new stories.
 // ---------------------------------------------------------------------
-const SCENES = {
-  start: {
-    text: ['You are SIR TAPALOT, bravest knight in the land.',
-           'The king is sobbing on the castle steps.',
-           '',
-           'A DRAGON has stolen his GOLDEN THRONE.',
-           '(Yes. That throne. The bathroom one.)',
-           '',
-           '"Bring it back," he sniffles. "Before lunch."'],
+const GIVERS = [
+  { name: 'The KING', doing: 'is sobbing on the castle steps',
+    reward: 'The king weeps with joy and knights you TWICE.' },
+  { name: 'The QUEEN', doing: 'is pacing the throne room, furious',
+    reward: 'The queen declares a national holiday: Sir Tapalot Day.' },
+  { name: 'The ROYAL BAKER', doing: 'is covered in flour and tears',
+    reward: 'The baker bakes you a cake the size of a horse.' },
+  { name: 'Your GRANDMA', doing: 'is tapping her foot on the porch',
+    reward: 'Grandma pinches your cheek and slips you five gold.' },
+  { name: 'GERALD the wizard', doing: 'is here, and his beard is on fire (a little)',
+    reward: 'Gerald teaches your sword to glow in the dark.' },
+  { name: 'A TALKING PIG', doing: 'is standing on a barrel, very upset',
+    reward: 'The pig names all seventeen of his piglets after you.' },
+];
+
+const ITEMS = [
+  'the GOLDEN THRONE (yes. the bathroom one)',
+  'the ROYAL UNDERPANTS (the lucky pair)',
+  'the GREAT CHEESE WHEEL of the kingdom',
+  'the MAGIC SPATULA of Flipping',
+  'KEVIN, the royal goose',
+  'the ENCHANTED WHOOPEE CUSHION',
+  'the INVISIBLE CROWN (last seen... somewhere)',
+];
+
+const VILLAINS = [
+  { name: 'a DRAGON',
+    lair: ['A glittering cave yawns in Dragon Mountain.',
+           'And there, snoring on a pile of treasure,',
+           'the dragon sits right on top of your prize.'],
+    soft: '"I just wanted something nice," it sniffs.',
+    roar: '"MY TREASURE!" the dragon roars' },
+  { name: 'a GOBLIN GANG',
+    lair: ['You reach a messy camp in Stinky Hollow.',
+           'Five goblins are arguing at top volume over',
+           'whose turn it is to hold your prize.'],
+    soft: '"We only BORROWED it," they mumble, kicking dirt.',
+    roar: '"GET THE KNIGHT!" the goblins squeal' },
+  { name: 'the SWAMP WITCH',
+    lair: ['A crooked hut on chicken legs squats in the bog.',
+           'Inside, the witch stirs a burping cauldron,',
+           'your prize sitting proudly on her shelf.'],
+    soft: '"Bah. I only wanted some company," she admits.',
+    roar: '"MY PRETTY!" the witch cackles' },
+  { name: 'a GIANT BABY',
+    lair: ['An enormous crib towers on Beanstalk Hill.',
+           'A baby the size of a barn is using',
+           'your prize as a teething toy. It is soggy.'],
+    soft: 'It just wanted something to chew. Poor thing.',
+    roar: 'The baby cries so loud the hills shake' },
+  { name: 'the ghost of SIR BOOSALOT',
+    lair: ['A ruined tower stands ahead — spooky, but tidy.',
+           'Inside, a ghostly knight hums to himself,',
+           'polishing your prize with his cape.'],
+    soft: '"Being a ghost is lonely," he sighs.',
+    roar: '"WOOOOO!" Sir Boosalot woooos' },
+];
+
+// every obstacle offers three attempts; failing is ALWAYS funny and
+// NEVER stops the quest — it just changes how the story goes.
+const OBSTACLES = [
+  { title: ['A rickety bridge crosses a deep gorge.',
+            'A TROLL blocks the way, arms folded.',
+            '"NONE SHALL PASS without the SECRET PASSWORD."'],
     choices: [
-      { label: 'Ride your horse to Dragon Mountain', dc: 8, success: 'ride_ok', fail: 'trough' },
+      { label: 'Guess the password', dc: 12,
+        ok: ['You try: "...pretty please, with a troll on top?"',
+             'The troll GASPS. "That... is correct."',
+             'He wipes away a tear and waves you through.'],
+        no: ['You guess "swordfish." Then "fish sword."',
+             'The troll sighs, picks you up, and bonks you',
+             'gently over the gorge. Rude. But helpful.'] },
+      { label: 'Sneak under the bridge', dc: 10,
+        ok: ['You tiptoe under like a very sneaky crab.',
+             'He never sees you. You even find three',
+             'lost coins down there. Riches AND glory.'],
+        no: ['Halfway under, your armor squeaks LOUDLY.',
+             '"I CAN HEAR YE." He lifts you out by one leg',
+             'and sets you on the far side, unimpressed.'] },
+      { label: 'Challenge him to a BURPING contest', dc: 6,
+        ok: ['You summon a burp from your very soul.',
+             'BRAAAAAP. Birds scatter. The bridge wobbles.',
+             'The troll bows, weeping. "MAGNIFICENT."'],
+        no: ['Your burp is a tiny, polite "brip."',
+             'His burp blows your hair flat. He wins —',
+             'but pats your head and lets you cross anyway.'] },
+    ] },
+  { title: ['The Whispering Woods close in around you.',
+            'The trees are giggling. At YOU.'],
+    choices: [
+      { label: 'Follow the fireflies', dc: 10,
+        ok: ['The fireflies lead you straight through,',
+             'twinkling smugly the whole way.'],
+        no: ['The fireflies lead you into a spiderweb.',
+             'You scream (politely) and find the path anyway.'] },
+      { label: 'March straight through', dc: 12,
+        ok: ['You stomp through so bravely that the trees',
+             'stop giggling and start applauding.'],
+        no: ['You march in a big circle. TWICE.',
+             'The trees are hysterical. You escape eventually.'] },
+      { label: 'Ask a squirrel for directions', dc: 8,
+        ok: ['The squirrel draws you a tiny, perfect map',
+             'and salutes you with its tail.'],
+        no: ['The squirrel takes your snack and points the',
+             'wrong way. You find out. Eventually.'] },
+    ] },
+  { title: ['The Squelching Bog stretches ahead —',
+            'mud that BURPS every time you step in it.'],
+    choices: [
+      { label: 'Hop from stone to stone', dc: 12,
+        ok: ['Hop. Hop. Hop. You cross without one splash.',
+             'Somewhere, the bog burps in disappointment.'],
+        no: ['The fourth stone was a TURTLE. You go in',
+             'up to your helmet. The bog burps with joy.'] },
+      { label: 'Wade straight in', dc: 8,
+        ok: ['You squelch across with knightly dignity.',
+             'A frog rides your shoulder. He stays. He is',
+             'your frog now.'],
+        no: ['The mud steals BOTH your boots.',
+             'You squish onward. The bog keeps the boots.'] },
+      { label: 'Surf across on a giant lilypad', dc: 10,
+        ok: ['You ride the lilypad like a wave-taming hero.',
+             'Three fish jump to watch. One claps. Somehow.'],
+        no: ['The lilypad spins you like a pizza and',
+             'flings you across. It counts. Technically.'] },
+    ] },
+  { title: ['A GIANT is asleep across the entire road.',
+            'His snores bend the trees sideways.'],
+    choices: [
+      { label: 'Climb over him', dc: 12,
+        ok: ['You scale him like a warm, snoring mountain',
+             'and slide down his arm on your shield.'],
+        no: ['He rolls over mid-climb. You ride him like a',
+             'log roll, shrieking quietly, and tumble off',
+             'on the correct side. We take it.'] },
+      { label: 'Tiptoe around his toes', dc: 10,
+        ok: ['You thread the toes like a hero.',
+             'The pinky toe twitches. You do not.'],
+        no: ['You boop a toe. His foot SWATS at you like',
+             'you are a fly, and you sprint the long way',
+             'around while he giggles in his sleep.'] },
+      { label: 'Plug his nose and see what happens', dc: 6,
+        ok: ['AAAAAH-CHOOOO. The sneeze launches you',
+             'gloriously over him. Ten out of ten landing.'],
+        no: ['AAAAAH-CHOOOO. The sneeze launches you',
+             'BACKWARD into a haystack. You walk around',
+             'him instead, picking straw from your helmet.'] },
+    ] },
+  { title: ['Goat Canyon. One rope bridge, very wobbly.',
+            'One mountain goat, watching you, chewing.',
+            'He has done this canyon a thousand times.'],
+    choices: [
+      { label: 'Cross the wobbly rope bridge', dc: 12,
+        ok: ['You cross with arms out like a tightrope',
+             'star. The goat slow-claps his hooves.'],
+        no: ['You wobble, flip, and cross the last half',
+             'upside-down like a stuck sloth. The goat',
+             'pretends he did not see. He saw.'] },
+      { label: 'Ask the goat for a ride', dc: 8,
+        ok: ['The goat sighs like a teenager, but he takes',
+             'you across in four spectacular leaps.'],
+        no: ['The goat eats your quest map first, THEN',
+             'takes you across. Payment, apparently.'] },
+      { label: 'Pole-vault the canyon with your sword', dc: 14,
+        ok: ['LEGENDARY. You sail over the canyon as eagles',
+             'salute. Bards will sing of this.'],
+        no: ['Your sword bends like a noodle and boings you',
+             'into a berry bush on the far side. Juicy.'] },
+    ] },
+  { title: ['A meadow of giant mushrooms, springy as',
+            'trampolines, stretches to the horizon.'],
+    choices: [
+      { label: 'Bounce across sensibly', dc: 8,
+        ok: ['Boing. Boing. Boing. Efficient. Dignified.',
+             'Actually incredibly fun.'],
+        no: ['One mushroom is EXTRA springy. You bounce',
+             'into a tree, apologize to the tree, and',
+             'bounce onward anyway.'] },
+      { label: 'Bounce with MAXIMUM style', dc: 14,
+        ok: ['Triple flip. Knee slide. Helmet spin.',
+             'A passing bard faints from sheer joy.'],
+        no: ['Your triple flip becomes a quadruple flop.',
+             'The mushrooms squeak applause anyway. They',
+             'have never seen anyone try that hard.'] },
+      { label: 'Crawl underneath the caps', dc: 10,
+        ok: ['You duck-walk beneath the mushroom roof,',
+             'through a secret world of glowing spores.'],
+        no: ['A snail is under there. He is SO slow and SO',
+             'in the way. You lose an argument with a snail,',
+             'then crawl out the far side.'] },
+    ] },
+];
+
+// ---------------------------------------------------------------------
+// THE QUEST BUILDER — rolls on every table and stitches the story
+// ---------------------------------------------------------------------
+let SCENES = {};
+
+function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+function shuffle(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function buildQuest() {
+  const giver = pick(GIVERS);
+  const item = pick(ITEMS);
+  const villain = pick(VILLAINS);
+  const obstacles = shuffle(OBSTACLES).slice(0, 2);   // two per journey
+  SCENES = {};
+
+  SCENES.start = {
+    text: ['You are SIR TAPALOT, bravest knight around.',
+           giver.name + ' ' + giver.doing + '.',
+           '',
+           villain.name.toUpperCase() + ' has stolen',
+           item + '!',
+           '',
+           '"Bring it back," you are begged. "Before lunch."'],
+    choices: [
+      { label: 'Ride your horse toward trouble', dc: 8, success: 'ride_ok', fail: 'ride_no' },
       { label: 'Walk. Heroically. It is very far.', dc: 0, go: 'walk' },
     ],
-  },
-  ride_ok: {
+  };
+  SCENES.ride_ok = {
     text: ['Your horse, Sir Clompsalot, feels FAST today.',
            'You thunder across the kingdom like a legend.',
-           'Peasants cheer. A goose salutes you.',
-           '',
-           'Dragon Mountain rises ahead, smoking gently.'],
-    choices: [{ label: 'Onward, to the bridge!', dc: 0, go: 'bridge' }],
-  },
-  trough: {
+           'Peasants cheer. A goose salutes you.'],
+    choices: [{ label: 'Onward!', dc: 0, go: 'ob0' }],
+  };
+  SCENES.ride_no = {
     text: ['Sir Clompsalot takes two steps, then stops',
            'to eat a daisy. You fly over his head...',
            '',
            '...and land in a pig trough. SPLOOSH.',
            'The pigs are delighted. You smell incredible.',
            'One pig follows you now. He believes in you.'],
-    choices: [{ label: 'Squelch onward to Dragon Mountain', dc: 0, go: 'bridge' }],
-  },
-  walk: {
+    choices: [{ label: 'Squelch onward', dc: 0, go: 'ob0' }],
+  };
+  SCENES.walk = {
     text: ['You walk. And walk. AND WALK.',
            'Your armor squeaks the entire way.',
-           'By the time Dragon Mountain rises ahead,',
-           'your feet feel like two angry potatoes.',
+           'Your feet feel like two angry potatoes.',
            '',
            'But heroes walk. Everyone knows that.'],
-    choices: [{ label: 'Limp bravely to the bridge', dc: 0, go: 'bridge' }],
-  },
-  bridge: {
-    text: ['A rickety bridge crosses a deep gorge.',
-           'A TROLL blocks the way, arms folded.',
-           '',
-           '"NONE SHALL PASS," he booms, "unless ye',
-           'know the SECRET PASSWORD."'],
+    choices: [{ label: 'Limp bravely onward', dc: 0, go: 'ob0' }],
+  };
+
+  // the two randomly-drawn obstacles, wired up in a row
+  obstacles.forEach((ob, i) => {
+    const here = 'ob' + i;
+    const next = i === 0 ? 'ob1' : 'lair';
+    SCENES[here] = {
+      text: ob.title,
+      choices: ob.choices.map((ch, j) => (
+        { label: ch.label, dc: ch.dc,
+          success: here + '_ok' + j, fail: here + '_no' + j }
+      )),
+    };
+    ob.choices.forEach((ch, j) => {
+      SCENES[here + '_ok' + j] = { text: ch.ok,
+        choices: [{ label: 'Onward!', dc: 0, go: next }] };
+      SCENES[here + '_no' + j] = { text: ch.no,
+        choices: [{ label: 'Onward anyway!', dc: 0, go: next }] };
+    });
+  });
+
+  // the villain's lair: three classic approaches
+  SCENES.lair = {
+    text: villain.lair,
     choices: [
-      { label: 'Guess the password', dc: 12, success: 'pass_ok', fail: 'pass_no' },
-      { label: 'Sneak under the bridge', dc: 10, success: 'sneak_ok', fail: 'sneak_no' },
-      { label: 'Challenge him to a BURPING contest', dc: 6, success: 'burp_ok', fail: 'burp_no' },
+      { label: 'Tiptoe in and grab it', dc: 14, success: 'grab_ok', fail: 'chase' },
+      { label: 'Knock and ask POLITELY', dc: 10, success: 'ask_ok', fail: 'chase' },
+      { label: 'Yell "FREE SNACKS, THAT WAY!!"', dc: 12, success: 'trick_ok', fail: 'chase' },
     ],
-  },
-  pass_ok: {
-    text: ['You clear your throat and try:',
-           '"...pretty please, with a troll on top?"',
-           '',
-           'The troll GASPS. "That... is correct."',
-           'He wipes away a tear and waves you through.'],
-    choices: [{ label: 'Cross the bridge', dc: 0, go: 'cave' }],
-  },
-  pass_no: {
-    text: ['You guess "swordfish." Then "fish sword."',
-           'Then "swishford." The troll sighs, picks',
-           'you up, and bonks you gently over the gorge.',
-           '',
-           'You land on the far side anyway.',
-           'Rude. But helpful.'],
-    choices: [{ label: 'Dust yourself off and go on', dc: 0, go: 'cave' }],
-  },
-  sneak_ok: {
-    text: ['You tiptoe under the bridge like a',
-           'very sneaky crab. The troll never sees you.',
-           '',
-           'You even find three lost coins down there.',
-           'Riches AND glory.'],
-    choices: [{ label: 'Climb up the far side', dc: 0, go: 'cave' }],
-  },
-  sneak_no: {
-    text: ['Halfway under, your armor squeaks LOUDLY.',
-           '"I CAN HEAR YE," says the troll, unimpressed.',
-           'He lifts you out by one leg and sets you',
-           'down on the far side.',
-           '',
-           '"Just ask nicely next time," he mutters.'],
-    choices: [{ label: 'Nod politely and go on', dc: 0, go: 'cave' }],
-  },
-  burp_ok: {
-    text: ['You summon a burp from your very soul.',
-           'BRAAAAAP. Birds scatter. The bridge wobbles.',
-           '',
-           'The troll bows, weeping with joy.',
-           '"MAGNIFICENT. Cross freely, noble one."'],
-    choices: [{ label: 'Cross like the champion you are', dc: 0, go: 'cave' }],
-  },
-  burp_no: {
-    text: ['Your burp is a tiny, polite "brip."',
-           'The troll burps back and your hair blows flat.',
-           '',
-           'He wins. But he pats your head kindly and',
-           'lets you cross anyway.',
-           'Trolls love a good try.'],
-    choices: [{ label: 'Cross the bridge, hair flat', dc: 0, go: 'cave' }],
-  },
-  cave: {
-    text: ['The dragon cave glitters with hoarded gold.',
-           'And there, snoring on a treasure pile,',
-           'sits the dragon... right ON the golden throne.',
-           '',
-           'Smoke rings puff from its nose.',
-           'It is very, very asleep.'],
-    choices: [
-      { label: 'Tiptoe in and slide the throne out', dc: 14, success: 'steal_ok', fail: 'chase' },
-      { label: 'Wake it up and ask POLITELY', dc: 10, success: 'ask_ok', fail: 'chase' },
-      { label: 'Yell "YOUR TAIL IS ON FIRE!!"', dc: 12, success: 'trick_ok', fail: 'chase' },
-    ],
-  },
-  steal_ok: {
-    text: ['With the gentleness of a legend, you lift',
-           'the sleeping dragon with ONE FINGER, slide',
-           'the throne out, and set it down on a barrel.',
-           '',
-           'The dragon hugs the barrel. Adorable.',
-           'The GOLDEN THRONE is yours.'],
+  };
+  SCENES.grab_ok = {
+    text: ['You move like a shadow in polished armor.',
+           'One breath... two... GOT IT.',
+           'You are out before anyone even snorts.'],
     choices: [{ label: 'Carry it home in triumph', dc: 0, go: 'home' }],
-  },
-  ask_ok: {
-    text: ['You tap its nose. One giant eye opens.',
-           '"Excuse me," you say. "That is the king\'s',
-           'potty throne. May I have it back?"',
+  };
+  SCENES.ask_ok = {
+    text: ['You knock. You explain. You say "please."',
            '',
-           'The dragon BLUSHES. "Oh dear. I thought it',
-           'was a fancy chair. Take it. Please."'],
-    choices: [{ label: 'Thank the dragon and head home', dc: 0, go: 'home' }],
-  },
-  trick_ok: {
-    text: ['"YOUR TAIL IS ON FIRE!!"',
+           villain.soft,
            '',
-           'The dragon LEAPS up, spins three circles,',
-           'and gallops outside to find a lake.',
+           'And just like that, the prize is yours.',
+           'Politeness: the rarest of knightly weapons.'],
+    choices: [{ label: 'Say thank you and head home', dc: 0, go: 'home' }],
+  };
+  SCENES.trick_ok = {
+    text: ['"FREE SNACKS, THAT WAY!!" you bellow,',
+           'pointing at absolutely nothing.',
            '',
-           'You grab the throne and scoot.'],
+           'It works. It always works.',
+           'You grab the prize and scoot.'],
     choices: [{ label: 'Scoot faster', dc: 0, go: 'home' }],
-  },
-  chase: {
-    text: ['The dragon\'s eyes SNAP open.',
-           '"MY FANCY CHAIR!" it roars — and the chase',
-           'is ON. Down the mountain, over the bridge,',
-           'past the troll (he cheers for you).',
+  };
+  SCENES.chase = {
+    text: ['You are SPOTTED.',
+           villain.roar + ' — and the chase is ON,',
+           'all the way back down the road you came.',
            '',
            'RUN, SIR TAPALOT. RUN.'],
-    choices: [{ label: 'RUN with the throne!', dc: 8, success: 'escape_ok', fail: 'escape_no' }],
-  },
-  escape_ok: {
+    choices: [{ label: 'RUN with the prize!', dc: 8, success: 'run_ok', fail: 'run_no' }],
+  };
+  SCENES.run_ok = {
     text: ['You are faster. You were BORN for this.',
-           'You leap the gorge with the throne held',
-           'over your head, and the dragon pulls up,',
-           'puffing smoke rings of defeat.',
+           'You leap, roll, and vanish over the hill',
+           'with the prize held high.',
            '',
-           '"...fine," it grumbles. "But I want visits."'],
-    choices: [{ label: 'Promise Tuesday visits. Head home.', dc: 0, go: 'home' }],
-  },
-  escape_no: {
-    text: ['The dragon catches you in two wing-flaps...',
-           'then sets you down gently on the castle road.',
+           'Far behind you: grumpy, defeated noises.'],
+    choices: [{ label: 'Jog home victorious', dc: 0, go: 'home' }],
+  };
+  SCENES.run_no = {
+    text: ['You are caught in three heartbeats...',
+           'and then set down, surprisingly gently.',
            '',
-           '"I am not a MONSTER," it sniffs. "I just',
-           'miss having somewhere nice to sit."',
+           villain.soft,
            '',
-           'You promise it a royal outhouse of its own.',
-           'It sniffles, and lets you keep the throne.'],
-    choices: [{ label: 'Shake claws on the deal', dc: 0, go: 'home' }],
-  },
-  home: {
-    text: ['You return before lunch, throne held high.',
-           'The king weeps with joy and knights you TWICE.',
+           'You promise to visit every Tuesday.',
+           'The deal is struck. You keep the prize.'],
+    choices: [{ label: 'Shake on it and head home', dc: 0, go: 'home' }],
+  };
+  SCENES.home = {
+    text: ['You return before lunch, prize held high.',
+           giver.reward,
            '',
-           'A royal outhouse is built for the dragon.',
-           'It visits every Tuesday.',
-           'The pig from the trough moved into the castle.',
+           'Somewhere out there, a new troublemaker',
+           'is already eyeing something shiny...',
            '',
-           'THE END... of Quest One.'],
-    choices: [{ label: 'Play again from the beginning', dc: 0, go: 'start' }],
-  },
-};
+           'THE END... until the dice roll again.'],
+    choices: [{ label: 'ROLL UP A NEW QUEST', dc: 0, go: 'NEW' }],
+  };
+}
 
 // ---------------------------------------------------------------------
 // GAME STATE — where we are and what the die is doing
@@ -268,15 +422,17 @@ const SCENES = {
 let sceneId = 'start';
 let mode = 'scene';     // 'scene' = reading & choosing, 'rolling' = die
                         // tumbling, 'result' = showing success/failure
-let pending = null;     // the choice we're rolling for
-let rolling = 0;        // seconds of tumble left
-let face = 20;          // the number showing on the die right now
-let result = 0;         // the final roll
+let pending = null;
+let rolling = 0;
+let face = 20;
+let result = 0;
 let resultGlow = 0;
 let wobble = 0;
 let success = false;
-let buttons = [];       // this frame's tappable choice rectangles
+let buttons = [];
 let elapsed = 0;
+
+buildQuest();           // roll up the very first adventure
 
 function startRoll(choice) {
   pending = choice;
@@ -286,6 +442,13 @@ function startRoll(choice) {
   if (audio) for (let i = 0; i < 6; i++) {
     clack(audio.currentTime + i * 0.15, 700 + Math.random() * 500);
   }
+}
+
+function goTo(id) {
+  if (id === 'NEW') { buildQuest(); sceneId = 'start'; }
+  else sceneId = id;
+  mode = 'scene';
+  if (audio) clack(audio.currentTime, 500);
 }
 
 // ---------------------------------------------------------------------
@@ -298,15 +461,12 @@ addEventListener('pointerdown', e => {
       if (e.clientX > b.x && e.clientX < b.x + b.w &&
           e.clientY > b.y && e.clientY < b.y + b.h) {
         if (b.choice.dc > 0) startRoll(b.choice);
-        else { sceneId = b.choice.go; clack(audio.currentTime, 500); }
+        else goTo(b.choice.go);
         return;
       }
     }
   } else if (mode === 'result') {
-    // the story turns the page to wherever fate pointed
-    sceneId = success ? pending.success : pending.fail;
-    mode = 'scene';
-    clack(audio.currentTime, 500);
+    goTo(success ? pending.success : pending.fail);
   }
 });
 
@@ -415,7 +575,7 @@ function draw() {
     const scene = SCENES[sceneId];
     ctx.fillStyle = '#e8dcc0';
     ctx.font = `${fs}px Georgia, serif`;
-    let y = Math.max(90, H * 0.14);
+    let y = Math.max(90, H * 0.13);
     for (const line of scene.text) {
       ctx.fillText(line, cx, y);
       y += fs * 1.55;
