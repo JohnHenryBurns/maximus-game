@@ -1,0 +1,809 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>The Explorer 2 — Beneath the Abyss</title>
+<style>
+  html, body { margin: 0; background: #000; height: 100%; overflow: hidden; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+// =====================================================================
+// THE EXPLORER 2 — BENEATH THE ABYSS
+//
+// The first game ended at the bottom of everything... and something
+// ROARED from below it. This is below it.
+//
+// THE SEQUEL TRICK: this game READS your Explorer 1 save. Chippy, the
+// armor, the sword — whatever you earned up there, you carry down here.
+// =====================================================================
+
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+// any crash shouts itself on screen so we can squash it together
+window.onerror = function (msg, src, line) {
+  const div = document.createElement('div');
+  div.style.cssText = 'position:fixed;top:10px;left:10px;right:10px;background:#7a1f2b;' +
+    'color:#fff;font:bold 16px monospace;padding:14px;border:3px solid #ff6b5e;z-index:99';
+  div.textContent = '💥 BUG FOUND! Line ' + line + ': ' + msg;
+  document.body.appendChild(div);
+};
+
+function fitCanvas() { canvas.width = innerWidth; canvas.height = innerHeight; }
+fitCanvas();
+addEventListener('resize', fitCanvas);
+
+// ---------------------------------------------------------------------
+// YOUR LEGEND — read straight out of Explorer 1's save. Everything you
+// earned up there is still yours down here.
+// ---------------------------------------------------------------------
+const hasArmor         = localStorage.getItem('explorer_plate_armor') === 'yes';
+const hasGoldSword     = localStorage.getItem('explorer_gold_sword') === 'yes';
+const hasInfectedArmor = localStorage.getItem('explorer_infected_armor') === 'yes';
+const hasChippy        = localStorage.getItem('explorer_chippy') === 'yes';
+const hasGeckoArmor    = localStorage.getItem('explorer_gecko_armor') === 'yes';
+const beatAbyss        = localStorage.getItem('explorer_beat_abyss') === 'yes';
+let   foundDoor        = localStorage.getItem('explorer2_door') === 'yes';
+
+function armorMax() {
+  return hasGeckoArmor ? 5 : hasInfectedArmor ? 4 : hasArmor ? 3 : 0;
+}
+function swordDamage() {
+  return hasChippy ? 3 : hasGoldSword ? 2 : 1;
+}
+
+// ---------------------------------------------------------------------
+// SOUND — for the thing that roars. Deeper down here. Much deeper.
+// ---------------------------------------------------------------------
+let audioCtx = null;
+function ensureAudio() {
+  if (!audioCtx && window.AudioContext) audioCtx = new AudioContext();
+  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+}
+function deepRoar() {
+  if (!audioCtx) return;
+  const t = audioCtx.currentTime;
+  const g1 = audioCtx.createOscillator();
+  const g2 = audioCtx.createOscillator();
+  const muffle = audioCtx.createBiquadFilter();
+  const vol = audioCtx.createGain();
+  g1.type = 'sawtooth';
+  g1.frequency.setValueAtTime(55, t);
+  g1.frequency.exponentialRampToValueAtTime(16, t + 4.2);
+  g2.type = 'square';
+  g2.frequency.setValueAtTime(38, t);
+  g2.frequency.exponentialRampToValueAtTime(13, t + 4.2);
+  muffle.type = 'lowpass';
+  muffle.frequency.value = 180;
+  vol.gain.setValueAtTime(0.0001, t);
+  vol.gain.exponentialRampToValueAtTime(0.5, t + 0.25);
+  vol.gain.exponentialRampToValueAtTime(0.35, t + 2.8);
+  vol.gain.exponentialRampToValueAtTime(0.0001, t + 5);
+  g1.connect(muffle); g2.connect(muffle);
+  muffle.connect(vol); vol.connect(audioCtx.destination);
+  g1.start(t); g2.start(t);
+  g1.stop(t + 5.2); g2.stop(t + 5.2);
+}
+
+// ---------------------------------------------------------------------
+// THE CAVERN — one vast dark world beneath the bottom of everything
+// ---------------------------------------------------------------------
+const WORLD_W = 2400, WORLD_H = 2400;
+const START = { x: 1200, y: 2150 };
+const DOOR  = { x: 1200, y: 180 };     // far to the NORTH. where the roars live.
+
+// a pocket randomness machine — same number in, same "random" out
+function noise(n) {
+  const s = Math.sin(n * 127.1) * 43758.5453;
+  return s - Math.floor(s);
+}
+
+// stalagmites — the cave's version of trees. solid rock, floor to dark.
+const rocks = [];
+for (let i = 0; i < 120; i++) {
+  const x = 80 + noise(i * 3.17) * (WORLD_W - 160);
+  const y = 80 + noise(i * 7.71) * (WORLD_H - 160);
+  if (Math.hypot(x - START.x, y - START.y) < 170) continue;
+  if (Math.hypot(x - DOOR.x, y - DOOR.y) < 260) continue;
+  rocks.push({ x, y, size: 0.7 + noise(i * 13.3) * 0.8 });
+}
+// a solid rock border around the whole cavern
+for (let x = 30; x < WORLD_W; x += 60) {
+  rocks.push({ x: x + noise(x) * 25, y: 25, size: 1.1 });
+  rocks.push({ x: x + noise(x * 3) * 25, y: WORLD_H - 25, size: 1.1 });
+}
+for (let y = 30; y < WORLD_H; y += 60) {
+  rocks.push({ x: 25, y: y + noise(y * 5) * 25, size: 1.1 });
+  rocks.push({ x: WORLD_W - 25, y: y + noise(y * 7) * 25, size: 1.1 });
+}
+
+// glowing crystals — the cave's lanterns. beautiful, and load-bearing
+// for your sanity down here.
+const crystals = [];
+for (let i = 0; i < 40; i++) {
+  crystals.push({
+    x: 120 + noise(i * 21.3 + 5) * (WORLD_W - 240),
+    y: 120 + noise(i * 47.7 + 5) * (WORLD_H - 240),
+    size: 0.7 + noise(i * 5.5) * 0.8,
+    hue: noise(i * 9.9) < 0.7 ? 'cyan' : 'violet',
+  });
+}
+
+// little glowing mushrooms, purely for beauty
+const mushrooms = [];
+for (let i = 0; i < 150; i++) {
+  mushrooms.push({
+    x: noise(i * 31.7 + 9) * WORLD_W,
+    y: noise(i * 77.1 + 9) * WORLD_H,
+    glow: noise(i * 3.3),
+  });
+}
+
+function blocked(x, y, r) {
+  r = r || 12;
+  if (x < 20 || y < 20 || x > WORLD_W - 20 || y > WORLD_H - 20) return true;
+  for (const t of rocks) {
+    if (Math.hypot(x - t.x, y - t.y) < r + 14 * t.size) return true;
+  }
+  for (const c of crystals) {
+    if (Math.hypot(x - c.x, y - c.y) < r + 10 * c.size) return true;
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------------
+// THE EXPLORER — same hero, deeper hole
+// ---------------------------------------------------------------------
+const player = {
+  x: START.x, y: START.y,
+  radius: 12,
+  speed: 230 * (hasGeckoArmor ? 1.15 : 1),   // gecko scales still make you quick
+  facing: 1,
+  walkTime: 0,
+  moving: false,
+  attackTime: 0,
+  swingId: 0,
+  hp: 5, maxHp: 5,
+  armor: armorMax(),
+  hurtTimer: 0,
+  deathTimer: 0,
+};
+let armorRegen = 0;
+
+// ---------------------------------------------------------------------
+// THE LOCALS — two creatures no explorer has ever met before
+// ---------------------------------------------------------------------
+// CAVE BATS: they fly (rocks mean nothing to them), swoop fast, pop in
+// one hit. ROCK CRAWLERS: armored beetles of living stone. Slow. Tough.
+let bats = [];
+for (let i = 0; i < 500 && bats.length < 12; i++) {
+  const x = noise(i * 61.3 + 11) * WORLD_W;
+  const y = noise(i * 37.9 + 11) * WORLD_H;
+  if (Math.hypot(x - START.x, y - START.y) < 350) continue;
+  if (Math.hypot(x - DOOR.x, y - DOOR.y) < 300) continue;
+  bats.push({ x, y, hp: 1, wander: noise(i) * 6.28, flap: noise(i * 2) * 6.28,
+              lastHitSwing: 0, hurtFlash: 0 });
+}
+let crawlers = [];
+for (let i = 0; i < 500 && crawlers.length < 8; i++) {
+  const x = noise(i * 43.9 + 13) * WORLD_W;
+  const y = noise(i * 29.3 + 13) * WORLD_H;
+  if (Math.hypot(x - START.x, y - START.y) < 350) continue;
+  if (Math.hypot(x - DOOR.x, y - DOOR.y) < 300) continue;
+  if (blocked(x, y, 10)) continue;
+  crawlers.push({ x, y, hp: 3, wander: noise(i * 1.7) * 6.28,
+                  lastHitSwing: 0, hurtFlash: 0 });
+}
+
+let emeralds = [];
+let particles = [];
+let emeraldCount = 0;
+
+// ---------------------------------------------------------------------
+// THE ROAR — it found you. it's counting the minutes.
+// ---------------------------------------------------------------------
+let roarTimer = 8;         // the cave says hello early
+let roarShake = 0;
+let doorBanner = 0;        // the chapter-complete celebration timer
+let elapsed = 0;
+
+// ---------------------------------------------------------------------
+// CONTROLS — keyboard + touch, same as the first adventure
+// ---------------------------------------------------------------------
+const keys = {};
+addEventListener('keydown', e => { ensureAudio(); keys[e.key.toLowerCase()] = true;
+  if (e.key === ' ') swing(); });
+addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+addEventListener('click', () => { ensureAudio(); swing(); });
+
+let stick = null;
+addEventListener('touchstart', e => {
+  e.preventDefault();
+  ensureAudio();
+  for (const t of e.changedTouches) {
+    if (Math.hypot(t.clientX - (innerWidth - 70), t.clientY - (innerHeight - 70)) < 50) {
+      swing();
+    } else if (!stick) {
+      stick = { id: t.identifier, sx: t.clientX, sy: t.clientY, x: t.clientX, y: t.clientY };
+    }
+  }
+}, { passive: false });
+addEventListener('touchmove', e => {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    if (stick && t.identifier === stick.id) { stick.x = t.clientX; stick.y = t.clientY; }
+  }
+}, { passive: false });
+addEventListener('touchend', e => {
+  for (const t of e.changedTouches) if (stick && t.identifier === stick.id) stick = null;
+});
+
+function swing() {
+  if (player.attackTime <= 0 && player.deathTimer <= 0) {
+    player.attackTime = 0.25;
+    player.swingId++;
+  }
+}
+
+// ---------------------------------------------------------------------
+// UPDATE
+// ---------------------------------------------------------------------
+function update(dt) {
+  elapsed += dt;
+  if (player.attackTime > 0) player.attackTime -= dt;
+  if (player.hurtTimer > 0) player.hurtTimer -= dt;
+  if (roarShake > 0) roarShake -= dt;
+  if (doorBanner > 0) doorBanner -= dt;
+
+  // THE ROAR — every so often, from the north. always from the north.
+  roarTimer -= dt;
+  if (roarTimer <= 0) {
+    roarTimer = 20 + noise(elapsed * 3.7) * 15;
+    roarShake = 3.5;
+    deepRoar();
+  }
+
+  // living armor still regrows itself down here
+  if ((hasInfectedArmor || hasGeckoArmor) && player.armor < armorMax() && player.deathTimer <= 0) {
+    armorRegen += dt;
+    if (armorRegen >= (hasGeckoArmor ? 6 : 8)) { armorRegen = 0; player.armor++; }
+  } else armorRegen = 0;
+
+  // ---- MOVEMENT ----
+  let dx = 0, dy = 0;
+  if (keys['w'] || keys['arrowup'])    dy -= 1;
+  if (keys['s'] || keys['arrowdown'])  dy += 1;
+  if (keys['a'] || keys['arrowleft'])  dx -= 1;
+  if (keys['d'] || keys['arrowright']) dx += 1;
+  if (stick) {
+    dx = Math.max(-1, Math.min(1, (stick.x - stick.sx) / 50));
+    dy = Math.max(-1, Math.min(1, (stick.y - stick.sy) / 50));
+  }
+  const len = Math.hypot(dx, dy);
+  if (len > 1) { dx /= len; dy /= len; }
+  player.moving = len > 0.1 && player.deathTimer <= 0;
+  if (player.moving) {
+    player.walkTime += dt;
+    if (dx > 0.1) player.facing = 1;
+    if (dx < -0.1) player.facing = -1;
+    const nx = player.x + dx * player.speed * dt;
+    const ny = player.y + dy * player.speed * dt;
+    if (!blocked(nx, player.y)) player.x = nx;
+    if (!blocked(player.x, ny)) player.y = ny;
+  }
+
+  // ---- BATS — rocks mean nothing to a thing with wings ----
+  for (const b of bats) {
+    if (b.hurtFlash > 0) b.hurtFlash -= dt;
+    b.flap += dt * 14;
+    const d = Math.hypot(player.x - b.x, player.y - b.y);
+    if (d < 260 && player.deathTimer <= 0) {
+      b.x += (player.x - b.x) / d * 150 * dt;      // straight through the rocks
+      b.y += (player.y - b.y) / d * 150 * dt;
+    } else {
+      b.wander += (noise(Math.floor(elapsed) + b.x) - 0.5) * dt * 5;
+      b.x += Math.cos(b.wander) * 60 * dt;
+      b.y += Math.sin(b.wander) * 60 * dt;
+      b.x = Math.max(30, Math.min(WORLD_W - 30, b.x));
+      b.y = Math.max(30, Math.min(WORLD_H - 30, b.y));
+    }
+    if (player.attackTime > 0 && b.lastHitSwing !== player.swingId &&
+        d < 55 && (b.x - player.x) * player.facing > -8) {
+      b.lastHitSwing = player.swingId;
+      b.hp -= swordDamage();
+      if (b.hp <= 0) {
+        for (let i = 0; i < 8; i++) {
+          particles.push({ x: b.x, y: b.y, vx: (noise(i * 3.3 + elapsed) - 0.5) * 240,
+            vy: (noise(i * 7.7 + elapsed) - 0.9) * 200, life: 0.5, color: '#4a4458' });
+        }
+        if (noise(b.x + elapsed) < 0.5) emeralds.push({ x: b.x, y: b.y, born: elapsed });
+      }
+    }
+    if (d < 22 && b.hp > 0 && player.hurtTimer <= 0 && player.deathTimer <= 0) {
+      if (player.armor > 0) player.armor--;
+      else player.hp--;
+      player.hurtTimer = 1;
+      if (player.hp <= 0) player.deathTimer = 2.5;
+    }
+  }
+  bats = bats.filter(b => b.hp > 0);
+
+  // ---- ROCK CRAWLERS — slow, armored, inevitable ----
+  for (const c of crawlers) {
+    if (c.hurtFlash > 0) c.hurtFlash -= dt;
+    const d = Math.hypot(player.x - c.x, player.y - c.y);
+    let cdx, cdy, spd;
+    if (d < 240 && player.deathTimer <= 0) {
+      cdx = (player.x - c.x) / d; cdy = (player.y - c.y) / d; spd = 55;
+    } else {
+      c.wander += (noise(Math.floor(elapsed) + c.x) - 0.5) * dt * 4;
+      cdx = Math.cos(c.wander); cdy = Math.sin(c.wander); spd = 20;
+    }
+    const nx = c.x + cdx * spd * dt, ny = c.y + cdy * spd * dt;
+    if (!blocked(nx, c.y, 10)) c.x = nx;
+    if (!blocked(c.x, ny, 10)) c.y = ny;
+
+    if (player.attackTime > 0 && c.lastHitSwing !== player.swingId &&
+        d < 55 && (c.x - player.x) * player.facing > -8) {
+      c.lastHitSwing = player.swingId;
+      c.hp -= swordDamage();
+      c.hurtFlash = 0.15;
+      const push = 30 / Math.max(1, d);
+      if (!blocked(c.x + (c.x - player.x) * push, c.y, 10)) c.x += (c.x - player.x) * push;
+      if (!blocked(c.x, c.y + (c.y - player.y) * push, 10)) c.y += (c.y - player.y) * push;
+      if (c.hp <= 0) {
+        for (let i = 0; i < 10; i++) {
+          particles.push({ x: c.x, y: c.y - 8, vx: (noise(i * 3.3 + elapsed) - 0.5) * 240,
+            vy: (noise(i * 7.7 + elapsed) - 0.9) * 220, life: 0.6,
+            color: i % 2 ? '#6a6a72' : '#8a8a92' });
+        }
+        emeralds.push({ x: c.x - 8, y: c.y, born: elapsed });
+        emeralds.push({ x: c.x + 8, y: c.y, born: elapsed });
+      }
+    }
+    if (d < 26 && c.hp > 0 && player.hurtTimer <= 0 && player.deathTimer <= 0) {
+      if (player.armor > 0) player.armor--;
+      else player.hp--;
+      player.hurtTimer = 1;
+      if (player.hp <= 0) player.deathTimer = 2.5;
+    }
+  }
+  crawlers = crawlers.filter(c => c.hp > 0);
+
+  // respawn back at the drop point
+  if (player.deathTimer > 0) {
+    player.deathTimer -= dt;
+    if (player.deathTimer <= 0) {
+      player.x = START.x; player.y = START.y;
+      player.hp = player.maxHp;
+      player.armor = armorMax();
+    }
+  }
+
+  // emeralds hop into your pocket
+  emeralds = emeralds.filter(e => {
+    if (Math.hypot(player.x - e.x, player.y - e.y) < 30) { emeraldCount++; return false; }
+    return true;
+  });
+
+  for (const p of particles) {
+    p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 500 * dt; p.life -= dt;
+  }
+  particles = particles.filter(p => p.life > 0);
+
+  // ---- THE DOOR — chapter one's destination ----
+  if (!foundDoor && player.deathTimer <= 0 &&
+      Math.hypot(player.x - DOOR.x, player.y - DOOR.y) < 150) {
+    foundDoor = true;
+    localStorage.setItem('explorer2_door', 'yes');
+    doorBanner = 8;
+  }
+}
+
+// ---------------------------------------------------------------------
+// DRAWING
+// ---------------------------------------------------------------------
+function cam() {
+  let cx = Math.max(0, Math.min(WORLD_W - canvas.width,  player.x - canvas.width / 2));
+  let cy = Math.max(0, Math.min(WORLD_H - canvas.height, player.y - canvas.height / 2));
+  if (roarShake > 0) {
+    const tr = Math.min(1, roarShake);
+    cx += (noise(elapsed * 47.1) - 0.5) * 18 * tr;
+    cy += (noise(elapsed * 61.7) - 0.5) * 18 * tr;
+  }
+  return { x: cx, y: cy };
+}
+
+function draw() {
+  const c = cam();
+
+  // cave floor — deep, dark stone
+  ctx.fillStyle = '#17161f';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // glowing mushrooms, scattered like tiny stars on the floor
+  for (const m of mushrooms) {
+    const mx = m.x - c.x, my = m.y - c.y;
+    if (mx < -10 || my < -10 || mx > canvas.width + 10 || my > canvas.height + 10) continue;
+    const tw = 0.5 + Math.sin(elapsed * 2 + m.glow * 20) * 0.5;
+    ctx.fillStyle = `rgba(110, 230, 200, ${0.25 + tw * 0.4})`;
+    ctx.fillRect(mx, my, 3, 3);
+  }
+
+  // everything that stands up, sorted so nearer things draw in front
+  const things = [];
+  for (const r of rocks) things.push({ y: r.y, kind: 'rock', it: r });
+  for (const cr of crystals) things.push({ y: cr.y, kind: 'crystal', it: cr });
+  for (const cw of crawlers) things.push({ y: cw.y, kind: 'crawler', it: cw });
+  things.push({ y: player.y, kind: 'player' });
+  things.sort((a, b) => a.y - b.y);
+
+  for (const th of things) {
+    if (th.kind === 'rock') drawRock(th.it, c);
+    else if (th.kind === 'crystal') drawCrystal(th.it, c);
+    else if (th.kind === 'crawler') drawCrawler(th.it, c);
+    else drawPlayer(c);
+  }
+
+  // bats fly over everything
+  for (const b of bats) drawBat(b, c);
+
+  // emeralds
+  for (const e of emeralds) {
+    const ex = e.x - c.x, ey = e.y - c.y + Math.sin((elapsed - e.born) * 4) * 3;
+    if (ex < -20 || ey < -20 || ex > canvas.width + 20 || ey > canvas.height + 20) continue;
+    ctx.save();
+    ctx.translate(ex, ey - 8);
+    ctx.rotate(Math.PI / 4);
+    ctx.fillStyle = '#2ecc71';
+    ctx.fillRect(-6, -6, 12, 12);
+    ctx.strokeStyle = '#aaffcc'; ctx.lineWidth = 1.5;
+    ctx.strokeRect(-6, -6, 12, 12);
+    ctx.restore();
+  }
+
+  for (const p of particles) {
+    ctx.globalAlpha = Math.max(0, p.life / 0.6);
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x - c.x - 3, p.y - c.y - 3, 6, 6);
+  }
+  ctx.globalAlpha = 1;
+
+  // THE DOOR — colossal, sealed, and glowing angrily through its cracks
+  drawDoor(c);
+
+  // ---- THE DARK — heavier than any night above ----
+  const px = player.x - c.x, py = player.y - c.y;
+  const night = ctx.createRadialGradient(px, py - 14, 35, px, py - 14, 230);
+  night.addColorStop(0, 'rgba(2, 2, 8, 0)');
+  night.addColorStop(0.5, 'rgba(2, 2, 8, 0.55)');
+  night.addColorStop(1, 'rgba(2, 2, 8, 0.93)');
+  ctx.fillStyle = night;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // crystal glow cuts through the dark
+  for (const cr of crystals) {
+    const gx = cr.x - c.x, gy = cr.y - c.y - 14;
+    if (gx < -150 || gy < -150 || gx > canvas.width + 150 || gy > canvas.height + 150) continue;
+    const col = cr.hue === 'cyan' ? '110, 220, 240' : '180, 130, 255';
+    const g = ctx.createRadialGradient(gx, gy, 4, gx, gy, 90 * cr.size);
+    g.addColorStop(0, `rgba(${col}, 0.30)`);
+    g.addColorStop(1, `rgba(${col}, 0)`);
+    ctx.fillStyle = g;
+    ctx.fillRect(gx - 90 * cr.size, gy - 90 * cr.size, 180 * cr.size, 180 * cr.size);
+  }
+  // and the door's cracks burn through everything
+  const dxp = DOOR.x - c.x, dyp = DOOR.y - c.y;
+  const dg = ctx.createRadialGradient(dxp, dyp, 10, dxp, dyp, 260);
+  dg.addColorStop(0, 'rgba(255, 70, 40, 0.30)');
+  dg.addColorStop(1, 'rgba(255, 70, 40, 0)');
+  ctx.fillStyle = dg;
+  ctx.fillRect(dxp - 260, dyp - 260, 520, 520);
+
+  drawHUD();
+}
+
+function drawRock(r, c) {
+  const x = r.x - c.x, y = r.y - c.y;
+  if (x < -60 || y < -90 || x > canvas.width + 60 || y > canvas.height + 90) return;
+  const s = r.size;
+  ctx.fillStyle = '#26242f';
+  ctx.beginPath();
+  ctx.moveTo(x - 15 * s, y + 5);
+  ctx.lineTo(x - 8 * s, y - 46 * s);
+  ctx.lineTo(x, y - 60 * s);
+  ctx.lineTo(x + 9 * s, y - 42 * s);
+  ctx.lineTo(x + 15 * s, y + 5);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#332f3d';                       // one lit edge
+  ctx.beginPath();
+  ctx.moveTo(x - 8 * s, y - 46 * s);
+  ctx.lineTo(x, y - 60 * s);
+  ctx.lineTo(x + 2 * s, y - 40 * s);
+  ctx.closePath(); ctx.fill();
+}
+
+function drawCrystal(cr, c) {
+  const x = cr.x - c.x, y = cr.y - c.y;
+  if (x < -60 || y < -90 || x > canvas.width + 60 || y > canvas.height + 90) return;
+  const s = cr.size;
+  const main = cr.hue === 'cyan' ? '#6edcf0' : '#b482ff';
+  const lite = cr.hue === 'cyan' ? '#c8f4fa' : '#dcc8ff';
+  ctx.fillStyle = main;
+  ctx.beginPath();
+  ctx.moveTo(x - 10 * s, y);
+  ctx.lineTo(x - 5 * s, y - 34 * s);
+  ctx.lineTo(x, y - 44 * s);
+  ctx.lineTo(x + 6 * s, y - 30 * s);
+  ctx.lineTo(x + 10 * s, y);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = lite;
+  ctx.beginPath();
+  ctx.moveTo(x - 5 * s, y - 34 * s);
+  ctx.lineTo(x, y - 44 * s);
+  ctx.lineTo(x + 1 * s, y - 26 * s);
+  ctx.closePath(); ctx.fill();
+}
+
+function drawBat(b, c) {
+  const x = b.x - c.x, y = b.y - c.y;
+  if (x < -30 || y < -30 || x > canvas.width + 30 || y > canvas.height + 30) return;
+  const w = Math.sin(b.flap) * 8;
+  ctx.fillStyle = '#4a4458';
+  ctx.beginPath(); ctx.ellipse(x, y, 6, 5, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath();                                 // wings, mid-beat
+  ctx.moveTo(x - 3, y);
+  ctx.quadraticCurveTo(x - 14, y - 6 + w, x - 18, y + 2 + w);
+  ctx.quadraticCurveTo(x - 10, y + 2, x - 3, y + 3);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(x + 3, y);
+  ctx.quadraticCurveTo(x + 14, y - 6 + w, x + 18, y + 2 + w);
+  ctx.quadraticCurveTo(x + 10, y + 2, x + 3, y + 3);
+  ctx.fill();
+  ctx.fillStyle = '#ffd23f';                       // tiny glowing eyes
+  ctx.fillRect(x - 3, y - 2, 2, 2);
+  ctx.fillRect(x + 1, y - 2, 2, 2);
+}
+
+function drawCrawler(cw, c) {
+  const x = cw.x - c.x, y = cw.y - c.y;
+  if (x < -40 || y < -40 || x > canvas.width + 40 || y > canvas.height + 40) return;
+  const flash = cw.hurtFlash > 0;
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.beginPath(); ctx.ellipse(x, y + 8, 13, 5, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = flash ? '#ffffff' : '#55525f';   // armored stone shell
+  ctx.beginPath(); ctx.ellipse(x, y - 4, 14, 10, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = flash ? '#ffffff' : '#6a6775';   // shell plates
+  ctx.beginPath(); ctx.ellipse(x - 4, y - 7, 6, 4, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(x + 5, y - 5, 5, 3.5, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#2a2832';                       // little stone legs
+  const step = Math.sin(elapsed * 10 + cw.x) * 2;
+  ctx.fillRect(x - 12, y + 2 + step, 3, 5);
+  ctx.fillRect(x - 4, y + 4 - step, 3, 5);
+  ctx.fillRect(x + 4, y + 4 + step, 3, 5);
+  ctx.fillRect(x + 10, y + 2 - step, 3, 5);
+  ctx.fillStyle = '#ff9f43';                       // two smouldering eyes
+  ctx.fillRect(x - 5, y - 6, 3, 3);
+  ctx.fillRect(x + 2, y - 6, 3, 3);
+}
+
+function drawPlayer(c) {
+  const x = player.x - c.x, y = player.y - c.y;
+  const bob = player.moving ? Math.abs(Math.sin(player.walkTime * 10)) * 4 : 0;
+
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  ctx.beginPath(); ctx.ellipse(x, y + 8, 12, 5, 0, 0, Math.PI * 2); ctx.fill();
+
+  // your armor came with you — gecko scales, infection, plate, or shirt
+  ctx.fillStyle = hasGeckoArmor ? '#3f8a3f'
+                : hasInfectedArmor ? '#3a3345'
+                : hasArmor ? '#b8c4d0' : '#c98a3d';
+  ctx.fillRect(x - 8, y - 14 - bob, 16, 16);
+  if (hasGeckoArmor) {
+    ctx.fillStyle = '#8fce8f';
+    ctx.fillRect(x - 3, y - 14 - bob, 6, 16);
+    ctx.fillStyle = '#3f8a3f';                     // the tiny tail, still going
+    ctx.fillRect(x - 13 * player.facing - 3, y - 4 - bob, 7, 3);
+  } else if (hasInfectedArmor) {
+    ctx.fillStyle = '#b06cff';
+    ctx.fillRect(x - 1, y - 11 - bob, 3, 12);
+  }
+
+  ctx.fillStyle = '#f2c79b';                       // square head
+  ctx.fillRect(x - 7, y - 30 - bob, 14, 14);
+  ctx.fillStyle = '#7a5230';                       // the hat survived the fall
+  ctx.fillRect(x - 11, y - 30 - bob, 22, 4);
+  ctx.fillRect(x - 7, y - 36 - bob, 14, 7);
+  ctx.fillStyle = '#222';
+  ctx.fillRect(x + 3 * player.facing, y - 25 - bob, 3, 3);
+
+  // your weapon — Chippy if you earned him, sword otherwise
+  const swinging = player.attackTime > 0;
+  const progress = swinging ? 1 - player.attackTime / 0.25 : 0;
+  ctx.save();
+  ctx.translate(x + 9 * player.facing, y - 8 - bob);
+  if (player.facing === -1) ctx.scale(-1, 1);
+  ctx.rotate(swinging ? (-1.3 + 2.6 * progress) : 1.0);
+  if (hasChippy) {
+    ctx.fillStyle = '#8a6b3f'; ctx.fillRect(0, -2, 20, 4);
+    ctx.fillStyle = '#c8ccd4'; ctx.fillRect(16, -11, 9, 18);
+    ctx.fillStyle = '#e8ecf2'; ctx.fillRect(23, -11, 3, 18);
+    ctx.fillStyle = '#ffffff';                     // his eyes! he's thrilled!
+    ctx.fillRect(17.5, -8, 3, 3); ctx.fillRect(17.5, 1, 3, 3);
+    ctx.fillStyle = '#222';
+    ctx.fillRect(18.5, -7, 1.5, 1.5); ctx.fillRect(18.5, 2, 1.5, 1.5);
+  } else {
+    ctx.fillStyle = '#5b3b1e'; ctx.fillRect(0, -2, 7, 4);
+    ctx.fillStyle = '#c9a83c'; ctx.fillRect(6, -5, 3, 10);
+    ctx.fillStyle = hasGoldSword ? '#f2c94c' : '#dbe4ee'; ctx.fillRect(9, -2, 17, 4);
+    ctx.fillStyle = hasGoldSword ? '#fff3b8' : '#ffffff'; ctx.fillRect(9, -2, 17, 1.5);
+  }
+  if (swinging) {
+    ctx.strokeStyle = `rgba(255,255,255,${0.5 * (1 - progress)})`;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(0, 0, 26, -1.3, -1.3 + 2.6 * progress);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawDoor(c) {
+  const x = DOOR.x - c.x, y = DOOR.y - c.y;
+  if (x < -300 || y < -300 || x > canvas.width + 300 || y > canvas.height + 300) return;
+  // the frame: two colossal carved pillars
+  ctx.fillStyle = '#2e2a38';
+  ctx.fillRect(x - 150, y - 160, 40, 200);
+  ctx.fillRect(x + 110, y - 160, 40, 200);
+  ctx.fillRect(x - 160, y - 190, 320, 40);
+  // the door itself: black slabs
+  ctx.fillStyle = '#14121c';
+  ctx.fillRect(x - 110, y - 150, 220, 190);
+  // the cracks — something bright and angry lives behind them
+  const pulse = 0.6 + Math.sin(elapsed * 2.2) * 0.4;
+  ctx.strokeStyle = `rgba(255, 80, 40, ${pulse})`;
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.moveTo(x - 40, y - 150);
+  ctx.lineTo(x - 20, y - 90);
+  ctx.lineTo(x - 45, y - 40);
+  ctx.lineTo(x - 25, y + 30);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(x + 55, y - 150);
+  ctx.lineTo(x + 30, y - 70);
+  ctx.lineTo(x + 60, y + 10);
+  ctx.stroke();
+  // FOUR colossal claw marks. bigger than you. much bigger.
+  ctx.strokeStyle = '#0a0910';
+  ctx.lineWidth = 9;
+  for (let k = 0; k < 4; k++) {
+    ctx.beginPath();
+    ctx.moveTo(x - 70 + k * 45, y - 130);
+    ctx.lineTo(x - 95 + k * 45, y + 20);
+    ctx.stroke();
+  }
+}
+
+function drawHUD() {
+  // hearts + armor
+  for (let i = 0; i < player.maxHp; i++) drawHeart(14 + i * 26, 14, i < player.hp, '#ff4757');
+  for (let i = 0; i < armorMax(); i++) {
+    drawHeart(22 + (player.maxHp + i) * 26, 14, i < player.armor,
+              hasGeckoArmor ? '#5fbf5f' : hasInfectedArmor ? '#a86cf0' : '#b8c4d0');
+  }
+  // emeralds
+  ctx.save();
+  ctx.translate(24, 52); ctx.rotate(Math.PI / 4);
+  ctx.fillStyle = '#2ecc71'; ctx.fillRect(-6, -6, 12, 12);
+  ctx.restore();
+  ctx.fillStyle = '#bfffdd';
+  ctx.font = '18px monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText('x ' + emeraldCount, 40, 58);
+
+  // your carried-over legend, listed proudly
+  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  ctx.font = '12px monospace';
+  const gear = [];
+  if (hasChippy) gear.push('Chippy');
+  else if (hasGoldSword) gear.push('Golden Sword');
+  if (hasGeckoArmor) gear.push('Gecko Skin Armor');
+  else if (hasInfectedArmor) gear.push('Infected Armor');
+  else if (hasArmor) gear.push('Plate Armor');
+  ctx.fillText(gear.length ? 'gear from Explorer 1: ' + gear.join(', ')
+                           : 'no Explorer 1 gear found — a fresh start!', 14, 82);
+
+  // sword button for touch screens
+  if (navigator.maxTouchPoints > 0) {
+    ctx.fillStyle = 'rgba(255,255,255,0.12)';
+    ctx.beginPath(); ctx.arc(canvas.width - 70, canvas.height - 70, 42, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.4)'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(canvas.width - 70, canvas.height - 70, 42, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.font = '28px monospace'; ctx.textAlign = 'center';
+    ctx.fillText('⚔', canvas.width - 70, canvas.height - 60);
+  }
+
+  // the roar's message, while the world trembles
+  if (roarShake > 0.3) {
+    ctx.textAlign = 'center';
+    ctx.fillStyle = `rgba(255, 120, 90, ${Math.min(1, roarShake) * 0.8})`;
+    ctx.font = 'bold 22px monospace';
+    ctx.fillText('R R R A A A A W R R R R . . .',
+                 canvas.width / 2 + (noise(elapsed * 53.3) - 0.5) * 8,
+                 canvas.height - 46 + (noise(elapsed * 71.9) - 0.5) * 6);
+    ctx.font = '14px monospace';
+    ctx.fillStyle = 'rgba(255, 170, 140, 0.7)';
+    ctx.fillText('...it came from the NORTH', canvas.width / 2, canvas.height - 24);
+  }
+
+  // getting hurt flashes red
+  if (player.hurtTimer > 0.7) {
+    ctx.fillStyle = `rgba(255, 40, 40, ${(player.hurtTimer - 0.7) * 0.8})`;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
+  // going down
+  if (player.deathTimer > 0) {
+    ctx.fillStyle = 'rgba(20, 0, 10, 0.6)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#ffdddd';
+    ctx.font = 'bold 32px monospace';
+    ctx.fillText('The deep got you!', canvas.width / 2, canvas.height / 2 - 8);
+    ctx.font = '17px monospace';
+    ctx.fillText('Waking up at the drop point...', canvas.width / 2, canvas.height / 2 + 24);
+  }
+  // CHAPTER COMPLETE — you found the door
+  if (doorBanner > 0) {
+    ctx.fillStyle = 'rgba(20, 5, 5, 0.7)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#ffd23f';
+    ctx.font = 'bold 34px monospace';
+    ctx.fillText('CHAPTER 1 COMPLETE', canvas.width / 2, canvas.height / 2 - 50);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 20px monospace';
+    ctx.fillText('You found the Door at the bottom of everything.', canvas.width / 2, canvas.height / 2);
+    ctx.fillStyle = '#ffb3ab';
+    ctx.font = '16px monospace';
+    ctx.fillText('Something COLOSSAL sleeps behind it. The claw marks are on the OUTSIDE.',
+                 canvas.width / 2, canvas.height / 2 + 32);
+    ctx.fillStyle = '#9fb4ff';
+    ctx.fillText("What's behind the Door? The designer decides... TO BE CONTINUED",
+                 canvas.width / 2, canvas.height / 2 + 64);
+  }
+}
+
+function drawHeart(hx, hy, full, color) {
+  ctx.fillStyle = full ? color : 'rgba(255,255,255,0.25)';
+  ctx.fillRect(hx, hy, 8, 8);
+  ctx.fillRect(hx + 10, hy, 8, 8);
+  ctx.save();
+  ctx.translate(hx + 9, hy + 10);
+  ctx.rotate(Math.PI / 4);
+  ctx.fillRect(-6.4, -6.4, 12.8, 12.8);
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------------
+// THE GAME LOOP
+// ---------------------------------------------------------------------
+let lastTime = 0;
+function loop(time) {
+  const dt = Math.min(0.05, (time - lastTime) / 1000);
+  lastTime = time;
+  update(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
