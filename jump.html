@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>JUMP GUY</title>
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #6ec6ff; }
+  canvas { display: block; touch-action: none; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+// =====================================================================
+// JUMP GUY — a 2D side-scroller, Mario-style. Run right. Jump the
+// gaps. Stomp the baddies. Grab the coins. Reach the flag.
+//
+// The hero is a placeholder guy for now — the real designer gets to
+// decide who he is, what world this is, and what the game is called.
+// =====================================================================
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+function fit() { canvas.width = innerWidth; canvas.height = innerHeight; }
+addEventListener('resize', fit);
+fit();
+
+window.onerror = (msg, src, line) => {
+  const d = document.createElement('div');
+  d.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#c0392b;' +
+    'color:#fff;font:14px monospace;padding:8px;z-index:9';
+  d.textContent = '🐛 BUG on line ' + line + ': ' + msg;
+  document.body.appendChild(d);
+};
+
+// ---------------------------------------------------------------------
+// SOUND — boops and bings, cooked from pure math
+// ---------------------------------------------------------------------
+let audio = null;
+function ensureAudio() {
+  if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)();
+}
+function beep(freq, dur, type, vol) {
+  if (!audio) return;
+  const o = audio.createOscillator(), g = audio.createGain();
+  o.type = type || 'square';
+  o.frequency.value = freq;
+  g.gain.setValueAtTime(vol || 0.1, audio.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + dur);
+  o.connect(g); g.connect(audio.destination);
+  o.start(); o.stop(audio.currentTime + dur + 0.02);
+}
+function jumpSound() { beep(300, 0.12, 'square', 0.08); beep(500, 0.18, 'square', 0.05); }
+function coinSound() { beep(988, 0.08, 'square', 0.08); setTimeout(() => beep(1319, 0.2, 'square', 0.08), 60); }
+function stompSound() { beep(180, 0.15, 'triangle', 0.15); }
+function hurtSound() { beep(200, 0.3, 'sawtooth', 0.1); }
+function winSound() { [523, 659, 784, 1047, 1319].forEach((n, i) => setTimeout(() => beep(n, 0.25, 'square', 0.09), i * 130)); }
+
+// ---------------------------------------------------------------------
+// THE LEVEL — built from solid blocks. x, y, w, h are in world pixels.
+// The ground has GAPS in it — that's what the jumping is for.
+// ---------------------------------------------------------------------
+const TILE = 46;                    // one block is this many pixels
+const WORLD_W = 6400;
+const FLOOR = 640;                  // where the main ground level sits
+
+// ground pieces (the gaps between them are pits!)
+const solids = [
+  { x: 0,    y: FLOOR, w: 1200, h: 200 },
+  { x: 1340, y: FLOOR, w: 800,  h: 200 },
+  { x: 2280, y: FLOOR, w: 620,  h: 200 },
+  { x: 3080, y: FLOOR, w: 1000, h: 200 },
+  { x: 4260, y: FLOOR, w: 700,  h: 200 },
+  { x: 5100, y: FLOOR, w: 1300, h: 200 },
+  // floating platforms — brick shelves in the sky
+  { x: 500,  y: FLOOR - 150, w: 3 * TILE, h: 40 },
+  { x: 800,  y: FLOOR - 260, w: 3 * TILE, h: 40 },
+  { x: 1450, y: FLOOR - 170, w: 4 * TILE, h: 40 },
+  { x: 1800, y: FLOOR - 300, w: 3 * TILE, h: 40 },
+  { x: 2400, y: FLOOR - 180, w: 3 * TILE, h: 40 },
+  { x: 2650, y: FLOOR - 320, w: 3 * TILE, h: 40 },
+  { x: 3300, y: FLOOR - 160, w: 4 * TILE, h: 40 },
+  { x: 3700, y: FLOOR - 280, w: 3 * TILE, h: 40 },
+  { x: 4400, y: FLOOR - 170, w: 3 * TILE, h: 40 },
+  { x: 4700, y: FLOOR - 300, w: 4 * TILE, h: 40 },
+  { x: 5400, y: FLOOR - 180, w: 3 * TILE, h: 40 },
+  // stair blocks near the end, like the classic finale
+  { x: 5750, y: FLOOR - TILE, w: TILE * 4, h: TILE },
+  { x: 5796, y: FLOOR - TILE * 2, w: TILE * 3, h: TILE * 2 },
+  { x: 5842, y: FLOOR - TILE * 3, w: TILE * 2, h: TILE * 3 },
+];
+
+// coins float where jumping is worth it
+const COIN_SPOTS = [
+  [570, FLOOR - 210], [640, FLOOR - 210],
+  [870, FLOOR - 320], [940, FLOOR - 320],
+  [1270, FLOOR - 120],                      // over the first pit!
+  [1520, FLOOR - 230], [1590, FLOOR - 230],
+  [1870, FLOOR - 360],
+  [2210, FLOOR - 130],                      // over the second pit
+  [2470, FLOOR - 240], [2720, FLOOR - 380],
+  [2990, FLOOR - 140],                      // over the third pit
+  [3380, FLOOR - 220], [3450, FLOOR - 220],
+  [3770, FLOOR - 340],
+  [4170, FLOOR - 130],                      // over the fourth pit
+  [4470, FLOOR - 230],
+  [4790, FLOOR - 360], [4860, FLOOR - 360],
+  [5030, FLOOR - 130],                      // the last pit
+  [5470, FLOOR - 240],
+];
+
+// walking baddies: [startX, leftEdge, rightEdge] of their patrol
+const BADDIE_SPOTS = [
+  [700, 480, 1150],
+  [1600, 1360, 2100],
+  [2500, 2300, 2860],
+  [3400, 3100, 4040],
+  [3800, 3100, 4040],
+  [4500, 4280, 4920],
+  [5300, 5120, 5700],
+];
+
+const FLAG = { x: 6100, y: FLOOR };
+
+// ---------------------------------------------------------------------
+// GAME STATE
+// ---------------------------------------------------------------------
+const player = {
+  x: 100, y: FLOOR - 60, w: 34, h: 52,
+  vx: 0, vy: 0,
+  onGround: false,
+  facing: 1,
+  coyote: 0,        // grace time to jump just after leaving a ledge
+  buffer: 0,        // grace time when jump is pressed just before landing
+  invuln: 0,        // safety seconds after getting hurt
+  walk: 0,
+};
+let coins = [];
+let baddies = [];
+let hearts = 3;
+let coinCount = 0;
+let won = false;
+let elapsed = 0;
+let camX = 0;
+
+function resetLevel() {
+  player.x = 100; player.y = FLOOR - 60;
+  player.vx = 0; player.vy = 0;
+  player.invuln = 0;
+  hearts = 3;
+  coinCount = 0;
+  won = false;
+  coins = COIN_SPOTS.map(c => ({ x: c[0], y: c[1], taken: false }));
+  baddies = BADDIE_SPOTS.map(b => ({
+    x: b[0], y: FLOOR - 40, w: 40, h: 40,
+    min: b[1], max: b[2], dir: 1, squish: 0,
+  }));
+}
+resetLevel();
+
+// ---------------------------------------------------------------------
+// INPUT — keyboard for computers, touch buttons for phones
+// ---------------------------------------------------------------------
+const keys = {};
+addEventListener('keydown', e => {
+  ensureAudio();
+  keys[e.key.toLowerCase()] = true;
+  if (won && e.key === ' ') resetLevel();
+});
+addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+
+// three big touch zones: ◀ ▶ on the left, JUMP on the right
+let touchLeft = false, touchRight = false, touchJump = false;
+function readTouches(e) {
+  touchLeft = touchRight = touchJump = false;
+  for (const t of e.touches) {
+    if (t.clientX > canvas.width * 0.55) touchJump = true;
+    else if (t.clientX < canvas.width * 0.28) touchLeft = true;
+    else touchRight = true;
+  }
+}
+addEventListener('touchstart', e => {
+  e.preventDefault();
+  ensureAudio();
+  if (won) { resetLevel(); return; }
+  readTouches(e);
+}, { passive: false });
+addEventListener('touchmove', e => { e.preventDefault(); readTouches(e); }, { passive: false });
+addEventListener('touchend', e => { e.preventDefault(); readTouches(e); }, { passive: false });
+
+function heldLeft()  { return keys['arrowleft'] || keys['a'] || touchLeft; }
+function heldRight() { return keys['arrowright'] || keys['d'] || touchRight; }
+function heldJump()  { return keys[' '] || keys['arrowup'] || keys['w'] || touchJump; }
+
+// ---------------------------------------------------------------------
+// PHYSICS — the invisible rules that make jumping feel GOOD
+// ---------------------------------------------------------------------
+const GRAVITY = 2300;
+const RUN_SPEED = 290;
+const JUMP_POWER = 860;
+
+function overlaps(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x &&
+         a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+let jumpWasHeld = false;
+function update(dt) {
+  elapsed += dt;
+  if (won) return;
+
+  // ---- running ----
+  const want = (heldRight() ? 1 : 0) - (heldLeft() ? 1 : 0);
+  player.vx = want * RUN_SPEED;
+  if (want !== 0) { player.facing = want; player.walk += dt; }
+
+  // ---- jumping, with two secret kindnesses: ----
+  // coyote time (you can jump a split second AFTER walking off a ledge)
+  // and jump buffering (pressing jump a split second EARLY still works)
+  player.coyote = player.onGround ? 0.1 : player.coyote - dt;
+  const jumpPressed = heldJump() && !jumpWasHeld;
+  jumpWasHeld = heldJump();
+  player.buffer = jumpPressed ? 0.12 : player.buffer - dt;
+  if (player.buffer > 0 && player.coyote > 0) {
+    player.vy = -JUMP_POWER;
+    player.coyote = 0;
+    player.buffer = 0;
+    jumpSound();
+  }
+  // letting go of jump early cuts the jump short — that's how you
+  // do small hops AND big leaps with one button
+  if (!heldJump() && player.vy < -300) player.vy = -300;
+
+  // ---- gravity, then collide with the world one axis at a time ----
+  player.vy += GRAVITY * dt;
+  player.x += player.vx * dt;
+  for (const s of solids) {
+    if (!overlaps(player, s)) continue;
+    if (player.vx > 0) player.x = s.x - player.w;
+    else if (player.vx < 0) player.x = s.x + s.w;
+  }
+  player.x = Math.max(0, Math.min(WORLD_W - player.w, player.x));
+
+  player.y += player.vy * dt;
+  player.onGround = false;
+  for (const s of solids) {
+    if (!overlaps(player, s)) continue;
+    if (player.vy > 0) { player.y = s.y - player.h; player.vy = 0; player.onGround = true; }
+    else if (player.vy < 0) { player.y = s.y + s.h; player.vy = 0; }
+  }
+
+  // ---- falling into a pit ----
+  if (player.y > FLOOR + 500) hurt(true);
+
+  if (player.invuln > 0) player.invuln -= dt;
+
+  // ---- coins ----
+  for (const c of coins) {
+    if (c.taken) continue;
+    if (Math.abs(player.x + player.w / 2 - c.x) < 34 &&
+        Math.abs(player.y + player.h / 2 - c.y) < 40) {
+      c.taken = true;
+      coinCount++;
+      coinSound();
+    }
+  }
+
+  // ---- baddies ----
+  for (const b of baddies) {
+    if (b.squish > 0) { b.squish -= dt; continue; }
+    b.x += b.dir * 70 * dt;
+    if (b.x < b.min) { b.x = b.min; b.dir = 1; }
+    if (b.x > b.max - b.w) { b.x = b.max - b.w; b.dir = -1; }
+    if (!overlaps(player, b)) continue;
+    if (player.vy > 150 && player.y + player.h < b.y + b.h * 0.7) {
+      // STOMP! squish it and bounce off
+      b.squish = 9999;
+      player.vy = -JUMP_POWER * 0.55;
+      stompSound();
+    } else if (player.invuln <= 0) hurt(false);
+  }
+
+  // ---- the flag ----
+  if (Math.abs(player.x - FLAG.x) < 40 && player.y > FLAG.y - 300) {
+    won = true;
+    winSound();
+  }
+
+  // ---- camera follows, but never shows past the edges ----
+  camX = Math.max(0, Math.min(WORLD_W - canvas.width,
+                              player.x - canvas.width * 0.38));
+}
+
+function hurt(fell) {
+  hearts--;
+  hurtSound();
+  if (hearts <= 0) { resetLevel(); return; }
+  if (fell) {
+    // put you back on the nearest ground piece to the left
+    let best = solids[0];
+    for (const s of solids) {
+      if (s.y === FLOOR && s.x < player.x && s.x > best.x) best = s;
+    }
+    player.x = best.x + 60;
+    player.y = FLOOR - 80;
+    player.vy = 0;
+  }
+  player.invuln = 1.5;
+}
+
+// ---------------------------------------------------------------------
+// DRAWING — bright cartoon world, blocky and cheerful
+// ---------------------------------------------------------------------
+function draw() {
+  const W = canvas.width, H = canvas.height;
+
+  // sky, with a soft gradient down to the horizon
+  const sky = ctx.createLinearGradient(0, 0, 0, H);
+  sky.addColorStop(0, '#6ec6ff');
+  sky.addColorStop(1, '#b8e4ff');
+  ctx.fillStyle = sky;
+  ctx.fillRect(0, 0, W, H);
+
+  // faraway hills slide slower than the world — that's "parallax",
+  // and it's what makes flat drawings feel deep.
+  // (the +span %span dance keeps them wrapping around forever)
+  ctx.fillStyle = '#8fd48f';
+  const hillSpan = 700 * 10;
+  for (let i = 0; i < 12; i++) {
+    const hx = ((i * 700 - camX * 0.3) % hillSpan + hillSpan) % hillSpan - 200;
+    ctx.beginPath();
+    ctx.arc(hx, H - 8, 120 + (i % 3) * 40, Math.PI, 0);
+    ctx.fill();
+  }
+  // clouds drift even slower
+  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  const cloudSpan = 1100 * 8;
+  for (let i = 0; i < 8; i++) {
+    const cxx = ((i * 1100 + 300 - camX * 0.15) % cloudSpan + cloudSpan) % cloudSpan - 100;
+    const cy = 80 + (i % 3) * 70;
+    ctx.beginPath();
+    ctx.arc(cxx, cy, 34, 0, Math.PI * 2);
+    ctx.arc(cxx + 38, cy + 8, 26, 0, Math.PI * 2);
+    ctx.arc(cxx - 38, cy + 10, 24, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.save();
+  // the vertical camera pins the ground to the bottom of ANY screen
+  const camY = FLOOR + 200 - H;
+  ctx.translate(-camX, -camY);
+
+  // solid blocks: grassy tops on ground, bricks in the sky
+  for (const s of solids) {
+    if (s.x + s.w < camX - 50 || s.x > camX + W + 50) continue;
+    if (s.y === FLOOR) {
+      ctx.fillStyle = '#8a5a2b';                       // dirt
+      ctx.fillRect(s.x, s.y, s.w, s.h);
+      ctx.fillStyle = '#3faf4f';                       // grass lid
+      ctx.fillRect(s.x, s.y, s.w, 18);
+    } else {
+      ctx.fillStyle = '#c8722e';                       // brick shelf
+      ctx.fillRect(s.x, s.y, s.w, s.h);
+      ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+      ctx.lineWidth = 2;
+      for (let bx = s.x; bx < s.x + s.w; bx += TILE) {
+        ctx.strokeRect(bx, s.y, Math.min(TILE, s.x + s.w - bx), s.h);
+      }
+    }
+  }
+
+  // coins — spinning by squashing their width with a sine wave
+  for (const c of coins) {
+    if (c.taken) continue;
+    const squash = Math.abs(Math.sin(elapsed * 5 + c.x));
+    ctx.fillStyle = '#ffd23f';
+    ctx.beginPath();
+    ctx.ellipse(c.x, c.y + Math.sin(elapsed * 3 + c.x) * 4,
+                11 * squash + 2, 13, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#c8931f';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  // baddies — grumpy little walkers
+  for (const b of baddies) {
+    if (b.squish > 0) continue;
+    ctx.fillStyle = '#a0522d';
+    ctx.fillRect(b.x, b.y + 6, b.w, b.h - 6);
+    ctx.fillStyle = '#7a3a1d';
+    ctx.fillRect(b.x - 4, b.y + b.h - 10, b.w + 8, 10);   // grumpy feet
+    // angry eyes that look where it walks
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(b.x + 8, b.y + 12, 9, 9);
+    ctx.fillRect(b.x + 23, b.y + 12, 9, 9);
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(b.x + 10 + b.dir * 2, b.y + 15, 4, 4);
+    ctx.fillRect(b.x + 25 + b.dir * 2, b.y + 15, 4, 4);
+  }
+
+  // the flag — reach it and the level is yours
+  ctx.fillStyle = '#666';
+  ctx.fillRect(FLAG.x, FLAG.y - 290, 8, 290);
+  ctx.fillStyle = won ? '#ffd23f' : '#e8453c';
+  ctx.beginPath();
+  ctx.moveTo(FLAG.x + 8, FLAG.y - 290);
+  ctx.lineTo(FLAG.x + 90, FLAG.y - 262);
+  ctx.lineTo(FLAG.x + 8, FLAG.y - 234);
+  ctx.fill();
+
+  // ---- THE HERO (a placeholder guy — the designer will decide!) ----
+  if (player.invuln <= 0 || Math.floor(elapsed * 10) % 2 === 0) {
+    const px = player.x, py = player.y;
+    ctx.fillStyle = '#3a6ea5';                          // overalls
+    ctx.fillRect(px, py + 20, player.w, player.h - 20);
+    ctx.fillStyle = '#ffcc99';                          // face
+    ctx.fillRect(px + 4, py, player.w - 8, 24);
+    ctx.fillStyle = '#e8453c';                          // cap
+    ctx.fillRect(px, py - 6, player.w, 10);
+    ctx.fillRect(px + (player.facing > 0 ? player.w - 6 : -8), py - 2, 14, 6);
+    ctx.fillStyle = '#000';                             // eye
+    ctx.fillRect(px + (player.facing > 0 ? player.w - 12 : 8), py + 8, 4, 6);
+    // little walk-bounce feet
+    const step = player.onGround && player.vx !== 0
+               ? Math.sin(player.walk * 14) * 4 : 0;
+    ctx.fillStyle = '#5a3a1a';
+    ctx.fillRect(px + 2, py + player.h - 6 + step, 12, 6);
+    ctx.fillRect(px + player.w - 14, py + player.h - 6 - step, 12, 6);
+  }
+
+  ctx.restore();
+
+  // ---- HUD ----
+  ctx.textAlign = 'left';
+  ctx.font = 'bold 22px monospace';
+  ctx.fillStyle = '#fff';
+  ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+  ctx.lineWidth = 4;
+  const hud = '❤'.repeat(hearts) + '   🪙 ' + coinCount;
+  ctx.strokeText(hud, 16, 36);
+  ctx.fillText(hud, 16, 36);
+
+  // touch controls, only drawn where fingers go
+  if ('ontouchstart' in window) {
+    ctx.fillStyle = 'rgba(255,255,255,0.18)';
+    ctx.font = 'bold 40px monospace';
+    ctx.fillText('◀', W * 0.08, H - 40);
+    ctx.fillText('▶', W * 0.36, H - 40);
+    ctx.textAlign = 'right';
+    ctx.fillText('⤴ JUMP', W - 30, H - 40);
+    ctx.textAlign = 'left';
+  }
+
+  if (won) {
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#ffd23f';
+    ctx.font = `bold ${Math.min(54, W / 12)}px monospace`;
+    ctx.fillText('LEVEL COMPLETE!', W / 2, H / 2 - 20);
+    ctx.fillStyle = '#fff';
+    ctx.font = '20px monospace';
+    ctx.fillText('coins: ' + coinCount + ' / ' + COIN_SPOTS.length, W / 2, H / 2 + 24);
+    ctx.fillText('space or tap to play again', W / 2, H / 2 + 56);
+  }
+}
+
+// ---------------------------------------------------------------------
+// THE GAME LOOP
+// ---------------------------------------------------------------------
+let lastTime = 0;
+function loop(time) {
+  const dt = Math.min(0.03, (time - lastTime) / 1000);
+  lastTime = time;
+  update(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
