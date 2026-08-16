@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Grow a Garden</title>
+<style>
+  html, body { margin: 0; background: #2e4a2a; height: 100%; overflow: hidden; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+// =====================================================================
+// GROW A GARDEN
+//
+// Plant seeds. Wait. Harvest. Sell. Buy better seeds. Repeat forever.
+// The sneaky-best part: plants grow by REAL clock time, so your garden
+// keeps growing even while the game is closed. Come back after dinner
+// and your pumpkins kept working the whole time.
+// =====================================================================
+
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+function fitCanvas() {
+  canvas.width = innerWidth;
+  canvas.height = innerHeight;
+}
+fitCanvas();
+addEventListener('resize', fitCanvas);
+
+const TOPBAR = 64;
+
+// ---------------------------------------------------------------------
+// THE CROPS — everything plantable lives in this one table.
+// Want a new crop? Add one line here and it's in the shop.
+//   cost   = what the seed costs in the shop
+//   sell   = what a harvest pays you (always more than cost — that's farming)
+//   grow   = seconds from seed to harvest-ready
+// ---------------------------------------------------------------------
+const CROPS = {
+  carrot:    { name: 'Carrot',    icon: '🥕', cost: 5,  sell: 9,   grow: 30 },
+  sunflower: { name: 'Sunflower', icon: '🌻', cost: 12, sell: 22,  grow: 90 },
+  pumpkin:   { name: 'Pumpkin',   icon: '🎃', cost: 25, sell: 50,  grow: 240 },
+};
+
+// ---------------------------------------------------------------------
+// THE GARDEN — a grid of soil plots. Each plot is either empty (null)
+// or growing something: { type, at (when planted), watered }
+// Growth is measured with Date.now() — the REAL clock — which is the
+// whole trick behind offline growing.
+// ---------------------------------------------------------------------
+const PLOT_COLS = 8, PLOT_ROWS = 5;
+let plots = [];
+for (let i = 0; i < PLOT_COLS * PLOT_ROWS; i++) plots.push(null);
+
+let coins = 20;
+let ownCan = false;          // bought the watering can yet?
+let selected = 'carrot';     // what tool/seed is in your hand
+let shopOpen = false;
+let sparkles = [];           // little celebration bits
+let statusText = 'Welcome! Open the SHOP, buy seeds, tap a plot to plant.';
+let statusTimer = 6;
+let elapsed = 0;
+
+// how grown is this plot, from 0 (just planted) to 1 (ready)?
+function growthOf(plot) {
+  if (!plot) return 0;
+  const secs = (Date.now() - plot.at) / 1000;
+  const speed = plot.watered ? 2 : 1;          // watered = twice as fast
+  return Math.min(1, (secs * speed) / CROPS[plot.type].grow);
+}
+
+// ---------------------------------------------------------------------
+// SAVING — the garden writes itself into the browser's storage box
+// after every action, and reads itself back when the game opens.
+// ---------------------------------------------------------------------
+function save() {
+  localStorage.setItem('garden_save', JSON.stringify({ coins, ownCan, plots }));
+}
+function load() {
+  try {
+    const d = JSON.parse(localStorage.getItem('garden_save'));
+    if (d) { coins = d.coins; ownCan = d.ownCan; plots = d.plots; }
+  } catch (e) {}                                // bad save? start fresh, no drama
+}
+load();
+
+function setStatus(t) { statusText = t; statusTimer = 3.5; }
+
+// ---------------------------------------------------------------------
+// LAYOUT — where the plots sit on screen (recomputed so any screen works)
+// ---------------------------------------------------------------------
+function plotSize() {
+  const w = (canvas.width - 40) / PLOT_COLS;
+  const h = (canvas.height - TOPBAR - 90) / PLOT_ROWS;
+  return Math.min(w, h, 110);
+}
+function plotRect(i) {
+  const s = plotSize();
+  const gw = PLOT_COLS * s, gh = PLOT_ROWS * s;
+  const ox = (canvas.width - gw) / 2;
+  const oy = TOPBAR + (canvas.height - TOPBAR - 70 - gh) / 2;
+  return { x: ox + (i % PLOT_COLS) * s, y: oy + Math.floor(i / PLOT_COLS) * s, s };
+}
+
+// ---------------------------------------------------------------------
+// THE SHOP — seeds, and gear at the bottom
+// ---------------------------------------------------------------------
+function shopItems() {
+  const items = Object.keys(CROPS).map(k => ({
+    kind: 'seed', key: k,
+    label: `${CROPS[k].icon} ${CROPS[k].name} seed`,
+    info: `sells for ${CROPS[k].sell}c · ${CROPS[k].grow}s to grow`,
+    cost: CROPS[k].cost,
+  }));
+  items.push({
+    kind: 'gear', key: 'can',
+    label: '🚿 Watering Can',
+    info: ownCan ? 'OWNED — select it, tap plants to water' : 'water makes plants grow 2x faster',
+    cost: ownCan ? 0 : 30,
+  });
+  return items;
+}
+function shopRects() {
+  const items = shopItems();
+  const w = Math.min(430, canvas.width - 30), h = 62, gap = 8;
+  const x = (canvas.width - w) / 2;
+  const y0 = TOPBAR + 40;
+  return items.map((it, i) => ({ ...it, x, y: y0 + i * (h + gap), w, h }));
+}
+
+function buyOrPick(item) {
+  if (item.kind === 'seed') {
+    selected = item.key;                        // seeds: just pick them —
+    shopOpen = false;                           // you pay when you PLANT
+    setStatus(`${CROPS[item.key].icon} seed in hand — tap a plot to plant (${item.cost}c each)`);
+  } else if (item.key === 'can') {
+    if (ownCan) {
+      selected = 'can';
+      shopOpen = false;
+      setStatus('🚿 Watering can in hand — tap a growing plant!');
+    } else if (coins >= 30) {
+      coins -= 30;
+      ownCan = true;
+      selected = 'can';
+      shopOpen = false;
+      setStatus('You bought the watering can! Tap plants to water them.');
+      save();
+    } else {
+      setStatus("Not enough coins for the can yet — keep farming!");
+    }
+  }
+}
+
+// ---------------------------------------------------------------------
+// TAPPING THE GARDEN — plant, water, or harvest, depending
+// ---------------------------------------------------------------------
+function tapPlot(i) {
+  const plot = plots[i];
+  const r = plotRect(i);
+
+  if (plot && growthOf(plot) >= 1) {
+    // HARVEST! the whole point of everything
+    const crop = CROPS[plot.type];
+    coins += crop.sell;
+    plots[i] = null;
+    for (let k = 0; k < 12; k++) {
+      sparkles.push({
+        x: r.x + r.s / 2, y: r.y + r.s / 2,
+        vx: (Math.random() - 0.5) * 260, vy: -Math.random() * 260 - 40,
+        life: 0.8, color: k % 2 ? '#ffd23f' : '#aef28b',
+      });
+    }
+    setStatus(`${crop.icon} Harvested! +${crop.sell} coins`);
+    save();
+    return;
+  }
+
+  if (plot && selected === 'can' && ownCan && !plot.watered) {
+    // WATER — the plant keeps the progress it has, then grows 2x from here
+    const done = growthOf(plot) * CROPS[plot.type].grow;   // seconds "already grown"
+    plot.watered = true;
+    plot.at = Date.now() - done * 500;                     // re-aim the clock at 2x speed
+    for (let k = 0; k < 8; k++) {
+      sparkles.push({
+        x: r.x + r.s / 2, y: r.y + r.s * 0.3,
+        vx: (Math.random() - 0.5) * 120, vy: Math.random() * 120 + 30,
+        life: 0.6, color: '#7dd3ff',
+      });
+    }
+    setStatus('💧 Watered! Growing twice as fast now.');
+    save();
+    return;
+  }
+
+  if (!plot && CROPS[selected]) {
+    // PLANT a seed (this is where you pay for it)
+    const crop = CROPS[selected];
+    if (coins < crop.cost) {
+      setStatus(`Need ${crop.cost}c for a ${crop.name} seed — harvest something first!`);
+      return;
+    }
+    coins -= crop.cost;
+    plots[i] = { type: selected, at: Date.now(), watered: false };
+    setStatus(`${crop.icon} planted! Ready in ${crop.grow} seconds${ownCan ? ' (or water it!)' : ''}`);
+    save();
+  }
+}
+
+// ---------------------------------------------------------------------
+// INPUT
+// ---------------------------------------------------------------------
+function shopBtnRect() { return { x: canvas.width - 130, y: 12, w: 118, h: 40 }; }
+function inside(px, py, r) { return px > r.x && px < r.x + r.w && py > r.y && py < r.y + (r.h || r.s); }
+
+function press(px, py) {
+  if (shopOpen) {
+    for (const r of shopRects()) {
+      if (inside(px, py, r)) { buyOrPick(r); return; }
+    }
+    shopOpen = false;                            // tapped away — close the shop
+    return;
+  }
+  if (inside(px, py, shopBtnRect())) { shopOpen = true; return; }
+  for (let i = 0; i < plots.length; i++) {
+    if (inside(px, py, plotRect(i))) { tapPlot(i); return; }
+  }
+}
+
+addEventListener('mousedown', e => press(e.clientX, e.clientY));
+addEventListener('touchstart', e => {
+  e.preventDefault();
+  press(e.changedTouches[0].clientX, e.changedTouches[0].clientY);
+}, { passive: false });
+
+// ---------------------------------------------------------------------
+// DRAWING
+// ---------------------------------------------------------------------
+function drawPlant(plot, r) {
+  const g = growthOf(plot);                      // 0 (seed) .. 1 (ready)
+  const cx = r.x + r.s / 2, base = r.y + r.s * 0.78;
+  const crop = CROPS[plot.type];
+
+  if (g < 0.15) {
+    // freshly planted: a little mound with a hopeful sprout
+    ctx.fillStyle = '#4a3520';
+    ctx.beginPath(); ctx.ellipse(cx, base, r.s * 0.14, r.s * 0.06, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#7cb342';
+    ctx.fillRect(cx - 1, base - r.s * 0.1, 2, r.s * 0.1);
+  } else if (plot.type === 'carrot') {
+    // feathery green top, and the carrot peeks out when it's ready
+    const h = r.s * (0.12 + g * 0.25);
+    ctx.strokeStyle = '#5da03c'; ctx.lineWidth = 2;
+    for (let f = -1; f <= 1; f++) {
+      ctx.beginPath();
+      ctx.moveTo(cx, base);
+      ctx.quadraticCurveTo(cx + f * r.s * 0.08, base - h * 0.6, cx + f * r.s * 0.14, base - h);
+      ctx.stroke();
+    }
+    if (g >= 1) {
+      ctx.fillStyle = '#ff8f2b';
+      ctx.beginPath();
+      ctx.moveTo(cx - r.s * 0.07, base);
+      ctx.lineTo(cx + r.s * 0.07, base);
+      ctx.lineTo(cx, base + r.s * 0.16);
+      ctx.closePath(); ctx.fill();
+    }
+  } else if (plot.type === 'sunflower') {
+    // the stem climbs, then the big happy head opens
+    const h = r.s * (0.15 + g * 0.42);
+    ctx.strokeStyle = '#4f8a34'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(cx, base); ctx.lineTo(cx, base - h); ctx.stroke();
+    ctx.fillStyle = '#5da03c';                   // two leaves
+    ctx.beginPath(); ctx.ellipse(cx - r.s * 0.08, base - h * 0.45, r.s * 0.08, r.s * 0.035, -0.5, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(cx + r.s * 0.08, base - h * 0.6, r.s * 0.08, r.s * 0.035, 0.5, 0, Math.PI * 2); ctx.fill();
+    if (g > 0.55) {
+      const head = r.s * 0.07 + (g - 0.55) * r.s * 0.25;
+      ctx.fillStyle = '#ffd23f';                 // petals
+      for (let p = 0; p < 10; p++) {
+        const a = p / 10 * Math.PI * 2 + elapsed * 0.15;
+        ctx.beginPath();
+        ctx.ellipse(cx + Math.cos(a) * head, base - h + Math.sin(a) * head,
+                    head * 0.5, head * 0.24, a, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.fillStyle = '#6d4a26';                 // the middle
+      ctx.beginPath(); ctx.arc(cx, base - h, head * 0.55, 0, Math.PI * 2); ctx.fill();
+    }
+  } else if (plot.type === 'pumpkin') {
+    // a creeping vine, then the pumpkin swells up big and proud
+    ctx.strokeStyle = '#4f8a34'; ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(cx - r.s * 0.2, base);
+    ctx.quadraticCurveTo(cx, base - r.s * 0.16 * g, cx + r.s * 0.2 * g, base);
+    ctx.stroke();
+    if (g > 0.3) {
+      const pr = r.s * 0.06 + (g - 0.3) * r.s * 0.3;
+      ctx.fillStyle = g >= 1 ? '#ff8f2b' : '#7cb342';   // green until ripe!
+      ctx.beginPath(); ctx.ellipse(cx, base - pr * 0.4, pr, pr * 0.8, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,0.15)'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(cx, base - pr * 1.1); ctx.lineTo(cx, base + pr * 0.35); ctx.stroke();
+      ctx.fillStyle = '#4f8a34';
+      ctx.fillRect(cx - 1.5, base - pr * 1.35, 3, pr * 0.3);
+    }
+  }
+}
+
+function draw(dt) {
+  // lawn
+  ctx.fillStyle = '#568a3f';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // the plots
+  for (let i = 0; i < plots.length; i++) {
+    const r = plotRect(i);
+    const plot = plots[i];
+    ctx.fillStyle = plot && plot.watered ? '#4a3520' : '#6b4a2e';   // wet soil is darker
+    ctx.fillRect(r.x + 3, r.y + 3, r.s - 6, r.s - 6);
+    ctx.strokeStyle = 'rgba(0,0,0,0.18)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(r.x + 3, r.y + 3, r.s - 6, r.s - 6);
+
+    if (plot) {
+      drawPlant(plot, r);
+      const g = growthOf(plot);
+      if (g >= 1) {
+        // READY — golden sparkle ring so you can't miss it
+        const tw = 0.5 + Math.sin(elapsed * 5 + i) * 0.5;
+        ctx.strokeStyle = `rgba(255, 210, 63, ${0.4 + tw * 0.5})`;
+        ctx.lineWidth = 3;
+        ctx.strokeRect(r.x + 5, r.y + 5, r.s - 10, r.s - 10);
+      } else {
+        // a tiny green progress bar along the bottom
+        ctx.fillStyle = 'rgba(0,0,0,0.3)';
+        ctx.fillRect(r.x + 8, r.y + r.s - 12, r.s - 16, 5);
+        ctx.fillStyle = plot.watered ? '#7dd3ff' : '#aef28b';
+        ctx.fillRect(r.x + 8, r.y + r.s - 12, (r.s - 16) * g, 5);
+      }
+    }
+  }
+
+  // sparkles
+  for (const sp of sparkles) {
+    sp.x += sp.vx * dt; sp.y += sp.vy * dt;
+    sp.vy += 500 * dt; sp.life -= dt;
+    ctx.globalAlpha = Math.max(0, sp.life);
+    ctx.fillStyle = sp.color;
+    ctx.fillRect(sp.x - 3, sp.y - 3, 6, 6);
+  }
+  ctx.globalAlpha = 1;
+  sparkles = sparkles.filter(sp => sp.life > 0);
+
+  // top bar
+  ctx.fillStyle = '#1d3020';
+  ctx.fillRect(0, 0, canvas.width, TOPBAR);
+  ctx.fillStyle = '#ffd23f';
+  ctx.font = 'bold 22px monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText(`🪙 ${coins} coins`, 16, 40);
+  const sel = CROPS[selected];
+  ctx.fillStyle = '#cfe8cf';
+  ctx.font = '15px monospace';
+  ctx.fillText('holding: ' + (sel ? sel.icon + ' ' + sel.name + ' seed' : '🚿 watering can'),
+               190, 38);
+  const sb = shopBtnRect();
+  ctx.fillStyle = '#7a5a1f';
+  ctx.fillRect(sb.x, sb.y, sb.w, sb.h);
+  ctx.strokeStyle = '#ffd23f'; ctx.lineWidth = 2;
+  ctx.strokeRect(sb.x, sb.y, sb.w, sb.h);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 17px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('🛒 SHOP', sb.x + sb.w / 2, sb.y + 26);
+
+  // status line at the bottom
+  if (statusTimer > 0) {
+    statusTimer -= dt;
+    ctx.fillStyle = `rgba(255, 255, 255, ${Math.min(1, statusTimer)})`;
+    ctx.font = 'bold 15px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(statusText, canvas.width / 2, canvas.height - 24);
+  }
+
+  // the shop overlay
+  if (shopOpen) {
+    ctx.fillStyle = 'rgba(10, 18, 10, 0.75)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#ffd23f';
+    ctx.font = 'bold 24px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('🛒 THE GARDEN SHOP', canvas.width / 2, TOPBAR + 20);
+    for (const r of shopRects()) {
+      const afford = r.cost === 0 || coins >= (r.kind === 'seed' ? CROPS[r.key].cost : r.cost);
+      ctx.fillStyle = afford ? '#2c4a2e' : '#2c2c26';
+      ctx.fillRect(r.x, r.y, r.w, r.h);
+      ctx.strokeStyle = afford ? '#7ddf8f' : '#5a5a4e';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(r.x, r.y, r.w, r.h);
+      ctx.fillStyle = afford ? '#ffffff' : '#8a8a7e';
+      ctx.font = 'bold 16px monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText(r.label, r.x + 12, r.y + 26);
+      ctx.font = '12px monospace';
+      ctx.fillStyle = '#b8d4b8';
+      ctx.fillText(r.info, r.x + 12, r.y + 48);
+      if (r.cost > 0) {
+        ctx.textAlign = 'right';
+        ctx.fillStyle = afford ? '#ffd23f' : '#8a8a7e';
+        ctx.font = 'bold 16px monospace';
+        ctx.fillText(r.cost + 'c', r.x + r.w - 12, r.y + 32);
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------
+// THE GAME LOOP
+// ---------------------------------------------------------------------
+let lastTime = 0;
+function loop(time) {
+  const dt = Math.min(0.05, (time - lastTime) / 1000);
+  lastTime = time;
+  elapsed += dt;
+  draw(dt);
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
