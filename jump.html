@@ -80,11 +80,11 @@ function winSound() { [110, 145, 185, 235, 300].forEach((n, i) => setTimeout(() 
 // The ground has GAPS in it — that's what the jumping is for.
 // ---------------------------------------------------------------------
 const TILE = 46;                    // one block is this many pixels
-const WORLD_W = 6400;
-const FLOOR = 640;                  // where the main ground level sits
+const STORY_W = 6400;
+const FLOOR = 640;                  // where the story level's ground sits
 
 // ground pieces (the gaps between them are pits!)
-const solids = [
+const STORY_SOLIDS = [
   { x: 0,    y: FLOOR, w: 1200, h: 200 },
   { x: 1340, y: FLOOR, w: 800,  h: 200 },
   { x: 2280, y: FLOOR, w: 620,  h: 200 },
@@ -139,7 +139,85 @@ const BADDIE_SPOTS = [
   [5300, 5120, 5700],
 ];
 
-const FLAG = { x: 6100, y: FLOOR };
+// ---------------------------------------------------------------------
+// LEVELS — the game can play the STORY level, or YOUR level from the
+// builder. These variables hold whichever level is loaded right now.
+// ---------------------------------------------------------------------
+let solids = [];
+let specCoins = [];     // where beans belong (so restarting re-places them)
+let specBaddies = [];   // where sniffers wake up
+let FLAG = { x: 6100, y: FLOOR };
+let startPos = { x: 100, y: FLOOR - 60 };
+let worldW = STORY_W;
+let levelBottom = FLOOR + 200;   // below this + a bit = you fell in a pit
+let playingCustom = false;
+
+function loadStory() {
+  playingCustom = false;
+  solids = STORY_SOLIDS.map(s => ({ ...s, lid: s.y === FLOOR }));
+  specCoins = COIN_SPOTS.map(c => ({ x: c[0], y: c[1] }));
+  specBaddies = BADDIE_SPOTS.map(b => ({ x: b[0], y: FLOOR - 40 }));
+  FLAG = { x: 6100, y: FLOOR };
+  startPos = { x: 100, y: FLOOR - 60 };
+  worldW = STORY_W;
+  levelBottom = FLOOR + 200;
+  resetLevel();
+}
+
+// ---------------------------------------------------------------------
+// THE LEVEL BUILDER's notebook — everything you've placed, kept as
+// grid cells ("cx,cy" strings). Saved to the browser automatically.
+// ---------------------------------------------------------------------
+let edit = {
+  tiles: new Set(),
+  beans: [],
+  sniffers: [],
+  start: [2, 12],
+  exit: [16, 12],
+};
+// a fresh builder starts with a strip of ground so it's instantly playable
+for (let i = 0; i < 19; i++) edit.tiles.add(i + ',13');
+
+function saveCustom() {
+  localStorage.setItem('fartcave_custom', JSON.stringify({
+    tiles: [...edit.tiles], beans: edit.beans, sniffers: edit.sniffers,
+    start: edit.start, exit: edit.exit,
+  }));
+}
+try {
+  const saved = JSON.parse(localStorage.getItem('fartcave_custom'));
+  if (saved && saved.tiles) {
+    edit = { tiles: new Set(saved.tiles), beans: saved.beans || [],
+             sniffers: saved.sniffers || [], start: saved.start || [2, 12],
+             exit: saved.exit || [16, 12] };
+  }
+} catch (err) { /* a broken save just means a fresh start */ }
+
+function loadCustomLevel() {
+  playingCustom = true;
+  solids = [];
+  let maxX = 900, maxBottom = 0;
+  for (const key of edit.tiles) {
+    const [cx, cy] = key.split(',').map(Number);
+    const lid = !edit.tiles.has(cx + ',' + (cy - 1));
+    solids.push({ x: cx * TILE, y: cy * TILE, w: TILE, h: TILE, lid });
+    maxX = Math.max(maxX, cx * TILE + TILE);
+    maxBottom = Math.max(maxBottom, cy * TILE + TILE);
+  }
+  specCoins = edit.beans.map(k => {
+    const [cx, cy] = k.split(',').map(Number);
+    return { x: cx * TILE + TILE / 2, y: cy * TILE + TILE / 2 };
+  });
+  specBaddies = edit.sniffers.map(k => {
+    const [cx, cy] = k.split(',').map(Number);
+    return { x: cx * TILE + 3, y: cy * TILE + TILE - 40 };
+  });
+  FLAG = { x: edit.exit[0] * TILE + TILE / 2, y: (edit.exit[1] + 1) * TILE };
+  startPos = { x: edit.start[0] * TILE + 6, y: edit.start[1] * TILE - 8 };
+  worldW = Math.max(maxX + 300, 2000);
+  levelBottom = maxBottom || 800;
+  resetLevel();
+}
 
 // ---------------------------------------------------------------------
 // GAME STATE
@@ -164,20 +242,22 @@ let won = false;
 let elapsed = 0;
 let camX = 0;
 
+let lastSafe = { x: 100, y: FLOOR - 60 };   // last solid ground you stood on
+
 function resetLevel() {
-  player.x = 100; player.y = FLOOR - 60;
+  player.x = startPos.x; player.y = startPos.y;
   player.vx = 0; player.vy = 0;
   player.invuln = 0;
   hearts = 3;
   coinCount = 0;
   won = false;
-  coins = COIN_SPOTS.map(c => ({ x: c[0], y: c[1], taken: false }));
-  baddies = BADDIE_SPOTS.map(b => ({
-    x: b[0], y: FLOOR - 40, w: 40, h: 40,
-    min: b[1], max: b[2], dir: 1, squish: 0,
+  lastSafe = { x: startPos.x, y: startPos.y };
+  coins = specCoins.map(c => ({ x: c.x, y: c.y, taken: false }));
+  baddies = specBaddies.map(b => ({
+    x: b.x, y: b.y, w: 40, h: 40, dir: 1, squish: 0,
   }));
 }
-resetLevel();
+loadStory();
 
 // ---------------------------------------------------------------------
 // INPUT — keyboard for computers, touch buttons for phones
@@ -194,7 +274,9 @@ addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
 let touchLeft = false, touchRight = false, touchJump = false;
 function readTouches(e) {
   touchLeft = touchRight = touchJump = false;
+  if (mode === 'build') return;         // fingers are for building now
   for (const t of e.touches) {
+    if (t.clientY < 74) continue;       // the button bar isn't a control
     if (t.clientX > canvas.width * 0.55) touchJump = true;
     else if (t.clientX < canvas.width * 0.28) touchLeft = true;
     else touchRight = true;
@@ -214,6 +296,80 @@ function heldRight() { return keys['arrowright'] || keys['d'] || touchRight; }
 function heldJump()  { return keys[' '] || keys['arrowup'] || keys['w'] || touchJump; }
 
 // ---------------------------------------------------------------------
+// THE BUILDER's controls — pick a tool, then tap/drag on the world.
+// Buttons (uiRects) are drawn each frame and clicked here.
+// ---------------------------------------------------------------------
+let tool = 'ground';
+let editCamX = 0, editCamY = 260;
+let painting = false;
+let panLast = null;
+let hoverPt = null;
+let uiRects = [];
+
+function uiAction(id) {
+  if (id === 'build') {
+    mode = 'build';
+    editCamX = edit.start[0] * TILE - canvas.width / 2;
+    editCamY = edit.start[1] * TILE - canvas.height / 2;
+  } else if (id === 'test') {
+    saveCustom();
+    loadCustomLevel();
+    mode = 'play';
+  } else if (id === 'story') {
+    loadStory();
+    mode = 'play';
+  } else tool = id;
+}
+
+function applyTool(sx, sy) {
+  if (sy < 96) return;                  // don't paint underneath the buttons
+  const cx = Math.floor((sx + editCamX) / TILE);
+  const cy = Math.floor((sy + editCamY) / TILE);
+  const key = cx + ',' + cy;
+  if (tool === 'ground') {
+    edit.tiles.add(key);
+    edit.beans = edit.beans.filter(k => k !== key);
+    edit.sniffers = edit.sniffers.filter(k => k !== key);
+  } else if (tool === 'bean') {
+    if (!edit.tiles.has(key) && !edit.beans.includes(key)) edit.beans.push(key);
+  } else if (tool === 'nose') {
+    if (!edit.tiles.has(key) && !edit.sniffers.includes(key)) edit.sniffers.push(key);
+  } else if (tool === 'start') edit.start = [cx, cy];
+  else if (tool === 'exit') edit.exit = [cx, cy];
+  else if (tool === 'erase') {
+    edit.tiles.delete(key);
+    edit.beans = edit.beans.filter(k => k !== key);
+    edit.sniffers = edit.sniffers.filter(k => k !== key);
+  }
+  saveCustom();                         // every change is saved instantly
+}
+
+addEventListener('pointerdown', e => {
+  ensureAudio();
+  for (const r of uiRects) {
+    if (e.clientX > r.x && e.clientX < r.x + r.w &&
+        e.clientY > r.y && e.clientY < r.y + r.h) { uiAction(r.id); return; }
+  }
+  if (mode !== 'build') {
+    if (won) resetLevel();              // a mouse-click restart, too
+    return;
+  }
+  if (tool === 'pan') { panLast = { x: e.clientX, y: e.clientY }; return; }
+  painting = true;
+  applyTool(e.clientX, e.clientY);
+});
+addEventListener('pointermove', e => {
+  if (mode !== 'build') return;
+  hoverPt = { x: e.clientX, y: e.clientY };
+  if (panLast) {
+    editCamX -= e.clientX - panLast.x;
+    editCamY -= e.clientY - panLast.y;
+    panLast = { x: e.clientX, y: e.clientY };
+  } else if (painting) applyTool(e.clientX, e.clientY);
+});
+addEventListener('pointerup', () => { painting = false; panLast = null; });
+
+// ---------------------------------------------------------------------
 // PHYSICS — the invisible rules that make jumping feel GOOD
 // ---------------------------------------------------------------------
 const GRAVITY = 2300;
@@ -225,10 +381,11 @@ function overlaps(a, b) {
          a.y < b.y + b.h && a.y + a.h > b.y;
 }
 
+let mode = 'play';      // 'play' or 'build'
 let jumpWasHeld = false;
 function update(dt) {
   elapsed += dt;
-  if (won) return;
+  if (won || mode === 'build') return;
 
   // ---- running ----
   const want = (heldRight() ? 1 : 0) - (heldLeft() ? 1 : 0);
@@ -267,7 +424,7 @@ function update(dt) {
     if (player.vx > 0) player.x = s.x - player.w;
     else if (player.vx < 0) player.x = s.x + s.w;
   }
-  player.x = Math.max(0, Math.min(WORLD_W - player.w, player.x));
+  player.x = Math.max(0, Math.min(worldW - player.w, player.x));
 
   player.y += player.vy * dt;
   player.onGround = false;
@@ -276,9 +433,11 @@ function update(dt) {
     if (player.vy > 0) { player.y = s.y - player.h; player.vy = 0; player.onGround = true; }
     else if (player.vy < 0) { player.y = s.y + s.h; player.vy = 0; }
   }
+  // remember the last spot of solid ground, for coming back after a fall
+  if (player.onGround) lastSafe = { x: player.x, y: player.y - 10 };
 
   // ---- falling into a pit ----
-  if (player.y > FLOOR + 500) hurt(true);
+  if (player.y > levelBottom + 400) hurt(true);
 
   if (player.invuln > 0) player.invuln -= dt;
 
@@ -313,8 +472,17 @@ function update(dt) {
   for (const b of baddies) {
     if (b.squish > 0) { b.squish -= dt; continue; }
     b.x += b.dir * 70 * dt;
-    if (b.x < b.min) { b.x = b.min; b.dir = 1; }
-    if (b.x > b.max - b.w) { b.x = b.max - b.w; b.dir = -1; }
+    // a sniffer turns around at walls and at the edge of a cliff —
+    // it pokes one toe ahead and checks: is there floor under it?
+    const aheadX = b.dir > 0 ? b.x + b.w + 2 : b.x - 2;
+    let wall = false, floorAhead = false;
+    for (const s of solids) {
+      if (aheadX > s.x && aheadX < s.x + s.w) {
+        if (b.y + b.h > s.y && b.y < s.y + s.h) wall = true;
+        if (Math.abs(s.y - (b.y + b.h)) < 8) floorAhead = true;
+      }
+    }
+    if (wall || !floorAhead) { b.dir *= -1; b.x += b.dir * 2; }
     if (!overlaps(player, b)) continue;
     if (player.vy > 150 && player.y + player.h < b.y + b.h * 0.7) {
       // STOMP! squish it and bounce off
@@ -331,7 +499,7 @@ function update(dt) {
   }
 
   // ---- camera follows, but never shows past the edges ----
-  camX = Math.max(0, Math.min(WORLD_W - canvas.width,
+  camX = Math.max(0, Math.min(Math.max(0, worldW - canvas.width),
                               player.x - canvas.width * 0.38));
 }
 
@@ -340,13 +508,9 @@ function hurt(fell) {
   hurtSound();
   if (hearts <= 0) { resetLevel(); return; }
   if (fell) {
-    // put you back on the nearest ground piece to the left
-    let best = solids[0];
-    for (const s of solids) {
-      if (s.y === FLOOR && s.x < player.x && s.x > best.x) best = s;
-    }
-    player.x = best.x + 60;
-    player.y = FLOOR - 80;
+    // put you back on the last solid ground you stood on
+    player.x = lastSafe.x;
+    player.y = lastSafe.y;
     player.vy = 0;
   }
   player.invuln = 1.5;
@@ -356,7 +520,9 @@ function hurt(fell) {
 // DRAWING — bright cartoon world, blocky and cheerful
 // ---------------------------------------------------------------------
 function draw() {
+  if (mode === 'build') { drawEditor(); return; }
   const W = canvas.width, H = canvas.height;
+  uiRects = [];
 
   // deep-cave gloom, lighter near the floor where the crystals glow
   const cave = ctx.createLinearGradient(0, 0, 0, H);
@@ -407,8 +573,9 @@ function draw() {
   }
 
   ctx.save();
-  // the vertical camera pins the ground to the bottom of ANY screen
-  const camY = FLOOR + 200 - H;
+  // the camera keeps the level floor at the bottom of any screen,
+  // but rises with you if you climb a tall home-made tower
+  const camY = Math.min(levelBottom - H, player.y - H * 0.35);
   ctx.translate(-camX, -camY);
 
   // solid blocks: grassy tops on ground, bricks in the sky
@@ -551,9 +718,21 @@ function draw() {
   ctx.fillStyle = '#fff';
   ctx.strokeStyle = 'rgba(0,0,0,0.4)';
   ctx.lineWidth = 4;
-  const hud = '❤'.repeat(hearts) + '   beans: ' + coinCount;
+  const hud = '❤'.repeat(hearts) + '   beans: ' + coinCount +
+              (playingCustom ? '   (your level!)' : '');
   ctx.strokeText(hud, 16, 36);
   ctx.fillText(hud, 16, 36);
+
+  // the door to the level builder, always one tap away
+  uiRects.push({ x: W - 122, y: 10, w: 110, h: 40, id: 'build' });
+  ctx.fillStyle = 'rgba(255, 210, 63, 0.15)';
+  ctx.fillRect(W - 122, 10, 110, 40);
+  ctx.strokeStyle = '#ffd23f';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(W - 122, 10, 110, 40);
+  ctx.fillStyle = '#ffd23f';
+  ctx.font = 'bold 16px monospace';
+  ctx.fillText('🔨 BUILD', W - 112, 36);
 
   // touch controls, only drawn where fingers go
   if ('ontouchstart' in window) {
@@ -575,10 +754,133 @@ function draw() {
     ctx.fillText('YOU ESCAPED THE CAVE!', W / 2, H / 2 - 20);
     ctx.fillStyle = '#fff';
     ctx.font = '20px monospace';
-    ctx.fillText('the fart is FREE. smell ya later, cave.', W / 2, H / 2 + 24);
-    ctx.fillText('beans: ' + coinCount + ' / ' + COIN_SPOTS.length +
+    ctx.fillText(playingCustom ? 'YOUR level. YOUR victory. Nice building.'
+                               : 'the fart is FREE. smell ya later, cave.', W / 2, H / 2 + 24);
+    ctx.fillText('beans: ' + coinCount + ' / ' + Math.max(1, specCoins.length) +
                  '  —  space or tap to play again', W / 2, H / 2 + 56);
   }
+}
+
+// ---------------------------------------------------------------------
+// THE BUILDER SCREEN — a grid, your placed pieces, and a toolbar.
+// Tap a tool, then tap (or drag) on the world to place things.
+// ---------------------------------------------------------------------
+const TOOLS = [
+  ['ground', 'GROUND'], ['bean', 'BEAN'], ['nose', 'NOSE'],
+  ['start', 'START'], ['exit', 'EXIT'], ['erase', 'ERASE'], ['pan', 'PAN'],
+];
+
+function drawEditor() {
+  const W = canvas.width, H = canvas.height;
+  uiRects = [];
+
+  // arrow keys pan too, for keyboard builders
+  if (keys['arrowleft'] || keys['a']) editCamX -= 10;
+  if (keys['arrowright'] || keys['d']) editCamX += 10;
+  if (keys['arrowup'] || keys['w']) editCamY -= 10;
+  if (keys['arrowdown'] || keys['s']) editCamY += 10;
+
+  ctx.fillStyle = '#1d1712';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.save();
+  ctx.translate(-editCamX, -editCamY);
+
+  // the grid — faint lines showing every placeable cell
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.06)';
+  ctx.lineWidth = 1;
+  const gx0 = Math.floor(editCamX / TILE) * TILE;
+  const gy0 = Math.floor(editCamY / TILE) * TILE;
+  for (let gx = gx0; gx < editCamX + W + TILE; gx += TILE) {
+    ctx.beginPath(); ctx.moveTo(gx, editCamY); ctx.lineTo(gx, editCamY + H); ctx.stroke();
+  }
+  for (let gy = gy0; gy < editCamY + H + TILE; gy += TILE) {
+    ctx.beginPath(); ctx.moveTo(editCamX, gy); ctx.lineTo(editCamX + W, gy); ctx.stroke();
+  }
+
+  // everything you've placed so far
+  for (const key of edit.tiles) {
+    const [cx, cy] = key.split(',').map(Number);
+    const x = cx * TILE, y = cy * TILE;
+    if (x < editCamX - TILE || x > editCamX + W || y < editCamY - TILE || y > editCamY + H) continue;
+    ctx.fillStyle = '#3d362f';
+    ctx.fillRect(x, y, TILE, TILE);
+    if (!edit.tiles.has(cx + ',' + (cy - 1))) {
+      ctx.fillStyle = '#4f7a4a';
+      ctx.fillRect(x, y, TILE, 12);
+    }
+  }
+  for (const key of edit.beans) {
+    const [cx, cy] = key.split(',').map(Number);
+    ctx.fillStyle = '#b5651d';
+    ctx.beginPath();
+    ctx.ellipse(cx * TILE + TILE / 2, cy * TILE + TILE / 2, 12, 8, 0.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  for (const key of edit.sniffers) {
+    const [cx, cy] = key.split(',').map(Number);
+    const x = cx * TILE + 3, y = cy * TILE + TILE - 40;
+    ctx.fillStyle = '#e8a4a4';
+    ctx.beginPath();
+    ctx.moveTo(x + 4, y + 32);
+    ctx.lineTo(x + 20, y + 2);
+    ctx.lineTo(x + 36, y + 32);
+    ctx.quadraticCurveTo(x + 20, y + 46, x + 4, y + 32);
+    ctx.fill();
+  }
+  // the start marker: a little ghost of the hero himself
+  const stx = edit.start[0] * TILE + TILE / 2, sty = edit.start[1] * TILE + TILE / 2;
+  ctx.fillStyle = 'rgba(140, 220, 110, 0.75)';
+  ctx.beginPath(); ctx.arc(stx, sty, 16, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#183a10';
+  ctx.beginPath();
+  ctx.arc(stx - 5, sty - 3, 2.5, 0, Math.PI * 2);
+  ctx.arc(stx + 5, sty - 3, 2.5, 0, Math.PI * 2);
+  ctx.fill();
+  // the exit marker: the crack of daylight
+  const exx = edit.exit[0] * TILE + TILE / 2, exy = (edit.exit[1] + 1) * TILE;
+  ctx.fillStyle = 'rgba(255, 252, 230, 0.9)';
+  ctx.beginPath();
+  ctx.moveTo(exx - 8, exy); ctx.lineTo(exx, exy - 80);
+  ctx.lineTo(exx + 8, exy); ctx.fill();
+
+  // a ghost square under your pointer, so you can aim
+  if (hoverPt && hoverPt.y > 96 && tool !== 'pan') {
+    const hcx = Math.floor((hoverPt.x + editCamX) / TILE);
+    const hcy = Math.floor((hoverPt.y + editCamY) / TILE);
+    ctx.strokeStyle = 'rgba(255, 210, 63, 0.8)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(hcx * TILE, hcy * TILE, TILE, TILE);
+  }
+  ctx.restore();
+
+  // ---- the toolbar ----
+  ctx.fillStyle = 'rgba(10, 7, 5, 0.85)';
+  ctx.fillRect(0, 0, W, 96);
+  let bx = 8, by = 8;
+  const all = TOOLS.concat([['test', '▶ TEST'], ['story', 'STORY']]);
+  for (const [id, label] of all) {
+    const bw = Math.max(64, label.length * 11 + 20);
+    if (bx + bw > W - 8) { bx = 8; by += 42; }
+    uiRects.push({ x: bx, y: by, w: bw, h: 38, id });
+    const active = tool === id;
+    ctx.fillStyle = id === 'test' ? 'rgba(125, 223, 143, 0.2)'
+                  : active ? 'rgba(255, 210, 63, 0.25)' : 'rgba(255, 255, 255, 0.07)';
+    ctx.fillRect(bx, by, bw, 38);
+    ctx.strokeStyle = id === 'test' ? '#7ddf8f' : active ? '#ffd23f' : '#5a5450';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(bx, by, bw, 38);
+    ctx.fillStyle = id === 'test' ? '#7ddf8f' : active ? '#ffd23f' : '#c8c0b8';
+    ctx.font = 'bold 14px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(label, bx + bw / 2, by + 25);
+    bx += bw + 8;
+  }
+  ctx.textAlign = 'left';
+  ctx.fillStyle = 'rgba(255,255,255,0.45)';
+  ctx.font = '13px monospace';
+  ctx.fillText('pick a tool, then tap or drag on the grid — PAN (or arrow keys) moves around — everything saves itself',
+               10, by + 60 > 90 ? by + 52 : 88);
 }
 
 // ---------------------------------------------------------------------
