@@ -100,16 +100,19 @@ let menuCards = [];      // filled each frame so taps know where the cards are
 
 const LEVELS2 = [
   { name: 'Abyssal Madness', unlocked: true },
-  { name: '???', unlocked: false },
+  { name: 'Going Insane', unlocked: foundDoor },   // behind the Door...
   { name: '???', unlocked: false },
 ];
+let hasBeatInsane = localStorage.getItem('explorer2_insane') === 'yes';
 
 // ---------------------------------------------------------------------
 // THE CAVERN — one vast dark world beneath the bottom of everything
 // ---------------------------------------------------------------------
-const WORLD_W = 2400, WORLD_H = 2400;
-const START = { x: 1200, y: 2150 };
-const DOOR  = { x: 1200, y: 180 };     // far to the NORTH. where the roars live.
+// the world changes shape per level — these get set by each builder
+let worldW = 2400, worldH = 2400;
+let START = { x: 1200, y: 2150 };
+let currentLevel = 0;
+const DOOR = { x: 1200, y: 180 };      // level 1's goal. where the roars live.
 
 // a pocket randomness machine — same number in, same "random" out
 function noise(n) {
@@ -117,52 +120,48 @@ function noise(n) {
   return s - Math.floor(s);
 }
 
-// stalagmites — the cave's version of trees. solid rock, floor to dark.
-const rocks = [];
-for (let i = 0; i < 120; i++) {
-  const x = 80 + noise(i * 3.17) * (WORLD_W - 160);
-  const y = 80 + noise(i * 7.71) * (WORLD_H - 160);
-  if (Math.hypot(x - START.x, y - START.y) < 170) continue;
-  if (Math.hypot(x - DOOR.x, y - DOOR.y) < 260) continue;
-  rocks.push({ x, y, size: 0.7 + noise(i * 13.3) * 0.8 });
-}
-// a solid rock border around the whole cavern
-for (let x = 30; x < WORLD_W; x += 60) {
-  rocks.push({ x: x + noise(x) * 25, y: 25, size: 1.1 });
-  rocks.push({ x: x + noise(x * 3) * 25, y: WORLD_H - 25, size: 1.1 });
-}
-for (let y = 30; y < WORLD_H; y += 60) {
-  rocks.push({ x: 25, y: y + noise(y * 5) * 25, size: 1.1 });
-  rocks.push({ x: WORLD_W - 25, y: y + noise(y * 7) * 25, size: 1.1 });
+// ---------------------------------------------------------------------
+// LEVEL 2's TEMPLE — a corridor winding through the deep. You asked for
+// really long. This is REALLY long.
+// ---------------------------------------------------------------------
+const T2_PATH = [
+  { x: 1500, y: 2850 }, { x: 1500, y: 2600 }, { x: 1250, y: 2520 },
+  { x: 1050, y: 2600 }, { x: 850,  y: 2480 }, { x: 820,  y: 2260 },
+  { x: 1000, y: 2140 }, { x: 1250, y: 2200 }, { x: 1500, y: 2140 },
+  { x: 1750, y: 2200 }, { x: 1980, y: 2100 }, { x: 2050, y: 1880 },
+  { x: 1880, y: 1720 }, { x: 1620, y: 1780 }, { x: 1380, y: 1720 },
+  { x: 1150, y: 1780 }, { x: 950,  y: 1660 }, { x: 900,  y: 1440 },
+  { x: 1080, y: 1300 }, { x: 1350, y: 1360 }, { x: 1600, y: 1300 },
+  { x: 1850, y: 1360 }, { x: 2080, y: 1240 }, { x: 2130, y: 1020 },
+  { x: 1950, y: 880 },  { x: 1700, y: 940 },  { x: 1450, y: 880 },
+  { x: 1200, y: 940 },  { x: 1000, y: 820 },  { x: 960,  y: 600 },
+  { x: 1140, y: 470 },  { x: 1400, y: 530 },  { x: 1550, y: 380 },
+  { x: 1500, y: 300 },
+];
+const T2_CHAMBER = { x: 1500, y: 240 };   // where the sixteen eyes wait
+
+function distToPath(x, y, path) {
+  let best = 999999;
+  for (let i = 0; i < path.length - 1; i++) {
+    const a = path[i], b = path[i + 1];
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / (dx * dx + dy * dy)));
+    best = Math.min(best, Math.hypot(x - (a.x + t * dx), y - (a.y + t * dy)));
+  }
+  return best;
 }
 
-// glowing crystals — the cave's lanterns. beautiful, and load-bearing
-// for your sanity down here.
-const crystals = [];
-for (let i = 0; i < 40; i++) {
-  crystals.push({
-    x: 120 + noise(i * 21.3 + 5) * (WORLD_W - 240),
-    y: 120 + noise(i * 47.7 + 5) * (WORLD_H - 240),
-    size: 0.7 + noise(i * 5.5) * 0.8,
-    hue: noise(i * 9.9) < 0.7 ? 'cyan' : 'violet',
-  });
-}
-
-// little glowing mushrooms, purely for beauty
-const mushrooms = [];
-for (let i = 0; i < 150; i++) {
-  mushrooms.push({
-    x: noise(i * 31.7 + 9) * WORLD_W,
-    y: noise(i * 77.1 + 9) * WORLD_H,
-    glow: noise(i * 3.3),
-  });
-}
+// terrain — rebuilt fresh by each level's builder
+let rocks = [];       // stalagmites (and, in the temple, wall blocks)
+let crystals = [];    // the glowing lanterns of the deep
+let mushrooms = [];   // tiny glowing floor stars
 
 function blocked(x, y, r) {
   r = r || 12;
-  if (x < 20 || y < 20 || x > WORLD_W - 20 || y > WORLD_H - 20) return true;
+  if (x < 20 || y < 20 || x > worldW - 20 || y > worldH - 20) return true;
   for (const t of rocks) {
-    if (Math.hypot(x - t.x, y - t.y) < r + 14 * t.size) return true;
+    const chunk = t.wall ? 20 : 14 * t.size;
+    if (Math.hypot(x - t.x, y - t.y) < r + chunk) return true;
   }
   for (const c of crystals) {
     if (Math.hypot(x - c.x, y - c.y) < r + 10 * c.size) return true;
@@ -206,8 +205,8 @@ let emeraldCount = 0;
 // a random spot in the cavern, away from the start, the Door, and rocks
 function wildSpot(seed) {
   for (let tries = 0; tries < 40; tries++) {
-    const x = 100 + noise(seed * 13.7 + tries * 3.1) * (WORLD_W - 200);
-    const y = 100 + noise(seed * 29.3 + tries * 7.7) * (WORLD_H - 200);
+    const x = 100 + noise(seed * 13.7 + tries * 3.1) * (worldW - 200);
+    const y = 100 + noise(seed * 29.3 + tries * 7.7) * (worldH - 200);
     if (Math.hypot(x - START.x, y - START.y) < 380) continue;
     if (Math.hypot(x - DOOR.x, y - DOOR.y) < 320) continue;
     if (blocked(x, y, 12)) continue;
@@ -216,8 +215,57 @@ function wildSpot(seed) {
   return null;
 }
 
+// a random spot along the temple corridor, for level 2's population
+function pathSpot(seed) {
+  for (let tries = 0; tries < 60; tries++) {
+    const x = noise(seed * 17.9 + tries * 3.3) * worldW;
+    const y = noise(seed * 31.1 + tries * 7.1) * worldH;
+    if (distToPath(x, y, T2_PATH) > 65) continue;
+    if (Math.hypot(x - START.x, y - START.y) < 350) continue;
+    if (Math.hypot(x - T2_CHAMBER.x, y - T2_CHAMBER.y) < 280) continue;
+    if (blocked(x, y, 12)) continue;
+    return { x, y };
+  }
+  return null;
+}
+
 // fill the cavern fresh — called every time you enter the level
 function buildCavern() {
+  worldW = 2400; worldH = 2400;
+  START = { x: 1200, y: 2150 };
+
+  // stalagmites — the cave's version of trees
+  rocks = [];
+  for (let i = 0; i < 120; i++) {
+    const x = 80 + noise(i * 3.17) * (worldW - 160);
+    const y = 80 + noise(i * 7.71) * (worldH - 160);
+    if (Math.hypot(x - START.x, y - START.y) < 170) continue;
+    if (Math.hypot(x - DOOR.x, y - DOOR.y) < 260) continue;
+    rocks.push({ x, y, size: 0.7 + noise(i * 13.3) * 0.8 });
+  }
+  for (let x = 30; x < worldW; x += 60) {
+    rocks.push({ x: x + noise(x) * 25, y: 25, size: 1.1 });
+    rocks.push({ x: x + noise(x * 3) * 25, y: worldH - 25, size: 1.1 });
+  }
+  for (let y = 30; y < worldH; y += 60) {
+    rocks.push({ x: 25, y: y + noise(y * 5) * 25, size: 1.1 });
+    rocks.push({ x: worldW - 25, y: y + noise(y * 7) * 25, size: 1.1 });
+  }
+  crystals = [];
+  for (let i = 0; i < 40; i++) {
+    crystals.push({
+      x: 120 + noise(i * 21.3 + 5) * (worldW - 240),
+      y: 120 + noise(i * 47.7 + 5) * (worldH - 240),
+      size: 0.7 + noise(i * 5.5) * 0.8,
+      hue: noise(i * 9.9) < 0.7 ? 'cyan' : 'violet',
+    });
+  }
+  mushrooms = [];
+  for (let i = 0; i < 150; i++) {
+    mushrooms.push({ x: noise(i * 31.7 + 9) * worldW,
+                     y: noise(i * 77.1 + 9) * worldH, glow: noise(i * 3.3) });
+  }
+
   bats = [];
   for (let i = 0; i < 500 && bats.length < 12; i++) {
     const x = noise(i * 61.3 + 11) * WORLD_W;
@@ -272,6 +320,7 @@ function buildCavern() {
                            wander: noise(i) * 6.28, lastHitSwing: 0, hurtFlash: 0 });
   }
 
+  boss = null;                       // no sixteen-eyed anything in level 1
   emeralds = [];
   particles = [];
   emeraldCount = 0;
@@ -283,16 +332,133 @@ function buildCavern() {
 
 function startLevel(i) {
   if (!LEVELS2[i] || !LEVELS2[i].unlocked) {
-    lockedText = i === 1 ? 'Find what waits behind the Door first...'
+    lockedText = i === 1 ? 'Beat Abyssal Madness first — find the Door!'
                          : "You haven't invented that level yet!";
     lockedTimer = 2;
     return;
   }
-  buildCavern();
+  currentLevel = i;
+  if (i === 1) buildTemple2();
+  else buildCavern();
   roarTimer = 8;
   doorDone = false;
   doorBanner = 0;
+  bossBanner = 0;
   screen = 'playing';
+}
+
+// ---------------------------------------------------------------------
+// LEVEL 2: GOING INSANE — the temple behind the Door. A corridor that
+// winds and winds and WINDS, walled in abyssal stone, lit by crystals,
+// with every creature waiting... and sixteen eyes at the end of it.
+// ---------------------------------------------------------------------
+let boss = null;          // THE ABYSSAL MULTI-TASKER
+let bossBanner = 0;
+
+function buildTemple2() {
+  worldW = 3000; worldH = 3000;
+  START = { x: T2_PATH[0].x, y: T2_PATH[0].y - 40 };
+
+  // the walls: a sealed band of abyssal stone hugging every bend
+  rocks = [];
+  for (let gx = 40; gx < worldW - 40; gx += 34) {
+    for (let gy = 40; gy < worldH - 40; gy += 34) {
+      const d = distToPath(gx, gy, T2_PATH);
+      if (d < 100 || d > 140) continue;
+      if (Math.hypot(gx - T2_CHAMBER.x, gy - T2_CHAMBER.y) < 195) continue;
+      rocks.push({
+        x: gx + (noise(gx * 1.3 + gy) - 0.5) * 8,
+        y: gy + (noise(gy * 2.7 + gx) - 0.5) * 8,
+        size: 1, wall: true,
+      });
+    }
+  }
+  // the boss chamber: a ring of stone with one doorway, facing the path
+  for (let ang = 0; ang < Math.PI * 2; ang += 0.26) {
+    if (Math.abs(ang - Math.PI / 2) < 0.5) continue;
+    const wx = T2_CHAMBER.x + Math.cos(ang) * 205;
+    const wy = T2_CHAMBER.y + Math.sin(ang) * 205;
+    if (wx < 60 || wy < 60 || wx > worldW - 60 || wy > worldH - 60) continue;
+    rocks.push({ x: wx, y: wy, size: 1, wall: true });
+  }
+  // stalagmite scenery out beyond the walls
+  for (let i = 0; i < 90; i++) {
+    const x = 80 + noise(i * 3.17 + 55) * (worldW - 160);
+    const y = 80 + noise(i * 7.71 + 55) * (worldH - 160);
+    if (distToPath(x, y, T2_PATH) < 170) continue;
+    if (Math.hypot(x - T2_CHAMBER.x, y - T2_CHAMBER.y) < 260) continue;
+    rocks.push({ x, y, size: 0.7 + noise(i * 13.3) * 0.8 });
+  }
+
+  // crystals line the corridor like torches — the only light down here
+  crystals = [];
+  for (let i = 0; i < T2_PATH.length - 1; i += 2) {
+    const a = T2_PATH[i], b = T2_PATH[i + 1];
+    crystals.push({ x: (a.x + b.x) / 2 + 62, y: (a.y + b.y) / 2,
+                    size: 0.8 + noise(i * 5.5) * 0.4,
+                    hue: noise(i * 9.9) < 0.6 ? 'violet' : 'cyan' });
+    crystals.push({ x: (a.x + b.x) / 2 - 62, y: (a.y + b.y) / 2,
+                    size: 0.8 + noise(i * 7.7) * 0.4,
+                    hue: noise(i * 3.3) < 0.6 ? 'cyan' : 'violet' });
+  }
+  // and a crown of crystals around the boss chamber
+  for (let ang = 0.9; ang < Math.PI * 2 - 0.3; ang += 0.9) {
+    crystals.push({ x: T2_CHAMBER.x + Math.cos(ang) * 150,
+                    y: T2_CHAMBER.y + Math.sin(ang) * 150,
+                    size: 1.1, hue: 'violet' });
+  }
+
+  // glowing floor stars, scattered along the corridor
+  mushrooms = [];
+  for (let i = 0; i < 400; i++) {
+    const x = noise(i * 31.7 + 19) * worldW;
+    const y = noise(i * 77.1 + 19) * worldH;
+    if (distToPath(x, y, T2_PATH) > 90) continue;
+    mushrooms.push({ x, y, glow: noise(i * 3.3) });
+  }
+
+  // ---- EVERY CREATURE, and lots of them — it's a long way down ----
+  bats = []; crawlers = []; zombies = []; skeletons = []; creepers = [];
+  for (let i = 0; i < 14; i++) { const p = pathSpot(i + 201);
+    if (p) bats.push({ x: p.x, y: p.y, hp: 1, wander: noise(i) * 6.28,
+                       flap: noise(i * 2) * 6.28, lastHitSwing: 0, hurtFlash: 0 }); }
+  for (let i = 0; i < 10; i++) { const p = pathSpot(i + 211);
+    if (p) crawlers.push({ x: p.x, y: p.y, hp: 3, wander: noise(i * 1.7) * 6.28,
+                           lastHitSwing: 0, hurtFlash: 0 }); }
+  for (let i = 0; i < 4; i++) { const p = pathSpot(i + 221);
+    if (p) zombies.push({ x: p.x, y: p.y, hp: 2, wander: noise(i) * 6.28,
+                          lastHitSwing: 0, hurtFlash: 0 }); }
+  for (let i = 0; i < 4; i++) { const p = pathSpot(i + 231);
+    if (p) zombies.push({ x: p.x, y: p.y, sand: true, hp: 3, wander: noise(i) * 6.28,
+                          lastHitSwing: 0, hurtFlash: 0 }); }
+  for (let i = 0; i < 4; i++) { const p = pathSpot(i + 241);
+    if (p) zombies.push({ x: p.x, y: p.y, black: true, hp: 3, speed: 95,
+                          wander: noise(i) * 6.28, lastHitSwing: 0, hurtFlash: 0 }); }
+  for (let i = 0; i < 3; i++) { const p = pathSpot(i + 251);
+    if (p) zombies.push({ x: p.x, y: p.y, black: true, giant: true, hp: 6, speed: 60,
+                          wander: noise(i) * 6.28, lastHitSwing: 0, hurtFlash: 0 }); }
+  for (let i = 0; i < 6; i++) { const p = pathSpot(i + 261);
+    if (p) skeletons.push({ x: p.x, y: p.y, hp: 2, facing: 1,
+                            wander: noise(i * 1.7) * 6.28, lastHitSwing: 0, hurtFlash: 0 }); }
+  for (let i = 0; i < 8; i++) { const p = pathSpot(i + 271);
+    if (p) creepers.push({ x: p.x, y: p.y, hp: 2, fuse: 0,
+                           wander: noise(i) * 6.28, lastHitSwing: 0, hurtFlash: 0 }); }
+
+  // THE ABYSSAL MULTI-TASKER — sixteen eyes, and every one on you
+  boss = {
+    x: T2_CHAMBER.x, y: T2_CHAMBER.y,
+    hp: 50, active: false,
+    teleportTimer: 4.5, summonTimer: 7,
+    lastHitSwing: 0, hurtFlash: 0,
+  };
+
+  emeralds = [];
+  particles = [];
+  emeraldCount = 0;
+  player.x = START.x;
+  player.y = START.y;
+  player.hp = player.maxHp;
+  player.armor = armorMax();
 }
 
 // ---------------------------------------------------------------------
@@ -434,8 +600,8 @@ function update(dt) {
       b.wander += (noise(Math.floor(elapsed) + b.x) - 0.5) * dt * 5;
       b.x += Math.cos(b.wander) * 60 * dt;
       b.y += Math.sin(b.wander) * 60 * dt;
-      b.x = Math.max(30, Math.min(WORLD_W - 30, b.x));
-      b.y = Math.max(30, Math.min(WORLD_H - 30, b.y));
+      b.x = Math.max(30, Math.min(worldW - 30, b.x));
+      b.y = Math.max(30, Math.min(worldH - 30, b.y));
     }
     if (player.attackTime > 0 && b.lastHitSwing !== player.swingId &&
         d < 55 && (b.x - player.x) * player.facing > -8) {
@@ -644,6 +810,101 @@ function update(dt) {
   }
   creepers = creepers.filter(cr => cr.hp > 0);
 
+  // ---- THE ABYSSAL MULTI-TASKER — sixteen eyes, three summons, zero mercy ----
+  if (boss) {
+    const B = boss;
+    if (B.hurtFlash > 0) B.hurtFlash -= dt;
+    const d = Math.hypot(player.x - B.x, player.y - B.y);
+    if (!B.active && d < 320) B.active = true;
+
+    if (B.active && player.deathTimer <= 0) {
+      // it oozes toward you, unhurried. it has sixteen eyes. it can wait.
+      const spd = 85 + Math.sin(elapsed * 2) * 35;
+      const bdx = (player.x - B.x) / Math.max(1, d);
+      const bdy = (player.y - B.y) / Math.max(1, d);
+      if (!blocked(B.x + bdx * spd * dt, B.y, 16)) B.x += bdx * spd * dt;
+      if (!blocked(B.x, B.y + bdy * spd * dt, 16)) B.y += bdy * spd * dt;
+
+      // TELEPORT — a burst of violet, and it's somewhere else. near you.
+      B.teleportTimer -= dt;
+      if (B.teleportTimer <= 0) {
+        B.teleportTimer = 4.5;
+        for (let p = 0; p < 14; p++) {
+          particles.push({ x: B.x, y: B.y - 16,
+            vx: (noise(p * 3.1 + elapsed) - 0.5) * 280,
+            vy: (noise(p * 7.3 + elapsed) - 0.8) * 240, life: 0.5, color: '#b06cff' });
+        }
+        for (let attempt = 0; attempt < 10; attempt++) {
+          const ang = noise(elapsed * 7.7 + attempt) * 6.28;
+          const nx = player.x + Math.cos(ang) * 200;
+          const ny = player.y + Math.sin(ang) * 200;
+          if (!blocked(nx, ny, 16)) { B.x = nx; B.y = ny; break; }
+        }
+        for (let p = 0; p < 14; p++) {
+          particles.push({ x: B.x, y: B.y - 16,
+            vx: (noise(p * 4.7 + elapsed) - 0.5) * 280,
+            vy: (noise(p * 9.1 + elapsed) - 0.8) * 240, life: 0.5, color: '#b06cff' });
+        }
+      }
+
+      // SUMMON — THREE creatures at once. it multi-tasks. it's in the name.
+      B.summonTimer -= dt;
+      if (B.summonTimer <= 0) {
+        B.summonTimer = 7;
+        for (let s = 0; s < 3; s++) {
+          const pick = Math.floor(noise(elapsed * 9.9 + s * 3.7) * 7);
+          const sx = B.x + (noise(elapsed + s) - 0.5) * 200;
+          const sy = B.y + (noise(elapsed * 2.2 + s) - 0.5) * 200;
+          if (pick === 0 && bats.length < 18) {
+            bats.push({ x: sx, y: sy, hp: 1, wander: 0, flap: 0, lastHitSwing: 0, hurtFlash: 0 });
+          } else if (pick === 1 && crawlers.length < 12) {
+            crawlers.push({ x: sx, y: sy, hp: 3, wander: 0, lastHitSwing: 0, hurtFlash: 0 });
+          } else if (pick === 2 && zombies.length < 18) {
+            zombies.push({ x: sx, y: sy, hp: 2, wander: 0, lastHitSwing: 0, hurtFlash: 0 });
+          } else if (pick === 3 && zombies.length < 18) {
+            zombies.push({ x: sx, y: sy, sand: true, hp: 3, wander: 0, lastHitSwing: 0, hurtFlash: 0 });
+          } else if (pick === 4 && zombies.length < 18) {
+            zombies.push({ x: sx, y: sy, black: true, hp: 3, speed: 95, wander: 0, lastHitSwing: 0, hurtFlash: 0 });
+          } else if (pick === 5 && skeletons.length < 10) {
+            skeletons.push({ x: sx, y: sy, hp: 2, facing: 1, wander: 0, lastHitSwing: 0, hurtFlash: 0 });
+          } else if (creepers.length < 10) {
+            creepers.push({ x: sx, y: sy, hp: 2, fuse: 0, wander: 0, lastHitSwing: 0, hurtFlash: 0 });
+          }
+        }
+      }
+
+      // its reach — one heart, armor first, and a big shove
+      if (d < 62) hurtPlayer(B.x, B.y, 90);
+    }
+
+    // your swings against the sixteen-eyed dark
+    if (B.active && player.attackTime > 0 && B.lastHitSwing !== player.swingId &&
+        d < 85 && (B.x - player.x) * player.facing > -8) {
+      B.lastHitSwing = player.swingId;
+      B.hp -= swordDamage();
+      B.hurtFlash = 0.15;
+      if (B.hp <= 0) {
+        for (let i = 0; i < 46; i++) {
+          particles.push({ x: B.x, y: B.y - 14,
+            vx: (noise(i * 3.3 + elapsed) - 0.5) * 420,
+            vy: (noise(i * 7.7 + elapsed) - 0.9) * 380, life: 0.9,
+            color: i % 3 === 0 ? '#1a1a20' : i % 3 === 1 ? '#b06cff' : '#ff4757' });
+        }
+        for (let e = 0; e < 12; e++) {
+          emeralds.push({ x: B.x + (e - 6) * 13, y: B.y, born: elapsed });
+        }
+        boss = null;
+        bossBanner = 8;
+        hasBeatInsane = true;
+        localStorage.setItem('explorer2_insane', 'yes');
+      }
+    }
+  }
+  if (bossBanner > 0) {
+    bossBanner -= dt;
+    if (bossBanner <= 0) screen = 'menu';   // GOING INSANE: beaten
+  }
+
   // respawn back at the drop point
   if (player.deathTimer > 0) {
     player.deathTimer -= dt;
@@ -666,11 +927,12 @@ function update(dt) {
   particles = particles.filter(p => p.life > 0);
 
   // ---- THE DOOR — reach it and Abyssal Madness is BEATEN ----
-  if (!doorDone && player.deathTimer <= 0 &&
+  if (currentLevel === 0 && !doorDone && player.deathTimer <= 0 &&
       Math.hypot(player.x - DOOR.x, player.y - DOOR.y) < 150) {
     doorDone = true;
     foundDoor = true;
     localStorage.setItem('explorer2_door', 'yes');   // remembered forever
+    LEVELS2[1].unlocked = true;                      // GOING INSANE opens
     doorBanner = 8;
   }
 }
@@ -679,8 +941,8 @@ function update(dt) {
 // DRAWING
 // ---------------------------------------------------------------------
 function cam() {
-  let cx = Math.max(0, Math.min(WORLD_W - canvas.width,  player.x - canvas.width / 2));
-  let cy = Math.max(0, Math.min(WORLD_H - canvas.height, player.y - canvas.height / 2));
+  let cx = Math.max(0, Math.min(worldW - canvas.width,  player.x - canvas.width / 2));
+  let cy = Math.max(0, Math.min(worldH - canvas.height, player.y - canvas.height / 2));
   if (roarShake > 0) {
     const tr = Math.min(1, roarShake);
     cx += (noise(elapsed * 47.1) - 0.5) * 18 * tr;
@@ -695,6 +957,26 @@ function draw() {
   // cave floor — deep, dark stone
   ctx.fillStyle = '#17161f';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // level 2: the temple corridor's ancient paved floor
+  if (currentLevel === 1) {
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(T2_PATH[0].x - c.x, T2_PATH[0].y - c.y);
+    for (const p of T2_PATH) ctx.lineTo(p.x - c.x, p.y - c.y);
+    ctx.strokeStyle = '#221a2e';
+    ctx.lineWidth = 175;
+    ctx.stroke();
+    // the boss chamber floor, and rings worn into the stone
+    const chx = T2_CHAMBER.x - c.x, chy = T2_CHAMBER.y - c.y;
+    ctx.fillStyle = '#221a2e';
+    ctx.beginPath(); ctx.arc(chx, chy, 200, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#322645';
+    ctx.lineWidth = 5;
+    ctx.beginPath(); ctx.arc(chx, chy, 170, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(chx, chy, 90, 0, Math.PI * 2); ctx.stroke();
+  }
 
   // glowing mushrooms, scattered like tiny stars on the floor
   for (const m of mushrooms) {
@@ -750,8 +1032,11 @@ function draw() {
   }
   ctx.globalAlpha = 1;
 
-  // THE DOOR — colossal, sealed, and glowing angrily through its cracks
-  drawDoor(c);
+  // THE DOOR — colossal, sealed, and glowing angrily (level 1 only)
+  if (currentLevel === 0) drawDoor(c);
+
+  // THE ABYSSAL MULTI-TASKER, in all its sixteen-eyed glory (level 2)
+  if (boss) drawBoss(c);
 
   // ---- THE DARK — heavier than any night above ----
   const px = player.x - c.x, py = player.y - c.y;
@@ -806,13 +1091,26 @@ function draw() {
     ctx.fillRect(cw.x - c.x + 2, cw.y - c.y - 6, 3, 3);
   }
 
-  // and the door's cracks burn through everything
-  const dxp = DOOR.x - c.x, dyp = DOOR.y - c.y;
-  const dg = ctx.createRadialGradient(dxp, dyp, 10, dxp, dyp, 260);
-  dg.addColorStop(0, 'rgba(255, 70, 40, 0.30)');
-  dg.addColorStop(1, 'rgba(255, 70, 40, 0)');
-  ctx.fillStyle = dg;
-  ctx.fillRect(dxp - 260, dyp - 260, 520, 520);
+  // and the door's cracks burn through everything (level 1)
+  if (currentLevel === 0) {
+    const dxp = DOOR.x - c.x, dyp = DOOR.y - c.y;
+    const dg = ctx.createRadialGradient(dxp, dyp, 10, dxp, dyp, 260);
+    dg.addColorStop(0, 'rgba(255, 70, 40, 0.30)');
+    dg.addColorStop(1, 'rgba(255, 70, 40, 0)');
+    ctx.fillStyle = dg;
+    ctx.fillRect(dxp - 260, dyp - 260, 520, 520);
+  }
+
+  // sixteen eyes, glowing through the dark, all pointed at you (level 2)
+  if (boss) {
+    const bx = boss.x - c.x, by = boss.y - c.y;
+    ctx.fillStyle = 'rgba(176, 108, 255, 0.9)';
+    for (let row = 0; row < 4; row++) {
+      for (let col = 0; col < 4; col++) {
+        ctx.fillRect(bx - 27 + col * 17, by - 42 + row * 13, 4, 4);
+      }
+    }
+  }
 
   drawHUD();
 }
@@ -821,6 +1119,19 @@ function drawRock(r, c) {
   const x = r.x - c.x, y = r.y - c.y;
   if (x < -60 || y < -90 || x > canvas.width + 60 || y > canvas.height + 90) return;
   const s = r.size;
+  // temple wall blocks: carved abyssal stone with faint red veins
+  if (r.wall) {
+    ctx.fillStyle = '#1c1524';
+    ctx.fillRect(x - 22, y - 10, 44, 14);
+    ctx.fillStyle = '#2b2136';
+    ctx.fillRect(x - 22, y - 52, 44, 44);
+    ctx.fillStyle = '#3d3050';
+    ctx.fillRect(x - 22, y - 52, 44, 10);
+    ctx.fillStyle = 'rgba(255, 70, 40, 0.18)';       // something seeps through
+    ctx.fillRect(x - 4 + noise(r.x) * 8, y - 52, 2, 21);
+    ctx.fillRect(x - 14 + noise(r.y) * 8, y - 29, 2, 19);
+    return;
+  }
   ctx.fillStyle = '#26242f';
   ctx.beginPath();
   ctx.moveTo(x - 15 * s, y + 5);
@@ -1074,6 +1385,84 @@ function drawPlayer(c) {
   ctx.restore();
 }
 
+function drawBoss(c) {
+  const B = boss;
+  const bx = B.x - c.x, by = B.y - c.y;
+  if (bx < -160 || by < -160 || bx > canvas.width + 160 || by > canvas.height + 160) return;
+  const flash = B.hurtFlash > 0;
+  const wob = elapsed * 2.2;
+
+  ctx.fillStyle = 'rgba(0,0,0,0.4)';
+  ctx.beginPath(); ctx.ellipse(bx, by + 42, 66, 18, 0, 0, Math.PI * 2); ctx.fill();
+
+  // six tentacles of abyssal dark, writhing out from underneath
+  ctx.strokeStyle = flash ? '#ffffff' : '#0e0a14';
+  ctx.lineWidth = 6;
+  ctx.lineCap = 'round';
+  for (let t = 0; t < 6; t++) {
+    const baseAng = (t / 6) * Math.PI * 2 + Math.sin(wob + t) * 0.14;
+    ctx.beginPath();
+    let tx = bx + Math.cos(baseAng) * 30, ty = by + Math.sin(baseAng) * 24;
+    ctx.moveTo(tx, ty);
+    for (let seg = 1; seg <= 3; seg++) {
+      tx += Math.cos(baseAng + Math.sin(wob * 1.6 + t + seg) * 0.5) * 26;
+      ty += Math.sin(baseAng + Math.cos(wob * 1.4 + t + seg) * 0.5) * 22;
+      ctx.lineTo(tx, ty);
+    }
+    ctx.stroke();
+  }
+
+  // the blob — near-black, edges rippling, veined with abyss-red
+  ctx.fillStyle = flash ? '#ffffff' : '#191221';
+  ctx.beginPath();
+  for (let k = 0; k <= 22; k++) {
+    const ang = (k / 22) * Math.PI * 2;
+    const r = 56 + Math.sin(wob * 1.4 + k * 1.9) * 7;
+    const px = bx + Math.cos(ang) * r;
+    const py = by + Math.sin(ang) * r * 0.85;
+    if (k === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255, 70, 40, 0.35)';       // red veins across the goo
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(bx - 40, by + 10);
+  ctx.lineTo(bx - 15, by - 5);
+  ctx.lineTo(bx - 25, by - 30);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(bx + 42, by + 2);
+  ctx.lineTo(bx + 18, by - 12);
+  ctx.stroke();
+
+  // SIXTEEN EYES — a 4x4 grid, every pupil tracking you
+  const lk = Math.hypot(player.x - B.x, player.y - B.y) || 1;
+  const ex = (player.x - B.x) / lk * 2, ey = (player.y - B.y) / lk * 2;
+  for (let row = 0; row < 4; row++) {
+    for (let col = 0; col < 4; col++) {
+      const ox = bx - 27 + col * 17, oy = by - 40 + row * 13;
+      ctx.fillStyle = '#f4f0e8';
+      ctx.beginPath(); ctx.arc(ox, oy, 5, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#b06cff';
+      ctx.beginPath(); ctx.arc(ox + ex, oy + ey, 2.6, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
+  // the mouth — wide and toothy, beneath all those eyes
+  ctx.fillStyle = '#0a0710';
+  ctx.beginPath();
+  ctx.ellipse(bx, by + 22, 26, 9 + Math.sin(wob * 2) * 3, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#f4f0e8';
+  for (let tt = 0; tt < 5; tt++) {
+    const tx = bx - 20 + tt * 9;
+    ctx.beginPath();
+    ctx.moveTo(tx, by + 16); ctx.lineTo(tx + 7, by + 16); ctx.lineTo(tx + 3.5, by + 23);
+    ctx.closePath(); ctx.fill();
+  }
+}
+
 function drawDoor(c) {
   const x = DOOR.x - c.x, y = DOOR.y - c.y;
   if (x < -300 || y < -300 || x > canvas.width + 300 || y > canvas.height + 300) return;
@@ -1180,6 +1569,43 @@ function drawHUD() {
     ctx.font = '17px monospace';
     ctx.fillText('Waking up at the drop point...', canvas.width / 2, canvas.height / 2 + 24);
   }
+  // the boss bar, once the sixteen eyes have noticed you
+  if (boss && boss.active) {
+    const bw = Math.min(500, canvas.width - 80);
+    const bx = canvas.width / 2 - bw / 2, by = 30;
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#d8c2ff';
+    ctx.font = 'bold 16px monospace';
+    ctx.fillText('THE ABYSSAL MULTI-TASKER', canvas.width / 2, by - 8);
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(bx, by, bw, 14);
+    ctx.fillStyle = '#b06cff';
+    ctx.fillRect(bx + 2, by + 2, (bw - 4) * (boss.hp / 50), 10);
+    ctx.strokeStyle = '#d8c2ff';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(bx, by, bw, 14);
+  }
+
+  // GOING INSANE: CONQUERED
+  if (bossBanner > 0) {
+    ctx.fillStyle = 'rgba(15, 5, 20, 0.75)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#ffd23f';
+    ctx.font = 'bold 34px monospace';
+    ctx.fillText('LEVEL 2 COMPLETE — GOING INSANE', canvas.width / 2, canvas.height / 2 - 50);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 20px monospace';
+    ctx.fillText('Sixteen eyes... closed.', canvas.width / 2, canvas.height / 2);
+    ctx.fillStyle = '#d8c2ff';
+    ctx.font = '16px monospace';
+    ctx.fillText('But the roars have not stopped. That was never the thing roaring.',
+                 canvas.width / 2, canvas.height / 2 + 32);
+    ctx.fillStyle = '#9fb4ff';
+    ctx.fillText('Level 3 waits to be invented... TO BE CONTINUED',
+                 canvas.width / 2, canvas.height / 2 + 64);
+  }
+
   // CHAPTER COMPLETE — you found the door
   if (doorBanner > 0) {
     ctx.fillStyle = 'rgba(20, 5, 5, 0.7)';
