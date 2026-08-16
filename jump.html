@@ -72,6 +72,7 @@ function fart(len, base) {
 function jumpSound() { fart(0.22, 120 + Math.random() * 40); }
 function coinSound() { beep(700, 0.06, 'square', 0.08); setTimeout(() => beep(1100, 0.15, 'square', 0.08), 50); }
 function stompSound() { beep(520, 0.08, 'triangle', 0.15); setTimeout(() => beep(290, 0.14, 'triangle', 0.15), 60); }  // HONK
+function splatSound() { beep(220, 0.08, 'sine', 0.18); setTimeout(() => beep(80, 0.18, 'sine', 0.2), 40); }            // SPLAT
 function hurtSound() { fart(0.7, 90); }               // the long, sad pffffft
 function winSound() { [110, 145, 185, 235, 300].forEach((n, i) => setTimeout(() => fart(0.3, n), i * 200)); }
 
@@ -139,6 +140,15 @@ const BADDIE_SPOTS = [
   [5300, 5120, 5700],
 ];
 
+// FLYING TURDS patrol the air on tiny wings — mostly over the pits,
+// exactly where you'd rather they weren't
+const TURD_SPOTS = [
+  [1210, FLOOR - 160],
+  [2600, FLOOR - 360],
+  [2870, FLOOR - 180],
+  [4900, FLOOR - 200],
+];
+
 // ---------------------------------------------------------------------
 // LEVELS — the game can play the STORY level, or YOUR level from the
 // builder. These variables hold whichever level is loaded right now.
@@ -148,8 +158,10 @@ let specCoins = [];     // where beans belong (so restarting re-places them)
 let specBaddies = [];   // where sniffers wake up
 let specSpikes = [];    // where the pointy bits live
 let specPlatforms = []; // where the gliding platforms run
+let specTurds = [];     // where the flying turds take wing
 let spikes = [];
 let platforms = [];
+let turds = [];
 let FLAG = { x: 6100, y: FLOOR };
 let startPos = { x: 100, y: FLOOR - 60 };
 let worldW = STORY_W;
@@ -163,6 +175,7 @@ function loadStory() {
   specBaddies = BADDIE_SPOTS.map(b => ({ x: b[0], y: FLOOR - 40 }));
   specSpikes = [];
   specPlatforms = [];
+  specTurds = TURD_SPOTS.map(t => ({ x: t[0], y: t[1] }));
   FLAG = { x: 6100, y: FLOOR };
   startPos = { x: 100, y: FLOOR - 60 };
   worldW = STORY_W;
@@ -179,6 +192,7 @@ let edit = {
   beans: [],
   sniffers: [],
   spikes: [],
+  turds: [],
   platforms: [],        // each one: { a: [cx, cy], b: [cx, cy] } — it glides a→b→a
   start: [2, 12],
   exit: [16, 12],
@@ -189,7 +203,7 @@ for (let i = 0; i < 19; i++) edit.tiles.add(i + ',13');
 function saveCustom() {
   localStorage.setItem('fartcave_custom', JSON.stringify({
     tiles: [...edit.tiles], beans: edit.beans, sniffers: edit.sniffers,
-    spikes: edit.spikes, platforms: edit.platforms,
+    spikes: edit.spikes, turds: edit.turds, platforms: edit.platforms,
     start: edit.start, exit: edit.exit,
   }));
 }
@@ -198,8 +212,8 @@ try {
   if (saved && saved.tiles) {
     edit = { tiles: new Set(saved.tiles), beans: saved.beans || [],
              sniffers: saved.sniffers || [], spikes: saved.spikes || [],
-             platforms: saved.platforms || [], start: saved.start || [2, 12],
-             exit: saved.exit || [16, 12] };
+             turds: saved.turds || [], platforms: saved.platforms || [],
+             start: saved.start || [2, 12], exit: saved.exit || [16, 12] };
   }
 } catch (err) { /* a broken save just means a fresh start */ }
 
@@ -230,6 +244,10 @@ function loadCustomLevel() {
     ax: p.a[0] * TILE, ay: p.a[1] * TILE,
     bx: p.b[0] * TILE, by: p.b[1] * TILE,
   }));
+  specTurds = edit.turds.map(k => {
+    const [cx, cy] = k.split(',').map(Number);
+    return { x: cx * TILE + 3, y: cy * TILE + 6 };
+  });
   FLAG = { x: edit.exit[0] * TILE + TILE / 2, y: (edit.exit[1] + 1) * TILE };
   startPos = { x: edit.start[0] * TILE + 6, y: edit.start[1] * TILE - 8 };
   worldW = Math.max(maxX + 300, 2000);
@@ -277,6 +295,11 @@ function resetLevel() {
   spikes = specSpikes.map(s => ({ ...s }));
   platforms = specPlatforms.map(p => ({
     ...p, x: p.ax, y: p.ay, w: TILE * 2, h: 16, t: 0, dir: 1, dx: 0, dy: 0,
+  }));
+  turds = specTurds.map(t => ({
+    x: t.x, y: t.y, w: 40, h: 32, baseY: t.y,
+    minX: t.x - 150, maxX: t.x + 150 + 40,
+    dir: 1, phase: t.x * 0.1, squish: 0,
   }));
   player.ride = null;
 }
@@ -357,12 +380,15 @@ function applyTool(sx, sy) {
     edit.beans = edit.beans.filter(k => k !== key);
     edit.sniffers = edit.sniffers.filter(k => k !== key);
     edit.spikes = edit.spikes.filter(k => k !== key);
+    edit.turds = edit.turds.filter(k => k !== key);
   } else if (tool === 'bean') {
     if (!edit.tiles.has(key) && !edit.beans.includes(key)) edit.beans.push(key);
   } else if (tool === 'nose') {
     if (!edit.tiles.has(key) && !edit.sniffers.includes(key)) edit.sniffers.push(key);
   } else if (tool === 'spike') {
     if (!edit.tiles.has(key) && !edit.spikes.includes(key)) edit.spikes.push(key);
+  } else if (tool === 'turd') {
+    if (!edit.tiles.has(key) && !edit.turds.includes(key)) edit.turds.push(key);
   } else if (tool === 'plat') {
     // two taps: first sets where it starts, second sets where it glides to
     if (!pendingPlat) pendingPlat = [cx, cy];
@@ -377,6 +403,7 @@ function applyTool(sx, sy) {
     edit.beans = edit.beans.filter(k => k !== key);
     edit.sniffers = edit.sniffers.filter(k => k !== key);
     edit.spikes = edit.spikes.filter(k => k !== key);
+    edit.turds = edit.turds.filter(k => k !== key);
     edit.platforms = edit.platforms.filter(p =>
       !(p.a[0] === cx && p.a[1] === cy) && !(p.b[0] === cx && p.b[1] === cy));
   }
@@ -598,6 +625,27 @@ function update(dt) {
     } else if (player.invuln <= 0) hurt(false);
   }
 
+  // ---- flying turds, patrolling the air on tiny proud wings ----
+  for (const b of turds) {
+    if (b.squish > 0) { b.squish -= dt; continue; }
+    b.x += b.dir * 90 * dt;
+    b.y = b.baseY + Math.sin(elapsed * 3 + b.phase) * 22;
+    if (b.x < b.minX) { b.x = b.minX; b.dir = 1; }
+    if (b.x + b.w > b.maxX) { b.x = b.maxX - b.w; b.dir = -1; }
+    // turn at walls too, so they don't fly through your architecture
+    const aheadX = b.dir > 0 ? b.x + b.w + 2 : b.x - 2;
+    for (const s of solids) {
+      if (aheadX > s.x && aheadX < s.x + s.w &&
+          b.y + b.h > s.y && b.y < s.y + s.h) { b.dir *= -1; break; }
+    }
+    if (!overlaps(player, b)) continue;
+    if (player.vy > 150 && player.y + player.h < b.y + b.h * 0.7) {
+      b.squish = 9999;
+      player.vy = -JUMP_POWER * 0.55;
+      splatSound();
+    } else if (player.invuln <= 0) hurt(false);
+  }
+
   // ---- the flag ----
   if (Math.abs(player.x - FLAG.x) < 40 && player.y > FLAG.y - 300) {
     won = true;
@@ -758,6 +806,12 @@ function draw() {
     ctx.fillRect(b.x + b.w - 14, b.y + b.h - 4, 10, 4);
   }
 
+  // the flying turds, in all their winged glory
+  for (const b of turds) {
+    if (b.squish > 0) continue;
+    drawTurd(b.x, b.y, elapsed + b.phase);
+  }
+
   // the way out — a crack of DAYLIGHT in the cave wall
   const shine = 0.7 + Math.sin(elapsed * 2) * 0.2;
   const day = ctx.createLinearGradient(FLAG.x - 40, 0, FLAG.x + 60, 0);
@@ -890,7 +944,7 @@ function draw() {
 // ---------------------------------------------------------------------
 const TOOLS = [
   ['ground', 'GROUND'], ['bean', 'BEAN'], ['nose', 'NOSE'],
-  ['spike', 'SPIKE'], ['plat', 'PLATFORM'],
+  ['turd', 'TURD'], ['spike', 'SPIKE'], ['plat', 'PLATFORM'],
   ['start', 'START'], ['exit', 'EXIT'], ['erase', 'ERASE'], ['pan', 'PAN'],
 ];
 
@@ -910,6 +964,41 @@ function drawSpikeCell(x, y) {
     const sx = x + 4 + i * 13;
     ctx.fillRect(sx + 4.5, y + TILE * 0.2, 4, 8);
   }
+}
+
+// a flying turd: the classic three-tier swirl, plus tiny flapping
+// wings, because dignity was never an option
+function drawTurd(x, y, flap) {
+  const cx = x + 20;
+  // the wings — two white ovals beating fast
+  const beat = Math.sin(flap * 30) * 0.5 + 0.6;
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+  ctx.beginPath();
+  ctx.ellipse(cx - 20, y + 8, 12, 6 * beat, -0.5, 0, Math.PI * 2);
+  ctx.ellipse(cx + 20, y + 8, 12, 6 * beat, 0.5, 0, Math.PI * 2);
+  ctx.fill();
+  // the swirl: wide, medium, curl
+  ctx.fillStyle = '#7a4a21';
+  ctx.beginPath();
+  ctx.ellipse(cx, y + 24, 19, 9, 0, 0, Math.PI * 2);
+  ctx.ellipse(cx, y + 14, 14, 8, 0, 0, Math.PI * 2);
+  ctx.ellipse(cx + 2, y + 5, 9, 6, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#8f5a2b';                           // the proud tip
+  ctx.beginPath();
+  ctx.ellipse(cx + 6, y - 1, 4, 3, 0.6, 0, Math.PI * 2);
+  ctx.fill();
+  // cheerful menacing eyes
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.arc(cx - 6, y + 13, 4, 0, Math.PI * 2);
+  ctx.arc(cx + 6, y + 13, 4, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#000000';
+  ctx.beginPath();
+  ctx.arc(cx - 5, y + 14, 1.8, 0, Math.PI * 2);
+  ctx.arc(cx + 7, y + 14, 1.8, 0, Math.PI * 2);
+  ctx.fill();
 }
 
 // a gliding platform: a mossy slab with faintly glowing crystal ends
@@ -984,6 +1073,10 @@ function drawEditor() {
   for (const key of edit.spikes) {
     const [cx, cy] = key.split(',').map(Number);
     drawSpikeCell(cx * TILE, cy * TILE);
+  }
+  for (const key of edit.turds) {
+    const [cx, cy] = key.split(',').map(Number);
+    drawTurd(cx * TILE + 3, cy * TILE + 6, 0.02);
   }
   for (const p of edit.platforms) {
     ctx.strokeStyle = 'rgba(125, 211, 255, 0.35)';
