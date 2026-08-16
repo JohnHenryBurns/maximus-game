@@ -98,12 +98,12 @@ let lockedTimer = 0;
 let lockedText = '';
 let menuCards = [];      // filled each frame so taps know where the cards are
 
+let hasBeatInsane = localStorage.getItem('explorer2_insane') === 'yes';
 const LEVELS2 = [
   { name: 'Abyssal Madness', unlocked: true },
-  { name: 'Going Insane', unlocked: foundDoor },   // behind the Door...
-  { name: '???', unlocked: false },
+  { name: 'Going Insane', unlocked: foundDoor },
+  { name: 'Behind the Door...', unlocked: hasBeatInsane },   // the answer. finally.
 ];
-let hasBeatInsane = localStorage.getItem('explorer2_insane') === 'yes';
 
 // ---------------------------------------------------------------------
 // THE CAVERN — one vast dark world beneath the bottom of everything
@@ -333,8 +333,15 @@ function buildCavern() {
 function startLevel(i) {
   if (!LEVELS2[i] || !LEVELS2[i].unlocked) {
     lockedText = i === 1 ? 'Beat Abyssal Madness first — find the Door!'
-                         : "You haven't invented that level yet!";
+               : i === 2 ? 'Defeat the Abyssal Multi-Tasker first!'
+               : "You haven't invented that level yet!";
     lockedTimer = 2;
+    return;
+  }
+  if (i === 2) {
+    // the level exists... but what's IN it hasn't been decided yet
+    lockedText = "Behind the Door is still being built — tell me what the ROARING THING is!";
+    lockedTimer = 3;
     return;
   }
   currentLevel = i;
@@ -897,6 +904,7 @@ function update(dt) {
         bossBanner = 8;
         hasBeatInsane = true;
         localStorage.setItem('explorer2_insane', 'yes');
+        LEVELS2[2].unlocked = true;          // Behind the Door... opens
       }
     }
   }
