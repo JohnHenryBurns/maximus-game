@@ -237,6 +237,10 @@ function tapPlot(i) {
 // INPUT
 // ---------------------------------------------------------------------
 function shopBtnRect() { return { x: canvas.width - 130, y: 12, w: 118, h: 40 }; }
+// the DRAG ME button, right next to the shop: press, hold, drag, drop!
+function dragBtnRect() { return { x: canvas.width - 262, y: 12, w: 124, h: 40 }; }
+let dragItem = null;               // what's floating under your finger right now
+let dragPos = { x: 0, y: 0 };
 function inside(px, py, r) { return px > r.x && px < r.x + r.w && py > r.y && py < r.y + (r.h || r.s); }
 
 function press(px, py) {
@@ -268,6 +272,11 @@ let lastPlot = -1;
 
 addEventListener('mousedown', e => {
   if (e.button !== 0) return;          // left button only — the planting hand
+  if (!shopOpen && inside(e.clientX, e.clientY, dragBtnRect())) {
+    dragItem = selected;               // picked up off the button — now carry it!
+    dragPos = { x: e.clientX, y: e.clientY };
+    return;
+  }
   dragging = true;
   lastPlot = -1;
   press(e.clientX, e.clientY);
@@ -275,17 +284,31 @@ addEventListener('mousedown', e => {
   if (i >= 0) lastPlot = i;            // remember it so the drag doesn't double-tap
 });
 addEventListener('mousemove', e => {
+  if (dragItem) { dragPos = { x: e.clientX, y: e.clientY }; return; }
   if (!dragging || shopOpen) return;
   const i = plotAt(e.clientX, e.clientY);
   if (i >= 0 && i !== lastPlot) { lastPlot = i; tapPlot(i); }
 });
-addEventListener('mouseup', () => { dragging = false; lastPlot = -1; });
+addEventListener('mouseup', e => {
+  if (dragItem) {                      // release = drop it into the slot below
+    const i = plotAt(e.clientX, e.clientY);
+    if (i >= 0) tapPlot(i);
+    dragItem = null;
+  }
+  dragging = false;
+  lastPlot = -1;
+});
 addEventListener('contextmenu', e => e.preventDefault());   // right-click stays out of it
 
 // fingers get the same drag-to-plant powers
 addEventListener('touchstart', e => {
   e.preventDefault();
   const t = e.changedTouches[0];
+  if (!shopOpen && inside(t.clientX, t.clientY, dragBtnRect())) {
+    dragItem = selected;
+    dragPos = { x: t.clientX, y: t.clientY };
+    return;
+  }
   dragging = true;
   lastPlot = -1;
   press(t.clientX, t.clientY);
@@ -294,12 +317,22 @@ addEventListener('touchstart', e => {
 }, { passive: false });
 addEventListener('touchmove', e => {
   e.preventDefault();
-  if (!dragging || shopOpen) return;
   const t = e.changedTouches[0];
+  if (dragItem) { dragPos = { x: t.clientX, y: t.clientY }; return; }
+  if (!dragging || shopOpen) return;
   const i = plotAt(t.clientX, t.clientY);
   if (i >= 0 && i !== lastPlot) { lastPlot = i; tapPlot(i); }
 }, { passive: false });
-addEventListener('touchend', () => { dragging = false; lastPlot = -1; });
+addEventListener('touchend', e => {
+  if (dragItem) {
+    const t = e.changedTouches[0];
+    const i = plotAt(t.clientX, t.clientY);
+    if (i >= 0) tapPlot(i);
+    dragItem = null;
+  }
+  dragging = false;
+  lastPlot = -1;
+});
 
 // ---------------------------------------------------------------------
 // DRAWING
@@ -517,6 +550,34 @@ function draw(dt) {
   ctx.font = 'bold 17px monospace';
   ctx.textAlign = 'center';
   ctx.fillText('🛒 SHOP', sb.x + sb.w / 2, sb.y + 26);
+
+  // the DRAG ME button — hold it, carry the seed, drop it in a slot
+  const db = dragBtnRect();
+  ctx.fillStyle = dragItem ? '#3d6b30' : '#2c4a2e';
+  ctx.fillRect(db.x, db.y, db.w, db.h);
+  ctx.strokeStyle = '#7ddf8f'; ctx.lineWidth = 2;
+  ctx.strokeRect(db.x, db.y, db.w, db.h);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 13px monospace';
+  ctx.fillText((CROPS[selected] ? CROPS[selected].icon : '🚿') + ' drag me!',
+               db.x + db.w / 2, db.y + 26);
+
+  // the seed floating under your finger, mid-drag
+  if (dragItem) {
+    const over = plotAt(dragPos.x, dragPos.y);
+    if (over >= 0) {                   // light up the slot it would land in
+      const r = plotRect(over);
+      ctx.strokeStyle = '#aef28b';
+      ctx.lineWidth = 4;
+      ctx.strokeRect(r.x + 3, r.y + 3, r.s - 6, r.s - 6);
+    }
+    ctx.font = '42px monospace';
+    ctx.textAlign = 'center';
+    ctx.globalAlpha = 0.85;
+    ctx.fillText(CROPS[dragItem] ? CROPS[dragItem].icon : '🚿',
+                 dragPos.x, dragPos.y + 14);
+    ctx.globalAlpha = 1;
+  }
 
   // status line at the bottom
   if (statusTimer > 0) {
