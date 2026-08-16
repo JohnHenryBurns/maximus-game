@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>UNIT ??? — Chapter 1: The Factory</title>
+<style>
+  html, body { margin: 0; background: #000; height: 100%; overflow: hidden; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+// =====================================================================
+// UNIT ???  — a story in chapters
+//
+// CHAPTER 1: THE FACTORY
+// A robot wakes up in the dark. It does not remember its name.
+// It does not remember anything. The only light in the whole world
+// is the glow of its own two eyes.
+// =====================================================================
+
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+window.onerror = function (msg, src, line) {
+  const div = document.createElement('div');
+  div.style.cssText = 'position:fixed;top:10px;left:10px;right:10px;background:#7a1f2b;' +
+    'color:#fff;font:bold 16px monospace;padding:14px;border:3px solid #ff6b5e;z-index:99';
+  div.textContent = '💥 BUG FOUND! Line ' + line + ': ' + msg;
+  document.body.appendChild(div);
+};
+
+function fitCanvas() { canvas.width = innerWidth; canvas.height = innerHeight; }
+fitCanvas();
+addEventListener('resize', fitCanvas);
+
+function noise(n) {
+  const s = Math.sin(n * 127.1) * 43758.5453;
+  return s - Math.floor(s);
+}
+
+// ---------------------------------------------------------------------
+// GAME STATE — 'menu' (the chapter cards), 'story' (a title card),
+// 'playing' (the factory floor)
+// ---------------------------------------------------------------------
+let screen = 'menu';
+let lockedTimer = 0, lockedText = '';
+let menuCards = [];
+let ch1Done = localStorage.getItem('robot_ch1') === 'yes';
+
+const CHAPTERS = [
+  { name: 'The Factory', unlocked: true },
+  { name: '???', unlocked: false },
+  { name: '???', unlocked: false },
+];
+
+// the story card shown when a chapter begins
+let storyLines = [];
+let storyTimer = 0;
+
+// ---------------------------------------------------------------------
+// THE FACTORY — one big dark building, seen from above
+// ---------------------------------------------------------------------
+const WORLD_W = 2200, WORLD_H = 1800;
+const START = { x: 300, y: 1500 };
+
+// machines and crates — the solid furniture of the factory floor
+let blocks = [];
+// conveyor belts — flat, decorative, and DEAD until the power comes on
+let belts = [];
+// lamps — dark until their switch is flipped
+let lamps = [];
+// THE SWITCHES — four of them, hiding in the dark corners
+let switches = [];
+// the master lever, at the far end
+const LEVER = { x: 2000, y: 260 };
+let leverPulled = false;
+let powered = 0;              // how many switches are ON
+let wokeTimer = 0;            // the "something else woke up" moment
+let endTimer = 0;             // chapter-complete countdown
+let sparks = [];
+let elapsed = 0;
+
+function buildFactory() {
+  blocks = [];
+  // big machine hulks in rows, like a real factory floor
+  for (let row = 0; row < 4; row++) {
+    for (let col = 0; col < 6; col++) {
+      if (noise(row * 7.7 + col * 3.3) < 0.25) continue;   // some gaps to slip through
+      blocks.push({
+        x: 350 + col * 300 + (noise(row + col * 9) - 0.5) * 60,
+        y: 420 + row * 330 + (noise(row * 5 + col) - 0.5) * 60,
+        w: 110 + noise(row * 3 + col * 7) * 80,
+        h: 70 + noise(row * 9 + col * 2) * 50,
+        kind: noise(row * 2 + col * 5) < 0.7 ? 'machine' : 'crates',
+      });
+    }
+  }
+  // walls around the whole building
+  blocks.push({ x: WORLD_W / 2, y: 30, w: WORLD_W, h: 60, kind: 'wall' });
+  blocks.push({ x: WORLD_W / 2, y: WORLD_H - 30, w: WORLD_W, h: 60, kind: 'wall' });
+  blocks.push({ x: 30, y: WORLD_H / 2, w: 60, h: WORLD_H, kind: 'wall' });
+  blocks.push({ x: WORLD_W - 30, y: WORLD_H / 2, w: 60, h: WORLD_H, kind: 'wall' });
+
+  belts = [];
+  for (let i = 0; i < 3; i++) {
+    belts.push({ x: 500 + i * 550, y: 950 + i * 120, w: 380, h: 46 });
+  }
+
+  // the four switches, spread to the corners of the dark
+  switches = [
+    { x: 320,  y: 320,  on: false },
+    { x: 1900, y: 1500, on: false },
+    { x: 1150, y: 250,  on: false },
+    { x: 700,  y: 1600, on: false },
+  ];
+  // each switch wakes the lamps nearest to it
+  lamps = [];
+  for (const sw of switches) {
+    for (let i = 0; i < 3; i++) {
+      lamps.push({
+        x: sw.x + (noise(sw.x + i * 7.7) - 0.5) * 500,
+        y: sw.y + (noise(sw.y + i * 3.3) - 0.5) * 400,
+        sw,
+      });
+    }
+  }
+
+  leverPulled = false;
+  powered = 0;
+  wokeTimer = 0;
+  endTimer = 0;
+  sparks = [];
+  player.x = START.x;
+  player.y = START.y;
+}
+
+// is this spot inside any solid block? (r = how chunky you are)
+function blocked(x, y, r) {
+  r = r || 13;
+  for (const b of blocks) {
+    if (Math.abs(x - b.x) < b.w / 2 + r && Math.abs(y - b.y) < b.h / 2 + r) return true;
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------------
+// THE ROBOT (you) — designation unknown. even to itself.
+// ---------------------------------------------------------------------
+const player = {
+  x: START.x, y: START.y,
+  speed: 220,
+  facing: 1,
+  walkTime: 0,
+  moving: false,
+};
+
+// ---------------------------------------------------------------------
+// CONTROLS — keyboard + touch, house style
+// ---------------------------------------------------------------------
+const keys = {};
+addEventListener('keydown', e => {
+  keys[e.key.toLowerCase()] = true;
+  if (screen === 'story') { screen = 'playing'; return; }
+  if (screen === 'menu') {
+    const n = parseInt(e.key) - 1;
+    if (n >= 0 && n < CHAPTERS.length) startChapter(n);
+  } else if (e.key === 'Escape') {
+    screen = 'menu';
+  }
+});
+addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+addEventListener('click', e => {
+  if (screen === 'story') { screen = 'playing'; return; }
+  if (screen === 'menu') {
+    for (let i = 0; i < menuCards.length; i++) {
+      const r = menuCards[i];
+      if (e.clientX > r.x && e.clientX < r.x + r.w &&
+          e.clientY > r.y && e.clientY < r.y + r.h) { startChapter(i); return; }
+    }
+  }
+});
+
+let stick = null;
+addEventListener('touchstart', e => {
+  e.preventDefault();
+  if (screen === 'story') { screen = 'playing'; return; }
+  if (screen === 'menu') {
+    const t = e.changedTouches[0];
+    for (let i = 0; i < menuCards.length; i++) {
+      const r = menuCards[i];
+      if (t.clientX > r.x && t.clientX < r.x + r.w &&
+          t.clientY > r.y && t.clientY < r.y + r.h) { startChapter(i); return; }
+    }
+    return;
+  }
+  const t = e.changedTouches[0];
+  if (!stick) stick = { id: t.identifier, sx: t.clientX, sy: t.clientY, x: t.clientX, y: t.clientY };
+}, { passive: false });
+addEventListener('touchmove', e => {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    if (stick && t.identifier === stick.id) { stick.x = t.clientX; stick.y = t.clientY; }
+  }
+}, { passive: false });
+addEventListener('touchend', e => {
+  for (const t of e.changedTouches) if (stick && t.identifier === stick.id) stick = null;
+});
+
+function startChapter(i) {
+  if (!CHAPTERS[i] || !CHAPTERS[i].unlocked) {
+    lockedText = i === 1 ? 'Finish Chapter 1 first — turn the power on!'
+                         : "That chapter hasn't been written yet...";
+    lockedTimer = 2;
+    return;
+  }
+  buildFactory();
+  storyLines = [
+    'CHAPTER 1: THE FACTORY',
+    '',
+    'You wake up on a cold metal floor.',
+    'The dark goes on forever in every direction.',
+    'You do not remember your name.',
+    'You do not remember anything at all.',
+    '',
+    'The only light in the world is the glow of your own eyes.',
+    '',
+    'Somewhere in this factory there is power. Find it.',
+    '',
+    '( press anything to begin )',
+  ];
+  screen = 'story';
+}
+
+// ---------------------------------------------------------------------
+// UPDATE
+// ---------------------------------------------------------------------
+function update(dt) {
+  elapsed += dt;
+  if (wokeTimer > 0) wokeTimer -= dt;
+  if (endTimer > 0) {
+    endTimer -= dt;
+    if (endTimer <= 0) screen = 'menu';
+    return;                                   // hold still for the ending
+  }
+
+  // ---- MOVEMENT ----
+  let dx = 0, dy = 0;
+  if (keys['w'] || keys['arrowup'])    dy -= 1;
+  if (keys['s'] || keys['arrowdown'])  dy += 1;
+  if (keys['a'] || keys['arrowleft'])  dx -= 1;
+  if (keys['d'] || keys['arrowright']) dx += 1;
+  if (stick) {
+    dx = Math.max(-1, Math.min(1, (stick.x - stick.sx) / 50));
+    dy = Math.max(-1, Math.min(1, (stick.y - stick.sy) / 50));
+  }
+  const len = Math.hypot(dx, dy);
+  if (len > 1) { dx /= len; dy /= len; }
+  player.moving = len > 0.1;
+  if (player.moving) {
+    player.walkTime += dt;
+    if (dx > 0.1) player.facing = 1;
+    if (dx < -0.1) player.facing = -1;
+    const nx = player.x + dx * player.speed * dt;
+    const ny = player.y + dy * player.speed * dt;
+    if (!blocked(nx, player.y)) player.x = nx;
+    if (!blocked(player.x, ny)) player.y = ny;
+    player.x = Math.max(80, Math.min(WORLD_W - 80, player.x));
+    player.y = Math.max(80, Math.min(WORLD_H - 80, player.y));
+  }
+
+  // ---- FLIPPING SWITCHES — just walk into them ----
+  for (const sw of switches) {
+    if (!sw.on && Math.hypot(player.x - sw.x, player.y - sw.y) < 34) {
+      sw.on = true;
+      powered++;
+      for (let i = 0; i < 14; i++) {
+        sparks.push({ x: sw.x, y: sw.y - 14,
+          vx: (noise(i * 3.3 + elapsed) - 0.5) * 320,
+          vy: (noise(i * 7.7 + elapsed) - 0.9) * 280,
+          life: 0.7, color: i % 2 ? '#ffd23f' : '#7dd3ff' });
+      }
+    }
+  }
+
+  // ---- THE MASTER LEVER — only answers when all four are on ----
+  if (!leverPulled && powered >= 4 &&
+      Math.hypot(player.x - LEVER.x, player.y - LEVER.y) < 40) {
+    leverPulled = true;
+    wokeTimer = 5;                            // the factory ROARS to life...
+    endTimer = 9;                             // ...and the chapter closes
+    ch1Done = true;
+    localStorage.setItem('robot_ch1', 'yes');
+    for (let i = 0; i < 30; i++) {
+      sparks.push({ x: LEVER.x, y: LEVER.y - 20,
+        vx: (noise(i * 3.3 + elapsed) - 0.5) * 420,
+        vy: (noise(i * 7.7 + elapsed) - 0.9) * 380,
+        life: 1, color: i % 3 === 0 ? '#ffd23f' : i % 3 === 1 ? '#7dd3ff' : '#ffffff' });
+    }
+  }
+
+  for (const p of sparks) {
+    p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 500 * dt; p.life -= dt;
+  }
+  sparks = sparks.filter(p => p.life > 0);
+}
+
+// ---------------------------------------------------------------------
+// DRAWING
+// ---------------------------------------------------------------------
+function cam() {
+  let cx = Math.max(0, Math.min(WORLD_W - canvas.width,  player.x - canvas.width / 2));
+  let cy = Math.max(0, Math.min(WORLD_H - canvas.height, player.y - canvas.height / 2));
+  if (wokeTimer > 2.5) {                      // the factory shudders awake
+    cx += (noise(elapsed * 47.1) - 0.5) * 12;
+    cy += (noise(elapsed * 61.7) - 0.5) * 12;
+  }
+  return { x: cx, y: cy };
+}
+
+function draw() {
+  const c = cam();
+  const powerOn = leverPulled;
+
+  // the factory floor — riveted metal plates
+  ctx.fillStyle = powerOn ? '#252a30' : '#191c21';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+  ctx.lineWidth = 2;
+  const gs = 160;
+  for (let gx = -(c.x % gs); gx < canvas.width; gx += gs) {
+    ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, canvas.height); ctx.stroke();
+  }
+  for (let gy = -(c.y % gs); gy < canvas.height; gy += gs) {
+    ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(canvas.width, gy); ctx.stroke();
+  }
+
+  // conveyor belts — rolling once the power is on
+  for (const b of belts) {
+    const x = b.x - c.x, y = b.y - c.y;
+    ctx.fillStyle = '#14161a';
+    ctx.fillRect(x - b.w / 2, y - b.h / 2, b.w, b.h);
+    ctx.fillStyle = '#2c3038';
+    const roll = powerOn ? (elapsed * 60) % 36 : 0;
+    for (let s = -roll; s < b.w; s += 36) {
+      if (s > 0) ctx.fillRect(x - b.w / 2 + s, y - b.h / 2 + 4, 4, b.h - 8);
+    }
+  }
+
+  // sorted world: machines, crates, walls, switches, lever, robot
+  const things = [];
+  for (const b of blocks) things.push({ y: b.y + b.h / 2, kind: 'block', it: b });
+  for (const sw of switches) things.push({ y: sw.y, kind: 'switch', it: sw });
+  things.push({ y: LEVER.y, kind: 'lever' });
+  things.push({ y: player.y, kind: 'player' });
+  things.sort((a, b) => a.y - b.y);
+  for (const th of things) {
+    if (th.kind === 'block') drawBlock(th.it, c);
+    else if (th.kind === 'switch') drawSwitch(th.it, c);
+    else if (th.kind === 'lever') drawLever(c);
+    else drawRobot(c);
+  }
+
+  for (const p of sparks) {
+    ctx.globalAlpha = Math.max(0, p.life);
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x - c.x - 3, p.y - c.y - 3, 6, 6);
+  }
+  ctx.globalAlpha = 1;
+
+  // ---- THE DARK — pushed back only by eye-glow, lamps, and progress ----
+  if (!powerOn) {
+    const px = player.x - c.x, py = player.y - c.y;
+    const night = ctx.createRadialGradient(px, py - 12, 30, px, py - 12, 210);
+    night.addColorStop(0, 'rgba(1, 2, 5, 0)');
+    night.addColorStop(0.55, 'rgba(1, 2, 5, 0.6)');
+    night.addColorStop(1, 'rgba(1, 2, 5, 0.95)');
+    ctx.fillStyle = night;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // lamps glow warm wherever their switch is on
+    for (const l of lamps) {
+      if (!l.sw.on) continue;
+      const lx = l.x - c.x, ly = l.y - c.y;
+      if (lx < -160 || ly < -160 || lx > canvas.width + 160 || ly > canvas.height + 160) continue;
+      const g = ctx.createRadialGradient(lx, ly, 5, lx, ly, 150);
+      g.addColorStop(0, 'rgba(255, 214, 130, 0.35)');
+      g.addColorStop(1, 'rgba(255, 214, 130, 0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(lx - 150, ly - 150, 300, 300);
+    }
+    // switches beckon faintly through the dark
+    for (const sw of switches) {
+      if (sw.on) continue;
+      const sx = sw.x - c.x, sy = sw.y - c.y;
+      ctx.fillStyle = `rgba(255, 80, 60, ${0.4 + Math.sin(elapsed * 4 + sw.x) * 0.3})`;
+      ctx.fillRect(sx - 2, sy - 22, 4, 4);
+    }
+    // the lever glows when it's ready for you
+    if (powered >= 4) {
+      const lx = LEVER.x - c.x, ly = LEVER.y - c.y;
+      const g = ctx.createRadialGradient(lx, ly, 5, lx, ly, 180);
+      g.addColorStop(0, 'rgba(125, 211, 255, 0.4)');
+      g.addColorStop(1, 'rgba(125, 211, 255, 0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(lx - 180, ly - 180, 360, 360);
+    }
+  }
+
+  // ---- HUD ----
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#7dd3ff';
+  ctx.font = 'bold 18px monospace';
+  ctx.fillText('UNIT-??? ', 14, 30);
+  ctx.fillStyle = powered >= 4 ? '#7ddf8f' : '#ffd23f';
+  ctx.fillText(powered >= 4 && !leverPulled ? 'POWER 4/4 — find the MASTER LEVER'
+             : leverPulled ? 'POWER ONLINE'
+             : `POWER ${powered}/4`, 130, 30);
+
+  if (wokeTimer > 0 && wokeTimer < 4) {
+    // ...the lights come up, and the story lands its first twist
+    ctx.textAlign = 'center';
+    ctx.fillStyle = `rgba(255, 80, 60, ${Math.min(1, 4 - wokeTimer)})`;
+    ctx.font = 'bold 26px monospace';
+    ctx.fillText('SOMETHING ELSE JUST WOKE UP.', canvas.width / 2, canvas.height / 2 - 90);
+    ctx.font = '16px monospace';
+    ctx.fillStyle = 'rgba(255, 170, 150, 0.9)';
+    ctx.fillText('Far across the factory, two red eyes switch on... and turn toward you.',
+                 canvas.width / 2, canvas.height / 2 - 58);
+  }
+  if (endTimer > 0 && endTimer < 3) {
+    ctx.fillStyle = `rgba(0, 0, 0, ${Math.min(0.8, 3 - endTimer)})`;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#ffd23f';
+    ctx.font = 'bold 30px monospace';
+    ctx.fillText('CHAPTER 1 COMPLETE', canvas.width / 2, canvas.height / 2 - 10);
+    ctx.fillStyle = '#9fb4ff';
+    ctx.font = '16px monospace';
+    ctx.fillText('Chapter 2 is unwritten... what happens next is up to the author.',
+                 canvas.width / 2, canvas.height / 2 + 26);
+  }
+}
+
+function drawBlock(b, c) {
+  const x = b.x - c.x, y = b.y - c.y;
+  if (x < -b.w || y < -b.h - 60 || x > canvas.width + b.w || y > canvas.height + b.h) return;
+  const hw = b.w / 2, hh = b.h / 2;
+  if (b.kind === 'wall') {
+    ctx.fillStyle = '#2c3038';
+    ctx.fillRect(x - hw, y - hh, b.w, b.h);
+    ctx.fillStyle = '#3a3f48';
+    ctx.fillRect(x - hw, y - hh, b.w, 8);
+    return;
+  }
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.beginPath(); ctx.ellipse(x, y + hh, hw * 1.05, 8, 0, 0, Math.PI * 2); ctx.fill();
+  if (b.kind === 'machine') {
+    ctx.fillStyle = '#333a44';                     // the machine body
+    ctx.fillRect(x - hw, y - hh - 26, b.w, b.h + 26);
+    ctx.fillStyle = '#414a56';                     // top panel
+    ctx.fillRect(x - hw, y - hh - 26, b.w, 12);
+    ctx.fillStyle = leverPulled ? '#7ddf8f' : '#20242a';   // status lights
+    for (let i = 0; i < Math.floor(b.w / 30); i++) {
+      ctx.fillRect(x - hw + 8 + i * 30, y - hh - 18, 6, 4);
+    }
+    ctx.fillStyle = '#20242a';                     // vents
+    for (let i = 0; i < Math.floor(b.w / 26); i++) {
+      ctx.fillRect(x - hw + 6 + i * 26, y - 6, 14, 3);
+      ctx.fillRect(x - hw + 6 + i * 26, y + 2, 14, 3);
+    }
+  } else {
+    ctx.fillStyle = '#5b4a2e';                     // stacked crates
+    ctx.fillRect(x - hw, y - hh - 18, b.w, b.h + 18);
+    ctx.strokeStyle = '#443722';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x - hw, y - hh - 18, b.w / 2, (b.h + 18) / 2);
+    ctx.strokeRect(x - hw + b.w / 2, y - hh - 18 + (b.h + 18) / 2, b.w / 2, (b.h + 18) / 2);
+  }
+}
+
+function drawSwitch(sw, c) {
+  const x = sw.x - c.x, y = sw.y - c.y;
+  ctx.fillStyle = '#2c3038';                       // the panel
+  ctx.fillRect(x - 12, y - 30, 24, 32);
+  ctx.fillStyle = sw.on ? '#7ddf8f' : '#e8453c';   // the big chunky switch
+  ctx.fillRect(x - 5, sw.on ? y - 24 : y - 12, 10, 10);
+  ctx.fillStyle = sw.on ? 'rgba(125,223,143,0.8)' : 'rgba(232,69,60,0.8)';
+  ctx.fillRect(x - 8, y - 34, 16, 3);              // indicator bar
+}
+
+function drawLever(c) {
+  const x = LEVER.x - c.x, y = LEVER.y - c.y;
+  ctx.fillStyle = '#3a3f48';                       // the big master console
+  ctx.fillRect(x - 34, y - 40, 68, 44);
+  ctx.fillStyle = '#20242a';
+  ctx.fillRect(x - 28, y - 34, 56, 20);
+  ctx.save();                                      // the lever arm itself
+  ctx.translate(x, y - 8);
+  ctx.rotate(leverPulled ? 0.7 : -0.7);
+  ctx.fillStyle = '#8a8d94';
+  ctx.fillRect(-3, -30, 6, 30);
+  ctx.fillStyle = leverPulled ? '#7ddf8f' : '#e8453c';
+  ctx.beginPath(); ctx.arc(0, -32, 7, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+
+function drawRobot(c) {
+  const x = player.x - c.x, y = player.y - c.y;
+  const bob = player.moving ? Math.abs(Math.sin(player.walkTime * 10)) * 3 : 0;
+
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  ctx.beginPath(); ctx.ellipse(x, y + 8, 12, 5, 0, 0, Math.PI * 2); ctx.fill();
+
+  ctx.fillStyle = '#4a5568';                       // treads
+  ctx.fillRect(x - 9, y - 4, 18, 8);
+  ctx.fillStyle = '#2c3340';
+  const tread = (player.walkTime * 30) % 6;
+  for (let i = -tread; i < 18; i += 6) {
+    if (i > 0) ctx.fillRect(x - 9 + i, y - 3, 2, 6);
+  }
+  ctx.fillStyle = '#6b7a94';                       // boxy body
+  ctx.fillRect(x - 8, y - 20 - bob, 16, 17);
+  ctx.fillStyle = '#7dd3ff';                       // chest light
+  ctx.fillRect(x - 2, y - 15 - bob, 4, 4);
+  ctx.fillStyle = '#8a99b4';                       // head
+  ctx.fillRect(x - 7, y - 33 - bob, 14, 12);
+  ctx.fillStyle = '#7dd3ff';                       // THE EYES — your lantern
+  ctx.fillRect(x - 5 + player.facing, y - 30 - bob, 4, 4);
+  ctx.fillRect(x + 1 + player.facing, y - 30 - bob, 4, 4);
+  ctx.strokeStyle = '#8a99b4';                     // antenna
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(x, y - 33 - bob);
+  ctx.lineTo(x + 3, y - 41 - bob);
+  ctx.stroke();
+  ctx.fillStyle = '#e8453c';
+  ctx.beginPath(); ctx.arc(x + 3, y - 42 - bob, 2, 0, Math.PI * 2); ctx.fill();
+  // eye-glow spilling ahead of you
+  const g = ctx.createRadialGradient(x, y - 28 - bob, 2, x + player.facing * 30, y - 24, 70);
+  g.addColorStop(0, 'rgba(125, 211, 255, 0.25)');
+  g.addColorStop(1, 'rgba(125, 211, 255, 0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(x - 80, y - 100, 200, 160);
+}
+
+// ---------------------------------------------------------------------
+// MENU + STORY CARD
+// ---------------------------------------------------------------------
+function drawMenu(dt) {
+  elapsed += dt;
+  if (lockedTimer > 0) lockedTimer -= dt;
+  const W = canvas.width, H = canvas.height;
+  ctx.fillStyle = '#0b0d12';
+  ctx.fillRect(0, 0, W, H);
+  // faint blueprint grid, like factory schematics
+  ctx.strokeStyle = 'rgba(125, 211, 255, 0.06)';
+  ctx.lineWidth = 1;
+  for (let x = 0; x < W; x += 60) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
+  for (let y = 0; y < H; y += 60) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#7dd3ff';
+  ctx.font = `bold ${Math.min(64, W / 9)}px monospace`;
+  ctx.fillText('UNIT-???', W / 2, H * 0.22);
+  ctx.fillStyle = '#9fb4ff';
+  ctx.font = '17px monospace';
+  ctx.fillText('a story in chapters', W / 2, H * 0.22 + 34);
+
+  const count = CHAPTERS.length;
+  const cw = Math.min(220, W / (count + 1.5)), chh = cw * 0.72, gap = cw * 0.15;
+  const totalW = cw * count + gap * (count - 1);
+  menuCards = [];
+  for (let i = 0; i < count; i++) {
+    const cx = W / 2 - totalW / 2 + i * (cw + gap);
+    const cy = H * 0.42;
+    menuCards.push({ x: cx, y: cy, w: cw, h: chh });
+    const ch = CHAPTERS[i];
+    ctx.fillStyle = ch.unlocked ? '#14232e' : '#171a24';
+    ctx.fillRect(cx, cy, cw, chh);
+    ctx.strokeStyle = ch.unlocked ? '#7dd3ff' : '#2c3040';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(cx, cy, cw, chh);
+    ctx.fillStyle = ch.unlocked ? '#ffffff' : '#555b77';
+    ctx.font = `bold ${chh * 0.18}px monospace`;
+    ctx.fillText('CHAPTER ' + (i + 1), cx + cw / 2, cy + chh * 0.32);
+    ctx.font = `${Math.min(chh * 0.14, (cw * 1.5) / Math.max(6, ch.name.length))}px monospace`;
+    ctx.fillText(ch.name, cx + cw / 2, cy + chh * 0.58);
+    ctx.font = `${chh * 0.11}px monospace`;
+    ctx.fillText(ch.unlocked ? (i === 0 && ch1Done ? 'complete ✓ — replay' : `press ${i + 1} or tap`)
+                             : 'locked', cx + cw / 2, cy + chh * 0.82);
+  }
+  if (lockedTimer > 0) {
+    ctx.fillStyle = '#ff9f43';
+    ctx.font = '16px monospace';
+    ctx.fillText(lockedText, W / 2, H * 0.42 + chh + 42);
+  }
+}
+
+function drawStory(dt) {
+  elapsed += dt;
+  const W = canvas.width, H = canvas.height;
+  ctx.fillStyle = '#050608';
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  const y0 = H / 2 - storyLines.length * 14;
+  for (let i = 0; i < storyLines.length; i++) {
+    const line = storyLines[i];
+    ctx.fillStyle = i === 0 ? '#7dd3ff' : line.startsWith('(') ? '#555b77' : '#c8d4e8';
+    ctx.font = i === 0 ? 'bold 26px monospace' : '17px monospace';
+    ctx.fillText(line, W / 2, y0 + i * 30);
+  }
+}
+
+// ---------------------------------------------------------------------
+// THE GAME LOOP
+// ---------------------------------------------------------------------
+let lastTime = 0;
+function loop(time) {
+  const dt = Math.min(0.05, (time - lastTime) / 1000);
+  lastTime = time;
+  if (screen === 'menu') drawMenu(dt);
+  else if (screen === 'story') drawStory(dt);
+  else { update(dt); draw(); }
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
