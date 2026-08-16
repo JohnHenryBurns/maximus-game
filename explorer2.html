@@ -425,6 +425,8 @@ let bossBanner = 0;
 let sleeper = null;
 let glitchTimer = 0;      // while > 0, reality is having a bad moment
 let glitchWait = 8;       // seconds until reality's next bad moment
+let timeStop = 0;         // while > 0, TIME ITSELF has stopped. all of it.
+let timeStopWait = 10;    // seconds until time's next seizure
 let hasEnd = localStorage.getItem('explorer2_end') === 'yes';
 
 function buildTemple2() {
@@ -712,6 +714,8 @@ function buildEscape() {
 
   // THE COLLAPSE — it starts below you, and it does not stop
   collapse = { y: worldH + 250, speed: 85 };
+  timeStop = 0;
+  timeStopWait = 6;
 
   boss = null;
   sleeper = null;
@@ -806,6 +810,20 @@ function swing() {
 // UPDATE
 // ---------------------------------------------------------------------
 function update(dt) {
+  // ---- TIME STOPS (the escape) — the dying abyss seizes up, and for a
+  // moment NOTHING moves. Not the collapse. Not the monsters. Not you.
+  if (currentLevel === 3) {
+    if (timeStop > 0) {
+      timeStop -= dt;          // the only clock still ticking is the real one
+      return;                  // everything else is frozen mid-frame
+    }
+    timeStopWait -= dt;
+    if (timeStopWait <= 0) {
+      timeStopWait = 8 + noise(elapsed * 4.3) * 8;
+      timeStop = 0.9 + noise(elapsed * 6.7) * 0.7;
+    }
+  }
+
   elapsed += dt;
   if (player.attackTime > 0) player.attackTime -= dt;
   if (player.hurtTimer > 0) player.hurtTimer -= dt;
@@ -1170,8 +1188,8 @@ function update(dt) {
     if (bossBanner <= 0) screen = 'menu';   // GOING INSANE: beaten
   }
 
-  // ---- REALITY GLITCHES (level 3) — the closer to IT, the worse ----
-  if (currentLevel === 2) {
+  // ---- REALITY GLITCHES — near IT, and all through the escape ----
+  if (currentLevel >= 2) {
     if (glitchTimer > 0) glitchTimer -= dt;
     glitchWait -= dt;
     if (glitchWait <= 0) {
@@ -1612,8 +1630,12 @@ function draw() {
   // ---- THE GLITCH — for one second, reality forgets how to draw itself.
   // We slice the finished screen into strips and shove them sideways,
   // ghost the whole picture, and sprinkle static over everything. ----
-  if (glitchTimer > 0 && currentLevel === 2) {
-    const strength = Math.min(1, glitchTimer * 2);
+  if ((glitchTimer > 0 && currentLevel === 2) || currentLevel === 3) {
+    // in the escape, reality NEVER fully holds together — a constant
+    // background fuzz, with the big bursts stacked on top
+    const strength = currentLevel === 3
+      ? Math.min(1, 0.3 + Math.max(0, glitchTimer))
+      : Math.min(1, glitchTimer * 2);
     for (let i = 0; i < 10; i++) {
       const sy = Math.random() * canvas.height;
       const h = 8 + Math.random() * 34;
@@ -1628,6 +1650,18 @@ function draw() {
       ctx.fillRect(Math.random() * canvas.width, Math.random() * canvas.height,
                    2 + Math.random() * 4, 2 + Math.random() * 3);
     }
+  }
+
+  // ---- TIME STOPPED — the whole world hangs frozen in pale light ----
+  if (timeStop > 0 && currentLevel === 3) {
+    ctx.fillStyle = 'rgba(200, 220, 255, 0.14)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = `rgba(220, 235, 255, ${0.6 + Math.random() * 0.4})`;
+    ctx.font = 'bold 30px monospace';
+    ctx.fillText('—  T I M E   S T O P P E D  —',
+                 canvas.width / 2 + (Math.random() - 0.5) * 8,
+                 canvas.height / 2 - 100 + (Math.random() - 0.5) * 6);
   }
 }
 
