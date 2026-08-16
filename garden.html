@@ -200,6 +200,16 @@ function tapPlot(i) {
     return;
   }
 
+  // clicked a growing plant but can't water it? SAY SO — silence is confusing
+  if (plot) {
+    if (!ownCan) {
+      setStatus("It's growing! Buy the 🚿 Watering Can (30c) to make plants grow faster.");
+    } else if (plot.watered) {
+      setStatus('💧 Already watered — growing double-speed. Patience, farmer!');
+    }
+    return;
+  }
+
   if (!plot && CROPS[selected]) {
     // PLANT a seed (this is where you pay for it)
     const crop = CROPS[selected];
