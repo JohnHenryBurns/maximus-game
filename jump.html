@@ -159,9 +159,11 @@ let specBaddies = [];   // where sniffers wake up
 let specSpikes = [];    // where the pointy bits live
 let specPlatforms = []; // where the gliding platforms run
 let specTurds = [];     // where the flying turds take wing
+let specCrumbles = [];  // where the untrustworthy blocks wait
 let spikes = [];
 let platforms = [];
 let turds = [];
+let crumbles = [];
 let FLAG = { x: 6100, y: FLOOR };
 let startPos = { x: 100, y: FLOOR - 60 };
 let worldW = STORY_W;
@@ -175,6 +177,7 @@ function loadStory() {
   specBaddies = BADDIE_SPOTS.map(b => ({ x: b[0], y: FLOOR - 40 }));
   specSpikes = [];
   specPlatforms = [];
+  specCrumbles = [];
   specTurds = TURD_SPOTS.map(t => ({ x: t[0], y: t[1] }));
   FLAG = { x: 6100, y: FLOOR };
   startPos = { x: 100, y: FLOOR - 60 };
@@ -193,6 +196,7 @@ let edit = {
   sniffers: [],
   spikes: [],
   turds: [],
+  crumbles: [],         // blocks that shake, then fall away under your feet
   platforms: [],        // each one: { a: [cx, cy], b: [cx, cy] } — it glides a→b→a
   start: [2, 12],
   exit: [16, 12],
@@ -203,8 +207,8 @@ for (let i = 0; i < 19; i++) edit.tiles.add(i + ',13');
 function saveCustom() {
   localStorage.setItem('fartcave_custom', JSON.stringify({
     tiles: [...edit.tiles], beans: edit.beans, sniffers: edit.sniffers,
-    spikes: edit.spikes, turds: edit.turds, platforms: edit.platforms,
-    start: edit.start, exit: edit.exit,
+    spikes: edit.spikes, turds: edit.turds, crumbles: edit.crumbles,
+    platforms: edit.platforms, start: edit.start, exit: edit.exit,
   }));
 }
 try {
@@ -212,7 +216,8 @@ try {
   if (saved && saved.tiles) {
     edit = { tiles: new Set(saved.tiles), beans: saved.beans || [],
              sniffers: saved.sniffers || [], spikes: saved.spikes || [],
-             turds: saved.turds || [], platforms: saved.platforms || [],
+             turds: saved.turds || [], crumbles: saved.crumbles || [],
+             platforms: saved.platforms || [],
              start: saved.start || [2, 12], exit: saved.exit || [16, 12] };
   }
 } catch (err) { /* a broken save just means a fresh start */ }
@@ -247,6 +252,10 @@ function loadCustomLevel() {
   specTurds = edit.turds.map(k => {
     const [cx, cy] = k.split(',').map(Number);
     return { x: cx * TILE + 3, y: cy * TILE + 6 };
+  });
+  specCrumbles = edit.crumbles.map(k => {
+    const [cx, cy] = k.split(',').map(Number);
+    return { x: cx * TILE, y: cy * TILE };
   });
   FLAG = { x: edit.exit[0] * TILE + TILE / 2, y: (edit.exit[1] + 1) * TILE };
   startPos = { x: edit.start[0] * TILE + 6, y: edit.start[1] * TILE - 8 };
@@ -300,6 +309,10 @@ function resetLevel() {
     x: t.x, y: t.y, w: 40, h: 32, baseY: t.y,
     minX: t.x - 150, maxX: t.x + 150 + 40,
     dir: 1, phase: t.x * 0.1, squish: 0,
+  }));
+  crumbles = specCrumbles.map(c => ({
+    x: c.x, y: c.y, ox: c.x, oy: c.y, w: TILE, h: TILE,
+    crumble: true, shake: 0, falling: false, vy: 0, gone: false, respawn: 0,
   }));
   player.ride = null;
 }
@@ -381,6 +394,7 @@ function applyTool(sx, sy) {
     edit.sniffers = edit.sniffers.filter(k => k !== key);
     edit.spikes = edit.spikes.filter(k => k !== key);
     edit.turds = edit.turds.filter(k => k !== key);
+    edit.crumbles = edit.crumbles.filter(k => k !== key);
   } else if (tool === 'bean') {
     if (!edit.tiles.has(key) && !edit.beans.includes(key)) edit.beans.push(key);
   } else if (tool === 'nose') {
@@ -389,6 +403,8 @@ function applyTool(sx, sy) {
     if (!edit.tiles.has(key) && !edit.spikes.includes(key)) edit.spikes.push(key);
   } else if (tool === 'turd') {
     if (!edit.tiles.has(key) && !edit.turds.includes(key)) edit.turds.push(key);
+  } else if (tool === 'crumble') {
+    if (!edit.tiles.has(key) && !edit.crumbles.includes(key)) edit.crumbles.push(key);
   } else if (tool === 'plat') {
     // two taps: first sets where it starts, second sets where it glides to
     if (!pendingPlat) pendingPlat = [cx, cy];
@@ -404,6 +420,7 @@ function applyTool(sx, sy) {
     edit.sniffers = edit.sniffers.filter(k => k !== key);
     edit.spikes = edit.spikes.filter(k => k !== key);
     edit.turds = edit.turds.filter(k => k !== key);
+    edit.crumbles = edit.crumbles.filter(k => k !== key);
     edit.platforms = edit.platforms.filter(p =>
       !(p.a[0] === cx && p.a[1] === cy) && !(p.b[0] === cx && p.b[1] === cy));
   }
@@ -538,8 +555,32 @@ function update(dt) {
   }
   player.ride = null;
 
+  // ---- crumbling blocks: shake... shake... GONE. then they regrow ----
+  for (const c of crumbles) {
+    if (c.shake > 0) {
+      c.shake -= dt;
+      if (c.shake <= 0) { c.falling = true; beep(90, 0.2, 'triangle', 0.15); }
+    } else if (c.falling) {
+      c.vy += GRAVITY * dt;
+      c.y += c.vy * dt;
+      if (c.y > levelBottom + 400) { c.falling = false; c.gone = true; c.respawn = 3; }
+    } else if (c.gone) {
+      c.respawn -= dt;
+      // don't regrow inside the player — that would be rude
+      if (c.respawn <= 0 &&
+          !overlaps(player, { x: c.ox, y: c.oy, w: c.w, h: c.h })) {
+        c.gone = false;
+        c.x = c.ox; c.y = c.oy; c.vy = 0;
+      }
+    }
+  }
+
   // ---- gravity, then collide with the world one axis at a time ----
-  const colliders = platforms.length ? solids.concat(platforms) : solids;
+  let colliders = solids;
+  if (platforms.length || crumbles.length) {
+    colliders = solids.concat(platforms);
+    for (const c of crumbles) if (!c.falling && !c.gone) colliders.push(c);
+  }
   player.vy += GRAVITY * dt;
   player.x += player.vx * dt;
   for (const s of colliders) {
@@ -556,11 +597,24 @@ function update(dt) {
     if (player.vy > 0) {
       player.y = s.y - player.h; player.vy = 0; player.onGround = true;
       if (s.dx !== undefined) player.ride = s;   // platforms remember their rider
+      if (s.crumble && s.shake <= 0 && !s.falling) {
+        s.shake = 0.7;                           // the countdown begins
+        beep(150, 0.07, 'square', 0.1);
+      }
     } else if (player.vy < 0) { player.y = s.y + s.h; player.vy = 0; }
   }
   // remember the last spot of REAL ground for coming back after a fall —
-  // a moving platform doesn't count, it might have wandered over a pit
-  if (player.onGround && !player.ride) lastSafe = { x: player.x, y: player.y - 10 };
+  // a moving platform doesn't count (it wanders over pits), and neither
+  // does a crumbling block (it is, by definition, not to be trusted)
+  let onCrumble = false;
+  for (const c of crumbles) {
+    if (!c.falling && !c.gone && c.shake > 0 &&
+        Math.abs(player.y + player.h - c.y) < 4 &&
+        player.x + player.w > c.x && player.x < c.x + c.w) onCrumble = true;
+  }
+  if (player.onGround && !player.ride && !onCrumble) {
+    lastSafe = { x: player.x, y: player.y - 10 };
+  }
 
   // ---- spikes are pointy. do not touch the pointy. ----
   if (player.invuln <= 0) {
@@ -757,6 +811,13 @@ function draw() {
   for (const sp of spikes) {
     drawSpikeCell(sp.x - 4, sp.y - TILE * 0.45);
   }
+  // crumbling blocks: intact, shaking nervously, or tumbling away
+  for (const c of crumbles) {
+    if (c.gone) continue;
+    if (c.falling) ctx.globalAlpha = 0.7;
+    drawCrumbleCell(c.x, c.y, c.shake > 0);
+    ctx.globalAlpha = 1;
+  }
   // gliding platforms, each with a faint dotted rail showing its path
   for (const p of platforms) {
     ctx.strokeStyle = 'rgba(125, 211, 255, 0.15)';
@@ -944,7 +1005,8 @@ function draw() {
 // ---------------------------------------------------------------------
 const TOOLS = [
   ['ground', 'GROUND'], ['bean', 'BEAN'], ['nose', 'NOSE'],
-  ['turd', 'TURD'], ['spike', 'SPIKE'], ['plat', 'PLATFORM'],
+  ['turd', 'TURD'], ['spike', 'SPIKE'], ['crumble', 'CRUMBLE'],
+  ['plat', 'PLATFORM'],
   ['start', 'START'], ['exit', 'EXIT'], ['erase', 'ERASE'], ['pan', 'PAN'],
 ];
 
@@ -999,6 +1061,24 @@ function drawTurd(x, y, flap) {
   ctx.arc(cx - 5, y + 14, 1.8, 0, Math.PI * 2);
   ctx.arc(cx + 7, y + 14, 1.8, 0, Math.PI * 2);
   ctx.fill();
+}
+
+// a crumbling block: pale, cracked, clearly having a hard time
+function drawCrumbleCell(x, y, wobble) {
+  const jx = wobble ? (Math.random() - 0.5) * 4 : 0;
+  const jy = wobble ? (Math.random() - 0.5) * 4 : 0;
+  ctx.fillStyle = '#6a6055';
+  ctx.fillRect(x + jx, y + jy, TILE, TILE);
+  ctx.strokeStyle = 'rgba(30, 24, 18, 0.7)';         // the worrying cracks
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(x + jx + 8, y + jy + 4);
+  ctx.lineTo(x + jx + 20, y + jy + 20);
+  ctx.lineTo(x + jx + 12, y + jy + 40);
+  ctx.moveTo(x + jx + 34, y + jy + 6);
+  ctx.lineTo(x + jx + 26, y + jy + 26);
+  ctx.lineTo(x + jx + 38, y + jy + 42);
+  ctx.stroke();
 }
 
 // a gliding platform: a mossy slab with faintly glowing crystal ends
@@ -1077,6 +1157,10 @@ function drawEditor() {
   for (const key of edit.turds) {
     const [cx, cy] = key.split(',').map(Number);
     drawTurd(cx * TILE + 3, cy * TILE + 6, 0.02);
+  }
+  for (const key of edit.crumbles) {
+    const [cx, cy] = key.split(',').map(Number);
+    drawCrumbleCell(cx * TILE, cy * TILE, false);
   }
   for (const p of edit.platforms) {
     ctx.strokeStyle = 'rgba(125, 211, 255, 0.35)';
