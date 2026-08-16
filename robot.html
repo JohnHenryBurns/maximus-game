@@ -163,9 +163,14 @@ const CHAPTERS = [
   { name: 'The Overseer', unlocked: ch1Done },
   { name: 'The Machine', unlocked: ch2Done },
   { name: 'The Truth', unlocked: ch3Done },
-  { name: '???', unlocked: false },
+  { name: 'The Fault', unlocked: false },
 ];
 let ch4Done = localStorage.getItem('robot_ch4') === 'yes';
+CHAPTERS[4].unlocked = ch4Done;
+let ch5Done = localStorage.getItem('robot_ch5') === 'yes';
+// the ending's great gift: the robot's true name, chosen by the player
+let robotName = localStorage.getItem('robot_name') || '';
+let nameDraft = '';
 let chapter = 0;
 
 // the story card shown when a chapter begins
@@ -247,6 +252,10 @@ let stun = 0;             // you, frozen and buzzing, after a shock
 let fault = null;
 let faultFlash = 0;      // the memory jolts when you touch what it remembers
 
+// CHAPTER 5: outside at last. Four beacons against one hungry dark.
+let beacons = [];
+let beaconsLit = 0;
+
 // THE OVERSEER — a giant with no legs, hanging from a ceiling rail by a
 // great metal bar at its waist. It glides right over everything.
 let overseer = null;
@@ -257,10 +266,77 @@ const RAILS = [
 let grace = 0;                // a moment of safety after it catches you
 
 function buildFactory() {
-  START = chapter === 3 ? { x: 200, y: 1600 } : { x: 300, y: 1500 };
+  START = chapter === 3 ? { x: 200, y: 1600 }
+        : chapter === 4 ? { x: 1100, y: 280 }
+        : { x: 300, y: 1500 };
   doors = [];
   levers = [];
   fault = null;
+  beacons = [];
+  beaconsLit = 0;
+
+  // CHAPTER 5 gets its own map: OUTSIDE, for the first time ever
+  if (chapter === 4) {
+    blocks = [];
+    // the factory's outer wall behind you — the doors sealed shut
+    blocks.push({ x: 490,  y: 120, w: 980, h: 140, kind: 'wall' });
+    blocks.push({ x: 1710, y: 120, w: 980, h: 140, kind: 'wall' });
+    blocks.push({ x: 1100, y: 120, w: 240, h: 140, kind: 'machine' });
+    // the edges of the world you know
+    blocks.push({ x: WORLD_W / 2, y: WORLD_H - 30, w: WORLD_W, h: 60, kind: 'wall' });
+    blocks.push({ x: 30, y: WORLD_H / 2, w: 60, h: WORLD_H, kind: 'wall' });
+    blocks.push({ x: WORLD_W - 30, y: WORLD_H / 2, w: 60, h: WORLD_H, kind: 'wall' });
+
+    // four beacons, far apart, waiting in the dark
+    beacons = [
+      { x: 300,  y: 520,  lit: false },
+      { x: 1950, y: 620,  lit: false },
+      { x: 360,  y: 1500, lit: false },
+      { x: 1840, y: 1460, lit: false },
+    ];
+
+    // old wreckage dragged out and dumped here, long ago
+    for (let i = 0; i < 16; i++) {
+      const wx = 220 + noise(i * 3.7) * (WORLD_W - 440);
+      const wy = 460 + noise(i * 8.1) * (WORLD_H - 720);
+      let clear = Math.hypot(wx - START.x, wy - START.y) > 180 &&
+                  Math.hypot(wx - 1100, wy - 1150) > 260;
+      for (const b of beacons) {
+        if (Math.hypot(wx - b.x, wy - b.y) < 160) clear = false;
+      }
+      if (!clear) continue;
+      blocks.push({
+        x: wx, y: wy,
+        w: 60 + noise(i * 5.1) * 80, h: 50 + noise(i * 9.3) * 60,
+        kind: noise(i * 2.9) < 0.5 ? 'machine' : 'crates',
+      });
+    }
+
+    // and THE FAULT itself. real this time. hungry this time.
+    fault = { x: 1100, y: 1150, r: 300 };
+
+    belts = [];
+    lamps = [];
+    switches = [];
+    powered = 0;
+    leverPulled = false;
+    overseer = null;
+    machineAwake = false;
+    awakeSeq = 0;
+    zapGrace = 0;
+    stun = 0;
+    carrying = null;
+    faultFlash = 0;
+    wokeTimer = 0;
+    endTimer = 0;
+    grace = 0;
+    saidName = false;
+    setScreech(0);
+    sparks = [];
+    player.x = START.x;
+    player.y = START.y;
+    return;
+  }
 
   // CHAPTER 4 gets its own map: the memory as a winding maze
   if (chapter === 3) {
@@ -480,6 +556,22 @@ const keys = {};
 addEventListener('keydown', e => {
   ensureAudio();
   keys[e.key.toLowerCase()] = true;
+  if (screen === 'naming') {
+    // the player types the robot's true name, letter by letter
+    if (e.key === 'Enter' && nameDraft.trim()) {
+      robotName = nameDraft.trim();
+      localStorage.setItem('robot_name', robotName);
+      screen = 'menu';
+    } else if (e.key === 'Backspace') {
+      nameDraft = nameDraft.slice(0, -1);
+    } else if (e.key === 'Escape') {
+      screen = 'menu';                      // shy? the Machine can wait.
+    } else if (e.key.length === 1 && /[a-z0-9 \-]/i.test(e.key) &&
+               nameDraft.length < 14) {
+      nameDraft += e.key;
+    }
+    return;
+  }
   if (screen === 'story') { screen = 'playing'; return; }
   if (screen === 'menu') {
     const n = parseInt(e.key) - 1;
@@ -492,6 +584,15 @@ addEventListener('keydown', e => {
 addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
 addEventListener('click', e => {
   ensureAudio();
+  if (screen === 'naming') {
+    const n = prompt('What is your name, little one?');
+    if (n && n.trim()) {
+      robotName = n.trim().slice(0, 14);
+      localStorage.setItem('robot_name', robotName);
+    }
+    screen = 'menu';
+    return;
+  }
   if (screen === 'story') { screen = 'playing'; return; }
   if (screen === 'menu') {
     for (let i = 0; i < menuCards.length; i++) {
@@ -506,6 +607,16 @@ let stick = null;
 addEventListener('touchstart', e => {
   e.preventDefault();
   ensureAudio();
+  if (screen === 'naming') {
+    // phones have no game-keyboard, so we borrow the browser's ask-box
+    const n = prompt('What is your name, little one?');
+    if (n && n.trim()) {
+      robotName = n.trim().slice(0, 14);
+      localStorage.setItem('robot_name', robotName);
+    }
+    screen = 'menu';
+    return;
+  }
   if (screen === 'story') { screen = 'playing'; return; }
   if (screen === 'menu') {
     const t = e.changedTouches[0];
@@ -534,6 +645,7 @@ function startChapter(i) {
     lockedText = i === 1 ? 'Finish Chapter 1 first — turn the power on!'
                : i === 2 ? 'Finish Chapter 2 first — silence the Overseer!'
                : i === 3 ? 'Finish Chapter 3 first — wake the Machine!'
+               : i === 4 ? 'Finish Chapter 4 first — learn the truth!'
                : "That chapter hasn't been written yet...";
     lockedTimer = 2;
     return;
@@ -554,6 +666,22 @@ function startChapter(i) {
       'Somewhere in this factory there is power. Find it.',
       '',
       '( press anything to begin )',
+    ];
+  } else if (i === 4) {
+    storyLines = [
+      'CHAPTER 5: THE FAULT',
+      '',
+      'The great doors of the factory grind open.',
+      'Cold air. Real air. You have never felt it before.',
+      '',
+      'The Machine speaks softly behind you:',
+      '"It sleeps out there in the dark. Starving. Waiting."',
+      '"Light the four beacons. Light burns it small."',
+      '"Then walk into the dark... and touch its heart."',
+      '',
+      'You step outside. The doors close behind you.',
+      '',
+      '( press anything to face it )',
     ];
   } else if (i === 3) {
     storyLines = [
@@ -619,12 +747,16 @@ function update(dt) {
   if (endTimer > 0) {
     endTimer -= dt;
     setScreech(0);                            // the rail falls silent
+    if (faultFlash > 0) faultFlash -= dt;     // the last jolt fades out
     if (machineAwake) awakeSeq += dt;         // the warm light spreading
     if (chapter === 1 && !saidName && endTimer < 9) {
       saidName = true;
       sayUnit13();                            // its last words. YOUR name.
     }
-    if (endTimer <= 0) screen = 'menu';
+    if (endTimer <= 0) {
+      // chapter 5's ending doesn't go back to the menu. it goes to a NAME.
+      screen = (chapter === 4 && !robotName) ? 'naming' : 'menu';
+    }
     return;                                   // hold still for the ending
   }
 
@@ -645,8 +777,8 @@ function update(dt) {
     player.walkTime += dt;
     if (dx > 0.1) player.facing = 1;
     if (dx < -0.1) player.facing = -1;
-    // inside the Fault, the memory turns to static — you wade, half speed
-    const inFault = chapter === 3 && fault &&
+    // inside the Fault, the world turns to static — you wade, half speed
+    const inFault = (chapter === 3 || chapter === 4) && fault &&
       Math.hypot(player.x - fault.x, player.y - fault.y) < fault.r;
     const spd = player.speed * (inFault ? 0.5 : 1);
     const nx = player.x + dx * spd * dt;
@@ -721,10 +853,55 @@ function update(dt) {
       endTimer = 21;
       ch4Done = true;
       localStorage.setItem('robot_ch4', 'yes');
+      CHAPTERS[4].unlocked = true;          // time to face THE FAULT
       sayDeep(['the fault came from outside.',
                'you turned everything off... to starve it.',
                'you saved us all, little one.',
                'but the fault... is still out there.'], 18);
+    }
+  }
+
+  // ---- CHAPTER 5: the last battle. light against hunger. ----
+  if (chapter === 4 && fault) {
+    if (faultFlash > 0) faultFlash -= dt;
+
+    // reach a beacon and it BLAZES — the Fault recoils, burned smaller
+    for (const b of beacons) {
+      if (b.lit) continue;
+      if (Math.hypot(player.x - b.x, player.y - b.y) < 42) {
+        b.lit = true;
+        fault.r = Math.max(140, fault.r * 0.8);
+        const fd = Math.hypot(fault.x - b.x, fault.y - b.y) || 1;
+        fault.x += (fault.x - b.x) / fd * 260;
+        fault.y += (fault.y - b.y) / fd * 260;
+        for (let k = 0; k < 20; k++) {
+          sparks.push({ x: b.x, y: b.y - 30, vx: (Math.random() - 0.5) * 260,
+                        vy: -Math.random() * 220, life: 0.8,
+                        color: k % 2 ? '#ffd23f' : '#ffffff' });
+        }
+      }
+    }
+    beaconsLit = beacons.filter(b => b.lit).length;
+
+    // it hunts you. every beacon makes it smaller — and angrier.
+    const hunt = 30 + beaconsLit * 16 + (beaconsLit >= 4 ? 35 : 0);
+    const dx = player.x - fault.x, dy = player.y - fault.y;
+    const dd = Math.hypot(dx, dy) || 1;
+    fault.x += dx / dd * hunt * dt;
+    fault.y += dy / dd * hunt * dt;
+    fault.x = Math.max(240, Math.min(WORLD_W - 240, fault.x));
+    fault.y = Math.max(380, Math.min(WORLD_H - 240, fault.y));
+    if (dd < fault.r + 12) faultFlash = 0.8;
+
+    // four beacons lit: its heart is bare. walk into the dark. touch it.
+    if (beaconsLit >= 4 && dd < 52) {
+      endTimer = 24;
+      ch5Done = true;
+      localStorage.setItem('robot_ch5', 'yes');
+      sayDeep(['it is over.',
+               'the fault is gone.',
+               'the factory is safe. forever.',
+               'little one. you need a true name.'], 20);
     }
   }
 
@@ -865,17 +1042,27 @@ function draw() {
   const c = cam();
   const powerOn = leverPulled;
 
-  // the factory floor — riveted metal plates
-  ctx.fillStyle = powerOn ? '#252a30' : '#191c21';
+  // the ground — riveted metal plates inside; bare cold earth outside
+  ctx.fillStyle = chapter === 4 ? '#1c1e19' : powerOn ? '#252a30' : '#191c21';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.strokeStyle = 'rgba(0,0,0,0.25)';
-  ctx.lineWidth = 2;
-  const gs = 160;
-  for (let gx = -(c.x % gs); gx < canvas.width; gx += gs) {
-    ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, canvas.height); ctx.stroke();
-  }
-  for (let gy = -(c.y % gs); gy < canvas.height; gy += gs) {
-    ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(canvas.width, gy); ctx.stroke();
+  if (chapter !== 4) {
+    ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+    ctx.lineWidth = 2;
+    const gs = 160;
+    for (let gx = -(c.x % gs); gx < canvas.width; gx += gs) {
+      ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, canvas.height); ctx.stroke();
+    }
+    for (let gy = -(c.y % gs); gy < canvas.height; gy += gs) {
+      ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(canvas.width, gy); ctx.stroke();
+    }
+  } else {
+    // scattered pebbles and cracks, so the outside feels like a real place
+    ctx.fillStyle = 'rgba(0,0,0,0.22)';
+    for (let i = 0; i < 60; i++) {
+      const px = noise(i * 7.1) * WORLD_W - c.x, py = noise(i * 3.9) * WORLD_H - c.y;
+      if (px < -10 || py < -10 || px > canvas.width + 10 || py > canvas.height + 10) continue;
+      ctx.fillRect(px, py, 5 + noise(i) * 6, 3 + noise(i * 2) * 4);
+    }
   }
 
   // conveyor belts — rolling once the power is on
@@ -916,7 +1103,7 @@ function draw() {
   const things = [];
   for (const b of blocks) things.push({ y: b.y + b.h / 2, kind: 'block', it: b });
   for (const sw of switches) things.push({ y: sw.y, kind: 'switch', it: sw });
-  things.push({ y: LEVER.y, kind: 'lever' });
+  if (chapter <= 2) things.push({ y: LEVER.y, kind: 'lever' });
   things.push({ y: player.y, kind: 'player' });
   things.sort((a, b) => a.y - b.y);
   for (const th of things) {
@@ -934,6 +1121,9 @@ function draw() {
 
   // THE FAULT, spreading through the memory (chapter 4)
   if (chapter === 3 && fault) drawFault(c);
+
+  // outside: the beacons, and the real Fault (chapter 5)
+  if (chapter === 4) drawOutside5(c);
 
   // the part you're carrying hovers proudly over your head
   if (carrying) {
@@ -960,6 +1150,9 @@ function draw() {
   const darkAmt = chapter === 0 ? (powerOn ? 0 : 1)
                 : chapter === 1 ? (4 - powered) / 4
                 : chapter === 3 ? (4 - powered) / 4 * 0.85   // the memory dims as you relive the shutdown
+                : chapter === 4 ? (endTimer > 0
+                    ? Math.max(0, Math.min(1, (endTimer - 12) / 12)) * 0.5   // dawn washes the night away
+                    : 0.8 - beaconsLit * 0.15)               // each beacon beats back the night
                 : machineAwake ? Math.max(0, 1 - awakeSeq / 3) : 1;
   if (darkAmt > 0) {
     const px = player.x - c.x, py = player.y - c.y;
@@ -970,6 +1163,17 @@ function draw() {
     ctx.fillStyle = night;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
+    // lit beacons pour warm pools of light onto the night (chapter 5)
+    for (const b of beacons) {
+      if (!b.lit) continue;
+      const bx = b.x - c.x, by = b.y - c.y - 30;
+      if (bx < -240 || by < -240 || bx > canvas.width + 240 || by > canvas.height + 240) continue;
+      const g = ctx.createRadialGradient(bx, by, 8, bx, by, 230);
+      g.addColorStop(0, 'rgba(255, 226, 150, 0.4)');
+      g.addColorStop(1, 'rgba(255, 226, 150, 0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(bx - 230, by - 230, 460, 460);
+    }
     // lamps glow warm wherever their switch is on
     for (const l of lamps) {
       if (!l.sw.on) continue;
@@ -1043,6 +1247,53 @@ function draw() {
     }
   }
 
+  // chapter 5's night-battle overlays: static jolts, the bare heart, the dawn
+  if (chapter === 4) {
+    if (faultFlash > 0) {
+      ctx.fillStyle = `rgba(255, 60, 40, ${faultFlash * 0.3})`;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#ffb3ab';
+      ctx.font = 'bold 18px monospace';
+      ctx.fillText('IT IS REAL THIS TIME. KEEP GOING.', canvas.width / 2, 120);
+    }
+    if (fault && beaconsLit >= 4 && endTimer <= 0) {
+      // its heart, glowing through everything — go and touch it
+      const hx = fault.x - c.x, hy = fault.y - c.y;
+      const pu = 0.5 + Math.sin(elapsed * 5) * 0.4;
+      ctx.strokeStyle = `rgba(255, 80, 60, ${pu})`;
+      ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(hx, hy, 40, 0, Math.PI * 2); ctx.stroke();
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#ff9f8f';
+      ctx.font = '15px monospace';
+      ctx.fillText('its heart is bare... touch it', hx, hy - 56);
+    }
+    if (endTimer > 0 && endTimer < 20) {
+      // the first sunrise this world has ever shown you
+      const dawn = (20 - endTimer) / 20;
+      const g = ctx.createLinearGradient(0, 0, 0, canvas.height);
+      g.addColorStop(0, `rgba(255, 159, 67, ${0.45 * dawn})`);
+      g.addColorStop(0.6, `rgba(255, 210, 63, ${0.15 * dawn})`);
+      g.addColorStop(1, 'rgba(255, 210, 63, 0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+  }
+
+  // the Machine's voice on the radio, as the sun comes up (chapter 5)
+  if (chapter === 4 && endTimer > 3) {
+    const t = 24 - endTimer;
+    const line = t < 5 ? '" IT IS OVER. "'
+               : t < 9.5 ? '" THE FAULT IS GONE. "'
+               : t < 14.5 ? '" THE FACTORY IS SAFE. FOREVER. "'
+               : '" LITTLE ONE... YOU NEED A TRUE NAME. "';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(255, 226, 150, 0.95)';
+    ctx.font = 'bold 24px monospace';
+    ctx.fillText(line, canvas.width / 2, canvas.height / 2 - 120);
+  }
+
   // the Machine narrating the memory's ending (chapter 4)
   if (chapter === 3 && endTimer > 3) {
     const t = 21 - endTimer;
@@ -1060,11 +1311,15 @@ function draw() {
   ctx.textAlign = 'left';
   ctx.fillStyle = '#7dd3ff';
   ctx.font = 'bold 18px monospace';
-  ctx.fillText('UNIT-??? ', 14, 30);
-  ctx.fillStyle = chapter === 2 ? (machineAwake ? '#7ddf8f' : '#ffd23f')
+  ctx.fillText((robotName ? robotName.toUpperCase() : 'UNIT-???') + ' ', 14, 30);
+  ctx.fillStyle = chapter === 4 ? (beaconsLit >= 4 ? '#ff6b5e' : '#ffd23f')
+                : chapter === 2 ? (machineAwake ? '#7ddf8f' : '#ffd23f')
                 : chapter === 1 ? (powered === 0 ? '#7ddf8f' : '#ff6b5e')
                 : powered >= 4 ? '#7ddf8f' : '#ffd23f';
-  ctx.fillText(chapter === 3
+  ctx.fillText(chapter === 4
+      ? (beaconsLit >= 4 ? 'ITS HEART IS BARE — walk into the dark and touch it'
+                         : `THE FAULT — light the beacons: ${beaconsLit}/4`)
+      : chapter === 3
       ? (powered > 0 ? `THE MEMORY — levers open doors. shut it all down: ${powered}/4 on`
                      : 'go back to sleep, little one...')
       : chapter === 2
@@ -1121,13 +1376,19 @@ function draw() {
     ctx.textAlign = 'center';
     ctx.fillStyle = '#ffd23f';
     ctx.font = 'bold 30px monospace';
-    ctx.fillText(chapter === 3 ? 'CHAPTER 4 COMPLETE'
+    ctx.fillText(chapter === 4 ? 'CHAPTER 5 COMPLETE'
+               : chapter === 3 ? 'CHAPTER 4 COMPLETE'
                : chapter === 2 ? 'CHAPTER 3 COMPLETE'
                : chapter === 1 ? 'CHAPTER 2 COMPLETE' : 'CHAPTER 1 COMPLETE',
                  canvas.width / 2, canvas.height / 2 - 10);
     ctx.fillStyle = '#9fb4ff';
     ctx.font = '16px monospace';
-    if (chapter === 3) {
+    if (chapter === 4) {
+      ctx.fillText('The Fault is gone. The sun is up. The story is yours.',
+                   canvas.width / 2, canvas.height / 2 + 26);
+      ctx.fillText('One thing left to do, little one...',
+                   canvas.width / 2, canvas.height / 2 + 50);
+    } else if (chapter === 3) {
       ctx.fillText('You are the robot who saved everyone. That is the truth.',
                    canvas.width / 2, canvas.height / 2 + 26);
       ctx.fillText('Chapter 5 is unwritten... and the Fault is still out there.',
@@ -1194,6 +1455,59 @@ function drawMaze4(c) {
       ctx.lineWidth = 2;
       ctx.beginPath(); ctx.arc(x, y, 24, 0, Math.PI * 2); ctx.stroke();
     }
+  }
+}
+
+// chapter 5's world: the beacons, and the real Fault with its heart
+function drawOutside5(c) {
+  for (const b of beacons) {
+    const x = b.x - c.x, y = b.y - c.y;
+    if (x < -80 || y < -80 || x > canvas.width + 80 || y > canvas.height + 80) continue;
+    // a tall iron pole with a lamp-cage on top
+    ctx.fillStyle = '#3a4150';
+    ctx.fillRect(x - 4, y - 58, 8, 58);
+    ctx.fillRect(x - 16, y - 4, 32, 8);
+    ctx.fillStyle = b.lit ? '#ffe296' : '#232833';
+    ctx.fillRect(x - 11, y - 76, 22, 20);
+    ctx.strokeStyle = '#3a4150';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x - 11, y - 76, 22, 20);
+    if (!b.lit) {
+      // an unlit beacon calls to you through the night
+      const pu = 0.4 + Math.sin(elapsed * 4 + b.x) * 0.3;
+      ctx.strokeStyle = `rgba(255, 226, 150, ${pu})`;
+      ctx.beginPath(); ctx.arc(x, y - 20, 30, 0, Math.PI * 2); ctx.stroke();
+    }
+  }
+
+  if (!fault) return;
+  // during the ending, the Fault unravels away to nothing
+  const rr = endTimer > 0 ? fault.r * Math.max(0, (endTimer - 17) / 7) : fault.r;
+  if (rr > 4) {
+    const x = fault.x - c.x, y = fault.y - c.y;
+    ctx.fillStyle = '#0a0508';
+    ctx.beginPath();
+    for (let k = 0; k <= 26; k++) {
+      const ang = (k / 26) * Math.PI * 2;
+      const r = rr * (0.92 + noise(k * 3.3 + Math.floor(elapsed * 2)) * 0.16);
+      const px = x + Math.cos(ang) * r;
+      const py = y + Math.sin(ang) * r;
+      if (k === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = `rgba(255, 46, 31, ${0.5 + Math.sin(elapsed * 3) * 0.3})`;
+    ctx.lineWidth = 4;
+    ctx.stroke();
+  }
+  // the heart: hidden while it's huge, bare once the beacons burn
+  if (beaconsLit >= 4 && (endTimer <= 0 || endTimer > 17)) {
+    const x = fault.x - c.x, y = fault.y - c.y;
+    const pu = 1 + Math.sin(elapsed * 5) * 0.15;
+    ctx.fillStyle = '#ff2e1f';
+    ctx.beginPath(); ctx.arc(x, y, 14 * pu, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#ffd23f';
+    ctx.beginPath(); ctx.arc(x, y, 6 * pu, 0, Math.PI * 2); ctx.fill();
   }
 }
 
@@ -1500,10 +1814,12 @@ function drawMenu(dt) {
   ctx.textAlign = 'center';
   ctx.fillStyle = '#7dd3ff';
   ctx.font = `bold ${Math.min(64, W / 9)}px monospace`;
-  ctx.fillText('UNIT-???', W / 2, H * 0.22);
+  // once the robot has its true name, the game itself is renamed
+  ctx.fillText(robotName ? robotName.toUpperCase() : 'UNIT-???', W / 2, H * 0.22);
   ctx.fillStyle = '#9fb4ff';
   ctx.font = '17px monospace';
-  ctx.fillText('a story in chapters', W / 2, H * 0.22 + 34);
+  ctx.fillText(robotName ? 'once known as UNIT-13 — a story in chapters'
+                         : 'a story in chapters', W / 2, H * 0.22 + 34);
 
   const count = CHAPTERS.length;
   const cw = Math.min(220, W / (count + 1.5)), chh = cw * 0.72, gap = cw * 0.15;
@@ -1535,6 +1851,39 @@ function drawMenu(dt) {
   }
 }
 
+// the last screen of the story: the Machine asks, and you answer
+function drawNaming(dt) {
+  elapsed += dt;
+  const W = canvas.width, H = canvas.height;
+  ctx.fillStyle = '#050608';
+  ctx.fillRect(0, 0, W, H);
+  // a faint warm dawn still glowing at the top of the world
+  const g = ctx.createLinearGradient(0, 0, 0, H * 0.5);
+  g.addColorStop(0, 'rgba(255, 159, 67, 0.18)');
+  g.addColorStop(1, 'rgba(255, 159, 67, 0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H * 0.5);
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#9fb4ff';
+  ctx.font = '17px monospace';
+  ctx.fillText('the Machine asks:', W / 2, H * 0.3);
+  ctx.fillStyle = 'rgba(255, 226, 150, 0.95)';
+  ctx.font = 'bold 26px monospace';
+  ctx.fillText('" WHAT IS YOUR NAME, LITTLE ONE? "', W / 2, H * 0.3 + 44);
+
+  // the name so far, with a blinking cursor
+  const cursor = Math.floor(elapsed * 2) % 2 ? '_' : ' ';
+  ctx.fillStyle = '#7dd3ff';
+  ctx.font = `bold ${Math.min(54, W / 12)}px monospace`;
+  ctx.fillText((nameDraft || '') + cursor, W / 2, H * 0.55);
+
+  ctx.fillStyle = '#555b77';
+  ctx.font = '15px monospace';
+  ctx.fillText('type a name, then press ENTER  —  (or tap here on a phone)',
+               W / 2, H * 0.55 + 50);
+}
+
 function drawStory(dt) {
   elapsed += dt;
   const W = canvas.width, H = canvas.height;
@@ -1558,6 +1907,7 @@ function loop(time) {
   const dt = Math.min(0.05, (time - lastTime) / 1000);
   lastTime = time;
   if (screen === 'menu') drawMenu(dt);
+  else if (screen === 'naming') drawNaming(dt);
   else if (screen === 'story') drawStory(dt);
   else { update(dt); draw(); }
   requestAnimationFrame(loop);
