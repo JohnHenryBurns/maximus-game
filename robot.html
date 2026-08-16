@@ -42,6 +42,58 @@ function noise(n) {
 }
 
 // ---------------------------------------------------------------------
+// SOUND — the Overseer's rail-screech, and its dying words.
+// Browsers only allow sound after a real key/tap, so we switch the
+// audio on at the first input.
+// ---------------------------------------------------------------------
+let audioCtx = null;
+let screech = null;        // the always-running screech, volume 0 when idle
+let saidName = false;      // has the deep voice spoken yet?
+
+function ensureAudio() {
+  if (!audioCtx && window.AudioContext) audioCtx = new AudioContext();
+  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+  // build the screech machine once: two sawtooth waves, slightly out of
+  // tune with each other (that's the metal-grinding sound), squeezed
+  // through a squealing bandpass filter. Volume starts at zero — the
+  // game turns it up only while the giant is actually gliding.
+  if (audioCtx && !screech) {
+    const o1 = audioCtx.createOscillator();
+    const o2 = audioCtx.createOscillator();
+    const lfo = audioCtx.createOscillator();
+    const lfoGain = audioCtx.createGain();
+    const band = audioCtx.createBiquadFilter();
+    const vol = audioCtx.createGain();
+    o1.type = 'sawtooth'; o1.frequency.value = 880;
+    o2.type = 'sawtooth'; o2.frequency.value = 897;
+    lfo.type = 'sine'; lfo.frequency.value = 5.5;   // the squeal wobbles
+    lfoGain.gain.value = 180;
+    lfo.connect(lfoGain); lfoGain.connect(o1.frequency);
+    band.type = 'bandpass'; band.frequency.value = 1300; band.Q.value = 7;
+    vol.gain.value = 0;
+    o1.connect(band); o2.connect(band);
+    band.connect(vol); vol.connect(audioCtx.destination);
+    o1.start(); o2.start(); lfo.start();
+    screech = { vol };
+  }
+}
+function setScreech(target) {
+  if (screech && audioCtx) {
+    screech.vol.gain.setTargetAtTime(target, audioCtx.currentTime, 0.1);
+  }
+}
+function sayUnit13() {
+  // the browser's built-in voice, pitched down as deep as it will go
+  try {
+    const u = new SpeechSynthesisUtterance('unit... thirteen');
+    u.pitch = 0.1;
+    u.rate = 0.55;
+    u.volume = 1;
+    speechSynthesis.speak(u);
+  } catch (e) {}
+}
+
+// ---------------------------------------------------------------------
 // GAME STATE — 'menu' (the chapter cards), 'story' (a title card),
 // 'playing' (the factory floor)
 // ---------------------------------------------------------------------
@@ -158,6 +210,8 @@ function buildFactory() {
   wokeTimer = 0;
   endTimer = 0;
   grace = 0;
+  saidName = false;
+  setScreech(0);
   sparks = [];
   player.x = START.x;
   player.y = START.y;
@@ -188,17 +242,20 @@ const player = {
 // ---------------------------------------------------------------------
 const keys = {};
 addEventListener('keydown', e => {
+  ensureAudio();
   keys[e.key.toLowerCase()] = true;
   if (screen === 'story') { screen = 'playing'; return; }
   if (screen === 'menu') {
     const n = parseInt(e.key) - 1;
     if (n >= 0 && n < CHAPTERS.length) startChapter(n);
   } else if (e.key === 'Escape') {
+    setScreech(0);
     screen = 'menu';
   }
 });
 addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
 addEventListener('click', e => {
+  ensureAudio();
   if (screen === 'story') { screen = 'playing'; return; }
   if (screen === 'menu') {
     for (let i = 0; i < menuCards.length; i++) {
@@ -212,6 +269,7 @@ addEventListener('click', e => {
 let stick = null;
 addEventListener('touchstart', e => {
   e.preventDefault();
+  ensureAudio();
   if (screen === 'story') { screen = 'playing'; return; }
   if (screen === 'menu') {
     const t = e.changedTouches[0];
@@ -288,6 +346,11 @@ function update(dt) {
   if (wokeTimer > 0) wokeTimer -= dt;
   if (endTimer > 0) {
     endTimer -= dt;
+    setScreech(0);                            // the rail falls silent
+    if (chapter === 1 && !saidName && endTimer < 9) {
+      saidName = true;
+      sayUnit13();                            // its last words. YOUR name.
+    }
     if (endTimer <= 0) screen = 'menu';
     return;                                   // hold still for the ending
   }
@@ -373,9 +436,14 @@ function update(dt) {
         O.x += (player.x - O.x) / d * spd * dt;
         O.y += (player.y - O.y) / d * spd * dt;
       }
+      // THE SCREECH — metal on metal, louder the faster it glides and
+      // the closer it gets. You will hear it before you see it.
+      const closeness = Math.max(0.15, 1 - d / 900);
+      setScreech(Math.min(0.09, (0.015 + powered * 0.018)) * closeness);
       // the claw closes
       if (d < 36 && grace <= 0) O.caught = 1.8;
     }
+    if (O.caught > 0 || O.downTimer > 0) setScreech(0);   // holding still
   }
 
   // ---- THE MASTER LEVER — chapter 1 only, once all four are on ----
