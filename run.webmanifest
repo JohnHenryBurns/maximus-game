@@ -1,0 +1,18 @@
+{
+  "name": "Run!",
+  "short_name": "Run",
+  "start_url": "run.html",
+  "scope": "./",
+  "display": "fullscreen",
+  "orientation": "any",
+  "background_color": "#141020",
+  "theme_color": "#141020",
+  "icons": [
+    {
+      "src": "icon-run.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
