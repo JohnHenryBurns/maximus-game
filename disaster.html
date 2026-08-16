@@ -1662,19 +1662,24 @@ function update(dt) {
       c.y += 480 * dt;
       if (c.y >= c.ty) {
         c.landed = true;
-        shake = Math.max(shake, 0.25);
-        // THUD. dust everywhere.
-        for (let i = 0; i < 8; i++) {
-          debris.push({ x: c.x, y: c.ty, vx: (Math.random() - 0.5) * 260,
-            vy: -Math.random() * 200 - 40, spin: Math.random() * 8, life: 0.6,
+        shake = Math.max(shake, 0.35);
+        // THUD!!! dust and bits everywhere.
+        for (let i = 0; i < 14; i++) {
+          debris.push({ x: c.x, y: c.ty, vx: (Math.random() - 0.5) * 380,
+            vy: -Math.random() * 300 - 60, spin: Math.random() * 8, life: 0.7,
             color: i % 2 ? '#c9b8a0' : '#f4f4f2' });
         }
-        // a falling cow flattens whatever it lands on (sorry)
-        const gx = Math.floor(c.x / s), gy = Math.floor((c.ty - TOPBAR) / s);
-        if (gx >= 0 && gy >= 0 && gx < COLS && gy < ROWS &&
-            grid[gy][gx] !== EMPTY && grid[gy][gx] !== BUNKER) {
-          hitBlock(gx, gy, c.x, c.ty, 2);
+        // a falling cow hits like a METEOR — everything near the landing
+        // zone is smashed outright. everything except bunkers. obviously.
+        for (let gy = 0; gy < ROWS; gy++) {
+          for (let gx = 0; gx < COLS; gx++) {
+            const kind = grid[gy][gx];
+            if (kind === EMPTY || kind === BUNKER) continue;
+            const bx = gx * s + s / 2, by = TOPBAR + gy * s + s / 2;
+            if (Math.hypot(bx - c.x, by - c.ty) < 55) smashBlock(gx, gy, bx, by);
+          }
         }
+        scatterRubble(c.x, c.ty, 2);   // and it leaves a proper mess
         // anyone standing underneath gets LAUNCHED
         for (const p of people) {
           if (!p.gone && !p.sheltering && Math.hypot(p.x - c.x, p.y - c.ty) < 36) {
