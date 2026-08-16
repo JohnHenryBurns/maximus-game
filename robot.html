@@ -83,14 +83,37 @@ function setScreech(target) {
   }
 }
 function sayUnit13() {
-  // the browser's built-in voice, pitched down as deep as it will go
+  // the browser's built-in voice — dragged down to the absolute floor,
+  // spoken in machine-chopped pieces, over a sub-bass drone
   try {
-    const u = new SpeechSynthesisUtterance('unit... thirteen');
-    u.pitch = 0.1;
-    u.rate = 0.55;
-    u.volume = 1;
-    speechSynthesis.speak(u);
+    const voices = speechSynthesis.getVoices();
+    const deep = voices.find(v => /david|male|daniel|george|mark/i.test(v.name)) || voices[0];
+    for (const word of ['unit.', 'thir. teen.']) {
+      const u = new SpeechSynthesisUtterance(word);
+      if (deep) u.voice = deep;
+      u.pitch = 0;         // the bottom. there is nothing below this.
+      u.rate = 0.4;        // one syllable at a time, like a machine reading
+      u.volume = 1;
+      speechSynthesis.speak(u);
+    }
   } catch (e) {}
+  // the drone underneath — a 55Hz machine-chest hum with a growling
+  // sub-octave, so the voice sounds like it comes from something HUGE
+  if (audioCtx) {
+    const t = audioCtx.currentTime;
+    const o = audioCtx.createOscillator();
+    const o2 = audioCtx.createOscillator();
+    const vol = audioCtx.createGain();
+    o.type = 'square';   o.frequency.value = 55;
+    o2.type = 'sawtooth'; o2.frequency.value = 27.5;
+    vol.gain.setValueAtTime(0.0001, t);
+    vol.gain.exponentialRampToValueAtTime(0.12, t + 0.15);
+    vol.gain.setValueAtTime(0.12, t + 2.8);
+    vol.gain.exponentialRampToValueAtTime(0.0001, t + 3.8);
+    o.connect(vol); o2.connect(vol); vol.connect(audioCtx.destination);
+    o.start(t); o.stop(t + 4);
+    o2.start(t); o2.stop(t + 4);
+  }
 }
 
 // ---------------------------------------------------------------------
