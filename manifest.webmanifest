@@ -2,17 +2,13 @@
   "name": "Max's Arcade",
   "short_name": "Max's Arcade",
   "description": "Games built from scratch by Maximus. No game engine, no downloaded pictures - every wall, spider and lava wave is drawn by code.",
-
   "start_url": "./",
   "scope": "./",
-
   "display": "fullscreen",
   "// orientation": "The cavern wants the phone sideways, the gnome wants it upright. Two games can't share one lock, so we let the phone turn freely.",
   "orientation": "any",
-
   "background_color": "#07060a",
   "theme_color": "#07060a",
-
   "icons": [
     {
       "src": "icon-192.png",
@@ -25,6 +21,56 @@
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Amos's Disaster Builder",
+      "short_name": "Disaster",
+      "url": "disaster.html",
+      "icons": [
+        {
+          "src": "icon-disaster.svg",
+          "sizes": "any",
+          "type": "image/svg+xml"
+        }
+      ]
+    },
+    {
+      "name": "Sinking Pole",
+      "short_name": "Sinking Pole",
+      "url": "gnome2.html",
+      "icons": [
+        {
+          "src": "icon-gnome2.svg",
+          "sizes": "any",
+          "type": "image/svg+xml"
+        }
+      ]
+    },
+    {
+      "name": "Bot Rush",
+      "short_name": "Bot Rush",
+      "url": "bot.html",
+      "icons": [
+        {
+          "src": "icon-bot.svg",
+          "sizes": "any",
+          "type": "image/svg+xml"
+        }
+      ]
+    },
+    {
+      "name": "The Explorer 2",
+      "short_name": "Explorer 2",
+      "url": "explorer2.html",
+      "icons": [
+        {
+          "src": "icon-explorer2.svg",
+          "sizes": "any",
+          "type": "image/svg+xml"
+        }
+      ]
     }
   ]
 }
