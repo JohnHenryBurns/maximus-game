@@ -101,14 +101,26 @@ window.onerror = function (msg, src, line) {
   document.body.appendChild(div);
 };
 
+// THE TOP OF THE SCREEN, in two rows.
+//   row 1 (HEADER): the arcade pill - the way back, same as every other game
+//   row 2 (the rest of TOPBAR): this garden's own controls
+// HEADER is MEASURED from where the pill actually landed rather than guessed,
+// because a phone with a notch pushes it down and a guess would overlap.
+let HEADER = 46;
+let TOPBAR = HEADER + 64;
+function measureHeader() {
+  const pill = document.getElementById('back');
+  HEADER = pill ? Math.ceil(pill.getBoundingClientRect().bottom) + 8 : 46;
+  TOPBAR = HEADER + 64;
+}
+
 function fitCanvas() {
   canvas.width = innerWidth;
   canvas.height = innerHeight;
+  measureHeader();
 }
 fitCanvas();
 addEventListener('resize', fitCanvas);
-
-const TOPBAR = 64;
 
 // ---------------------------------------------------------------------
 // THE CROPS — everything plantable lives in this one table.
@@ -326,9 +338,9 @@ function tapPlot(i) {
 // ---------------------------------------------------------------------
 // INPUT
 // ---------------------------------------------------------------------
-function shopBtnRect() { return { x: canvas.width - 130, y: 12, w: 118, h: 40 }; }
+function shopBtnRect() { return { x: canvas.width - 130, y: HEADER + 12, w: 118, h: 40 }; }
 // the DRAG ME button, right next to the shop: press, hold, drag, drop!
-function dragBtnRect() { return { x: canvas.width - 262, y: 12, w: 124, h: 40 }; }
+function dragBtnRect() { return { x: canvas.width - 262, y: HEADER + 12, w: 124, h: 40 }; }
 let dragItem = null;               // what's floating under your finger right now
 let dragPos = { x: 0, y: 0 };
 function inside(px, py, r) { return px > r.x && px < r.x + r.w && py > r.y && py < r.y + (r.h || r.s); }
@@ -740,12 +752,18 @@ function draw(dt) {
   ctx.fillStyle = '#ffd23f';
   ctx.font = 'bold 22px monospace';
   ctx.textAlign = 'left';
-  ctx.fillText(`🪙 ${coins} coins`, 16, 40);
+  // On a phone there isn't room for the long labels before the buttons start,
+  // so the coin count goes short and the "holding" line steps aside - the drag
+  // button already shows what you're carrying.
+  const roomy = canvas.width >= 560;
+  ctx.fillText(roomy ? `🪙 ${coins} coins` : `🪙 ${coins}`, 16, HEADER + 40);
   const sel = CROPS[selected];
-  ctx.fillStyle = '#cfe8cf';
-  ctx.font = '15px monospace';
-  ctx.fillText('holding: ' + (sel ? sel.icon + ' ' + sel.name + ' seed' : '🚿 watering can'),
-               190, 38);
+  if (roomy) {
+    ctx.fillStyle = '#cfe8cf';
+    ctx.font = '15px monospace';
+    ctx.fillText('holding: ' + (sel ? sel.icon + ' ' + sel.name + ' seed' : '🚿 watering can'),
+                 190, HEADER + 38);
+  }
   const sb = shopBtnRect();
   ctx.fillStyle = '#7a5a1f';
   ctx.fillRect(sb.x, sb.y, sb.w, sb.h);
