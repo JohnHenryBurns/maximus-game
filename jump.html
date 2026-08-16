@@ -390,9 +390,29 @@ let hoverPt = null;
 let uiRects = [];
 
 let pendingPlat = null;   // a platform waiting for its second tap
+let resetArmUntil = 0;    // RESET asks "REALLY?" — this is its deadline
+
+function freshLevel() {
+  edit = { tiles: new Set(), beans: [], sniffers: [], spikes: [], turds: [],
+           crumbles: [], platforms: [], bouncers: [],
+           start: [2, 12], exit: [16, 12] };
+  for (let i = 0; i < 19; i++) edit.tiles.add(i + ',13');
+  saveCustom();
+  editCamX = edit.start[0] * TILE - canvas.width / 2;
+  editCamY = edit.start[1] * TILE - canvas.height / 2;
+}
 
 function uiAction(id) {
   pendingPlat = null;
+  if (id === 'reset') {
+    // wiping a level is a big deal — you have to say it twice
+    if (performance.now() < resetArmUntil) {
+      freshLevel();
+      resetArmUntil = 0;
+    } else resetArmUntil = performance.now() + 3000;
+    return;
+  }
+  resetArmUntil = 0;      // tapping anything else stands down the reset
   if (id === 'build') {
     mode = 'build';
     editCamX = edit.start[0] * TILE - canvas.width / 2;
@@ -1315,19 +1335,25 @@ function drawEditor() {
   ctx.fillStyle = 'rgba(10, 7, 5, 0.85)';
   ctx.fillRect(0, 0, W, 96);
   let bx = 8, by = 8;
-  const all = TOOLS.concat([['test', '▶ TEST'], ['story', 'STORY']]);
+  const resetArmed = performance.now() < resetArmUntil;
+  const all = TOOLS.concat([['test', '▶ TEST'], ['story', 'STORY'],
+                            ['reset', resetArmed ? 'REALLY?' : 'RESET']]);
   for (const [id, label] of all) {
     const bw = Math.max(64, label.length * 11 + 20);
     if (bx + bw > W - 8) { bx = 8; by += 42; }
     uiRects.push({ x: bx, y: by, w: bw, h: 38, id });
     const active = tool === id;
-    ctx.fillStyle = id === 'test' ? 'rgba(125, 223, 143, 0.2)'
+    const danger = id === 'reset' && resetArmed;
+    ctx.fillStyle = danger ? 'rgba(232, 69, 60, 0.35)'
+                  : id === 'test' ? 'rgba(125, 223, 143, 0.2)'
                   : active ? 'rgba(255, 210, 63, 0.25)' : 'rgba(255, 255, 255, 0.07)';
     ctx.fillRect(bx, by, bw, 38);
-    ctx.strokeStyle = id === 'test' ? '#7ddf8f' : active ? '#ffd23f' : '#5a5450';
+    ctx.strokeStyle = danger ? '#e8453c'
+                    : id === 'test' ? '#7ddf8f' : active ? '#ffd23f' : '#5a5450';
     ctx.lineWidth = 2;
     ctx.strokeRect(bx, by, bw, 38);
-    ctx.fillStyle = id === 'test' ? '#7ddf8f' : active ? '#ffd23f' : '#c8c0b8';
+    ctx.fillStyle = danger ? '#ff9f97'
+                  : id === 'test' ? '#7ddf8f' : active ? '#ffd23f' : '#c8c0b8';
     ctx.font = 'bold 14px monospace';
     ctx.textAlign = 'center';
     ctx.fillText(label, bx + bw / 2, by + 25);
