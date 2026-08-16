@@ -91,6 +91,20 @@ function deepRoar() {
 }
 
 // ---------------------------------------------------------------------
+// GAME STATE — 'menu' shows the level cards, 'playing' is the deep
+// ---------------------------------------------------------------------
+let screen = 'menu';
+let lockedTimer = 0;
+let lockedText = '';
+let menuCards = [];      // filled each frame so taps know where the cards are
+
+const LEVELS2 = [
+  { name: 'Abyssal Madness', unlocked: true },
+  { name: '???', unlocked: false },
+  { name: '???', unlocked: false },
+];
+
+// ---------------------------------------------------------------------
 // THE CAVERN — one vast dark world beneath the bottom of everything
 // ---------------------------------------------------------------------
 const WORLD_W = 2400, WORLD_H = 2400;
@@ -181,28 +195,52 @@ let armorRegen = 0;
 // CAVE BATS: they fly (rocks mean nothing to them), swoop fast, pop in
 // one hit. ROCK CRAWLERS: armored beetles of living stone. Slow. Tough.
 let bats = [];
-for (let i = 0; i < 500 && bats.length < 12; i++) {
-  const x = noise(i * 61.3 + 11) * WORLD_W;
-  const y = noise(i * 37.9 + 11) * WORLD_H;
-  if (Math.hypot(x - START.x, y - START.y) < 350) continue;
-  if (Math.hypot(x - DOOR.x, y - DOOR.y) < 300) continue;
-  bats.push({ x, y, hp: 1, wander: noise(i) * 6.28, flap: noise(i * 2) * 6.28,
-              lastHitSwing: 0, hurtFlash: 0 });
-}
 let crawlers = [];
-for (let i = 0; i < 500 && crawlers.length < 8; i++) {
-  const x = noise(i * 43.9 + 13) * WORLD_W;
-  const y = noise(i * 29.3 + 13) * WORLD_H;
-  if (Math.hypot(x - START.x, y - START.y) < 350) continue;
-  if (Math.hypot(x - DOOR.x, y - DOOR.y) < 300) continue;
-  if (blocked(x, y, 10)) continue;
-  crawlers.push({ x, y, hp: 3, wander: noise(i * 1.7) * 6.28,
-                  lastHitSwing: 0, hurtFlash: 0 });
-}
-
 let emeralds = [];
 let particles = [];
 let emeraldCount = 0;
+
+// fill the cavern fresh — called every time you enter the level
+function buildCavern() {
+  bats = [];
+  for (let i = 0; i < 500 && bats.length < 12; i++) {
+    const x = noise(i * 61.3 + 11) * WORLD_W;
+    const y = noise(i * 37.9 + 11) * WORLD_H;
+    if (Math.hypot(x - START.x, y - START.y) < 350) continue;
+    if (Math.hypot(x - DOOR.x, y - DOOR.y) < 300) continue;
+    bats.push({ x, y, hp: 1, wander: noise(i) * 6.28, flap: noise(i * 2) * 6.28,
+                lastHitSwing: 0, hurtFlash: 0 });
+  }
+  crawlers = [];
+  for (let i = 0; i < 500 && crawlers.length < 8; i++) {
+    const x = noise(i * 43.9 + 13) * WORLD_W;
+    const y = noise(i * 29.3 + 13) * WORLD_H;
+    if (Math.hypot(x - START.x, y - START.y) < 350) continue;
+    if (Math.hypot(x - DOOR.x, y - DOOR.y) < 300) continue;
+    if (blocked(x, y, 10)) continue;
+    crawlers.push({ x, y, hp: 3, wander: noise(i * 1.7) * 6.28,
+                    lastHitSwing: 0, hurtFlash: 0 });
+  }
+  emeralds = [];
+  particles = [];
+  emeraldCount = 0;
+  player.x = START.x;
+  player.y = START.y;
+  player.hp = player.maxHp;
+  player.armor = armorMax();
+}
+
+function startLevel(i) {
+  if (!LEVELS2[i] || !LEVELS2[i].unlocked) {
+    lockedText = i === 1 ? 'Find what waits behind the Door first...'
+                         : "You haven't invented that level yet!";
+    lockedTimer = 2;
+    return;
+  }
+  buildCavern();
+  roarTimer = 8;
+  screen = 'playing';
+}
 
 // ---------------------------------------------------------------------
 // THE ROAR — it found you. it's counting the minutes.
@@ -216,15 +254,45 @@ let elapsed = 0;
 // CONTROLS — keyboard + touch, same as the first adventure
 // ---------------------------------------------------------------------
 const keys = {};
-addEventListener('keydown', e => { ensureAudio(); keys[e.key.toLowerCase()] = true;
-  if (e.key === ' ') swing(); });
+addEventListener('keydown', e => {
+  ensureAudio();
+  keys[e.key.toLowerCase()] = true;
+  if (screen === 'menu') {
+    const n = parseInt(e.key) - 1;
+    if (n >= 0 && n < LEVELS2.length) startLevel(n);
+  } else if (e.key === 'Escape') {
+    screen = 'menu';
+  } else if (e.key === ' ') {
+    swing();
+  }
+});
 addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
-addEventListener('click', () => { ensureAudio(); swing(); });
+addEventListener('click', e => {
+  ensureAudio();
+  if (screen === 'menu') {
+    for (let i = 0; i < menuCards.length; i++) {
+      const r = menuCards[i];
+      if (e.clientX > r.x && e.clientX < r.x + r.w &&
+          e.clientY > r.y && e.clientY < r.y + r.h) { startLevel(i); return; }
+    }
+  } else {
+    swing();
+  }
+});
 
 let stick = null;
 addEventListener('touchstart', e => {
   e.preventDefault();
   ensureAudio();
+  if (screen === 'menu') {
+    const t = e.changedTouches[0];
+    for (let i = 0; i < menuCards.length; i++) {
+      const r = menuCards[i];
+      if (t.clientX > r.x && t.clientX < r.x + r.w &&
+          t.clientY > r.y && t.clientY < r.y + r.h) { startLevel(i); return; }
+    }
+    return;
+  }
   for (const t of e.changedTouches) {
     if (Math.hypot(t.clientX - (innerWidth - 70), t.clientY - (innerHeight - 70)) < 50) {
       swing();
@@ -795,12 +863,100 @@ function drawHeart(hx, hy, full, color) {
 // ---------------------------------------------------------------------
 // THE GAME LOOP
 // ---------------------------------------------------------------------
+// ---------------------------------------------------------------------
+// THE MENU — deep-dark level select for the sequel era
+// ---------------------------------------------------------------------
+function drawMenu(dt) {
+  elapsed += dt;
+  if (lockedTimer > 0) lockedTimer -= dt;
+  const W = canvas.width, H = canvas.height;
+
+  ctx.fillStyle = '#0a0912';
+  ctx.fillRect(0, 0, W, H);
+  // drifting cave-glow specks instead of stars — we're UNDER everything now
+  for (let i = 0; i < 90; i++) {
+    const tw = 0.3 + noise(i) * 0.7;
+    const col = noise(i * 3.1) < 0.6 ? `rgba(110, 220, 240, ${tw * 0.5})`
+                                     : `rgba(180, 130, 255, ${tw * 0.5})`;
+    ctx.fillStyle = col;
+    ctx.fillRect(Math.floor(noise(i * 3.3) * W),
+                 Math.floor((noise(i * 7.7) * H + elapsed * (2 + noise(i) * 4)) % H), 2, 2);
+  }
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ff6b5e';
+  ctx.font = `bold ${Math.min(56, W / 10)}px monospace`;
+  ctx.fillText('THE EXPLORER 2', W / 2, H * 0.2);
+  ctx.fillStyle = '#9fb4ff';
+  ctx.font = '18px monospace';
+  ctx.fillText('— beneath the abyss —', W / 2, H * 0.2 + 34);
+
+  // your carried-over legend, right on the title screen
+  const gear = [];
+  if (hasChippy) gear.push('Chippy');
+  else if (hasGoldSword) gear.push('Golden Sword');
+  if (hasGeckoArmor) gear.push('Gecko Skin Armor');
+  else if (hasInfectedArmor) gear.push('Infected Armor');
+  else if (hasArmor) gear.push('Plate Armor');
+  ctx.fillStyle = '#7ddf8f';
+  ctx.font = '14px monospace';
+  ctx.fillText(gear.length ? '⚔ your legend carries over: ' + gear.join(' · ')
+                           : 'no Explorer 1 save found — a brand new legend begins',
+               W / 2, H * 0.2 + 62);
+
+  // the level cards
+  const count = LEVELS2.length;
+  const cw = Math.min(210, W / (count + 1.5)), chh = cw * 0.75, gap = cw * 0.15;
+  const totalW = cw * count + gap * (count - 1);
+  menuCards = [];
+  for (let i = 0; i < count; i++) {
+    const cx = W / 2 - totalW / 2 + i * (cw + gap);
+    const cy = H * 0.42;
+    menuCards.push({ x: cx, y: cy, w: cw, h: chh });
+    const lv = LEVELS2[i];
+    ctx.fillStyle = lv.unlocked ? '#1d2d4d' : '#20233d';
+    ctx.fillRect(cx, cy, cw, chh);
+    ctx.strokeStyle = lv.unlocked ? '#7fd4ff' : '#3a3f66';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(cx, cy, cw, chh);
+    ctx.fillStyle = lv.unlocked ? '#ffffff' : '#666b99';
+    ctx.font = `bold ${chh * 0.25}px monospace`;
+    ctx.fillText(String(i + 1), cx + cw / 2, cy + chh * 0.35);
+    ctx.font = `${Math.min(chh * 0.13, (cw * 1.55) / lv.name.length)}px monospace`;
+    ctx.fillText(lv.name, cx + cw / 2, cy + chh * 0.62);
+    ctx.font = `${chh * 0.11}px monospace`;
+    ctx.fillText(lv.unlocked ? `press ${i + 1} or tap` : 'locked',
+                 cx + cw / 2, cy + chh * 0.85);
+  }
+
+  if (lockedTimer > 0) {
+    ctx.fillStyle = '#ff9f43';
+    ctx.font = '17px monospace';
+    ctx.fillText(lockedText, W / 2, H * 0.42 + chh + 44);
+  }
+
+  // a slow, ominous heartbeat of red at the bottom of the screen
+  const pulse = 0.15 + Math.sin(elapsed * 1.4) * 0.1;
+  const grad = ctx.createLinearGradient(0, H - 140, 0, H);
+  grad.addColorStop(0, 'rgba(255, 70, 40, 0)');
+  grad.addColorStop(1, `rgba(255, 70, 40, ${pulse})`);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, H - 140, W, 140);
+  ctx.fillStyle = 'rgba(255, 150, 120, 0.5)';
+  ctx.font = '13px monospace';
+  ctx.fillText('...something down there is still roaring...', W / 2, H - 20);
+}
+
 let lastTime = 0;
 function loop(time) {
   const dt = Math.min(0.05, (time - lastTime) / 1000);
   lastTime = time;
-  update(dt);
-  draw();
+  if (screen === 'menu') {
+    drawMenu(dt);
+  } else {
+    update(dt);
+    draw();
+  }
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);
