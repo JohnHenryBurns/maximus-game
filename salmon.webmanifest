@@ -1,0 +1,18 @@
+{
+  "name": "Salmon",
+  "short_name": "Salmon",
+  "start_url": "salmon.html",
+  "scope": "./",
+  "display": "fullscreen",
+  "orientation": "any",
+  "background_color": "#0b1c26",
+  "theme_color": "#0b1c26",
+  "icons": [
+    {
+      "src": "icon-salmon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
