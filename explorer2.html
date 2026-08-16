@@ -290,6 +290,8 @@ function startLevel(i) {
   }
   buildCavern();
   roarTimer = 8;
+  doorDone = false;
+  doorBanner = 0;
   screen = 'playing';
 }
 
@@ -298,7 +300,8 @@ function startLevel(i) {
 // ---------------------------------------------------------------------
 let roarTimer = 8;         // the cave says hello early
 let roarShake = 0;
-let doorBanner = 0;        // the chapter-complete celebration timer
+let doorBanner = 0;        // the level-complete celebration timer
+let doorDone = false;      // reached the Door THIS run?
 let elapsed = 0;
 
 // ---------------------------------------------------------------------
@@ -377,7 +380,10 @@ function update(dt) {
   if (player.attackTime > 0) player.attackTime -= dt;
   if (player.hurtTimer > 0) player.hurtTimer -= dt;
   if (roarShake > 0) roarShake -= dt;
-  if (doorBanner > 0) doorBanner -= dt;
+  if (doorBanner > 0) {
+    doorBanner -= dt;
+    if (doorBanner <= 0) screen = 'menu';   // level beaten — back to the cards
+  }
 
   // THE ROAR — every so often, from the north. always from the north.
   roarTimer -= dt;
@@ -659,11 +665,12 @@ function update(dt) {
   }
   particles = particles.filter(p => p.life > 0);
 
-  // ---- THE DOOR — chapter one's destination ----
-  if (!foundDoor && player.deathTimer <= 0 &&
+  // ---- THE DOOR — reach it and Abyssal Madness is BEATEN ----
+  if (!doorDone && player.deathTimer <= 0 &&
       Math.hypot(player.x - DOOR.x, player.y - DOOR.y) < 150) {
+    doorDone = true;
     foundDoor = true;
-    localStorage.setItem('explorer2_door', 'yes');
+    localStorage.setItem('explorer2_door', 'yes');   // remembered forever
     doorBanner = 8;
   }
 }
@@ -1180,7 +1187,7 @@ function drawHUD() {
     ctx.textAlign = 'center';
     ctx.fillStyle = '#ffd23f';
     ctx.font = 'bold 34px monospace';
-    ctx.fillText('CHAPTER 1 COMPLETE', canvas.width / 2, canvas.height / 2 - 50);
+    ctx.fillText('LEVEL 1 COMPLETE — ABYSSAL MADNESS', canvas.width / 2, canvas.height / 2 - 50);
     ctx.fillStyle = '#ffffff';
     ctx.font = 'bold 20px monospace';
     ctx.fillText('You found the Door at the bottom of everything.', canvas.width / 2, canvas.height / 2);
