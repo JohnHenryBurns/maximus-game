@@ -176,7 +176,42 @@ let storyTimer = 0;
 // THE FACTORY — one big dark building, seen from above
 // ---------------------------------------------------------------------
 const WORLD_W = 2200, WORLD_H = 1800;
-const START = { x: 300, y: 1500 };
+let START = { x: 300, y: 1500 };     // moves per chapter — the maze starts elsewhere
+
+// CHAPTER 4's memory-maze: one long winding corridor plus the side
+// stubs where the levers hide. Walls hug every bend.
+const M4 = [
+  [ // the long way through the memory
+    { x: 200, y: 1650 }, { x: 200, y: 1250 }, { x: 500, y: 1150 },
+    { x: 520, y: 850 },  { x: 300, y: 700 },  { x: 330, y: 380 },
+    { x: 700, y: 300 },  { x: 1000, y: 420 }, { x: 1050, y: 750 },
+    { x: 800, y: 900 },  { x: 850, y: 1250 }, { x: 1200, y: 1350 },
+    { x: 1500, y: 1200 }, { x: 1480, y: 850 }, { x: 1250, y: 700 },
+    { x: 1300, y: 400 }, { x: 1700, y: 330 }, { x: 2000, y: 500 },
+    { x: 1980, y: 900 }, { x: 1750, y: 1050 }, { x: 1800, y: 1400 },
+    { x: 2000, y: 1600 },
+  ],
+  [{ x: 200, y: 1650 }, { x: 430, y: 1600 }],    // lever stub 1
+  [{ x: 500, y: 1150 }, { x: 720, y: 1180 }],    // lever stub 2
+  [{ x: 700, y: 300 },  { x: 680, y: 140 }],     // lever stub 3
+  [{ x: 1700, y: 330 }, { x: 1560, y: 150 }],    // lever stub 4
+];
+const SLEEP4 = { x: 2000, y: 1600 };   // the maze ends where the story began
+let doors = [];        // sealed until their lever is pulled
+let levers = [];       // color-matched to their doors
+
+function m4dist(x, y) {
+  let best = 999999;
+  for (const path of M4) {
+    for (let i = 0; i < path.length - 1; i++) {
+      const a = path[i], b = path[i + 1];
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / (dx * dx + dy * dy)));
+      best = Math.min(best, Math.hypot(x - (a.x + t * dx), y - (a.y + t * dy)));
+    }
+  }
+  return best;
+}
 
 // machines and crates — the solid furniture of the factory floor
 let blocks = [];
@@ -222,6 +257,69 @@ const RAILS = [
 let grace = 0;                // a moment of safety after it catches you
 
 function buildFactory() {
+  START = chapter === 3 ? { x: 200, y: 1600 } : { x: 300, y: 1500 };
+  doors = [];
+  levers = [];
+  fault = null;
+
+  // CHAPTER 4 gets its own map: the memory as a winding maze
+  if (chapter === 3) {
+    blocks = [];
+    // walls hugging every bend of every passage
+    for (let gx = 60; gx < WORLD_W - 40; gx += 36) {
+      for (let gy = 60; gy < WORLD_H - 40; gy += 36) {
+        const d = m4dist(gx, gy);
+        if (d < 95 || d > 140) continue;
+        blocks.push({ x: gx, y: gy, w: 30, h: 30, kind: 'wall' });
+      }
+    }
+    belts = [];
+    lamps = [];
+
+    // the four DOORS, sealed across the corridor...
+    doors = [
+      { x: 200,  y: 1400, w: 200, h: 26, id: 0, open: false },
+      { x: 515,  y: 990,  w: 200, h: 26, id: 1, open: false },
+      { x: 1035, y: 580,  w: 210, h: 26, id: 2, open: false },
+      { x: 1988, y: 700,  w: 200, h: 26, id: 3, open: false },
+    ];
+    // ...and the four LEVERS that open them, down the side stubs
+    levers = [
+      { x: 430,  y: 1600, id: 0, pulled: false },
+      { x: 720,  y: 1180, id: 1, pulled: false },
+      { x: 680,  y: 150,  id: 2, pulled: false },
+      { x: 1560, y: 160,  id: 3, pulled: false },
+    ];
+
+    // the four switches of that terrible night, spaced along the way
+    switches = [
+      { x: 300,  y: 700,  on: true },
+      { x: 850,  y: 1250, on: true },
+      { x: 1250, y: 700,  on: true },
+      { x: 1750, y: 1050, on: true },
+    ];
+    powered = 4;
+    leverPulled = true;                  // the memory-factory is alive
+    overseer = null;
+    fault = { x: 150, y: 1700, r: 120 }; // it starts right behind you
+
+    machineAwake = false;
+    awakeSeq = 0;
+    zapGrace = 0;
+    stun = 0;
+    carrying = null;
+    faultFlash = 0;
+    wokeTimer = 0;
+    endTimer = 0;
+    grace = 0;
+    saidName = false;
+    setScreech(0);
+    sparks = [];
+    player.x = START.x;
+    player.y = START.y;
+    return;
+  }
+
   // CHAPTER 3 gets its own map: the Machine's vault below the factory
   if (chapter === 2) {
     blocks = [];
@@ -336,19 +434,11 @@ function buildFactory() {
       downTimer: 0,          // the powering-down finale
       swing: 0,
     };
-  } else if (chapter === 3) {
-    // CHAPTER 4: the MEMORY of the factory, alive... with the Fault inside
-    leverPulled = true;
-    powered = 4;
-    for (const sw of switches) sw.on = true;
-    overseer = null;
-    fault = { x: 2050, y: 1560, r: 140 };    // it starts small. it doesn't stay small.
   } else {
     leverPulled = false;
     powered = 0;
     overseer = null;
   }
-  if (chapter !== 3) fault = null;
   wokeTimer = 0;
   endTimer = 0;
   grace = 0;
@@ -364,6 +454,10 @@ function blocked(x, y, r) {
   r = r || 13;
   for (const b of blocks) {
     if (Math.abs(x - b.x) < b.w / 2 + r && Math.abs(y - b.y) < b.h / 2 + r) return true;
+  }
+  // sealed doors block like walls. open doors are just floor.
+  for (const d of doors) {
+    if (!d.open && Math.abs(x - d.x) < d.w / 2 + r && Math.abs(y - d.y) < d.h / 2 + r) return true;
   }
   return false;
 }
@@ -551,8 +645,12 @@ function update(dt) {
     player.walkTime += dt;
     if (dx > 0.1) player.facing = 1;
     if (dx < -0.1) player.facing = -1;
-    const nx = player.x + dx * player.speed * dt;
-    const ny = player.y + dy * player.speed * dt;
+    // inside the Fault, the memory turns to static — you wade, half speed
+    const inFault = chapter === 3 && fault &&
+      Math.hypot(player.x - fault.x, player.y - fault.y) < fault.r;
+    const spd = player.speed * (inFault ? 0.5 : 1);
+    const nx = player.x + dx * spd * dt;
+    const ny = player.y + dy * spd * dt;
     if (!blocked(nx, player.y)) player.x = nx;
     if (!blocked(player.x, ny)) player.y = ny;
     player.x = Math.max(80, Math.min(WORLD_W - 80, player.x));
@@ -595,21 +693,30 @@ function update(dt) {
   // ---- CHAPTER 4: the memory of the night everything went dark ----
   if (chapter === 3 && fault) {
     if (faultFlash > 0) faultFlash -= dt;
-    // the Fault spreads. slowly. always.
-    fault.r = Math.min(950, fault.r + 20 * dt);
+
+    // pull a lever, open its door — somewhere, metal grinds aside
+    for (const lv of levers) {
+      if (lv.pulled) continue;
+      if (Math.hypot(player.x - lv.x, player.y - lv.y) < 34) {
+        lv.pulled = true;
+        for (const d of doors) if (d.id === lv.id) d.open = true;
+        for (let k = 0; k < 14; k++) {
+          sparks.push({ x: lv.x, y: lv.y - 10, vx: (Math.random() - 0.5) * 160,
+                        vy: -Math.random() * 130, life: 0.6,
+                        color: k % 2 ? M4_COLORS[lv.id] : '#ffffff' });
+        }
+      }
+    }
+
+    // the Fault holds still until the shutdown begins... then it spreads.
+    // slowly. always. behind you.
+    if (powered < 4) fault.r = Math.min(1300, fault.r + 14 * dt);
     // touch it and the memory JOLTS — it can't hurt you. it remembers you.
     const fd = Math.hypot(player.x - fault.x, player.y - fault.y);
-    if (fd < fault.r + 12) {
-      faultFlash = 0.8;
-      const push = (fault.r + 60 - fd) / Math.max(1, fd);
-      const nx = player.x + (player.x - fault.x) * push;
-      const ny = player.y + (player.y - fault.y) * push;
-      if (!blocked(nx, player.y)) player.x = nx;
-      if (!blocked(player.x, ny)) player.y = ny;
-    }
+    if (fd < fault.r + 12) faultFlash = 0.8;
     // all four down — now walk to where you fell asleep, one last time
     if (powered <= 0 &&
-        Math.hypot(player.x - START.x, player.y - START.y) < 44) {
+        Math.hypot(player.x - SLEEP4.x, player.y - SLEEP4.y) < 44) {
       fault = null;                         // the memory releases you
       endTimer = 21;
       ch4Done = true;
@@ -822,6 +929,9 @@ function draw() {
   // the Machine's great face, decorated over its wall-body (chapter 3)
   if (chapter === 2) drawMachineFace(c);
 
+  // the memory-maze's doors and levers (chapter 4)
+  if (chapter === 3) drawMaze4(c);
+
   // THE FAULT, spreading through the memory (chapter 4)
   if (chapter === 3 && fault) drawFault(c);
 
@@ -922,7 +1032,7 @@ function draw() {
     }
     if (powered <= 0 && endTimer <= 0) {
       // the glowing spot where you fell asleep, all those years ago
-      const mx = START.x - c.x, my = START.y - c.y;
+      const mx = SLEEP4.x - c.x, my = SLEEP4.y - c.y;
       ctx.strokeStyle = `rgba(125, 211, 255, ${0.5 + Math.sin(elapsed * 3) * 0.4})`;
       ctx.lineWidth = 3;
       ctx.beginPath(); ctx.arc(mx, my, 34, 0, Math.PI * 2); ctx.stroke();
@@ -955,7 +1065,7 @@ function draw() {
                 : chapter === 1 ? (powered === 0 ? '#7ddf8f' : '#ff6b5e')
                 : powered >= 4 ? '#7ddf8f' : '#ffd23f';
   ctx.fillText(chapter === 3
-      ? (powered > 0 ? `THE MEMORY — shut it all down: ${powered}/4 still on`
+      ? (powered > 0 ? `THE MEMORY — levers open doors. shut it all down: ${powered}/4 on`
                      : 'go back to sleep, little one...')
       : chapter === 2
       ? (machineAwake ? 'IT IS AWAKE'
@@ -1038,6 +1148,53 @@ function draw() {
     }
   }
 
+}
+
+// colors that match each lever to its door — see one, remember the other
+const M4_COLORS = ['#e8453c', '#ffd23f', '#7ddf8f', '#b482ff'];
+
+// the memory-maze's doors and levers (chapter 4)
+function drawMaze4(c) {
+  for (const d of doors) {
+    const x = d.x - c.x, y = d.y - c.y;
+    if (d.open) {
+      // an open door is just a frame in the floor now
+      ctx.strokeStyle = 'rgba(140, 160, 190, 0.5)';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(x - d.w / 2, y - d.h / 2, d.w, d.h);
+      continue;
+    }
+    // a sealed slab of riveted metal with its color-band
+    ctx.fillStyle = '#3a4150';
+    ctx.fillRect(x - d.w / 2, y - d.h / 2 - 14, d.w, d.h + 14);
+    ctx.fillStyle = M4_COLORS[d.id];
+    ctx.fillRect(x - d.w / 2, y - 6, d.w, 8);
+    ctx.fillStyle = '#232833';
+    for (let rx = -d.w / 2 + 12; rx < d.w / 2; rx += 24) {
+      ctx.fillRect(x + rx, y - d.h / 2 - 9, 4, 4);
+    }
+  }
+  for (const lv of levers) {
+    const x = lv.x - c.x, y = lv.y - c.y;
+    // panel base
+    ctx.fillStyle = '#2c313d';
+    ctx.fillRect(x - 14, y - 8, 28, 18);
+    ctx.fillStyle = M4_COLORS[lv.id];
+    ctx.fillRect(x - 14, y + 6, 28, 4);
+    // the arm: up = waiting, down = pulled
+    ctx.strokeStyle = lv.pulled ? '#8a93a6' : M4_COLORS[lv.id];
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + (lv.pulled ? 12 : -10), y - (lv.pulled ? 4 : 20));
+    ctx.stroke();
+    if (!lv.pulled) {
+      const pu = 0.5 + Math.sin(elapsed * 4 + lv.id) * 0.4;
+      ctx.strokeStyle = `rgba(255, 255, 255, ${pu * 0.5})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(x, y, 24, 0, Math.PI * 2); ctx.stroke();
+    }
+  }
 }
 
 // THE FAULT — the dark thing, drawn as a slow-boiling stain with a
