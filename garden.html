@@ -70,6 +70,9 @@ for (let i = 0; i < PLOT_COLS * PLOT_ROWS; i++) plots.push(null);
 
 let coins = 20;
 let ownCan = false;          // bought the watering can yet?
+let ownScare = false;        // bought the scarecrow yet?
+let crow = null;             // the menace itself (null = clear skies)
+let crowTimer = 25;          // seconds until the next visit
 let selected = 'carrot';     // what tool/seed is in your hand
 let shopOpen = false;
 let sparkles = [];           // little celebration bits
@@ -90,12 +93,12 @@ function growthOf(plot) {
 // after every action, and reads itself back when the game opens.
 // ---------------------------------------------------------------------
 function save() {
-  localStorage.setItem('garden_save', JSON.stringify({ coins, ownCan, plots }));
+  localStorage.setItem('garden_save', JSON.stringify({ coins, ownCan, ownScare, plots }));
 }
 function load() {
   try {
     const d = JSON.parse(localStorage.getItem('garden_save'));
-    if (d) { coins = d.coins; ownCan = d.ownCan; plots = d.plots; }
+    if (d) { coins = d.coins; ownCan = d.ownCan; ownScare = !!d.ownScare; plots = d.plots; }
   } catch (e) {}                                // bad save? start fresh, no drama
 }
 load();
@@ -134,6 +137,12 @@ function shopItems() {
     info: ownCan ? 'OWNED — just tap growing plants to water!' : 'water makes plants grow 2x faster',
     cost: ownCan ? 0 : 30,
   });
+  items.push({
+    kind: 'gear', key: 'scare',
+    label: '🎃 Scarecrow',
+    info: ownScare ? 'OWNED — standing guard by your garden' : 'crows visit less and flee before they can eat',
+    cost: ownScare ? 0 : 80,
+  });
   return items;
 }
 function shopRects() {
@@ -162,6 +171,19 @@ function buyOrPick(item) {
       save();
     } else {
       setStatus("Not enough coins for the can yet — keep farming!");
+    }
+  } else if (item.key === 'scare') {
+    if (ownScare) {
+      setStatus('🎃 Your scarecrow is already on duty. Crows hate him.');
+      shopOpen = false;
+    } else if (coins >= 80) {
+      coins -= 80;
+      ownScare = true;
+      shopOpen = false;
+      setStatus('🎃 Scarecrow planted! Crows will think twice now.');
+      save();
+    } else {
+      setStatus('The scarecrow costs 80c — a few more harvests!');
     }
   }
 }
@@ -252,6 +274,12 @@ function press(px, py) {
     return;
   }
   if (inside(px, py, shopBtnRect())) { shopOpen = true; return; }
+  // clicked the crow?! SHOO!!
+  if (crow && crow.state !== 'flee' && Math.hypot(px - crow.x, py - crow.y) < 42) {
+    crow.state = 'flee';
+    setStatus('You shooed the crow away!! 🐦💨');
+    return;
+  }
   for (let i = 0; i < plots.length; i++) {
     if (inside(px, py, plotRect(i))) { tapPlot(i); return; }
   }
@@ -485,9 +513,83 @@ function drawPlant(plot, r) {
 }
 
 function draw(dt) {
+  // ---- THE CROW'S TINY EVIL BRAIN ----
+  if (!crow) {
+    crowTimer -= dt;
+    if (crowTimer <= 0) {
+      // scarecrow owners get visited half as often
+      crowTimer = (35 + Math.random() * 35) * (ownScare ? 2 : 1);
+      const targets = [];
+      for (let i = 0; i < plots.length; i++) if (plots[i]) targets.push(i);
+      if (targets.length) {
+        const t = targets[Math.floor(Math.random() * targets.length)];
+        const r = plotRect(t);
+        crow = {
+          state: 'fly', target: t,
+          x: Math.random() < 0.5 ? -40 : canvas.width + 40,
+          y: TOPBAR + 30 + Math.random() * 100,
+          tx: r.x + r.s / 2, ty: r.y + r.s * 0.55,
+          peck: 0, eat: 0, flap: 0,
+        };
+        setStatus('🐦 A crow is coming for your garden!! CLICK IT!');
+      }
+    }
+  } else {
+    crow.flap += dt * 12;
+    if (crow.state === 'fly') {
+      const d = Math.hypot(crow.tx - crow.x, crow.ty - crow.y);
+      if (d < 6) crow.state = 'peck';
+      else {
+        crow.x += (crow.tx - crow.x) / d * 260 * dt;
+        crow.y += (crow.ty - crow.y) / d * 260 * dt;
+      }
+      if (!plots[crow.target]) crow.state = 'flee';   // target gone mid-flight
+    } else if (crow.state === 'peck') {
+      crow.eat += dt;
+      crow.peck += dt * 8;
+      if (ownScare && crow.eat > 2.5) {
+        crow.state = 'flee';                     // the pumpkin face strikes fear
+        setStatus('🎃 The scarecrow spooked the crow away!');
+      } else if (!plots[crow.target]) {
+        crow.state = 'flee';                     // you harvested it first — HA
+      } else if (crow.eat >= 6) {
+        const eaten = CROPS[plots[crow.target].type];
+        plots[crow.target] = null;
+        save();
+        setStatus('🐦 The crow ATE your ' + eaten.name + '!! So rude.');
+        for (let k = 0; k < 10; k++) {
+          sparkles.push({ x: crow.x, y: crow.y,
+            vx: (Math.random() - 0.5) * 200, vy: -Math.random() * 200,
+            life: 0.7, color: k % 2 ? '#2a2a30' : '#4a7c3a' });
+        }
+        crow.state = 'flee';
+      }
+    } else if (crow.state === 'flee') {
+      crow.x += (crow.x < canvas.width / 2 ? -1 : 1) * 380 * dt;
+      crow.y -= 140 * dt;
+      if (crow.x < -60 || crow.x > canvas.width + 60) crow = null;
+    }
+  }
+
   // lawn
   ctx.fillStyle = '#568a3f';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // the scarecrow, standing guard beside the garden (once you own it)
+  if (ownScare) {
+    const r0 = plotRect(0);
+    const sx = r0.x - 42, sy = r0.y + 14;
+    ctx.strokeStyle = '#6d5330'; ctx.lineWidth = 4;    // pole and arms
+    ctx.beginPath(); ctx.moveTo(sx, sy + 52); ctx.lineTo(sx, sy); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(sx - 17, sy + 14); ctx.lineTo(sx + 17, sy + 14); ctx.stroke();
+    ctx.fillStyle = '#c9a83c';                         // straw hands
+    ctx.fillRect(sx - 21, sy + 11, 6, 7); ctx.fillRect(sx + 15, sy + 11, 6, 7);
+    ctx.fillStyle = '#ff8f2b';                         // the pumpkin head
+    ctx.beginPath(); ctx.ellipse(sx, sy - 6, 12, 10, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#4a3520';                         // spooky face
+    ctx.fillRect(sx - 6, sy - 10, 3.5, 3.5); ctx.fillRect(sx + 2.5, sy - 10, 3.5, 3.5);
+    ctx.fillRect(sx - 4.5, sy - 3, 9, 2.5);
+  }
 
   // the plots
   for (let i = 0; i < plots.length; i++) {
@@ -528,6 +630,41 @@ function draw(dt) {
   }
   ctx.globalAlpha = 1;
   sparkles = sparkles.filter(sp => sp.life > 0);
+
+  // ---- THE CROW ITSELF ----
+  if (crow) {
+    const flapW = Math.sin(crow.flap) * (crow.state === 'peck' ? 2 : 8);
+    const peckDip = crow.state === 'peck' ? Math.max(0, Math.sin(crow.peck)) * 6 : 0;
+    ctx.fillStyle = 'rgba(0,0,0,0.2)';
+    ctx.beginPath(); ctx.ellipse(crow.x, crow.y + 14, 12, 4, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#23242c';                         // glossy black body
+    ctx.beginPath(); ctx.ellipse(crow.x, crow.y, 11, 8, 0, 0, Math.PI * 2); ctx.fill();
+    // wings — big beats in flight, tucked-in twitches while eating
+    ctx.beginPath(); ctx.ellipse(crow.x - 6, crow.y - 4, 9, 4 + flapW * 0.4, -0.6, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(crow.x + 6, crow.y - 4, 9, 4 + flapW * 0.4, 0.6, 0, Math.PI * 2); ctx.fill();
+    // head dips with every peck
+    ctx.beginPath(); ctx.arc(crow.x + 8, crow.y - 6 + peckDip, 5.5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#ff9f43';                         // the beak
+    ctx.beginPath();
+    ctx.moveTo(crow.x + 12, crow.y - 6 + peckDip);
+    ctx.lineTo(crow.x + 19, crow.y - 4 + peckDip);
+    ctx.lineTo(crow.x + 12, crow.y - 2 + peckDip);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#fff';                            // one beady, guilty eye
+    ctx.beginPath(); ctx.arc(crow.x + 9, crow.y - 7 + peckDip, 1.6, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#000';
+    ctx.beginPath(); ctx.arc(crow.x + 9.5, crow.y - 7 + peckDip, 0.8, 0, Math.PI * 2); ctx.fill();
+    // the danger ring while it's eating — CLICK IT!!
+    if (crow.state === 'peck') {
+      ctx.strokeStyle = `rgba(255, 80, 60, ${0.5 + Math.sin(elapsed * 8) * 0.4})`;
+      ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(crow.x, crow.y, 24, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = '#ff6b5e';
+      ctx.font = 'bold 14px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('CLICK ME!', crow.x, crow.y - 28);
+    }
+  }
 
   // top bar
   ctx.fillStyle = '#1d3020';
