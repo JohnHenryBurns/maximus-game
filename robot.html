@@ -162,7 +162,7 @@ const CHAPTERS = [
   { name: 'The Factory', unlocked: true },
   { name: 'The Overseer', unlocked: ch1Done },
   { name: 'The Machine', unlocked: ch2Done },
-  { name: '???', unlocked: false },
+  { name: 'The Truth', unlocked: ch3Done },
 ];
 let chapter = 0;
 
@@ -424,8 +424,14 @@ function startChapter(i) {
   if (!CHAPTERS[i] || !CHAPTERS[i].unlocked) {
     lockedText = i === 1 ? 'Finish Chapter 1 first — turn the power on!'
                : i === 2 ? 'Finish Chapter 2 first — silence the Overseer!'
+               : i === 3 ? 'Finish Chapter 3 first — wake the Machine!'
                : "That chapter hasn't been written yet...";
     lockedTimer = 2;
+    return;
+  }
+  if (i === 3) {
+    lockedText = 'THE TRUTH is still being written... only the author knows it.';
+    lockedTimer = 3;
     return;
   }
   chapter = i;
@@ -615,6 +621,7 @@ function update(dt) {
         endTimer = 16;
         ch3Done = true;
         localStorage.setItem('robot_ch3', 'yes');
+        CHAPTERS[3].unlocked = true;         // THE TRUTH can now be told
         sayDeep(['unit. thirteen.', 'my little one.', 'you came back.'], 11);
       }
     }
