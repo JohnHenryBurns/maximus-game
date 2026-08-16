@@ -344,8 +344,18 @@ function applyTool(sx, sy) {
   saveCustom();                         // every change is saved instantly
 }
 
+// every finger/mouse currently touching the screen, by id — because
+// TWO fingers swiping means "move the view", not "paint twice"
+const pointers = new Map();
+function pointerMid() {
+  let mx = 0, my = 0;
+  for (const p of pointers.values()) { mx += p.x; my += p.y; }
+  return { x: mx / pointers.size, y: my / pointers.size };
+}
+
 addEventListener('pointerdown', e => {
   ensureAudio();
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   for (const r of uiRects) {
     if (e.clientX > r.x && e.clientX < r.x + r.w &&
         e.clientY > r.y && e.clientY < r.y + r.h) { uiAction(r.id); return; }
@@ -354,20 +364,48 @@ addEventListener('pointerdown', e => {
     if (won) resetLevel();              // a mouse-click restart, too
     return;
   }
-  if (tool === 'pan') { panLast = { x: e.clientX, y: e.clientY }; return; }
+  if (pointers.size >= 2) {
+    // a second finger landed: stop painting, start swiping the view
+    painting = false;
+    panLast = pointerMid();
+    return;
+  }
+  if (tool === 'pan' || e.button === 2) {
+    panLast = { x: e.clientX, y: e.clientY };
+    return;
+  }
   painting = true;
   applyTool(e.clientX, e.clientY);
 });
 addEventListener('pointermove', e => {
+  if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (mode !== 'build') return;
   hoverPt = { x: e.clientX, y: e.clientY };
+  if (pointers.size >= 2) {
+    // two-finger swipe: the view follows the midpoint of your fingers
+    const mid = pointerMid();
+    if (panLast) {
+      editCamX -= mid.x - panLast.x;
+      editCamY -= mid.y - panLast.y;
+    }
+    panLast = mid;
+    return;
+  }
   if (panLast) {
     editCamX -= e.clientX - panLast.x;
     editCamY -= e.clientY - panLast.y;
     panLast = { x: e.clientX, y: e.clientY };
   } else if (painting) applyTool(e.clientX, e.clientY);
 });
-addEventListener('pointerup', () => { painting = false; panLast = null; });
+function dropPointer(e) {
+  pointers.delete(e.pointerId);
+  painting = false;
+  panLast = null;
+}
+addEventListener('pointerup', dropPointer);
+addEventListener('pointercancel', dropPointer);
+// right-click drag is a pan, not a browser menu
+addEventListener('contextmenu', e => e.preventDefault());
 
 // ---------------------------------------------------------------------
 // PHYSICS — the invisible rules that make jumping feel GOOD
@@ -879,7 +917,7 @@ function drawEditor() {
   ctx.textAlign = 'left';
   ctx.fillStyle = 'rgba(255,255,255,0.45)';
   ctx.font = '13px monospace';
-  ctx.fillText('pick a tool, then tap or drag on the grid — PAN (or arrow keys) moves around — everything saves itself',
+  ctx.fillText('tap or drag to place — swipe with TWO fingers (or right-drag, or arrow keys) to look around — everything saves itself',
                10, by + 60 > 90 ? by + 52 : 88);
 }
 
