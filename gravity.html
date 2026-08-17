@@ -423,10 +423,54 @@ function update(dt) {
 }
 
 // ---------------------------------------------------------------------
-// INPUT — toolbar buttons, placing, and GRABBING
+// INPUT — toolbar buttons, placing, GRABBING, and erasing
 // ---------------------------------------------------------------------
 let tool = 'person';
 let uiRects = [];
+let erasing = false;
+
+// remove whatever's under the eraser, one thing per tap
+function eraseAt(x, y) {
+  const puff = (px2, py2) => {
+    for (let i = 0; i < 8; i++) {
+      const a = Math.random() * Math.PI * 2;
+      particles.push({ x: px2, y: py2, vx: Math.cos(a) * 90, vy: Math.sin(a) * 90 - 40,
+                       life: 0.35, color: '#8a8fa0' });
+    }
+    beep(500, 0.05, 'sine', 0.07);
+  };
+  for (let i = launchers.length - 1; i >= 0; i--) {
+    if (Math.hypot(launchers[i].x - x, launchers[i].y - y) < 44) {
+      puff(launchers[i].x, launchers[i].y);
+      launchers.splice(i, 1);
+      return true;
+    }
+  }
+  for (let i = holes.length - 1; i >= 0; i--) {
+    if (Math.hypot(holes[i].x - x, holes[i].y - y) < 44) {
+      puff(holes[i].x, holes[i].y);
+      holes.splice(i, 1);
+      return true;
+    }
+  }
+  for (let i = bodies.length - 1; i >= 0; i--) {
+    const b = bodies[i];
+    if (Math.hypot(b.x - x, b.y - y) < b.r + 20) {
+      puff(b.x, b.y);
+      bodies.splice(i, 1);
+      return true;
+    }
+  }
+  for (let i = spikes.length - 1; i >= 0; i--) {
+    const s = spikes[i];
+    if (x > s.x - 8 && x < s.x + 54 && y > s.y - 12 && y < s.y + 54) {
+      puff(s.x + 23, s.y + 23);
+      spikes.splice(i, 1);
+      return true;
+    }
+  }
+  return false;
+}
 
 addEventListener('pointerdown', e => {
   ensureAudio();
@@ -457,6 +501,12 @@ addEventListener('pointerdown', e => {
     }
   }
   pointer = { x: e.clientX, y: e.clientY };
+  // the eraser takes priority over grabbing — tap or sweep to remove
+  if (tool === 'erase') {
+    erasing = true;
+    eraseAt(e.clientX, e.clientY);
+    return;
+  }
   // black holes can be grabbed and walked like a very dangerous dog
   for (const h of holes) {
     if (Math.hypot(h.x - e.clientX, h.y - e.clientY) < 44) {
@@ -486,9 +536,12 @@ addEventListener('pointerdown', e => {
   else if (tool === 'hole') addHole(e.clientX, e.clientY);
   else if (tool === 'launcher') addLauncher(e.clientX, e.clientY);
 });
-addEventListener('pointermove', e => { pointer = { x: e.clientX, y: e.clientY }; });
-addEventListener('pointerup', () => { grabbed = null; grabbedHole = null; grabbedLauncher = null; });
-addEventListener('pointercancel', () => { grabbed = null; grabbedHole = null; grabbedLauncher = null; });
+addEventListener('pointermove', e => {
+  pointer = { x: e.clientX, y: e.clientY };
+  if (erasing) eraseAt(e.clientX, e.clientY);
+});
+addEventListener('pointerup', () => { grabbed = null; grabbedHole = null; grabbedLauncher = null; erasing = false; });
+addEventListener('pointercancel', () => { grabbed = null; grabbedHole = null; grabbedLauncher = null; erasing = false; });
 
 // ---------------------------------------------------------------------
 // DRAWING
@@ -706,6 +759,7 @@ function draw() {
     ['spike', '⚠ SPIKE'], ['hole', '🕳 HOLE'], ['launcher', '💥 LAUNCHER'],
     ['gravity', gravityOn ? '🌍 GRAVITY: ON' : '🚀 GRAVITY: OFF'],
     ['time', timeOn ? '⏱ TIME: ON' : '❄ TIME: FROZEN'],
+    ['erase', '🧽 ERASE'],
     ['clear', '✖ CLEAR'],
   ];
   let bx = 8, by = 8;
