@@ -65,6 +65,33 @@ function boingSound() {
   o.start(); o.stop(audio.currentTime + 0.25);
 }
 function owSound() { beep(600 + Math.random() * 300, 0.1, 'square', 0.08); }
+function slurpSound() {
+  if (!audio) return;
+  const o = audio.createOscillator(), g = audio.createGain();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(700, audio.currentTime);
+  o.frequency.exponentialRampToValueAtTime(80, audio.currentTime + 0.3);
+  g.gain.setValueAtTime(0.15, audio.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + 0.32);
+  o.connect(g); g.connect(audio.destination);
+  o.start(); o.stop(audio.currentTime + 0.35);
+}
+function burpSound() {
+  if (!audio) return;
+  const o = audio.createOscillator(), g = audio.createGain();
+  const lfo = audio.createOscillator(), lg = audio.createGain();
+  o.type = 'sawtooth';
+  o.frequency.setValueAtTime(90, audio.currentTime);
+  o.frequency.linearRampToValueAtTime(55, audio.currentTime + 0.35);
+  lfo.type = 'square'; lfo.frequency.value = 22;
+  lg.gain.value = 0.05;
+  lfo.connect(lg); lg.connect(g.gain);
+  g.gain.setValueAtTime(0.16, audio.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + 0.4);
+  o.connect(g); g.connect(audio.destination);
+  o.start(); o.stop(audio.currentTime + 0.45);
+  lfo.start(); lfo.stop(audio.currentTime + 0.45);
+}
 function popSound() {
   if (!audio) return;
   const o = audio.createOscillator(), g = audio.createGain();
@@ -96,6 +123,9 @@ let bodies = [];        // everything that moves
 let spikes = [];        // static pointy strips
 let particles = [];
 let floatTexts = [];    // POP! and friends, drifting upward
+let holes = [];         // black holes. yes, plural. good luck.
+let burps = [];         // swallowed bombs, waiting to come back up
+let grabbedHole = null;
 let gravityOn = true;
 let timeOn = true;      // ...until somebody freezes it
 let shake = 0;
@@ -130,6 +160,10 @@ function addBomb(x, y) {
 }
 function addSpike(x, y) {
   spikes.push({ x: Math.round(x / 46) * 46, y: Math.round(y / 46) * 46 });
+}
+function addHole(x, y) {
+  holes.push({ x, y, swirl: Math.random() * 7 });
+  if (holes.length > 3) holes.shift();     // three black holes is plenty. THREE.
 }
 
 // people don't get hurt in this lab. they POP — like a balloon full
@@ -293,6 +327,62 @@ function update(dt) {
   }
   bodies = bodies.filter(b => !b.gone);
 
+  // ---- BLACK HOLES: they pull. they swallow. sometimes they burp. ----
+  for (const h of holes) {
+    if (h === grabbedHole) { h.x = pointer.x; h.y = pointer.y; }
+    for (const b of bodies) {
+      if (b === grabbed) continue;
+      const dx = h.x - b.x, dy = h.y - b.y;
+      const d = Math.hypot(dx, dy) || 1;
+      const pull = Math.min(2200, 260000 / Math.max(d * d, 900));
+      b.vx += (dx / d) * pull * dt;
+      b.vy += (dy / d) * pull * dt;
+      if (d < 28) {
+        // down the hatch
+        b.gone = true;
+        slurpSound();
+        floatTexts.push({ x: h.x, y: h.y - 34, t: 1, text: 'SLURP!' });
+        if (b.type === 'bomb') burps.push({ hole: h, t: 0.6 });
+      }
+    }
+    // confetti and smoke spiral in too — it sells the whole thing
+    for (const p of particles) {
+      const dx = h.x - p.x, dy = h.y - p.y;
+      const d = Math.hypot(dx, dy) || 1;
+      const pull = Math.min(1600, 140000 / Math.max(d * d, 900));
+      p.vx += (dx / d) * pull * dt + (-dy / d) * pull * 0.5 * dt;   // with a swirl
+      p.vy += (dy / d) * pull * dt + (dx / d) * pull * 0.5 * dt;
+      if (d < 16) p.life = 0;
+    }
+    // a steady snack of glowing dust, so the hole always looks hungry
+    if (Math.random() < 0.3) {
+      const a = Math.random() * Math.PI * 2;
+      particles.push({
+        x: h.x + Math.cos(a) * 90, y: h.y + Math.sin(a) * 90,
+        vx: -Math.sin(a) * 120, vy: Math.cos(a) * 120,
+        life: 1.2, color: ['#b482ff', '#7dd3ff', '#ffffff'][Math.floor(Math.random() * 3)],
+      });
+    }
+  }
+  // swallowed bombs come back up as a BURP
+  for (const bu of burps) {
+    bu.t -= dt;
+    if (bu.t <= 0) {
+      burpSound();
+      shake = Math.max(shake, 0.3);
+      floatTexts.push({ x: bu.hole.x, y: bu.hole.y - 40, t: 1.2, text: 'BURP.' });
+      for (let i = 0; i < 14; i++) {
+        const a = Math.random() * Math.PI * 2;
+        particles.push({
+          x: bu.hole.x, y: bu.hole.y, vx: Math.cos(a) * 260, vy: Math.sin(a) * 260,
+          life: 0.5, color: i % 2 ? '#b482ff' : '#ffd23f',
+        });
+      }
+    }
+  }
+  burps = burps.filter(b => b.t > 0);
+  bodies = bodies.filter(b => !b.gone);
+
   for (const p of particles) {
     p.x += p.vx * dt; p.y += p.vy * dt;
     if (gravityOn) p.vy += 600 * dt;
@@ -331,12 +421,19 @@ addEventListener('pointerdown', e => {
           setTimeout(() => beep(300, 0.25, 'sine', 0.1), 90);
         }
       } else if (r.id === 'clear') {
-        bodies = []; spikes = []; particles = [];
+        bodies = []; spikes = []; particles = []; holes = []; burps = [];
       } else tool = r.id;
       return;
     }
   }
   pointer = { x: e.clientX, y: e.clientY };
+  // black holes can be grabbed and walked like a very dangerous dog
+  for (const h of holes) {
+    if (Math.hypot(h.x - e.clientX, h.y - e.clientY) < 44) {
+      grabbedHole = h;
+      return;
+    }
+  }
   // grab the nearest body if one is close enough...
   let best = null, bestD = 48;
   for (const b of bodies) {
@@ -349,10 +446,11 @@ addEventListener('pointerdown', e => {
   else if (tool === 'crate') addCrate(e.clientX, e.clientY);
   else if (tool === 'bomb') addBomb(e.clientX, e.clientY);
   else if (tool === 'spike') addSpike(e.clientX - 23, e.clientY);
+  else if (tool === 'hole') addHole(e.clientX, e.clientY);
 });
 addEventListener('pointermove', e => { pointer = { x: e.clientX, y: e.clientY }; });
-addEventListener('pointerup', () => { grabbed = null; });
-addEventListener('pointercancel', () => { grabbed = null; });
+addEventListener('pointerup', () => { grabbed = null; grabbedHole = null; });
+addEventListener('pointercancel', () => { grabbed = null; grabbedHole = null; });
 
 // ---------------------------------------------------------------------
 // DRAWING
@@ -463,6 +561,33 @@ function draw() {
   ctx.fillStyle = gravityOn ? '#4a5a78' : '#7a5aff';
   ctx.fillRect(-20, floorY(), W + 40, 5);
 
+  // black holes: a dark heart, a glowing purple swirl, endless appetite
+  for (const h of holes) {
+    h.swirl = (h.swirl || 0) + 0.05;
+    const g = ctx.createRadialGradient(h.x, h.y, 4, h.x, h.y, 80);
+    g.addColorStop(0, 'rgba(180, 130, 255, 0.5)');
+    g.addColorStop(0.5, 'rgba(90, 60, 160, 0.2)');
+    g.addColorStop(1, 'rgba(90, 60, 160, 0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(h.x - 80, h.y - 80, 160, 160);
+    for (let ring = 0; ring < 3; ring++) {
+      ctx.strokeStyle = `rgba(${ring % 2 ? '125, 211, 255' : '180, 130, 255'}, ${0.5 - ring * 0.12})`;
+      ctx.lineWidth = 3 - ring * 0.7;
+      ctx.beginPath();
+      ctx.arc(h.x, h.y, 26 + ring * 12,
+              h.swirl * (ring % 2 ? 1.4 : -1.1) + ring,
+              h.swirl * (ring % 2 ? 1.4 : -1.1) + ring + 4.2);
+      ctx.stroke();
+    }
+    ctx.fillStyle = '#000000';
+    ctx.beginPath();
+    ctx.arc(h.x, h.y, 20, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(200, 170, 255, 0.8)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
   // spikes
   for (const s of spikes) {
     ctx.fillStyle = '#8a8378';
@@ -522,7 +647,7 @@ function draw() {
   uiRects = [];
   const TOOLS = [
     ['person', '🧍 PERSON'], ['crate', '📦 CRATE'], ['bomb', '💣 BOMB'],
-    ['spike', '⚠ SPIKE'],
+    ['spike', '⚠ SPIKE'], ['hole', '🕳 HOLE'],
     ['gravity', gravityOn ? '🌍 GRAVITY: ON' : '🚀 GRAVITY: OFF'],
     ['time', timeOn ? '⏱ TIME: ON' : '❄ TIME: FROZEN'],
     ['clear', '✖ CLEAR'],
