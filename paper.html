@@ -83,6 +83,26 @@ let ents = [];
 let towers = [];        // circle one into your land: it joins you
 let minis = [];         // ...and sends out three tiny helpers
 let elapsed = 0;
+let screen = 'menu';    // 'menu' | 'skins' | 'play'
+
+// ---- lifetime record: kills, best coverage, and your WARDROBE ----
+let psave = { kills: 0, best: 0, skin: 'block' };
+try {
+  const s = JSON.parse(localStorage.getItem('paper_save'));
+  if (s) psave = Object.assign(psave, s);
+} catch (err) {}
+function persistP() { localStorage.setItem('paper_save', JSON.stringify(psave)); }
+
+const SKINS = [
+  { id: 'block', name: 'THE BLOCK', how: 'the original. a classic.',
+    unlocked: () => true },
+  { id: 'toilet', name: 'THE TOILET', how: 'destroy 3 rivals',
+    unlocked: () => psave.kills >= 3,
+    progress: () => Math.min(psave.kills, 3) + '/3 rivals destroyed' },
+  { id: 'donut', name: 'SHINY DONUT', how: 'cover 10.5% of the map',
+    unlocked: () => psave.best >= 10.5,
+    progress: () => 'best so far: ' + psave.best.toFixed(1) + '% / 10.5%' },
+];
 let camX = 0, camY = 0;
 let gameOver = false;
 let bestPct = 0;
@@ -152,7 +172,8 @@ function spawnMinis(ownerId, tx, ty) {
 addEventListener('keydown', e => {
   ensureAudio();
   const you = ents[0];
-  if (gameOver && e.key === ' ') { resetGame(); return; }
+  if (screen === 'menu' && e.key === ' ') { resetGame(); screen = 'play'; return; }
+  if (gameOver && e.key === ' ') { screen = 'menu'; return; }
   const k = e.key.toLowerCase();
   if (k === 'arrowleft' || k === 'a') you.keyAngle = Math.PI;
   if (k === 'arrowright' || k === 'd') you.keyAngle = 0;
@@ -161,11 +182,31 @@ addEventListener('keydown', e => {
 });
 // the head CHASES the mouse — hover on desktop, drag on phones
 let mouseX = null, mouseY = null, mouseAt = -99;
+let uiRects = [];
 addEventListener('pointerdown', e => {
   ensureAudio();
-  if (gameOver) { resetGame(); return; }
+  for (const r of uiRects) {
+    if (e.clientX > r.x && e.clientX < r.x + r.w &&
+        e.clientY > r.y && e.clientY < r.y + r.h) { uiAction(r.id); return; }
+  }
+  if (screen !== 'play') return;
+  if (gameOver) { screen = 'menu'; return; }
   mouseX = e.clientX; mouseY = e.clientY; mouseAt = elapsed;
 });
+
+function uiAction(id) {
+  if (id === 'play') { resetGame(); screen = 'play'; return; }
+  if (id === 'skins') { screen = 'skins'; return; }
+  if (id === 'back') { screen = 'menu'; return; }
+  if (id.startsWith('skin_')) {
+    const sk = SKINS.find(s => s.id === id.slice(5));
+    if (sk && sk.unlocked()) {
+      psave.skin = sk.id;
+      persistP();
+      beep(700, 0.1, 'square', 0.08);
+    } else beep(160, 0.15, 'square', 0.08);
+  }
+}
 addEventListener('pointermove', e => {
   mouseX = e.clientX; mouseY = e.clientY; mouseAt = elapsed;
 });
@@ -240,6 +281,14 @@ function capture(ent) {
 }
 
 function kill(ent, byYou) {
+  if (byYou && !ent.p.isYou) {
+    psave.kills++;
+    persistP();
+    if (psave.kills === 3) {
+      setBanner('🚽 THE TOILET SKIN IS UNLOCKED!!');
+      towerSound();
+    }
+  }
   ent.alive = false;
   ent.respawnT = 3;
   for (const c of ent.myTrail) trail[c] = 0;
@@ -433,6 +482,15 @@ function update(dt) {
   // milestones deserve a little noise
   const pct = pctOwned(1);
   bestPct = Math.max(bestPct, pct);
+  if (pct > psave.best) {
+    const hadDonut = psave.best >= 10.5;
+    psave.best = pct;
+    persistP();
+    if (!hadDonut && pct >= 10.5) {
+      setBanner('🍩 THE SHINY DONUT SKIN IS UNLOCKED!!');
+      towerSound();
+    }
+  }
   if (pct >= milestone) {
     setBanner(milestone + '% OF THE PAPER IS YOURS!');
     claimSound(200);
@@ -517,69 +575,195 @@ function draw() {
     ctx.fill();
   }
 
-  // the minis: half-pint clones with maximum determination
+  // the minis: half-pint clones — wearing the boss's skin, naturally
   for (const m of minis) {
     const p = PLAYERS[m.ownerId - 1];
-    const px = m.x * CELL, py = m.y * CELL;
     const fade = Math.min(1, m.life / 2);            // they fade near the end
     ctx.globalAlpha = fade;
-    ctx.fillStyle = p.dark;
-    ctx.beginPath();
-    ctx.roundRect(px - CELL * 0.34, py - CELL * 0.34, CELL * 0.68, CELL * 0.68, 4);
-    ctx.fill();
-    ctx.fillStyle = p.color;
-    ctx.beginPath();
-    ctx.roundRect(px - CELL * 0.26, py - CELL * 0.26, CELL * 0.52, CELL * 0.52, 3);
-    ctx.fill();
-    ctx.fillStyle = '#ffffff';
-    ctx.beginPath();
-    ctx.arc(px - 3 + m.dx * 2, py - 1 + m.dy * 2, 2.4, 0, Math.PI * 2);
-    ctx.arc(px + 3 + m.dx * 2, py - 1 + m.dy * 2, 2.4, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#1a1a22';
-    ctx.beginPath();
-    ctx.arc(px - 3 + m.dx * 3, py - 1 + m.dy * 3, 1.2, 0, Math.PI * 2);
-    ctx.arc(px + 3 + m.dx * 3, py - 1 + m.dy * 3, 1.2, 0, Math.PI * 2);
-    ctx.fill();
+    drawHead(m.x * CELL, m.y * CELL, 0.55,
+             m.ownerId === 1 ? psave.skin : 'block', m.dx, m.dy, p);
     ctx.globalAlpha = 1;
   }
 
-  // the heads: rounded blocks with determined little faces
+  // the heads, dressed in whatever they've earned
   for (const ent of ents) {
     if (!ent.alive) continue;
     const px = ent.x * CELL, py = ent.y * CELL;
-    ctx.fillStyle = ent.p.dark;
-    ctx.beginPath();
-    ctx.roundRect(px - CELL * 0.6, py - CELL * 0.6, CELL * 1.2, CELL * 1.2, 6);
-    ctx.fill();
-    ctx.fillStyle = ent.p.color;
-    ctx.beginPath();
-    ctx.roundRect(px - CELL * 0.48, py - CELL * 0.48, CELL * 0.96, CELL * 0.96, 5);
-    ctx.fill();
-    // eyes that look where they're going
-    ctx.fillStyle = '#ffffff';
-    const ex = ent.dx * 3, ey = ent.dy * 3;
-    ctx.beginPath();
-    ctx.arc(px - 5 + ex, py - 2 + ey, 4, 0, Math.PI * 2);
-    ctx.arc(px + 5 + ex, py - 2 + ey, 4, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#1a1a22';
-    ctx.beginPath();
-    ctx.arc(px - 5 + ex * 1.6, py - 2 + ey * 1.6, 2, 0, Math.PI * 2);
-    ctx.arc(px + 5 + ex * 1.6, py - 2 + ey * 1.6, 2, 0, Math.PI * 2);
-    ctx.fill();
-    // name tag
+    drawHead(px, py, 1, ent.p.isYou ? psave.skin : 'block', ent.dx, ent.dy, ent.p);
     ctx.textAlign = 'center';
     ctx.fillStyle = 'rgba(40, 36, 24, 0.75)';
     ctx.font = 'bold 12px monospace';
-    ctx.fillText(ent.p.name, px, py - CELL * 0.85);
+    ctx.fillText(ent.p.name, px, py - CELL * 0.95);
   }
   ctx.restore();
 
   drawHud(W, H);
 }
 
+// one head, any size, any outfit
+function drawHead(px, py, sc, skin, dx, dy, p) {
+  ctx.save();
+  ctx.translate(px, py);
+  ctx.scale(sc, sc);
+  const ex = dx * 3, ey = dy * 3;
+  if (skin === 'toilet') {
+    ctx.fillStyle = '#e8e8f0';                     // the tank
+    ctx.beginPath();
+    ctx.roundRect(-12, -14, 24, 12, 3);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';                     // the bowl
+    ctx.beginPath();
+    ctx.ellipse(0, 6, 13, 9, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#b8b8c8';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.fillStyle = '#d8ecf8';                     // the water. don't ask.
+    ctx.beginPath();
+    ctx.ellipse(0, 6, 8, 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#c8c8d8';                     // flush handle
+    ctx.fillRect(7, -12, 4, 3);
+    ctx.fillStyle = '#1a1a22';                     // eyes on the tank
+    ctx.beginPath();
+    ctx.arc(-5 + ex, -8 + ey, 2, 0, Math.PI * 2);
+    ctx.arc(5 + ex, -8 + ey, 2, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (skin === 'donut') {
+    ctx.fillStyle = '#c8955a';                     // the dough
+    ctx.beginPath();
+    ctx.arc(0, 0, 14, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#f078a8';                     // the icing
+    ctx.beginPath();
+    ctx.arc(0, 0, 14, Math.PI, Math.PI * 2.35);
+    ctx.arc(0, 0, 8, Math.PI * 2.2, Math.PI, true);
+    ctx.fill();
+    ctx.fillStyle = '#f2ecd8';                     // the hole
+    ctx.beginPath();
+    ctx.arc(0, 0, 5, 0, Math.PI * 2);
+    ctx.fill();
+    // sprinkles
+    const sprinkleCols = ['#fff', '#ffd23f', '#7ddf8f', '#3a9ad9'];
+    for (let i = 0; i < 6; i++) {
+      const a = -Math.PI * 0.9 + i * 0.35;
+      ctx.strokeStyle = sprinkleCols[i % 4];
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(a) * 10, Math.sin(a) * 10);
+      ctx.lineTo(Math.cos(a) * 10 + 3, Math.sin(a) * 10 + 1);
+      ctx.stroke();
+    }
+    // the SHINE — it's not a shiny donut without the glint
+    const ga = elapsed * 3;
+    ctx.fillStyle = `rgba(255, 255, 255, ${0.6 + Math.sin(ga * 2) * 0.3})`;
+    ctx.beginPath();
+    ctx.arc(Math.cos(ga) * 9, Math.sin(ga) * 9, 2.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#1a1a22';                     // eyes on the icing
+    ctx.beginPath();
+    ctx.arc(-5 + ex, -7 + ey, 2, 0, Math.PI * 2);
+    ctx.arc(4 + ex, -8 + ey, 2, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    ctx.fillStyle = p.dark;
+    ctx.beginPath();
+    ctx.roundRect(-CELL * 0.6, -CELL * 0.6, CELL * 1.2, CELL * 1.2, 6);
+    ctx.fill();
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.roundRect(-CELL * 0.48, -CELL * 0.48, CELL * 0.96, CELL * 0.96, 5);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(-5 + ex, -2 + ey, 4, 0, Math.PI * 2);
+    ctx.arc(5 + ex, -2 + ey, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#1a1a22';
+    ctx.beginPath();
+    ctx.arc(-5 + ex * 1.6, -2 + ey * 1.6, 2, 0, Math.PI * 2);
+    ctx.arc(5 + ex * 1.6, -2 + ey * 1.6, 2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawMenu(W, H) {
+  uiRects = [];
+  ctx.fillStyle = '#f2ecd8';
+  ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = 'rgba(120, 110, 80, 0.12)';
+  for (let x = 0; x < W; x += CELL) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
+  for (let y = 0; y < H; y += CELL) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#3a3428';
+  ctx.font = `bold ${Math.min(56, W / 11)}px monospace`;
+  ctx.fillText('PAPER WARS', W / 2, H * 0.24);
+  ctx.font = '15px monospace';
+  ctx.fillStyle = '#7a7260';
+  ctx.fillText('rivals destroyed: ' + psave.kills + '   —   best coverage: ' +
+               psave.best.toFixed(1) + '%', W / 2, H * 0.24 + 34);
+  // your current look, admiring itself
+  drawHead(W / 2, H * 0.4, 1.6, psave.skin, Math.sin(elapsed * 1.5), 0, PLAYERS[0]);
+  const bw = Math.min(W - 60, 300), bh = 62;
+  for (const [i, [id, label, col]] of [['play', '▶ PLAY', '#3a9ad9'], ['skins', '👕 SKINS', '#e8953c']].entries()) {
+    const y = H * 0.52 + i * 80;
+    uiRects.push({ x: W / 2 - bw / 2, y, w: bw, h: bh, id });
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.fillRect(W / 2 - bw / 2, y, bw, bh);
+    ctx.strokeStyle = col;
+    ctx.lineWidth = 3;
+    ctx.strokeRect(W / 2 - bw / 2, y, bw, bh);
+    ctx.fillStyle = col;
+    ctx.font = 'bold 24px monospace';
+    ctx.fillText(label, W / 2, y + 40);
+  }
+}
+
+function drawSkins(W, H) {
+  uiRects = [];
+  ctx.fillStyle = '#f2ecd8';
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#3a3428';
+  ctx.font = `bold ${Math.min(40, W / 14)}px monospace`;
+  ctx.fillText('👕 SKINS', W / 2, 56);
+  SKINS.forEach((sk, i) => {
+    const cw = Math.min(W - 40, 460), x = W / 2 - cw / 2, y = 90 + i * 110;
+    const un = sk.unlocked();
+    const worn = psave.skin === sk.id;
+    uiRects.push({ x, y, w: cw, h: 96, id: 'skin_' + sk.id });
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.fillRect(x, y, cw, 96);
+    ctx.strokeStyle = worn ? '#3a9ad9' : un ? '#7a9a5a' : '#b8b098';
+    ctx.lineWidth = worn ? 4 : 2;
+    ctx.strokeRect(x, y, cw, 96);
+    ctx.save();
+    if (!un) ctx.globalAlpha = 0.35;
+    drawHead(x + 52, y + 48, 1.5, sk.id, 1, 0, PLAYERS[0]);
+    ctx.restore();
+    ctx.textAlign = 'left';
+    ctx.fillStyle = un ? '#3a3428' : '#9a9280';
+    ctx.font = 'bold 19px monospace';
+    ctx.fillText(sk.name + (worn ? '  ✓ wearing it' : ''), x + 104, y + 38);
+    ctx.font = '13px monospace';
+    ctx.fillStyle = '#7a7260';
+    ctx.fillText(un ? sk.how : '🔒 ' + sk.how + (sk.progress ? '  (' + sk.progress() + ')' : ''),
+                 x + 104, y + 64);
+    ctx.textAlign = 'center';
+  });
+  const y = 90 + SKINS.length * 110 + 8;
+  uiRects.push({ x: W / 2 - 100, y, w: 200, h: 50, id: 'back' });
+  ctx.strokeStyle = '#3a9ad9';
+  ctx.lineWidth = 3;
+  ctx.strokeRect(W / 2 - 100, y, 200, 50);
+  ctx.fillStyle = '#3a9ad9';
+  ctx.font = 'bold 20px monospace';
+  ctx.fillText('← BACK', W / 2, y + 33);
+}
+
 function drawHud(W, H) {
+  uiRects = [];
   // your share of the world, front and center
   const pct = pctOwned(1);
   ctx.textAlign = 'left';
@@ -636,8 +820,10 @@ let lastTime = 0;
 function loop(time) {
   const dt = Math.min(0.04, (time - lastTime) / 1000);
   lastTime = time;
-  update(dt);
-  draw();
+  elapsed += screen === 'play' ? 0 : dt;   // menus keep their sparkle moving
+  if (screen === 'menu') drawMenu(canvas.width, canvas.height);
+  else if (screen === 'skins') drawSkins(canvas.width, canvas.height);
+  else { update(dt); draw(); }
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);
