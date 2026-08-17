@@ -123,8 +123,8 @@ function resetGame() {
   });
   gameOver = false;
   milestone = 25;
-  banner = '';
-  bannerT = 0;
+  banner = 'steer with your MOUSE (or finger, or arrows)';
+  bannerT = 5;
   minis = [];
   towers = [[30, 15], [60, 15], [14, 30], [76, 30], [30, 45], [60, 45]]
     .map(([x, y]) => ({ x, y, claimedBy: 0 }));
@@ -157,27 +157,34 @@ addEventListener('keydown', e => {
   if ((k === 'arrowup' || k === 'w') && you.dy !== 1) { you.nextDx = 0; you.nextDy = -1; }
   if ((k === 'arrowdown' || k === 's') && you.dy !== -1) { you.nextDx = 0; you.nextDy = 1; }
 });
-let swipeStart = null;
+// the head CHASES the mouse — hover on desktop, drag on phones
+let mouseX = null, mouseY = null, mouseAt = -99;
 addEventListener('pointerdown', e => {
   ensureAudio();
   if (gameOver) { resetGame(); return; }
-  swipeStart = { x: e.clientX, y: e.clientY };
+  mouseX = e.clientX; mouseY = e.clientY; mouseAt = elapsed;
 });
 addEventListener('pointermove', e => {
-  if (!swipeStart) return;
-  const dx = e.clientX - swipeStart.x, dy = e.clientY - swipeStart.y;
-  if (Math.hypot(dx, dy) < 24) return;
-  const you = ents[0];
-  if (Math.abs(dx) > Math.abs(dy)) {
-    if (dx > 0 && you.dx !== -1) { you.nextDx = 1; you.nextDy = 0; }
-    if (dx < 0 && you.dx !== 1) { you.nextDx = -1; you.nextDy = 0; }
-  } else {
-    if (dy > 0 && you.dy !== -1) { you.nextDx = 0; you.nextDy = 1; }
-    if (dy < 0 && you.dy !== 1) { you.nextDx = 0; you.nextDy = -1; }
-  }
-  swipeStart = { x: e.clientX, y: e.clientY };
+  mouseX = e.clientX; mouseY = e.clientY; mouseAt = elapsed;
 });
-addEventListener('pointerup', () => { swipeStart = null; });
+
+// at each cell boundary: which legal turn points most at the cursor?
+function steerToMouse(you) {
+  if (mouseX === null || elapsed - mouseAt > 3) return;   // mouse gone quiet: keys rule
+  const wx = (mouseX + camX) / CELL, wy = (mouseY + camY) / CELL;
+  const dx = wx - you.x, dy = wy - you.y;
+  if (Math.hypot(dx, dy) < 0.9) return;      // cursor right on top: hold course
+  const cand = Math.abs(dx) >= Math.abs(dy)
+    ? [[Math.sign(dx), 0], [0, Math.sign(dy)]]
+    : [[0, Math.sign(dy)], [Math.sign(dx), 0]];
+  for (const [ndx, ndy] of cand) {
+    if (!ndx && !ndy) continue;
+    if (ndx === -you.dx && ndy === -you.dy) continue;     // still no U-turns
+    you.nextDx = ndx;
+    you.nextDy = ndy;
+    return;
+  }
+}
 
 // ---------------------------------------------------------------------
 // THE RULES OF PAPER
@@ -340,7 +347,8 @@ function update(dt) {
       enterCell(ent, cx, cy);
       if (!ent.alive) continue;
       // turning happens cleanly at cell boundaries
-      if (!ent.p.isYou) botThink(ent);
+      if (ent.p.isYou) steerToMouse(ent);
+      else botThink(ent);
       if ((ent.nextDx !== ent.dx || ent.nextDy !== ent.dy)) {
         ent.dx = ent.nextDx;
         ent.dy = ent.nextDy;
