@@ -52,6 +52,10 @@ function beep(freq, dur, type, vol) {
   o.start(); o.stop(audio.currentTime + dur + 0.02);
 }
 function swishSound() { beep(700, 0.06, 'sawtooth', 0.05); }
+function hissSound() {
+  beep(1800, 0.08, 'sawtooth', 0.04);
+  setTimeout(() => beep(1400, 0.12, 'sawtooth', 0.04), 60);
+}
 function shotgunSound() {
   beep(90, 0.12, 'sawtooth', 0.2);
   beep(160, 0.08, 'square', 0.15);
@@ -87,9 +91,9 @@ try {
 function persist() { localStorage.setItem('stick_save', JSON.stringify(save)); }
 
 // the arena: a set of ground cells plus the two starting corners
-let arena = { tiles: new Set(), spikes: [], you: [3, 9], enemy: [16, 9] };
+let arena = { tiles: new Set(), spikes: [], snakes: [], you: [3, 9], enemy: [16, 9] };
 function defaultArena() {
-  arena = { tiles: new Set(), spikes: [], you: [3, 9], enemy: [16, 9] };
+  arena = { tiles: new Set(), spikes: [], snakes: [], you: [3, 9], enemy: [16, 9] };
   for (let i = 0; i < 20; i++) arena.tiles.add(i + ',10');
   for (let i = 4; i < 8; i++) arena.tiles.add(i + ',7');
   for (let i = 12; i < 16; i++) arena.tiles.add(i + ',7');
@@ -97,13 +101,14 @@ function defaultArena() {
 defaultArena();
 function saveArena() {
   localStorage.setItem('stick_arena', JSON.stringify({
-    tiles: [...arena.tiles], spikes: arena.spikes,
+    tiles: [...arena.tiles], spikes: arena.spikes, snakes: arena.snakes,
     you: arena.you, enemy: arena.enemy }));
 }
 try {
   const a = JSON.parse(localStorage.getItem('stick_arena'));
   if (a && a.tiles && a.tiles.length) {
     arena = { tiles: new Set(a.tiles), spikes: a.spikes || [],
+              snakes: a.snakes || [],
               you: a.you || [3, 9], enemy: a.enemy || [16, 9] };
   }
 } catch (err) {}
@@ -144,6 +149,7 @@ let pellets = [];       // shotgun pellets in flight
 let fxRings = [];       // portal rings and other round sparkles
 let blastCounter = 0;   // so one shotgun blast can't hit twice
 let weaponNotice = 0;   // "you drew: ..." timer at battle start
+let snakes = [];        // the arena's slithering third party
 const WEAPONS = ['shotgun', 'brush', 'portal'];
 
 let spikeRects = [];
@@ -202,6 +208,11 @@ function startBattle() {
   weaponNotice = 3;
   hitFx = [];
   banner = null;
+  snakes = arena.snakes.map(k => {
+    const [cx, cy] = k.split(',').map(Number);
+    return { x: cx * TILE + 1, y: cy * TILE + TILE - 14, w: 44, h: 14,
+             vy: 0, dir: Math.random() < 0.5 ? -1 : 1, dead: false, grace: 0 };
+  });
   screen = 'battle';
 }
 
@@ -355,13 +366,17 @@ function applyTool(sx, sy) {
   if (tool === 'ground') {
     arena.tiles.add(key);
     arena.spikes = arena.spikes.filter(k => k !== key);
+    arena.snakes = arena.snakes.filter(k => k !== key);
   } else if (tool === 'spike') {
     if (!arena.tiles.has(key) && !arena.spikes.includes(key)) arena.spikes.push(key);
+  } else if (tool === 'snake') {
+    if (!arena.tiles.has(key) && !arena.snakes.includes(key)) arena.snakes.push(key);
   } else if (tool === 'you') arena.you = [cx, cy];
   else if (tool === 'enemy') arena.enemy = [cx, cy];
   else if (tool === 'erase') {
     arena.tiles.delete(key);
     arena.spikes = arena.spikes.filter(k => k !== key);
+    arena.snakes = arena.snakes.filter(k => k !== key);
   }
   saveArena();
 }
@@ -596,11 +611,62 @@ function update(dt) {
       p.life = 0;
       continue;
     }
+    // pellets also work on snakes — shotgun pest control
+    for (const sn of snakes) {
+      if (!sn.dead && overlaps(box, sn)) {
+        sn.dead = true;
+        fxRings.push({ x: sn.x + sn.w / 2, y: sn.y + sn.h / 2, t: 0.4, color: '#7ddf8f' });
+        p.life = 0;
+        break;
+      }
+    }
     for (const s of solids) {
       if (overlaps(box, s)) { p.life = 0; break; }
     }
   }
   pellets = pellets.filter(p => p.life > 0);
+
+  // ---- snakes: the arena's slithering third party. they bite
+  // EVERYONE, and everyone's weapons work on THEM. ----
+  for (const sn of snakes) {
+    if (sn.dead) continue;
+    if (sn.grace > 0) sn.grace -= dt;
+    sn.x += sn.dir * 60 * dt;
+    // gravity, so snakes placed in the air find the floor
+    sn.vy += GRAVITY * dt;
+    sn.y += sn.vy * dt;
+    for (const s of solids) {
+      if (!overlaps(sn, s)) continue;
+      if (sn.vy > 0) { sn.y = s.y - sn.h; sn.vy = 0; }
+    }
+    // turn at walls and at the edge of a drop
+    const aheadX = sn.dir > 0 ? sn.x + sn.w + 2 : sn.x - 2;
+    let wall = false, floorAhead = false;
+    for (const s of solids) {
+      if (aheadX > s.x && aheadX < s.x + s.w) {
+        if (sn.y + sn.h > s.y && sn.y < s.y + s.h) wall = true;
+        if (Math.abs(s.y - (sn.y + sn.h)) < 8) floorAhead = true;
+      }
+    }
+    if (wall || !floorAhead) { sn.dir *= -1; sn.x += sn.dir * 2; }
+    // CHOMP
+    for (const f of fighters) {
+      if (f.ko || f.hurtFlash > 0 || sn.grace > 0) continue;
+      if (overlaps(sn, f)) {
+        damageFighter(f, 6, sn.dir);
+        sn.grace = 0.8;
+        hissSound();
+      }
+    }
+    // a sword swing squishes a snake
+    for (const f of fighters) {
+      if (f.attack > 0.09 && overlaps(attackBox(f), sn)) {
+        sn.dead = true;
+        fxRings.push({ x: sn.x + sn.w / 2, y: sn.y + sn.h / 2, t: 0.4, color: '#7ddf8f' });
+        beep(300, 0.1, 'triangle', 0.12);
+      }
+    }
+  }
 
   // ---- spikes don't care WHOSE team you're on ----
   for (const f of fighters) {
@@ -761,6 +827,40 @@ function drawArenaWorld() {
   for (const sp of spikeRects) drawSpikeCell(sp.x - 4, sp.y - TILE * 0.45);
 }
 
+// a snake: a wavy green line with a head, a flicking tongue, and
+// absolutely no loyalty to anyone
+function drawSnake(sn, t) {
+  const headX = sn.dir > 0 ? sn.x + sn.w - 4 : sn.x + 4;
+  ctx.strokeStyle = '#5aa845';
+  ctx.lineWidth = 6;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  for (let i = 0; i <= 8; i++) {
+    const px = sn.x + (sn.w - 8) * (i / 8) + 4;
+    const py = sn.y + sn.h - 5 + Math.sin(t * 10 + i * 1.3 + sn.x) * 3.5;
+    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
+  ctx.stroke();
+  ctx.fillStyle = '#5aa845';                          // the head
+  ctx.beginPath();
+  ctx.arc(headX, sn.y + sn.h - 6, 6, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#ffd23f';                          // beady little eye
+  ctx.beginPath();
+  ctx.arc(headX + sn.dir * 2, sn.y + sn.h - 8, 1.8, 0, Math.PI * 2);
+  ctx.fill();
+  if (Math.sin(t * 6 + sn.x) > 0.4) {                 // tongue check
+    ctx.strokeStyle = '#e8453c';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(headX + sn.dir * 6, sn.y + sn.h - 6);
+    ctx.lineTo(headX + sn.dir * 13, sn.y + sn.h - 8);
+    ctx.moveTo(headX + sn.dir * 10, sn.y + sn.h - 7);
+    ctx.lineTo(headX + sn.dir * 13, sn.y + sn.h - 4);
+    ctx.stroke();
+  }
+}
+
 // a cell of gleaming arena spikes — impartial and very pointy
 function drawSpikeCell(x, y) {
   ctx.fillStyle = '#8a8378';
@@ -797,6 +897,9 @@ function drawBattle() {
   ctx.save();
   ctx.translate(-camX, -camY);
   drawArenaWorld();
+  for (const sn of snakes) {
+    if (!sn.dead) drawSnake(sn, elapsed);
+  }
   drawStickman(fighters[0], '#7dd3ff');
   drawStickman(fighters[1], '#ff6b5e');
   // shotgun pellets, hot and yellow
@@ -1001,7 +1104,8 @@ function drawShop() {
 }
 
 const TOOLS = [
-  ['ground', 'GROUND'], ['spike', 'SPIKE'], ['you', 'YOU'], ['enemy', 'ENEMY'],
+  ['ground', 'GROUND'], ['spike', 'SPIKE'], ['snake', 'SNAKE'],
+  ['you', 'YOU'], ['enemy', 'ENEMY'],
   ['erase', 'ERASE'], ['pan', 'PAN'],
 ];
 function drawBuild() {
@@ -1037,6 +1141,10 @@ function drawBuild() {
   for (const key of arena.spikes) {
     const [cx, cy] = key.split(',').map(Number);
     drawSpikeCell(cx * TILE, cy * TILE);
+  }
+  for (const key of arena.snakes) {
+    const [cx, cy] = key.split(',').map(Number);
+    drawSnake({ x: cx * TILE + 1, y: cy * TILE + TILE - 14, w: 44, h: 14, dir: 1 }, elapsed);
   }
   fightersPose(arena.you[0] * TILE + TILE / 2, arena.you[1] * TILE + TILE / 2, '#7dd3ff', 0);
   fightersPose(arena.enemy[0] * TILE + TILE / 2, arena.enemy[1] * TILE + TILE / 2, '#ff6b5e', 0);
