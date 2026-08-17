@@ -139,7 +139,7 @@ const SURFACE_Y = 130;      // where the water begins, on screen
 // ---------------------------------------------------------------------
 // SAVING — coins, upgrades, and the FISHDEX live in the browser
 // ---------------------------------------------------------------------
-let save = { coins: 0, line: 1, reel: 1, lamp: 0, dex: {} };
+let save = { coins: 0, line: 1, reel: 1, lamp: 0, sub: 0, dex: {} };
 try {
   const s = JSON.parse(localStorage.getItem('lake_save'));
   if (s) save = Object.assign(save, s);
@@ -202,7 +202,7 @@ addEventListener('keydown', e => {
 });
 addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
 
-let pointerX = null;
+let pointerX = null, pointerYv = null;
 addEventListener('pointerdown', e => {
   ensureAudio();
   for (const r of uiRects) {
@@ -211,13 +211,15 @@ addEventListener('pointerdown', e => {
   }
   if (overlay) { overlay = null; return; }
   pointerX = e.clientX;
+  pointerYv = e.clientY;
   action();
 });
-addEventListener('pointermove', e => { pointerX = e.clientX; });
-addEventListener('pointerup', () => { pointerX = null; });
+addEventListener('pointermove', e => { pointerX = e.clientX; pointerYv = e.clientY; });
+addEventListener('pointerup', () => { pointerX = null; pointerYv = null; });
 
 function action() {
   if (overlay) return;
+  if (mode === 'sub') return;          // taps steer the sub, nothing else
   if (mode === 'idle') {
     mode = 'drop';
     hook.d = 0;
@@ -233,6 +235,10 @@ function action() {
 function uiAction(id) {
   if (id === 'dex') { overlay = overlay === 'dex' ? null : 'dex'; return; }
   if (id === 'shop') { overlay = overlay === 'shop' ? null : 'shop'; return; }
+  if (id === 'dive') {
+    if (mode === 'idle') { overlay = null; startDive(); }
+    return;
+  }
   if (id.startsWith('buy_')) {
     const what = id.slice(4);
     const cost = shopCost(what);
@@ -249,7 +255,29 @@ function shopCost(what) {
   if (what === 'line') return save.line >= LINE_LEVELS.length ? null : save.line * 40;
   if (what === 'reel') return save.reel >= REEL_LEVELS.length ? null : save.reel * 30;
   if (what === 'lamp') return save.lamp >= LAMP_LEVELS.length - 1 ? null : 25 + save.lamp * 45;
+  if (what === 'sub') return save.sub ? null : 100;
   return null;
+}
+
+// ---------------------------------------------------------------------
+// THE SUBMARINE — the lake stops being a place you dangle into
+// and becomes a place you VISIT. air is the only rule.
+// ---------------------------------------------------------------------
+const SUB_AIR = 50;         // seconds of breathing per dive
+const CARGO_MAX = 5;
+const sub = { d: 20, x: 0, vx: 0, vy: 0, facing: 1, air: SUB_AIR,
+              cargo: [], blowing: false };
+
+function startDive() {
+  mode = 'sub';
+  sub.d = 20;
+  sub.x = boatX * 2 - 1;
+  sub.vx = 0; sub.vy = 0;
+  sub.air = SUB_AIR;
+  sub.cargo = [];
+  sub.blowing = false;
+  plop();
+  setStatus('DIVE! steer with arrows/WASD or your finger. watch the AIR.', 4);
 }
 
 // ---------------------------------------------------------------------
@@ -330,12 +358,90 @@ function update(dt) {
     }
   }
 
-  // the camera follows the hook into the dark
-  const targetCam = Math.max(0, hook.d - 260);
+  // ---- SUBMARINE MODE: you, personally, down there ----
+  if (mode === 'sub') {
+    sub.air -= dt;
+    if (sub.air <= 0 && !sub.blowing) {
+      sub.blowing = true;               // emergency blow: straight up, no arguing
+      setStatus('AIR OUT!! EMERGENCY BLOW — hold on!!', 4);
+      beep(200, 0.4, 'square', 0.15);
+    }
+    if (sub.blowing) {
+      sub.vy = -320;
+      sub.vx *= 0.95;
+    } else {
+      let ax = ((keys['arrowright'] || keys['d']) ? 1 : 0) -
+               ((keys['arrowleft'] || keys['a']) ? 1 : 0);
+      let ay = ((keys['arrowdown'] || keys['s']) ? 1 : 0) -
+               ((keys['arrowup'] || keys['w']) ? 1 : 0);
+      if (pointerX !== null && pointerYv !== null) {
+        // finger-steering: the sub swims toward your finger
+        const wx = (pointerX / canvas.width) * 2 - 1;
+        const wd = camD + (pointerYv - SURFACE_Y);
+        ax = Math.abs(wx - sub.x) > 0.04 ? Math.sign(wx - sub.x) : 0;
+        ay = Math.abs(wd - sub.d) > 24 ? Math.sign(wd - sub.d) : 0;
+      }
+      sub.vx += ax * 900 * dt;
+      sub.vy += ay * 520 * dt;
+      if (ax) sub.facing = ax;
+      sub.vx *= 0.94;
+      sub.vy *= 0.94;
+    }
+    sub.x += (sub.vx / 900) * dt * 1.4;
+    sub.d += sub.vy * dt;
+    sub.x = Math.max(-1, Math.min(1, sub.x));
+    sub.d = Math.max(12, Math.min(LAKE_DEPTH - 6, sub.d));
+
+    // the little hook dangling under the sub does the catching
+    if (sub.cargo.length < CARGO_MAX) {
+      for (const f of fishes) {
+        if (f.caught) continue;
+        const dx = (f.x - sub.x) * canvas.width * 0.5;
+        const dd = f.d - (sub.d + 42);
+        if (Math.abs(dx) < f.sp.size + 16 && Math.abs(dd) < f.sp.size + 12) {
+          sub.cargo.push(f.sp);
+          catchChime();
+          if (f.sp.bubbles) tootSound();
+          fishes = fishes.filter(x => x !== f);
+          if (f.sp.isIT) {
+            setStatus('IT is... in your cargo bay. IT is very patient.', 5);
+            setTimeout(() => fishes.push({ sp: f.sp, d: 1198, x: 0, dir: 1, phase: 0 }), 30000);
+          } else spawnFish(1);
+          if (sub.cargo.length >= CARGO_MAX) setStatus('cargo FULL — surface to sell!', 3);
+          break;
+        }
+      }
+    }
+
+    // surfacing: sell everything, breathe everything
+    if (sub.d <= 14) {
+      if (sub.cargo.length) {
+        let total = 0;
+        for (const sp of sub.cargo) {
+          total += sp.coins;
+          save.dex[sp.id] = (save.dex[sp.id] || 0) + 1;
+          if (sp.isIT) itCaughtEver = true;
+        }
+        save.coins += total;
+        persist();
+        coinSound();
+        setStatus('sold ' + sub.cargo.length + ' fish for ' + total + ' coins!' +
+                  (sub.cargo.some(sp => sp.isIT) ? ' ...including IT. it let you.' : ''), 5);
+        sub.cargo = [];
+      }
+      if (sub.blowing || sub.air < SUB_AIR * 0.5) {
+        mode = 'idle';                  // that dive is over, sailor
+      } else sub.air = SUB_AIR;         // topped off — dive on
+    }
+  }
+
+  // the camera follows whoever's deepest — hook or sub
+  const focusD = mode === 'sub' ? sub.d : hook.d;
+  const targetCam = Math.max(0, focusD - 260);
   camD += (targetCam - camD) * Math.min(1, dt * 3);
 
   // the deep hums. you'll feel it before you understand it.
-  setDrone(mode !== 'idle' && hook.d > 600);
+  setDrone(mode !== 'idle' && focusD > 600);
 }
 
 // ---------------------------------------------------------------------
@@ -540,30 +646,105 @@ function draw() {
   // fish under the darkness get redrawn if the lamp finds them
   for (const f of fishes) drawFish(f);
 
-  // darkness again on top, with a lamp-hole around the hook
-  if (hook.d > darkStart - 100 && mode !== 'idle') {
-    const hookY = depthToY(hook.d);
-    const hookX = ((hook.x + boatX * 2 - 1) + 1) / 2 * W;
-    const deepness = Math.min(1, Math.max(0, (hook.d - darkStart) / 200));
+  // darkness again on top, with a light-hole around whatever's down
+  // there representing you — the hook's lamp, or the sub's headlights
+  const focusD = mode === 'sub' ? sub.d : hook.d;
+  const focusX = mode === 'sub'
+    ? ((sub.x + 1) / 2) * W
+    : ((hook.x + boatX * 2 - 1) + 1) / 2 * W;
+  if (focusD > darkStart - 100 && mode !== 'idle') {
+    const focusY = depthToY(focusD);
+    const deepness = Math.min(1, Math.max(0, (focusD - darkStart) / 200));
     if (deepness > 0) {
-      const R = Math.max(60, lampR());
-      const lamp = ctx.createRadialGradient(hookX, hookY, R * 0.4, hookX, hookY, R * 2.2);
+      const R = mode === 'sub' ? 250 : Math.max(60, lampR());
+      const lamp = ctx.createRadialGradient(focusX, focusY, R * 0.4, focusX, focusY, R * 2.2);
       lamp.addColorStop(0, 'rgba(3, 5, 10, 0)');
       lamp.addColorStop(1, `rgba(3, 5, 10, ${0.94 * deepness})`);
       ctx.fillStyle = lamp;
       ctx.fillRect(0, 0, W, H);
-      if (save.lamp > 0) {
-        const warm = ctx.createRadialGradient(hookX, hookY, 4, hookX, hookY, lampR());
+      if (mode === 'sub' || save.lamp > 0) {
+        const warmR = mode === 'sub' ? 250 : lampR();
+        const warm = ctx.createRadialGradient(focusX, focusY, 4, focusX, focusY, warmR);
         warm.addColorStop(0, 'rgba(255, 230, 160, 0.25)');
         warm.addColorStop(1, 'rgba(255, 230, 160, 0)');
         ctx.fillStyle = warm;
-        ctx.fillRect(hookX - lampR(), hookY - lampR(), lampR() * 2, lampR() * 2);
+        ctx.fillRect(focusX - warmR, focusY - warmR, warmR * 2, warmR * 2);
       }
     }
   }
 
+  // ---- THE SUBMARINE, when you're in it ----
+  if (mode === 'sub') {
+    const sx = ((sub.x + 1) / 2) * W;
+    const sy = depthToY(sub.d);
+    ctx.save();
+    ctx.translate(sx, sy);
+    ctx.scale(sub.facing, 1);
+    // headlight beam, cutting the water ahead
+    const beam = ctx.createLinearGradient(20, 0, 220, 0);
+    beam.addColorStop(0, 'rgba(255, 240, 180, 0.22)');
+    beam.addColorStop(1, 'rgba(255, 240, 180, 0)');
+    ctx.fillStyle = beam;
+    ctx.beginPath();
+    ctx.moveTo(24, -4);
+    ctx.lineTo(230, -46);
+    ctx.lineTo(230, 46);
+    ctx.lineTo(24, 10);
+    ctx.fill();
+    // hull: yellow. obviously yellow.
+    ctx.fillStyle = '#e8c53f';
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 34, 18, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#c8a52f';                    // conning tower
+    ctx.fillRect(-12, -28, 20, 14);
+    ctx.fillStyle = '#e8c53f';
+    ctx.fillRect(-14, -30, 24, 6);
+    // porthole, with you in it
+    ctx.fillStyle = '#8fd4e8';
+    ctx.beginPath();
+    ctx.arc(8, -2, 8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#8a7420';
+    ctx.lineWidth = 2.5;
+    ctx.stroke();
+    ctx.fillStyle = '#5a4a3a';                    // your tiny worried head
+    ctx.beginPath();
+    ctx.arc(8, -2, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+    // propeller, doing its best
+    const spin = Math.sin(elapsed * 30) * 12;
+    ctx.strokeStyle = '#8a7420';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(-36, -spin);
+    ctx.lineTo(-36, spin);
+    ctx.stroke();
+    ctx.restore();
+    // bubbles, always bubbles
+    if (Math.random() < 0.4) {
+      ctx.fillStyle = 'rgba(200, 230, 255, 0.4)';
+      ctx.beginPath();
+      ctx.arc(sx - sub.facing * 40 + Math.random() * 8,
+              sy - 6 - Math.random() * 10, 2 + Math.random() * 2.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // the little cargo hook below
+    ctx.strokeStyle = 'rgba(230, 230, 240, 0.6)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(sx, sy + 16);
+    ctx.lineTo(sx, sy + 38);
+    ctx.stroke();
+    ctx.strokeStyle = '#d8d2c8';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(sx, sy + 44, 6, -0.4, Math.PI * 1.1);
+    ctx.stroke();
+  }
+
   // the line and the hook
-  if (mode !== 'idle') {
+  if (mode === 'drop' || mode === 'reel') {
     const hookY = depthToY(hook.d);
     const hookX = ((hook.x + boatX * 2 - 1) + 1) / 2 * W;
     ctx.strokeStyle = 'rgba(230, 230, 240, 0.5)';
@@ -593,7 +774,9 @@ function drawHud(W, H) {
   ctx.font = '14px monospace';
   ctx.fillText('depth: ' + Math.floor(hook.d) + 'm / ' + maxLine() + 'm', 14, 52);
 
-  for (const [id, label, x] of [['dex', '📖 FISHDEX', W - 260], ['shop', '⚓ SHOP', W - 120]]) {
+  const topButtons = [['dex', '📖 FISHDEX', W - 260], ['shop', '⚓ SHOP', W - 120]];
+  if (save.sub && mode === 'idle') topButtons.push(['dive', '🚤 DIVE', W - 400]);
+  for (const [id, label, x] of topButtons) {
     uiRects.push({ x, y: 12, w: 118, h: 36, id });
     ctx.fillStyle = 'rgba(255,255,255,0.08)';
     ctx.fillRect(x, 12, 118, 36);
@@ -610,7 +793,24 @@ function drawHud(W, H) {
   if (mode === 'idle' && !overlay) {
     ctx.fillStyle = `rgba(255, 240, 200, ${0.6 + Math.sin(elapsed * 2) * 0.25})`;
     ctx.font = 'bold 16px monospace';
-    ctx.fillText('tap (or space) to lower the hook', W / 2, H - 40);
+    ctx.fillText(save.sub ? 'tap to fish — or hit 🚤 DIVE, captain'
+                          : 'tap (or space) to lower the hook', W / 2, H - 40);
+  }
+
+  // sub instruments: the air bar and the cargo bay
+  if (mode === 'sub') {
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(W / 2 - 120, 14, 240, 20);
+    const frac = Math.max(0, sub.air / SUB_AIR);
+    ctx.fillStyle = frac > 0.3 ? '#4ac6ff' : (Math.floor(elapsed * 4) % 2 ? '#ff5a4a' : '#ffd23f');
+    ctx.fillRect(W / 2 - 118, 16, 236 * frac, 16);
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 12px monospace';
+    ctx.fillText('AIR', W / 2, 28);
+    ctx.font = '14px monospace';
+    ctx.fillStyle = '#cfe4ff';
+    ctx.fillText('cargo: ' + '🐟'.repeat(sub.cargo.length) + '·'.repeat(CARGO_MAX - sub.cargo.length) +
+                 '   —   surface to sell', W / 2, 52);
   }
   if (statusT > 0) {
     ctx.fillStyle = 'rgba(255, 255, 255, ' + Math.min(1, statusT) + ')';
@@ -673,6 +873,8 @@ function drawShop(W, H) {
       (save.reel < REEL_LEVELS.length ? ' → ' + REEL_LEVELS[save.reel] : ' (MAX)')],
     ['lamp', 'THE LAMP', save.lamp === 0 ? 'the deep is DARK. fix that.'
       : 'glow: ' + lampR() + (save.lamp < LAMP_LEVELS.length - 1 ? ' → ' + LAMP_LEVELS[save.lamp + 1] : ' (MAX)')],
+    ['sub', 'THE SUBMARINE', save.sub ? 'she\'s yours, captain. press DIVE.'
+      : 'go down there YOURSELF. any depth. 50s of air. 5-fish cargo bay.'],
   ];
   items.forEach(([id, name, desc], i) => {
     const cw = Math.min(W - 40, 440), x = W / 2 - cw / 2, y = 110 + i * 92;
