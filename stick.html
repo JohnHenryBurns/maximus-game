@@ -1,0 +1,771 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>STICK ARENA</title>
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #10131a; }
+  canvas { display: block; touch-action: none; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+// =====================================================================
+// STICK ARENA — build the arena. upgrade the fighter. WIN THE BATTLE.
+//
+// Three rooms in one game:
+//   BATTLE  — you vs a bot that gets meaner every round
+//   BUILD   — paint your own arena, grid-style
+//   UPGRADE — spend hard-won coins on POWER, SPEED, HEALTH, JUMP
+// =====================================================================
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+function fit() { canvas.width = innerWidth; canvas.height = innerHeight; }
+addEventListener('resize', fit);
+fit();
+
+window.onerror = (msg, src, line) => {
+  const d = document.createElement('div');
+  d.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#c0392b;' +
+    'color:#fff;font:14px monospace;padding:8px;z-index:9';
+  d.textContent = '🐛 BUG on line ' + line + ': ' + msg;
+  document.body.appendChild(d);
+};
+
+// ---------------------------------------------------------------------
+// SOUND
+// ---------------------------------------------------------------------
+let audio = null;
+function ensureAudio() {
+  if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)();
+}
+function beep(freq, dur, type, vol) {
+  if (!audio) return;
+  const o = audio.createOscillator(), g = audio.createGain();
+  o.type = type || 'square';
+  o.frequency.value = freq;
+  g.gain.setValueAtTime(vol || 0.1, audio.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + dur);
+  o.connect(g); g.connect(audio.destination);
+  o.start(); o.stop(audio.currentTime + dur + 0.02);
+}
+function swishSound() { beep(700, 0.06, 'sawtooth', 0.05); }
+function bonkSound() { beep(200, 0.1, 'square', 0.15); beep(120, 0.16, 'triangle', 0.15); }
+function koSound() { [400, 300, 200, 120].forEach((n, i) => setTimeout(() => beep(n, 0.15, 'square', 0.12), i * 90)); }
+function winSound() { [523, 659, 784, 1047].forEach((n, i) => setTimeout(() => beep(n, 0.2, 'square', 0.1), i * 110)); }
+function coinSound() { beep(988, 0.06, 'square', 0.08); setTimeout(() => beep(1319, 0.15, 'square', 0.08), 50); }
+
+// ---------------------------------------------------------------------
+// SAVING — your coins and upgrades live in the browser
+// ---------------------------------------------------------------------
+const TILE = 46;
+let save = { coins: 0, round: 1, hp: 0, spd: 0, pow: 0, jmp: 0 };
+try {
+  const s = JSON.parse(localStorage.getItem('stick_save'));
+  if (s) save = Object.assign(save, s);
+} catch (err) {}
+function persist() { localStorage.setItem('stick_save', JSON.stringify(save)); }
+
+// the arena: a set of ground cells plus the two starting corners
+let arena = { tiles: new Set(), you: [3, 9], enemy: [16, 9] };
+function defaultArena() {
+  arena = { tiles: new Set(), you: [3, 9], enemy: [16, 9] };
+  for (let i = 0; i < 20; i++) arena.tiles.add(i + ',10');
+  for (let i = 4; i < 8; i++) arena.tiles.add(i + ',7');
+  for (let i = 12; i < 16; i++) arena.tiles.add(i + ',7');
+}
+defaultArena();
+function saveArena() {
+  localStorage.setItem('stick_arena', JSON.stringify({
+    tiles: [...arena.tiles], you: arena.you, enemy: arena.enemy }));
+}
+try {
+  const a = JSON.parse(localStorage.getItem('stick_arena'));
+  if (a && a.tiles && a.tiles.length) {
+    arena = { tiles: new Set(a.tiles), you: a.you || [3, 9], enemy: a.enemy || [16, 9] };
+  }
+} catch (err) {}
+
+// ---------------------------------------------------------------------
+// UPGRADES — what your coins buy
+// ---------------------------------------------------------------------
+const UPGRADES = [
+  { key: 'pow', name: 'POWER', desc: 'hit harder',
+    base: 12, per: 4 },
+  { key: 'spd', name: 'SPEED', desc: 'run faster',
+    base: 240, per: 18 },
+  { key: 'hp', name: 'HEALTH', desc: 'take more hits',
+    base: 100, per: 25 },
+  { key: 'jmp', name: 'JUMP', desc: 'jump higher',
+    base: 700, per: 45 },
+];
+function upCost(level) { return 20 + level * 15; }
+function stat(key) {
+  const u = UPGRADES.find(u => u.key === key);
+  return u.base + save[key] * u.per;
+}
+
+// ---------------------------------------------------------------------
+// GAME STATE
+// ---------------------------------------------------------------------
+let screen = 'menu';    // 'menu' | 'battle' | 'build' | 'shop'
+let uiRects = [];
+let elapsed = 0;
+let solids = [];
+let levelBottom = 0;
+let worldW = 2000, worldH = 1200;
+let fighters = [];      // [you, bot]
+let hitFx = [];         // little impact stars
+let banner = null;      // { text, timer, coins } after a KO
+let camX = 0, camY = 0;
+
+function buildSolids() {
+  solids = [];
+  let maxX = 900, maxBottom = 500;
+  for (const key of arena.tiles) {
+    const [cx, cy] = key.split(',').map(Number);
+    solids.push({ x: cx * TILE, y: cy * TILE, w: TILE, h: TILE,
+                  lid: !arena.tiles.has(cx + ',' + (cy - 1)) });
+    maxX = Math.max(maxX, cx * TILE + TILE);
+    maxBottom = Math.max(maxBottom, cy * TILE + TILE);
+  }
+  worldW = maxX + 300;
+  levelBottom = maxBottom;
+}
+
+function makeFighter(cellX, cellY, isBot) {
+  const round = save.round;
+  return {
+    x: cellX * TILE + 8, y: cellY * TILE - 60,
+    w: 26, h: 56, vx: 0, vy: 0,
+    onGround: false, facing: isBot ? -1 : 1,
+    hp: isBot ? 50 + round * 14 : stat('hp'),
+    maxHp: isBot ? 50 + round * 14 : stat('hp'),
+    speed: isBot ? Math.min(300, 190 + round * 8) : stat('spd'),
+    jump: isBot ? 720 : stat('jmp'),
+    power: isBot ? 6 + round * 2 : stat('pow'),
+    attack: 0,          // seconds left of the current swing
+    cooldown: 0,
+    hurtFlash: 0,
+    ko: false, koSpin: 0,
+    walk: 0,
+    bot: isBot,
+    think: 0,           // the bot re-decides a few times a second
+    wantDir: 0, wantJump: false,
+  };
+}
+
+function startBattle() {
+  buildSolids();
+  fighters = [makeFighter(arena.you[0], arena.you[1], false),
+              makeFighter(arena.enemy[0], arena.enemy[1], true)];
+  hitFx = [];
+  banner = null;
+  screen = 'battle';
+}
+
+// ---------------------------------------------------------------------
+// INPUT
+// ---------------------------------------------------------------------
+const keys = {};
+addEventListener('keydown', e => {
+  ensureAudio();
+  keys[e.key.toLowerCase()] = true;
+  if (screen === 'battle' && (e.key.toLowerCase() === 'j' || e.key.toLowerCase() === 'x')) {
+    tryAttack(fighters[0]);
+  }
+});
+addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+
+let touchLeft = false, touchRight = false, touchJump = false, touchHitLatch = false;
+function readTouches(e) {
+  touchLeft = touchRight = touchJump = false;
+  if (screen !== 'battle') return;
+  for (const t of e.touches) {
+    const W = canvas.width, H = canvas.height;
+    if (t.clientY < 70) continue;
+    if (t.clientX < W * 0.22) touchLeft = true;
+    else if (t.clientX < W * 0.44) touchRight = true;
+    else if (t.clientX > W * 0.6 && t.clientY < H * 0.6) touchJump = true;
+    else if (t.clientX > W * 0.6) {
+      if (!touchHitLatch) { touchHitLatch = true; tryAttack(fighters[0]); }
+    }
+  }
+  if (![...e.touches].some(t => t.clientX > canvas.width * 0.6 && t.clientY >= canvas.height * 0.6)) {
+    touchHitLatch = false;
+  }
+}
+addEventListener('touchstart', e => { e.preventDefault(); ensureAudio(); readTouches(e); }, { passive: false });
+addEventListener('touchmove', e => { e.preventDefault(); readTouches(e); }, { passive: false });
+addEventListener('touchend', e => { e.preventDefault(); readTouches(e); }, { passive: false });
+
+// build-mode state (same builder muscles as the fart cave)
+let tool = 'ground';
+let editCamX = -100, editCamY = 100;
+let painting = false, panLast = null, hoverPt = null;
+let resetArmUntil = 0;
+const pointers = new Map();
+function pointerMid() {
+  let mx = 0, my = 0;
+  for (const p of pointers.values()) { mx += p.x; my += p.y; }
+  return { x: mx / pointers.size, y: my / pointers.size };
+}
+
+function uiAction(id) {
+  if (id === 'battle') { startBattle(); return; }
+  if (id === 'build') { screen = 'build'; return; }
+  if (id === 'shop') { screen = 'shop'; return; }
+  if (id === 'menu') { screen = 'menu'; return; }
+  if (id === 'reset') {
+    if (performance.now() < resetArmUntil) { defaultArena(); saveArena(); resetArmUntil = 0; }
+    else resetArmUntil = performance.now() + 3000;
+    return;
+  }
+  resetArmUntil = 0;
+  if (id.startsWith('buy_')) {
+    const key = id.slice(4);
+    const cost = upCost(save[key]);
+    if (save.coins >= cost && save[key] < 12) {
+      save.coins -= cost;
+      save[key]++;
+      persist();
+      coinSound();
+    }
+    return;
+  }
+  tool = id;
+}
+
+function applyTool(sx, sy) {
+  if (sy < 96) return;
+  const cx = Math.floor((sx + editCamX) / TILE);
+  const cy = Math.floor((sy + editCamY) / TILE);
+  const key = cx + ',' + cy;
+  if (tool === 'ground') arena.tiles.add(key);
+  else if (tool === 'you') arena.you = [cx, cy];
+  else if (tool === 'enemy') arena.enemy = [cx, cy];
+  else if (tool === 'erase') arena.tiles.delete(key);
+  saveArena();
+}
+
+addEventListener('pointerdown', e => {
+  ensureAudio();
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  for (const r of uiRects) {
+    if (e.clientX > r.x && e.clientX < r.x + r.w &&
+        e.clientY > r.y && e.clientY < r.y + r.h) { uiAction(r.id); return; }
+  }
+  if (screen === 'battle') {
+    if (banner && banner.timer > 0.8) return;
+    if (banner) { screen = 'menu'; return; }
+    if (e.pointerType !== 'touch') tryAttack(fighters[0]);   // click = swing
+    return;
+  }
+  if (screen !== 'build') return;
+  if (pointers.size >= 2) { painting = false; panLast = pointerMid(); return; }
+  if (tool === 'pan' || e.button === 2) { panLast = { x: e.clientX, y: e.clientY }; return; }
+  painting = true;
+  applyTool(e.clientX, e.clientY);
+});
+addEventListener('pointermove', e => {
+  if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (screen !== 'build') return;
+  hoverPt = { x: e.clientX, y: e.clientY };
+  if (pointers.size >= 2) {
+    const mid = pointerMid();
+    if (panLast) { editCamX -= mid.x - panLast.x; editCamY -= mid.y - panLast.y; }
+    panLast = mid;
+    return;
+  }
+  if (panLast) {
+    editCamX -= e.clientX - panLast.x;
+    editCamY -= e.clientY - panLast.y;
+    panLast = { x: e.clientX, y: e.clientY };
+  } else if (painting) applyTool(e.clientX, e.clientY);
+});
+function dropPointer(e) { pointers.delete(e.pointerId); painting = false; panLast = null; }
+addEventListener('pointerup', dropPointer);
+addEventListener('pointercancel', dropPointer);
+addEventListener('contextmenu', e => e.preventDefault());
+
+// ---------------------------------------------------------------------
+// THE FIGHT
+// ---------------------------------------------------------------------
+const GRAVITY = 2100;
+
+function overlaps(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x &&
+         a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+function tryAttack(f) {
+  if (!f || f.ko || f.cooldown > 0 || (banner && banner.timer)) return;
+  f.attack = 0.18;
+  f.cooldown = 0.42;
+  swishSound();
+}
+
+function fighterPhysics(f, dt, dir, jumpHeld) {
+  if (f.ko) {
+    // a KO'd stickman flops off the stage with cartoon dignity
+    f.koSpin += dt * 9;
+    f.vy += GRAVITY * dt;
+    f.y += f.vy * dt;
+    f.x += f.vx * dt;
+    return;
+  }
+  f.vx = dir * f.speed;
+  if (dir !== 0) { f.facing = dir; f.walk += dt; }
+  if (jumpHeld && f.onGround) {
+    f.vy = -f.jump;
+    f.onGround = false;
+  }
+  f.vy += GRAVITY * dt;
+  f.x += f.vx * dt;
+  for (const s of solids) {
+    if (!overlaps(f, s)) continue;
+    if (f.vx > 0) f.x = s.x - f.w;
+    else if (f.vx < 0) f.x = s.x + s.w;
+  }
+  f.y += f.vy * dt;
+  f.onGround = false;
+  for (const s of solids) {
+    if (!overlaps(f, s)) continue;
+    if (f.vy > 0) { f.y = s.y - f.h; f.vy = 0; f.onGround = true; }
+    else if (f.vy < 0) { f.y = s.y + s.h; f.vy = 0; }
+  }
+  if (f.cooldown > 0) f.cooldown -= dt;
+  if (f.attack > 0) f.attack -= dt;
+  if (f.hurtFlash > 0) f.hurtFlash -= dt;
+}
+
+function attackBox(f) {
+  // where the swing can reach: a box in front of the fighter
+  return { x: f.facing > 0 ? f.x + f.w : f.x - 44, y: f.y - 6, w: 44, h: f.h + 6 };
+}
+
+function update(dt) {
+  elapsed += dt;
+  if (screen !== 'battle') return;
+  const you = fighters[0], bot = fighters[1];
+
+  if (banner) { banner.timer += dt; return; }
+
+  // ---- your controls ----
+  const dir = ((keys['arrowright'] || keys['d'] || touchRight) ? 1 : 0) -
+              ((keys['arrowleft'] || keys['a'] || touchLeft) ? 1 : 0);
+  const jump = keys[' '] || keys['arrowup'] || keys['w'] || touchJump;
+  fighterPhysics(you, dt, you.ko ? 0 : dir, jump);
+
+  // ---- the bot's tiny brain: chase, jump when stuck, swing in range ----
+  bot.think -= dt;
+  if (bot.think <= 0 && !bot.ko) {
+    bot.think = 0.15 + Math.random() * 0.2;
+    const dx = (you.x + you.w / 2) - (bot.x + bot.w / 2);
+    bot.wantDir = Math.abs(dx) < 30 ? 0 : Math.sign(dx);
+    // jump if you're above, or if a wall is in the way, or for drama
+    const wallAhead = solids.some(s =>
+      overlaps({ x: bot.x + bot.wantDir * 20, y: bot.y, w: bot.w, h: bot.h - 6 }, s));
+    bot.wantJump = (you.y + you.h < bot.y - 20 && Math.abs(dx) < 260) ||
+                   wallAhead || Math.random() < 0.05;
+    if (Math.abs(dx) < 62 && Math.abs(you.y - bot.y) < 60 && !you.ko) tryAttack(bot);
+  }
+  fighterPhysics(bot, dt, bot.ko ? 0 : bot.wantDir, bot.wantJump);
+  if (bot.wantJump && bot.onGround === false) bot.wantJump = false;
+
+  // ---- swings connect ----
+  for (const [striker, target] of [[you, bot], [bot, you]]) {
+    if (striker.attack > 0.09 && !target.ko && target.hurtFlash <= 0 &&
+        overlaps(attackBox(striker), target)) {
+      target.hp -= striker.power;
+      target.hurtFlash = 0.35;
+      target.vx = striker.facing * 260;             // cartoon knockback
+      target.x += striker.facing * 14;
+      target.vy = Math.min(target.vy, -180);
+      bonkSound();
+      hitFx.push({ x: target.x + target.w / 2, y: target.y + 14, t: 0.35 });
+      if (target.hp <= 0) {
+        target.ko = true;
+        target.vy = -560;
+        target.vx = striker.facing * 220;
+        koSound();
+      }
+    }
+  }
+  for (const fx of hitFx) fx.t -= dt;
+  hitFx = hitFx.filter(fx => fx.t > 0);
+
+  // ---- falling off the arena is a RING-OUT ----
+  for (const f of fighters) {
+    if (!f.ko && f.y > levelBottom + 320) {
+      f.ko = true;
+      koSound();
+    }
+  }
+
+  // ---- somebody down? ----
+  if (bot.ko && !banner) {
+    const reward = 10 + save.round * 6;
+    banner = { text: 'ROUND ' + save.round + ' — YOU WIN!', coins: reward, timer: 0 };
+    save.coins += reward;
+    save.round++;
+    persist();
+    winSound();
+  } else if (you.ko && !banner) {
+    banner = { text: 'KNOCKED OUT...', coins: 0, timer: 0 };
+  }
+
+  // ---- camera keeps both fighters in frame ----
+  const midX = (you.x + bot.x) / 2;
+  camX = Math.max(0, Math.min(Math.max(0, worldW - canvas.width), midX - canvas.width / 2));
+  camY = Math.min(levelBottom + 60 - canvas.height, 0);
+  camY = Math.max(camY, Math.min(you.y, bot.y) - canvas.height * 0.4);
+  camY = Math.min(camY, levelBottom + 60 - canvas.height);
+}
+
+// ---------------------------------------------------------------------
+// DRAWING — stick figures with genuine attitude
+// ---------------------------------------------------------------------
+function drawStickman(f, color) {
+  const cx = f.x + f.w / 2;
+  const top = f.y;
+  ctx.save();
+  if (f.ko) {
+    ctx.translate(cx, f.y + f.h / 2);
+    ctx.rotate(f.koSpin);
+    ctx.translate(-cx, -(f.y + f.h / 2));
+  }
+  ctx.strokeStyle = f.hurtFlash > 0 && Math.floor(elapsed * 20) % 2 ? '#ffffff' : color;
+  ctx.lineWidth = 5;
+  ctx.lineCap = 'round';
+  // head
+  ctx.beginPath();
+  ctx.arc(cx, top + 10, 10, 0, Math.PI * 2);
+  ctx.stroke();
+  // body
+  ctx.beginPath();
+  ctx.moveTo(cx, top + 20);
+  ctx.lineTo(cx, top + 38);
+  ctx.stroke();
+  // legs: scissor while running, together while flying
+  const step = f.onGround && f.vx !== 0 ? Math.sin(f.walk * 13) * 9 : (f.onGround ? 0 : 5);
+  ctx.beginPath();
+  ctx.moveTo(cx, top + 38);
+  ctx.lineTo(cx - 8 - step, top + 56);
+  ctx.moveTo(cx, top + 38);
+  ctx.lineTo(cx + 8 + step, top + 56);
+  ctx.stroke();
+  // arms: one swings the stick-sword during an attack
+  const swing = f.attack > 0 ? (0.18 - f.attack) / 0.18 : 0;
+  ctx.beginPath();
+  ctx.moveTo(cx, top + 26);
+  ctx.lineTo(cx - f.facing * 10, top + 34);        // back arm
+  ctx.stroke();
+  const ang = swing > 0 ? -1.9 + swing * 2.6 : -0.5;   // the swing arc
+  const ax = cx + f.facing * Math.cos(ang) * 16;
+  const ay = top + 26 + Math.sin(ang) * 16;
+  ctx.beginPath();
+  ctx.moveTo(cx, top + 26);
+  ctx.lineTo(ax, ay);
+  ctx.stroke();
+  // the stick-sword itself
+  ctx.strokeStyle = '#c8c0b0';
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.moveTo(ax, ay);
+  ctx.lineTo(ax + f.facing * Math.cos(ang - 0.2) * 26, ay + Math.sin(ang - 0.2) * 26);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawArenaWorld() {
+  for (const s of solids) {
+    if (s.x + s.w < camX - 40 || s.x > camX + canvas.width + 40) continue;
+    ctx.fillStyle = '#2a3040';
+    ctx.fillRect(s.x, s.y, s.w, s.h);
+    if (s.lid) {
+      ctx.fillStyle = '#4a5a78';
+      ctx.fillRect(s.x, s.y, s.w, 8);
+    }
+  }
+}
+
+function drawBattle() {
+  const W = canvas.width, H = canvas.height;
+  uiRects = [];
+  // arena night sky + distant crowd sparkles
+  const bg = ctx.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, '#10131a');
+  bg.addColorStop(1, '#232a3a');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = 'rgba(255,255,255,0.25)';
+  for (let i = 0; i < 40; i++) {
+    const tw = Math.sin(elapsed * 2 + i * 7) > 0.6 ? 1 : 0;
+    if (tw) ctx.fillRect((i * 97) % W, (i * 53) % (H / 2), 2, 2);
+  }
+
+  ctx.save();
+  ctx.translate(-camX, -camY);
+  drawArenaWorld();
+  drawStickman(fighters[0], '#7dd3ff');
+  drawStickman(fighters[1], '#ff6b5e');
+  // impact stars
+  ctx.fillStyle = '#ffd23f';
+  ctx.font = 'bold 26px monospace';
+  ctx.textAlign = 'center';
+  for (const fx of hitFx) {
+    ctx.globalAlpha = fx.t / 0.35;
+    ctx.fillText(['POW', 'BONK', 'WHAM'][Math.floor(fx.x) % 3], fx.x, fx.y - (0.35 - fx.t) * 60);
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+
+  // health bars
+  const you = fighters[0], bot = fighters[1];
+  function bar(x, f, color, name) {
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(x, 14, 240, 22);
+    ctx.fillStyle = color;
+    ctx.fillRect(x + 2, 16, 236 * Math.max(0, f.hp / f.maxHp), 18);
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 13px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(name, x + 6, 30);
+  }
+  bar(14, you, '#3a9ad9', 'YOU');
+  bar(canvas.width - 254, bot, '#d94a3a', 'BOT ' + save.round);
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.font = '13px monospace';
+  ctx.fillText('move: ←→/AD   jump: ↑/W/space   attack: J / X / click', canvas.width / 2, 30);
+  if ('ontouchstart' in window) {
+    ctx.fillStyle = 'rgba(255,255,255,0.2)';
+    ctx.font = 'bold 34px monospace';
+    ctx.fillText('◀', canvas.width * 0.11, canvas.height - 40);
+    ctx.fillText('▶', canvas.width * 0.33, canvas.height - 40);
+    ctx.fillText('⤴', canvas.width * 0.8, canvas.height * 0.5);
+    ctx.fillText('⚔', canvas.width * 0.8, canvas.height - 40);
+  }
+
+  if (banner) {
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = banner.coins ? '#ffd23f' : '#ff6b5e';
+    ctx.font = `bold ${Math.min(46, canvas.width / 14)}px monospace`;
+    ctx.fillText(banner.text, canvas.width / 2, canvas.height / 2 - 20);
+    ctx.fillStyle = '#fff';
+    ctx.font = '18px monospace';
+    if (banner.coins) ctx.fillText('+' + banner.coins + ' coins!', canvas.width / 2, canvas.height / 2 + 20);
+    if (banner.timer > 0.8) {
+      ctx.fillStyle = 'rgba(255,255,255,0.7)';
+      ctx.fillText('tap to continue', canvas.width / 2, canvas.height / 2 + 54);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------
+// MENU + SHOP + BUILDER SCREENS
+// ---------------------------------------------------------------------
+function bigButton(x, y, w, h, id, label, sub, color) {
+  uiRects.push({ x, y, w, h, id });
+  ctx.fillStyle = 'rgba(255,255,255,0.06)';
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 3;
+  ctx.strokeRect(x, y, w, h);
+  ctx.fillStyle = color;
+  ctx.textAlign = 'center';
+  ctx.font = `bold ${Math.min(26, w / 9)}px monospace`;
+  ctx.fillText(label, x + w / 2, y + h / 2 - 4);
+  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  ctx.font = '13px monospace';
+  ctx.fillText(sub, x + w / 2, y + h / 2 + 20);
+}
+
+function drawMenu() {
+  const W = canvas.width, H = canvas.height;
+  uiRects = [];
+  ctx.fillStyle = '#10131a';
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#7dd3ff';
+  ctx.font = `bold ${Math.min(58, W / 10)}px monospace`;
+  ctx.fillText('STICK ARENA', W / 2, H * 0.2);
+  ctx.fillStyle = '#ffd23f';
+  ctx.font = 'bold 18px monospace';
+  ctx.fillText('coins: ' + save.coins + '   round: ' + save.round, W / 2, H * 0.2 + 34);
+
+  const bw = Math.min(W - 60, 380), bh = 74;
+  const bx = W / 2 - bw / 2;
+  bigButton(bx, H * 0.34, bw, bh, 'battle', '⚔  BATTLE', 'round ' + save.round + ' awaits', '#ff6b5e');
+  bigButton(bx, H * 0.34 + 90, bw, bh, 'build', '🔨  BUILD ARENA', 'paint your own battleground', '#7ddf8f');
+  bigButton(bx, H * 0.34 + 180, bw, bh, 'shop', '⬆  UPGRADE', 'spend coins, grow stronger', '#ffd23f');
+
+  // two little stickmen posing under the title
+  const t = elapsed;
+  fightersPose(W / 2 - 120, H * 0.27, '#7dd3ff', Math.sin(t * 2) * 0.2);
+  fightersPose(W / 2 + 120, H * 0.27, '#ff6b5e', Math.sin(t * 2 + 3) * 0.2);
+}
+function fightersPose(x, y, color, tilt) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(tilt);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 4;
+  ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.arc(0, -26, 8, 0, Math.PI * 2); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, -18); ctx.lineTo(0, 0); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-7, 16); ctx.moveTo(0, 0); ctx.lineTo(7, 16); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, -12); ctx.lineTo(-12, -4); ctx.moveTo(0, -12); ctx.lineTo(14, -18); ctx.stroke();
+  ctx.restore();
+}
+
+function drawShop() {
+  const W = canvas.width, H = canvas.height;
+  uiRects = [];
+  ctx.fillStyle = '#10131a';
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffd23f';
+  ctx.font = `bold ${Math.min(40, W / 14)}px monospace`;
+  ctx.fillText('UPGRADES', W / 2, 60);
+  ctx.font = 'bold 18px monospace';
+  ctx.fillText('coins: ' + save.coins, W / 2, 92);
+
+  const cw = Math.min(W - 40, 460), ch = 84;
+  const cx0 = W / 2 - cw / 2;
+  UPGRADES.forEach((u, i) => {
+    const y = 120 + i * (ch + 14);
+    const level = save[u.key];
+    const cost = upCost(level);
+    const maxed = level >= 12;
+    const can = !maxed && save.coins >= cost;
+    uiRects.push({ x: cx0, y, w: cw, h: ch, id: 'buy_' + u.key });
+    ctx.fillStyle = 'rgba(255,255,255,0.06)';
+    ctx.fillRect(cx0, y, cw, ch);
+    ctx.strokeStyle = maxed ? '#7ddf8f' : can ? '#ffd23f' : '#4a5060';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(cx0, y, cw, ch);
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 20px monospace';
+    ctx.fillText(u.name, cx0 + 16, y + 32);
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.font = '13px monospace';
+    ctx.fillText(u.desc + '  —  now: ' + stat(u.key), cx0 + 16, y + 56);
+    // level pips
+    for (let p = 0; p < 12; p++) {
+      ctx.fillStyle = p < level ? '#7ddf8f' : 'rgba(255,255,255,0.15)';
+      ctx.fillRect(cx0 + 16 + p * 14, y + 66, 10, 6);
+    }
+    ctx.textAlign = 'right';
+    ctx.fillStyle = maxed ? '#7ddf8f' : can ? '#ffd23f' : '#7a8090';
+    ctx.font = 'bold 18px monospace';
+    ctx.fillText(maxed ? 'MAX!' : cost + ' coins', cx0 + cw - 16, y + 40);
+  });
+  ctx.textAlign = 'center';
+  bigButton(W / 2 - 90, 120 + 4 * 98 + 10, 180, 54, 'menu', '← MENU', '', '#7dd3ff');
+}
+
+const TOOLS = [
+  ['ground', 'GROUND'], ['you', 'YOU'], ['enemy', 'ENEMY'],
+  ['erase', 'ERASE'], ['pan', 'PAN'],
+];
+function drawBuild() {
+  const W = canvas.width, H = canvas.height;
+  uiRects = [];
+  if (keys['arrowleft'] || keys['a']) editCamX -= 10;
+  if (keys['arrowright'] || keys['d']) editCamX += 10;
+  if (keys['arrowup'] || keys['w']) editCamY -= 10;
+  if (keys['arrowdown'] || keys['s']) editCamY += 10;
+
+  ctx.fillStyle = '#151922';
+  ctx.fillRect(0, 0, W, H);
+  ctx.save();
+  ctx.translate(-editCamX, -editCamY);
+  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+  ctx.lineWidth = 1;
+  const gx0 = Math.floor(editCamX / TILE) * TILE, gy0 = Math.floor(editCamY / TILE) * TILE;
+  for (let gx = gx0; gx < editCamX + W + TILE; gx += TILE) {
+    ctx.beginPath(); ctx.moveTo(gx, editCamY); ctx.lineTo(gx, editCamY + H); ctx.stroke();
+  }
+  for (let gy = gy0; gy < editCamY + H + TILE; gy += TILE) {
+    ctx.beginPath(); ctx.moveTo(editCamX, gy); ctx.lineTo(editCamX + W, gy); ctx.stroke();
+  }
+  for (const key of arena.tiles) {
+    const [cx, cy] = key.split(',').map(Number);
+    ctx.fillStyle = '#2a3040';
+    ctx.fillRect(cx * TILE, cy * TILE, TILE, TILE);
+    if (!arena.tiles.has(cx + ',' + (cy - 1))) {
+      ctx.fillStyle = '#4a5a78';
+      ctx.fillRect(cx * TILE, cy * TILE, TILE, 8);
+    }
+  }
+  fightersPose(arena.you[0] * TILE + TILE / 2, arena.you[1] * TILE + TILE / 2, '#7dd3ff', 0);
+  fightersPose(arena.enemy[0] * TILE + TILE / 2, arena.enemy[1] * TILE + TILE / 2, '#ff6b5e', 0);
+  if (hoverPt && hoverPt.y > 96 && tool !== 'pan') {
+    const hcx = Math.floor((hoverPt.x + editCamX) / TILE);
+    const hcy = Math.floor((hoverPt.y + editCamY) / TILE);
+    ctx.strokeStyle = 'rgba(255, 210, 63, 0.8)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(hcx * TILE, hcy * TILE, TILE, TILE);
+  }
+  ctx.restore();
+
+  // toolbar
+  ctx.fillStyle = 'rgba(8, 10, 14, 0.9)';
+  ctx.fillRect(0, 0, W, 96);
+  let bx = 8, by = 8;
+  const resetArmed = performance.now() < resetArmUntil;
+  const all = TOOLS.concat([['battle', '⚔ FIGHT'], ['menu', 'MENU'],
+                            ['reset', resetArmed ? 'REALLY?' : 'RESET']]);
+  for (const [id, label] of all) {
+    const bw = Math.max(64, label.length * 11 + 20);
+    if (bx + bw > W - 8) { bx = 8; by += 42; }
+    uiRects.push({ x: bx, y: by, w: bw, h: 38, id });
+    const active = tool === id;
+    const danger = id === 'reset' && resetArmed;
+    ctx.fillStyle = danger ? 'rgba(232, 69, 60, 0.35)'
+                  : id === 'battle' ? 'rgba(255, 107, 94, 0.2)'
+                  : active ? 'rgba(255, 210, 63, 0.25)' : 'rgba(255,255,255,0.07)';
+    ctx.fillRect(bx, by, bw, 38);
+    ctx.strokeStyle = danger ? '#e8453c' : id === 'battle' ? '#ff6b5e'
+                    : active ? '#ffd23f' : '#5a5450';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(bx, by, bw, 38);
+    ctx.fillStyle = danger ? '#ff9f97' : id === 'battle' ? '#ff6b5e'
+                  : active ? '#ffd23f' : '#c8c0b8';
+    ctx.font = 'bold 14px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(label, bx + bw / 2, by + 25);
+    bx += bw + 8;
+  }
+  ctx.textAlign = 'left';
+  ctx.fillStyle = 'rgba(255,255,255,0.45)';
+  ctx.font = '13px monospace';
+  ctx.fillText('paint the arena — YOU and ENEMY place the fighters — two-finger swipe (or right-drag) to look around',
+               10, by + 60 > 90 ? by + 52 : 88);
+}
+
+// ---------------------------------------------------------------------
+// THE GAME LOOP
+// ---------------------------------------------------------------------
+let lastTime = 0;
+function loop(time) {
+  const dt = Math.min(0.03, (time - lastTime) / 1000);
+  lastTime = time;
+  update(dt);                                // update() ticks `elapsed` for every screen
+  if (screen === 'menu') drawMenu();
+  else if (screen === 'shop') drawShop();
+  else if (screen === 'build') drawBuild();
+  else drawBattle();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
