@@ -52,6 +52,24 @@ function beep(freq, dur, type, vol) {
   o.start(); o.stop(audio.currentTime + dur + 0.02);
 }
 function swishSound() { beep(700, 0.06, 'sawtooth', 0.05); }
+function shotgunSound() {
+  beep(90, 0.12, 'sawtooth', 0.2);
+  beep(160, 0.08, 'square', 0.15);
+  setTimeout(() => beep(70, 0.1, 'triangle', 0.12), 40);
+}
+function paintSound() { beep(520, 0.05, 'sine', 0.12); setTimeout(() => beep(320, 0.08, 'sine', 0.1), 40); }
+function portalSound() {
+  if (!audio) return;
+  const o = audio.createOscillator(), g = audio.createGain();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(280, audio.currentTime);
+  o.frequency.exponentialRampToValueAtTime(900, audio.currentTime + 0.12);
+  o.frequency.exponentialRampToValueAtTime(320, audio.currentTime + 0.26);
+  g.gain.setValueAtTime(0.14, audio.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + 0.3);
+  o.connect(g); g.connect(audio.destination);
+  o.start(); o.stop(audio.currentTime + 0.35);
+}
 function bonkSound() { beep(200, 0.1, 'square', 0.15); beep(120, 0.16, 'triangle', 0.15); }
 function koSound() { [400, 300, 200, 120].forEach((n, i) => setTimeout(() => beep(n, 0.15, 'square', 0.12), i * 90)); }
 function winSound() { [523, 659, 784, 1047].forEach((n, i) => setTimeout(() => beep(n, 0.2, 'square', 0.1), i * 110)); }
@@ -122,6 +140,11 @@ let fighters = [];      // [you, bot]
 let hitFx = [];         // little impact stars
 let banner = null;      // { text, timer, coins } after a KO
 let camX = 0, camY = 0;
+let pellets = [];       // shotgun pellets in flight
+let fxRings = [];       // portal rings and other round sparkles
+let blastCounter = 0;   // so one shotgun blast can't hit twice
+let weaponNotice = 0;   // "you drew: ..." timer at battle start
+const WEAPONS = ['shotgun', 'brush', 'portal'];
 
 let spikeRects = [];
 function buildSolids() {
@@ -161,6 +184,7 @@ function makeFighter(cellX, cellY, isBot) {
     bot: isBot,
     think: 0,           // the bot re-decides a few times a second
     wantDir: 0, wantJump: false,
+    lastBlast: 0,       // which shotgun blast already hit this fighter
   };
 }
 
@@ -168,9 +192,87 @@ function startBattle() {
   buildSolids();
   fighters = [makeFighter(arena.you[0], arena.you[1], false),
               makeFighter(arena.enemy[0], arena.enemy[1], true)];
+  // the weapon lottery — every battle deals you something different
+  const you = fighters[0];
+  you.weapon = WEAPONS[Math.floor(Math.random() * WEAPONS.length)];
+  you.paint = 15;        // brush ammo
+  you.gunCd = 0;
+  you.portalCd = 0;
+  pellets = [];
+  fxRings = [];
+  weaponNotice = 3;
   hitFx = [];
   banner = null;
   screen = 'battle';
+}
+
+// one blow lands — damage, knockback, drama, maybe a KO
+function damageFighter(t, amt, dir) {
+  t.hp -= amt;
+  t.hurtFlash = 0.35;
+  t.vx = dir * 260;
+  t.x += dir * 10;
+  t.vy = Math.min(t.vy, -180);
+  bonkSound();
+  hitFx.push({ x: t.x + t.w / 2, y: t.y + 14, t: 0.35 });
+  if (t.hp <= 0 && !t.ko) { t.ko = true; t.vy = -560; t.vx = dir * 220; koSound(); }
+}
+
+// ---- the three weapons ----
+function fireShotgunAt(wx, wy) {
+  const you = fighters[0];
+  if (you.ko || you.gunCd > 0 || banner) return;
+  you.gunCd = 0.9;
+  const ang = Math.atan2(wy - (you.y + 20), wx - (you.x + you.w / 2));
+  you.facing = Math.cos(ang) >= 0 ? 1 : -1;
+  blastCounter++;
+  for (let i = -1; i <= 1; i++) {
+    const a = ang + i * 0.11;
+    pellets.push({ x: you.x + you.w / 2 + Math.cos(a) * 22,
+                   y: you.y + 20 + Math.sin(a) * 22,
+                   vx: Math.cos(a) * 950, vy: Math.sin(a) * 950,
+                   life: 0.5, blast: blastCounter });
+  }
+  shotgunSound();
+}
+
+function paintAt(wx, wy) {
+  const you = fighters[0];
+  if (you.ko || banner) return;
+  const cx = Math.floor(wx / TILE), cy = Math.floor(wy / TILE);
+  const cell = { x: cx * TILE, y: cy * TILE, w: TILE, h: TILE };
+  // painting your own wall a second time makes it SPIKY
+  const idx = solids.findIndex(s => s.painted && s.x === cell.x && s.y === cell.y);
+  if (idx >= 0) {
+    solids.splice(idx, 1);
+    spikeRects.push({ x: cell.x + 4, y: cell.y + TILE * 0.45,
+                      w: TILE - 8, h: TILE * 0.55 });
+    paintSound();
+    return;
+  }
+  if (you.paint <= 0) return;
+  if (solids.some(s => overlaps(cell, s))) return;          // no double-painting
+  if (overlaps(cell, you) || overlaps(cell, fighters[1])) return;
+  solids.push({ ...cell, lid: true, painted: true });
+  you.paint--;
+  paintSound();
+}
+
+function teleportTo(wx, wy) {
+  const you = fighters[0];
+  if (you.ko || you.portalCd > 0 || banner) return;
+  const dest = { x: wx - you.w / 2, y: wy - you.h / 2, w: you.w, h: you.h };
+  if (solids.some(s => overlaps(dest, s))) {                // no zapping into rock
+    beep(120, 0.15, 'square', 0.08);
+    return;
+  }
+  fxRings.push({ x: you.x + you.w / 2, y: you.y + you.h / 2, t: 0.4, color: '#ff9f43' });
+  you.x = dest.x;
+  you.y = dest.y;
+  you.vy = Math.min(you.vy, 0);
+  you.portalCd = 2.5;
+  fxRings.push({ x: wx, y: wy, t: 0.4, color: '#7dd3ff' });
+  portalSound();
 }
 
 // ---------------------------------------------------------------------
@@ -273,9 +375,27 @@ addEventListener('pointerdown', e => {
         e.clientY > r.y && e.clientY < r.y + r.h) { uiAction(r.id); return; }
   }
   if (screen === 'battle') {
-    if (banner && banner.timer > 0.8) return;
-    if (banner) { screen = 'menu'; return; }
-    if (e.pointerType !== 'touch') tryAttack(fighters[0]);   // click = swing
+    if (banner) {
+      if (banner.timer > 0.8) screen = 'menu';    // tap-to-continue works now
+      return;
+    }
+    const you = fighters[0];
+    const wx = e.clientX + camX, wy = e.clientY + camY;
+    if (e.pointerType === 'touch') {
+      // fingers mostly use the zones — but the middle band of the
+      // screen is the weapon-aiming area for touch players
+      const fx = e.clientX / canvas.width;
+      if (fx < 0.44 || fx > 0.6) return;
+      if (you.weapon === 'shotgun') fireShotgunAt(wx, wy);
+      else if (you.weapon === 'portal') teleportTo(wx, wy);
+      else if (you.weapon === 'brush') paintAt(wx, wy);
+      return;
+    }
+    // mouse: the click IS the weapon
+    if (you.weapon === 'shotgun') fireShotgunAt(wx, wy);
+    else if (you.weapon === 'portal') teleportTo(wx, wy);
+    else if (you.weapon === 'brush') paintAt(wx, wy);
+    else tryAttack(you);
     return;
   }
   if (screen !== 'build') return;
@@ -316,7 +436,17 @@ function overlaps(a, b) {
 }
 
 function tryAttack(f) {
-  if (!f || f.ko || f.cooldown > 0 || (banner && banner.timer)) return;
+  if (!f || f.ko || banner) return;
+  // the attack button speaks whatever weapon you're holding
+  if (!f.bot && f.weapon === 'shotgun') {
+    fireShotgunAt(f.x + f.w / 2 + f.facing * 400, f.y + 20);
+    return;
+  }
+  if (!f.bot && f.weapon === 'portal') {
+    teleportTo(f.x + f.w / 2 + f.facing * 230, f.y + f.h / 2);
+    return;
+  }
+  if (f.cooldown > 0) return;
   f.attack = 0.18;
   f.cooldown = 0.42;
   swishSound();
@@ -412,6 +542,31 @@ function update(dt) {
   for (const fx of hitFx) fx.t -= dt;
   hitFx = hitFx.filter(fx => fx.t > 0);
 
+  // ---- weapon housekeeping ----
+  if (you.gunCd > 0) you.gunCd -= dt;
+  if (you.portalCd > 0) you.portalCd -= dt;
+  if (weaponNotice > 0) weaponNotice -= dt;
+  for (const r of fxRings) r.t -= dt;
+  fxRings = fxRings.filter(r => r.t > 0);
+
+  // ---- shotgun pellets fly, hit, or fizzle on the rocks ----
+  for (const p of pellets) {
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.life -= dt;
+    const box = { x: p.x - 3, y: p.y - 3, w: 6, h: 6 };
+    if (!bot.ko && bot.lastBlast !== p.blast && overlaps(box, bot)) {
+      bot.lastBlast = p.blast;                     // one blast = one hit of 7
+      damageFighter(bot, 7, Math.sign(p.vx) || 1);
+      p.life = 0;
+      continue;
+    }
+    for (const s of solids) {
+      if (overlaps(box, s)) { p.life = 0; break; }
+    }
+  }
+  pellets = pellets.filter(p => p.life > 0);
+
   // ---- spikes don't care WHOSE team you're on ----
   for (const f of fighters) {
     if (f.ko || f.hurtFlash > 0) continue;
@@ -500,23 +655,63 @@ function drawStickman(f, color) {
   ctx.moveTo(cx, top + 26);
   ctx.lineTo(ax, ay);
   ctx.stroke();
-  // the stick-sword itself
-  ctx.strokeStyle = '#c8c0b0';
-  ctx.lineWidth = 4;
-  ctx.beginPath();
-  ctx.moveTo(ax, ay);
-  ctx.lineTo(ax + f.facing * Math.cos(ang - 0.2) * 26, ay + Math.sin(ang - 0.2) * 26);
-  ctx.stroke();
+  // whatever this fighter is holding
+  const tipX = ax + f.facing * Math.cos(ang - 0.2) * 26;
+  const tipY = ay + Math.sin(ang - 0.2) * 26;
+  if (f.weapon === 'shotgun') {
+    ctx.strokeStyle = '#8a7a5a';                    // a chunky boom-stick
+    ctx.lineWidth = 7;
+    ctx.beginPath();
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(ax + f.facing * 30, ay - 2);
+    ctx.stroke();
+    ctx.strokeStyle = '#5a5040';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(ax + f.facing * 30, ay - 2);
+    ctx.lineTo(ax + f.facing * 40, ay - 3);
+    ctx.stroke();
+  } else if (f.weapon === 'brush') {
+    ctx.strokeStyle = '#c8c0b0';                    // brush handle...
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(tipX, tipY);
+    ctx.stroke();
+    ctx.fillStyle = '#7dd3ff';                      // ...with a paint-loaded tip
+    ctx.beginPath();
+    ctx.arc(tipX, tipY, 6, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (f.weapon === 'portal') {
+    ctx.strokeStyle = '#c8c0b0';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(ax + f.facing * 20, ay - 4);
+    ctx.stroke();
+    ctx.strokeStyle = '#ff9f43';                    // the humming portal ring
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(ax + f.facing * 26, ay - 5, 7, 0, Math.PI * 2);
+    ctx.stroke();
+  } else {
+    ctx.strokeStyle = '#c8c0b0';                    // the trusty stick-sword
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(tipX, tipY);
+    ctx.stroke();
+  }
   ctx.restore();
 }
 
 function drawArenaWorld() {
   for (const s of solids) {
     if (s.x + s.w < camX - 40 || s.x > camX + canvas.width + 40) continue;
-    ctx.fillStyle = '#2a3040';
+    ctx.fillStyle = s.painted ? '#1e4a5a' : '#2a3040';   // painted walls wear your color
     ctx.fillRect(s.x, s.y, s.w, s.h);
     if (s.lid) {
-      ctx.fillStyle = '#4a5a78';
+      ctx.fillStyle = s.painted ? '#7dd3ff' : '#4a5a78';
       ctx.fillRect(s.x, s.y, s.w, 8);
     }
   }
@@ -561,6 +756,21 @@ function drawBattle() {
   drawArenaWorld();
   drawStickman(fighters[0], '#7dd3ff');
   drawStickman(fighters[1], '#ff6b5e');
+  // shotgun pellets, hot and yellow
+  ctx.fillStyle = '#ffd23f';
+  for (const p of pellets) {
+    ctx.fillRect(p.x - 3, p.y - 3, 6, 6);
+  }
+  // portal rings, blooming open
+  for (const r of fxRings) {
+    ctx.strokeStyle = r.color;
+    ctx.globalAlpha = r.t / 0.4;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(r.x, r.y, 12 + (0.4 - r.t) * 110, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
   // impact stars
   ctx.fillStyle = '#ffd23f';
   ctx.font = 'bold 26px monospace';
@@ -586,6 +796,30 @@ function drawBattle() {
   }
   bar(14, you, '#3a9ad9', 'YOU');
   bar(canvas.width - 254, bot, '#d94a3a', 'BOT ' + save.round);
+
+  // what you're holding, and whether it's ready
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#ffd23f';
+  ctx.font = 'bold 13px monospace';
+  const wtxt = you.weapon === 'shotgun'
+      ? '🔫 SHOTGUN — click to blast' + (you.gunCd > 0 ? ' (reloading...)' : '')
+    : you.weapon === 'portal'
+      ? '🌀 PORTAL GUN — click to teleport' + (you.portalCd > 0 ? ' (' + you.portalCd.toFixed(1) + 's)' : '')
+    : you.weapon === 'brush'
+      ? '🖌 PAINT BRUSH — paint: ' + you.paint + ' — click=wall, click your wall=SPIKES, J=swing'
+    : 'STICK SWORD';
+  ctx.fillText(wtxt, 14, 52);
+
+  if (weaponNotice > 0 && !banner) {
+    ctx.textAlign = 'center';
+    ctx.globalAlpha = Math.min(1, weaponNotice);
+    ctx.fillStyle = '#ffd23f';
+    ctx.font = `bold ${Math.min(30, canvas.width / 20)}px monospace`;
+    ctx.fillText('you drew: ' + (you.weapon === 'shotgun' ? 'the SHOTGUN!'
+                 : you.weapon === 'portal' ? 'the PORTAL GUN!'
+                 : 'the PAINT BRUSH!'), canvas.width / 2, canvas.height * 0.24);
+    ctx.globalAlpha = 1;
+  }
 
   ctx.textAlign = 'center';
   ctx.fillStyle = 'rgba(255,255,255,0.5)';
