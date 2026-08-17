@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>PAPER WARS</title>
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #e8e0c8; }
+  canvas { display: block; touch-action: none; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+// =====================================================================
+// PAPER WARS — claim the paper. All of it.
+// You own a patch of color. Venture out and you leave a TRAIL —
+// loop back home and everything you enclosed becomes yours.
+// But while you're out, your trail is your throat: if anyone
+// touches it (including YOU), you're gone. The others play by the
+// same rules. Their trails are waiting.
+// =====================================================================
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+function fit() { canvas.width = innerWidth; canvas.height = innerHeight; }
+addEventListener('resize', fit);
+fit();
+
+window.onerror = (msg, src, line) => {
+  const d = document.createElement('div');
+  d.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#c0392b;' +
+    'color:#fff;font:14px monospace;padding:8px;z-index:9';
+  d.textContent = '🐛 BUG on line ' + line + ': ' + msg;
+  document.body.appendChild(d);
+};
+
+// ---------------------------------------------------------------------
+// SOUND
+// ---------------------------------------------------------------------
+let audio = null;
+function ensureAudio() {
+  if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)();
+}
+function beep(freq, dur, type, vol) {
+  if (!audio) return;
+  const o = audio.createOscillator(), g = audio.createGain();
+  o.type = type || 'square';
+  o.frequency.value = freq;
+  g.gain.setValueAtTime(vol || 0.08, audio.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + dur);
+  o.connect(g); g.connect(audio.destination);
+  o.start(); o.stop(audio.currentTime + dur + 0.02);
+}
+function claimSound(size) {
+  const n = Math.min(5, 1 + Math.floor(size / 40));
+  for (let i = 0; i < n; i++) {
+    setTimeout(() => beep(520 + i * 110, 0.12, 'square', 0.07), i * 70);
+  }
+}
+function deathSound() { [300, 220, 150, 90].forEach((n, i) => setTimeout(() => beep(n, 0.18, 'sawtooth', 0.1), i * 100)); }
+function killSound() { beep(880, 0.08, 'square', 0.1); setTimeout(() => beep(590, 0.15, 'square', 0.1), 70); }
+
+// ---------------------------------------------------------------------
+// THE PAPER — a big grid; every cell remembers who owns it,
+// and whose trail is drawn on it right now
+// ---------------------------------------------------------------------
+const GW = 90, GH = 60, CELL = 22;
+const own = new Uint8Array(GW * GH);     // 0 = blank paper, else player id
+const trail = new Uint8Array(GW * GH);   // same, for wet ink trails
+const idx = (x, y) => y * GW + x;
+
+const PLAYERS = [
+  { id: 1, name: 'YOU',     color: '#3a9ad9', dark: '#2a6a9f', isYou: true },
+  { id: 2, name: 'Chippy',  color: '#e8453c', dark: '#a83028' },
+  { id: 3, name: 'Gerald',  color: '#ff9f43', dark: '#c8742a' },
+  { id: 4, name: 'Kevin',   color: '#5fbf6f', dark: '#3f8a4c' },
+  { id: 5, name: 'Barry',   color: '#a878e8', dark: '#7a52b0' },
+];
+
+let ents = [];
+let elapsed = 0;
+let camX = 0, camY = 0;
+let gameOver = false;
+let bestPct = 0;
+let milestone = 0;          // the next % worth celebrating
+let banner = '', bannerT = 0;
+
+function makeEnt(p, cx, cy) {
+  return {
+    p, x: cx + 0.5, y: cy + 0.5, dx: 1, dy: 0,
+    nextDx: 1, nextDy: 0,
+    lastCell: idx(cx, cy),
+    myTrail: [],
+    out: false,
+    alive: true,
+    respawnT: 0,
+    // bot brains
+    plan: [], home: null,
+  };
+}
+
+function stampSquare(id, cx, cy, r) {
+  for (let y = cy - r; y <= cy + r; y++) {
+    for (let x = cx - r; x <= cx + r; x++) {
+      if (x >= 0 && y >= 0 && x < GW && y < GH) own[idx(x, y)] = id;
+    }
+  }
+}
+
+function resetGame() {
+  own.fill(0);
+  trail.fill(0);
+  ents = [];
+  const spots = [[GW >> 1, GH >> 1], [10, 8], [GW - 11, 8], [10, GH - 9], [GW - 11, GH - 9]];
+  PLAYERS.forEach((p, i) => {
+    const [cx, cy] = spots[i];
+    stampSquare(p.id, cx, cy, 2);
+    ents.push(makeEnt(p, cx, cy));
+  });
+  gameOver = false;
+  milestone = 25;
+  banner = '';
+  bannerT = 0;
+}
+resetGame();
+
+// ---------------------------------------------------------------------
+// INPUT — arrows / WASD, or swipe anywhere on a phone
+// ---------------------------------------------------------------------
+addEventListener('keydown', e => {
+  ensureAudio();
+  const you = ents[0];
+  if (gameOver && e.key === ' ') { resetGame(); return; }
+  const k = e.key.toLowerCase();
+  if ((k === 'arrowleft' || k === 'a') && you.dx !== 1) { you.nextDx = -1; you.nextDy = 0; }
+  if ((k === 'arrowright' || k === 'd') && you.dx !== -1) { you.nextDx = 1; you.nextDy = 0; }
+  if ((k === 'arrowup' || k === 'w') && you.dy !== 1) { you.nextDx = 0; you.nextDy = -1; }
+  if ((k === 'arrowdown' || k === 's') && you.dy !== -1) { you.nextDx = 0; you.nextDy = 1; }
+});
+let swipeStart = null;
+addEventListener('pointerdown', e => {
+  ensureAudio();
+  if (gameOver) { resetGame(); return; }
+  swipeStart = { x: e.clientX, y: e.clientY };
+});
+addEventListener('pointermove', e => {
+  if (!swipeStart) return;
+  const dx = e.clientX - swipeStart.x, dy = e.clientY - swipeStart.y;
+  if (Math.hypot(dx, dy) < 24) return;
+  const you = ents[0];
+  if (Math.abs(dx) > Math.abs(dy)) {
+    if (dx > 0 && you.dx !== -1) { you.nextDx = 1; you.nextDy = 0; }
+    if (dx < 0 && you.dx !== 1) { you.nextDx = -1; you.nextDy = 0; }
+  } else {
+    if (dy > 0 && you.dy !== -1) { you.nextDx = 0; you.nextDy = 1; }
+    if (dy < 0 && you.dy !== 1) { you.nextDx = 0; you.nextDy = -1; }
+  }
+  swipeStart = { x: e.clientX, y: e.clientY };
+});
+addEventListener('pointerup', () => { swipeStart = null; });
+
+// ---------------------------------------------------------------------
+// THE RULES OF PAPER
+// ---------------------------------------------------------------------
+function pctOwned(id) {
+  let n = 0;
+  for (let i = 0; i < own.length; i++) if (own[i] === id) n++;
+  return n / own.length * 100;
+}
+
+// coming home: your trail plus everything it enclosed becomes yours.
+// trick: flood-fill from the OUTSIDE — whatever the flood can't reach
+// is surrounded, and surrounded means CAPTURED.
+function capture(ent) {
+  const id = ent.p.id;
+  for (const c of ent.myTrail) own[c] = id;
+  const reach = new Uint8Array(GW * GH);
+  const q = [];
+  for (let x = 0; x < GW; x++) {
+    for (const y of [0, GH - 1]) {
+      if (own[idx(x, y)] !== id && !reach[idx(x, y)]) { reach[idx(x, y)] = 1; q.push(idx(x, y)); }
+    }
+  }
+  for (let y = 0; y < GH; y++) {
+    for (const x of [0, GW - 1]) {
+      if (own[idx(x, y)] !== id && !reach[idx(x, y)]) { reach[idx(x, y)] = 1; q.push(idx(x, y)); }
+    }
+  }
+  while (q.length) {
+    const c = q.pop();
+    const cx = c % GW, cy = (c / GW) | 0;
+    for (const [nx, ny] of [[cx + 1, cy], [cx - 1, cy], [cx, cy + 1], [cx, cy - 1]]) {
+      if (nx < 0 || ny < 0 || nx >= GW || ny >= GH) continue;
+      const n = idx(nx, ny);
+      if (!reach[n] && own[n] !== id) { reach[n] = 1; q.push(n); }
+    }
+  }
+  let gained = 0;
+  for (let i = 0; i < own.length; i++) {
+    if (!reach[i] && own[i] !== id) { own[i] = id; gained++; }
+  }
+  gained += ent.myTrail.length;
+  for (const c of ent.myTrail) trail[c] = 0;
+  ent.myTrail = [];
+  ent.out = false;
+  if (ent.p.isYou) claimSound(gained);
+  return gained;
+}
+
+function kill(ent, byYou) {
+  ent.alive = false;
+  ent.respawnT = 3;
+  for (const c of ent.myTrail) trail[c] = 0;
+  ent.myTrail = [];
+  for (let i = 0; i < own.length; i++) if (own[i] === ent.p.id) own[i] = 0;
+  if (ent.p.isYou) {
+    gameOver = true;
+    deathSound();
+  } else if (byYou) killSound();
+}
+
+// one entity arrives at a fresh cell — the heart of the whole game
+function enterCell(ent, cx, cy) {
+  const c = idx(cx, cy);
+  // touching ANY wet trail pops its owner — even your own
+  if (trail[c]) {
+    const victim = ents.find(o => o.alive && o.p.id === trail[c]);
+    if (victim) kill(victim, ent.p.isYou && victim !== ent);
+    if (victim === ent) return;              // you popped yourself. rough.
+  }
+  if (!ent.alive) return;
+  if (own[c] === ent.p.id) {
+    if (ent.out) {
+      const gained = capture(ent);
+      if (ent.p.isYou && gained > 3) {
+        setBanner('+' + gained + ' squares!');
+      }
+    }
+  } else {
+    ent.out = true;
+    ent.myTrail.push(c);
+    trail[c] = ent.p.id;
+  }
+}
+
+function setBanner(t) { banner = t; bannerT = 2; }
+
+// ---------------------------------------------------------------------
+// BOT BRAINS — go out, draw a rectangle, come home. mostly survive.
+// ---------------------------------------------------------------------
+function botThink(ent) {
+  const cx = Math.floor(ent.x), cy = Math.floor(ent.y);
+  if (!ent.plan.length) {
+    if (!ent.out) {
+      // plan a sortie: a rectangle loop out into the wild
+      const w = 4 + Math.floor(Math.random() * 9);
+      const h = 3 + Math.floor(Math.random() * 8);
+      const dirH = Math.random() < 0.5 ? -1 : 1;
+      const dirV = Math.random() < 0.5 ? -1 : 1;
+      ent.plan = [
+        { dx: dirH, dy: 0, n: w },
+        { dx: 0, dy: dirV, n: h },
+        { dx: -dirH, dy: 0, n: w },
+        { dx: 0, dy: -dirV, n: h + 2 },      // overshoot home a touch
+      ];
+    } else {
+      ent.plan = [{ dx: -Math.sign(ent.dx) || 1, dy: 0, n: 3 }];
+    }
+  }
+  const step = ent.plan[0];
+  // safety: don't steer off the paper — bend along the wall instead
+  let dx = step.dx, dy = step.dy;
+  if (cx + dx < 1 && dx < 0) { dx = 0; dy = cy > GH / 2 ? -1 : 1; ent.plan = []; }
+  if (cx + dx > GW - 2 && dx > 0) { dx = 0; dy = cy > GH / 2 ? -1 : 1; ent.plan = []; }
+  if (cy + dy < 1 && dy < 0) { dy = 0; dx = cx > GW / 2 ? -1 : 1; ent.plan = []; }
+  if (cy + dy > GH - 2 && dy > 0) { dy = 0; dx = cx > GW / 2 ? -1 : 1; ent.plan = []; }
+  // safety: never step on your own wet ink
+  const n = idx(cx + dx, cy + dy);
+  if (trail[n] === ent.p.id) {
+    const alt = [[dy, dx], [-dy, -dx]].find(([ax, ay]) =>
+      trail[idx(cx + ax, cy + ay)] !== ent.p.id &&
+      cx + ax > 0 && cx + ax < GW - 1 && cy + ay > 0 && cy + ay < GH - 1);
+    if (alt) { dx = alt[0]; dy = alt[1]; ent.plan = []; }
+  }
+  ent.nextDx = dx;
+  ent.nextDy = dy;
+  if (ent.plan.length && --ent.plan[0].n <= 0) ent.plan.shift();
+}
+
+// ---------------------------------------------------------------------
+// UPDATE
+// ---------------------------------------------------------------------
+const SPEED = 7.5;          // cells per second — everyone's equal here
+function update(dt) {
+  elapsed += dt;
+  if (bannerT > 0) bannerT -= dt;
+  if (gameOver) return;
+
+  for (const ent of ents) {
+    if (!ent.alive) {
+      ent.respawnT -= dt;
+      if (ent.respawnT <= 0 && !ent.p.isYou) {
+        // a bot returns, humbly, somewhere random-ish and empty-ish
+        const cx = 6 + Math.floor(Math.random() * (GW - 12));
+        const cy = 6 + Math.floor(Math.random() * (GH - 12));
+        stampSquare(ent.p.id, cx, cy, 2);
+        Object.assign(ent, makeEnt(ent.p, cx, cy));
+      }
+      continue;
+    }
+    ent.x += ent.dx * SPEED * dt;
+    ent.y += ent.dy * SPEED * dt;
+    ent.x = Math.max(0.5, Math.min(GW - 0.5, ent.x));
+    ent.y = Math.max(0.5, Math.min(GH - 0.5, ent.y));
+    const cx = Math.floor(ent.x), cy = Math.floor(ent.y);
+    const c = idx(cx, cy);
+    if (c !== ent.lastCell) {
+      ent.lastCell = c;
+      enterCell(ent, cx, cy);
+      if (!ent.alive) continue;
+      // turning happens cleanly at cell boundaries
+      if (!ent.p.isYou) botThink(ent);
+      if ((ent.nextDx !== ent.dx || ent.nextDy !== ent.dy)) {
+        ent.dx = ent.nextDx;
+        ent.dy = ent.nextDy;
+        ent.x = cx + 0.5;
+        ent.y = cy + 0.5;
+      }
+    }
+  }
+
+  // milestones deserve a little noise
+  const pct = pctOwned(1);
+  bestPct = Math.max(bestPct, pct);
+  if (pct >= milestone) {
+    setBanner(milestone + '% OF THE PAPER IS YOURS!');
+    claimSound(200);
+    milestone += 25;
+  }
+
+  const you = ents[0];
+  camX = you.x * CELL - canvas.width / 2;
+  camY = you.y * CELL - canvas.height / 2;
+  camX = Math.max(-80, Math.min(GW * CELL - canvas.width + 80, camX));
+  camY = Math.max(-80, Math.min(GH * CELL - canvas.height + 80, camY));
+}
+
+// ---------------------------------------------------------------------
+// DRAWING
+// ---------------------------------------------------------------------
+function draw() {
+  const W = canvas.width, H = canvas.height;
+  ctx.fillStyle = '#d8d0b8';               // the desk under the paper
+  ctx.fillRect(0, 0, W, H);
+  ctx.save();
+  ctx.translate(-camX, -camY);
+
+  // the paper itself
+  ctx.fillStyle = '#f2ecd8';
+  ctx.fillRect(0, 0, GW * CELL, GH * CELL);
+
+  // visible cell range only — the paper is big
+  const x0 = Math.max(0, Math.floor(camX / CELL));
+  const y0 = Math.max(0, Math.floor(camY / CELL));
+  const x1 = Math.min(GW, Math.ceil((camX + W) / CELL));
+  const y1 = Math.min(GH, Math.ceil((camY + H) / CELL));
+
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      const c = idx(x, y);
+      if (own[c]) {
+        const p = PLAYERS[own[c] - 1];
+        ctx.fillStyle = p.color;
+        ctx.fillRect(x * CELL, y * CELL, CELL, CELL);
+      }
+      if (trail[c]) {
+        const p = PLAYERS[trail[c] - 1];
+        ctx.globalAlpha = 0.45;
+        ctx.fillStyle = p.color;
+        ctx.fillRect(x * CELL + 2, y * CELL + 2, CELL - 4, CELL - 4);
+        ctx.globalAlpha = 1;
+      }
+    }
+  }
+  // faint grid, like real graph paper
+  ctx.strokeStyle = 'rgba(120, 110, 80, 0.1)';
+  ctx.lineWidth = 1;
+  for (let x = x0; x <= x1; x++) {
+    ctx.beginPath(); ctx.moveTo(x * CELL, y0 * CELL); ctx.lineTo(x * CELL, y1 * CELL); ctx.stroke();
+  }
+  for (let y = y0; y <= y1; y++) {
+    ctx.beginPath(); ctx.moveTo(x0 * CELL, y * CELL); ctx.lineTo(x1 * CELL, y * CELL); ctx.stroke();
+  }
+
+  // the heads: rounded blocks with determined little faces
+  for (const ent of ents) {
+    if (!ent.alive) continue;
+    const px = ent.x * CELL, py = ent.y * CELL;
+    ctx.fillStyle = ent.p.dark;
+    ctx.beginPath();
+    ctx.roundRect(px - CELL * 0.6, py - CELL * 0.6, CELL * 1.2, CELL * 1.2, 6);
+    ctx.fill();
+    ctx.fillStyle = ent.p.color;
+    ctx.beginPath();
+    ctx.roundRect(px - CELL * 0.48, py - CELL * 0.48, CELL * 0.96, CELL * 0.96, 5);
+    ctx.fill();
+    // eyes that look where they're going
+    ctx.fillStyle = '#ffffff';
+    const ex = ent.dx * 3, ey = ent.dy * 3;
+    ctx.beginPath();
+    ctx.arc(px - 5 + ex, py - 2 + ey, 4, 0, Math.PI * 2);
+    ctx.arc(px + 5 + ex, py - 2 + ey, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#1a1a22';
+    ctx.beginPath();
+    ctx.arc(px - 5 + ex * 1.6, py - 2 + ey * 1.6, 2, 0, Math.PI * 2);
+    ctx.arc(px + 5 + ex * 1.6, py - 2 + ey * 1.6, 2, 0, Math.PI * 2);
+    ctx.fill();
+    // name tag
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(40, 36, 24, 0.75)';
+    ctx.font = 'bold 12px monospace';
+    ctx.fillText(ent.p.name, px, py - CELL * 0.85);
+  }
+  ctx.restore();
+
+  drawHud(W, H);
+}
+
+function drawHud(W, H) {
+  // your share of the world, front and center
+  const pct = pctOwned(1);
+  ctx.textAlign = 'left';
+  ctx.fillStyle = 'rgba(40, 36, 24, 0.85)';
+  ctx.font = `bold ${Math.min(34, W / 16)}px monospace`;
+  ctx.fillText(pct.toFixed(1) + '%', 16, 44);
+  ctx.font = '13px monospace';
+  ctx.fillText('best: ' + bestPct.toFixed(1) + '%', 16, 64);
+
+  // the leaderboard
+  const board = PLAYERS.map(p => ({ p, pct: pctOwned(p.id) }))
+    .sort((a, b) => b.pct - a.pct);
+  ctx.textAlign = 'right';
+  ctx.font = 'bold 14px monospace';
+  board.forEach((row, i) => {
+    ctx.fillStyle = row.p.color;
+    ctx.fillRect(W - 150, 20 + i * 24, 14, 14);
+    ctx.fillStyle = 'rgba(40, 36, 24, 0.85)';
+    ctx.fillText(row.p.name + '  ' + row.pct.toFixed(1) + '%', W - 20, 32 + i * 24);
+  });
+  ctx.textAlign = 'center';
+
+  if (bannerT > 0) {
+    ctx.fillStyle = `rgba(40, 36, 24, ${Math.min(1, bannerT)})`;
+    ctx.font = `bold ${Math.min(26, W / 20)}px monospace`;
+    ctx.fillText(banner, W / 2, H * 0.18);
+  }
+
+  const you = ents[0];
+  if (you.out && !gameOver) {
+    ctx.fillStyle = `rgba(200, 60, 40, ${0.5 + Math.sin(elapsed * 5) * 0.3})`;
+    ctx.font = 'bold 14px monospace';
+    ctx.fillText('your trail is EXPOSED — get home!', W / 2, H - 30);
+  }
+
+  if (gameOver) {
+    ctx.fillStyle = 'rgba(30, 26, 18, 0.75)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#f2ecd8';
+    ctx.font = `bold ${Math.min(44, W / 14)}px monospace`;
+    ctx.fillText('CUT!', W / 2, H / 2 - 40);
+    ctx.font = '18px monospace';
+    ctx.fillText('you held ' + bestPct.toFixed(1) + '% of the paper at your best', W / 2, H / 2 + 4);
+    ctx.fillStyle = 'rgba(242, 236, 216, 0.7)';
+    ctx.font = '15px monospace';
+    ctx.fillText('tap or space to try again', W / 2, H / 2 + 40);
+  }
+}
+
+// ---------------------------------------------------------------------
+// THE GAME LOOP
+// ---------------------------------------------------------------------
+let lastTime = 0;
+function loop(time) {
+  const dt = Math.min(0.04, (time - lastTime) / 1000);
+  lastTime = time;
+  update(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
