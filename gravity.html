@@ -366,6 +366,23 @@ function update(dt) {
       const pull = Math.min(2200, 260000 / Math.max(d * d, 900));
       b.vx += (dx / d) * pull * dt;
       b.vy += (dy / d) * pull * dt;
+      // PEOPLE get the full cinematic treatment: a DECAYING ORBIT.
+      // we steer them sideways at just under circular-orbit speed, so
+      // gravity wins a little bit every lap — a spiral to the SLURP.
+      if (b.type === 'person' && d < 340) {
+        const nx = dx / d, ny = dy / d;              // toward the hole
+        if (!b.orbitDir) {
+          // keep circling whichever way they were already drifting
+          b.orbitDir = (b.vx * -ny + b.vy * nx) >= 0 ? 1 : -1;
+        }
+        const tx = -ny * b.orbitDir, ty = nx * b.orbitDir;   // around it
+        const orbV = Math.sqrt(pull * d) * 0.92;     // 92% of stable = doomed
+        const blend = Math.min(1, dt * 4);
+        b.vx += (tx * orbV + nx * 26 - b.vx) * blend;
+        b.vy += (ty * orbV + ny * 26 - b.vy) * blend;
+        b.angVel = b.orbitDir * 4;                   // spin with the ride
+        b.dizzy = Math.max(b.dizzy, 0.3);            // stars ON, obviously
+      } else if (b.type === 'person') b.orbitDir = 0;
       if (d < 28) {
         // down the hatch
         b.gone = true;
