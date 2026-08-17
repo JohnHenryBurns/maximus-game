@@ -139,7 +139,7 @@ const SURFACE_Y = 130;      // where the water begins, on screen
 // ---------------------------------------------------------------------
 // SAVING — coins, upgrades, and the FISHDEX live in the browser
 // ---------------------------------------------------------------------
-let save = { coins: 0, line: 1, reel: 1, lamp: 0, sub: 0, dex: {} };
+let save = { coins: 0, line: 1, reel: 1, lamp: 0, sub: 0, net: 0, dex: {} };
 try {
   const s = JSON.parse(localStorage.getItem('lake_save'));
   if (s) save = Object.assign(save, s);
@@ -156,9 +156,9 @@ function lampR() { return LAMP_LEVELS[Math.min(save.lamp, LAMP_LEVELS.length - 1
 // ---------------------------------------------------------------------
 // GAME STATE
 // ---------------------------------------------------------------------
-let mode = 'idle';          // 'idle' | 'drop' | 'reel'
+let mode = 'idle';          // 'idle' | 'drop' | 'reel' | 'sub'
 let hook = { d: 0, x: 0 };  // d = depth in meters, x = sideways offset
-let caught = null;          // the fish on the hook right now
+let netted = [];            // everything currently on the hook / in the net
 let fishes = [];
 let elapsed = 0;
 let camD = 0;               // how far down the camera is looking
@@ -224,7 +224,7 @@ function action() {
     mode = 'drop';
     hook.d = 0;
     hook.x = 0;
-    caught = null;
+    netted = [];
     plop();
     setStatus('down we go... (steer with ← → or your finger)', 3);
   } else if (mode === 'drop') {
@@ -256,8 +256,11 @@ function shopCost(what) {
   if (what === 'reel') return save.reel >= REEL_LEVELS.length ? null : save.reel * 30;
   if (what === 'lamp') return save.lamp >= LAMP_LEVELS.length - 1 ? null : 25 + save.lamp * 45;
   if (what === 'sub') return save.sub ? null : 100;
+  if (what === 'net') return save.net ? null : 150;
   return null;
 }
+// how many fish one cast can carry: a bare hook takes one; a net, four
+function netCap() { return save.net ? 4 : 1; }
 
 // ---------------------------------------------------------------------
 // THE SUBMARINE — the lake stops being a place you dangle into
@@ -310,48 +313,63 @@ function update(dt) {
     hook.x += steer * 0.55 * dt;
     hook.x = Math.max(-1, Math.min(1, hook.x));
 
-    // did the hook meet a resident?
+    // did the hook (or net) meet a resident?
     for (const f of fishes) {
       if (f.caught) continue;
-      const fx = f.x, hd = hook.d;
-      const dx = (fx - (hook.x + boatX * 2 - 1)) * canvas.width * 0.5;
-      const dd = f.d - hd;
-      if (Math.abs(dx) < f.sp.size + 14 && Math.abs(dd) < f.sp.size + 10) {
-        caught = f;
+      const dx = (f.x - (hook.x + boatX * 2 - 1)) * canvas.width * 0.5;
+      const dd = f.d - hook.d;
+      const reach = save.net ? 20 : 14;            // a net is a wider welcome
+      if (Math.abs(dx) < f.sp.size + reach && Math.abs(dd) < f.sp.size + reach - 4) {
+        netted.push(f);
         f.caught = true;
-        mode = 'reel';
         catchChime();
         if (f.sp.bubbles) tootSound();
+        if (netted.length >= netCap()) {
+          mode = 'reel';                           // full house — haul away
+        } else {
+          setStatus('in the net! (' + netted.length + '/' + netCap() + ') — keep going...', 2.5);
+        }
         break;
       }
     }
     if (hook.d >= maxLine()) {
       mode = 'reel';
-      setStatus('that\'s all the line you\'ve got... for now.', 3);
+      if (!netted.length) setStatus('that\'s all the line you\'ve got... for now.', 3);
     }
   } else if (mode === 'reel') {
     hook.d -= reelSpeed() * dt;
-    if (caught) { caught.d = hook.d; caught.x = hook.x + boatX * 2 - 1; }
+    netted.forEach((f, i) => {
+      f.d = hook.d + 12 + i * 9;
+      f.x = hook.x + boatX * 2 - 1 + (i - (netted.length - 1) / 2) * 0.018;
+    });
     if (hook.d <= 0) {
-      if (caught) {
-        const sp = caught.sp;
-        save.coins += sp.coins;
-        save.dex[sp.id] = (save.dex[sp.id] || 0) + 1;
+      if (netted.length) {
+        let total = 0;
+        const names = [];
+        let gotIT = false;
+        for (const f of netted) {
+          const sp = f.sp;
+          total += sp.coins;
+          names.push(sp.name);
+          save.dex[sp.id] = (save.dex[sp.id] || 0) + 1;
+          if (sp.isIT) { gotIT = true; itCaughtEver = true; }
+          fishes = fishes.filter(x => x !== f);
+          if (sp.isIT) {
+            setTimeout(() => fishes.push({ sp, d: 1198, x: 0, dir: 1, phase: 0 }), 30000);
+          } else spawnFish(1);
+        }
+        save.coins += total;
         persist();
         coinSound();
-        if (sp.isIT) {
-          itCaughtEver = true;
-          setStatus('you caught... IT. it looked at you. you put it back. +' + sp.coins, 6);
+        if (gotIT) {
+          setStatus('the net came up heavy. IT was inside, folded politely. +' + total, 6);
           setDrone(false);
+        } else if (netted.length === 1) {
+          setStatus('caught: ' + names[0] + '! +' + total + ' coins — "' + netted[0].sp.lore + '"', 4);
         } else {
-          setStatus('caught: ' + sp.name + '! +' + sp.coins + ' coins — "' + sp.lore + '"', 4);
+          setStatus('hauled in ' + netted.length + ' fish for ' + total + ' coins!', 4);
         }
-        // the lake replaces what it loses (except IT — IT returns on its own)
-        fishes = fishes.filter(f => f !== caught);
-        if (sp.isIT) {
-          setTimeout(() => fishes.push({ sp, d: 1198, x: 0, dir: 1, phase: 0 }), 30000);
-        } else spawnFish(1);
-        caught = null;
+        netted = [];
       }
       mode = 'idle';
       hook.d = 0;
@@ -758,7 +776,23 @@ function draw() {
     ctx.beginPath();
     ctx.arc(hookX, hookY + 6, 6, -0.4, Math.PI * 1.1);
     ctx.stroke();
-    if (caught) drawFish(caught);
+    // the net: a mesh bag that swells with every catch
+    if (save.net) {
+      const bagR = 16 + netted.length * 7;
+      ctx.strokeStyle = 'rgba(220, 210, 180, 0.55)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(hookX, hookY + 14, bagR, -0.15, Math.PI + 0.15);
+      ctx.stroke();
+      for (let i = -2; i <= 2; i++) {
+        ctx.beginPath();
+        ctx.moveTo(hookX + i * bagR * 0.4, hookY + 8);
+        ctx.quadraticCurveTo(hookX + i * bagR * 0.5, hookY + 14 + bagR * 0.7,
+                             hookX, hookY + 14 + bagR);
+        ctx.stroke();
+      }
+    }
+    for (const f of netted) drawFish(f);
   }
 
   drawHud(W, H);
@@ -875,6 +909,8 @@ function drawShop(W, H) {
       : 'glow: ' + lampR() + (save.lamp < LAMP_LEVELS.length - 1 ? ' → ' + LAMP_LEVELS[save.lamp + 1] : ' (MAX)')],
     ['sub', 'THE SUBMARINE', save.sub ? 'she\'s yours, captain. press DIVE.'
       : 'go down there YOURSELF. any depth. 50s of air. 5-fish cargo bay.'],
+    ['net', 'FISHING NET', save.net ? 'four fish per cast. the lake noticed.'
+      : 'one cast, FOUR fish — the line keeps sinking as it scoops.'],
   ];
   items.forEach(([id, name, desc], i) => {
     const cw = Math.min(W - 40, 440), x = W / 2 - cw / 2, y = 110 + i * 92;
