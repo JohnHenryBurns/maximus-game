@@ -164,8 +164,12 @@ function addSpike(x, y) {
   spikes.push({ x: Math.round(x / 46) * 46, y: Math.round(y / 46) * 46 });
 }
 function addHole(x, y) {
-  holes.push({ x, y, swirl: Math.random() * 7 });
+  holes.push({ x, y, swirl: Math.random() * 7, size: 1, tents: [], tentT: 1.5 });
   if (holes.length > 3) holes.shift();     // three black holes is plenty. THREE.
+}
+function slitherSound() {
+  beep(280, 0.1, 'sawtooth', 0.06);
+  setTimeout(() => beep(180, 0.15, 'sawtooth', 0.06), 80);
 }
 function addLauncher(x, y) {
   launchers.push({ x, y, cd: 0, recoil: 0 });
@@ -359,6 +363,8 @@ function update(dt) {
   // ---- BLACK HOLES: they pull. they swallow. sometimes they burp. ----
   for (const h of holes) {
     if (h === grabbedHole) { h.x = pointer.x; h.y = pointer.y; }
+    // black holes GROW: slowly with age, and a spurt with every meal
+    h.size = Math.min(4, h.size + dt * 0.022);
     for (const b of bodies) {
       if (b === grabbed) continue;
       const dx = h.x - b.x, dy = h.y - b.y;
@@ -366,13 +372,15 @@ function update(dt) {
       // strong up close, but NEVER zero — a black hole owns the whole
       // room. far things slide along the floor toward it; near things
       // get lifted clean off the ground, gravity or no gravity.
-      const pull = Math.min(2600, 90000 / Math.max(d, 30) + 300);
+      // and the bigger it's grown, the harder it pulls.
+      const pull = Math.min(2600 * h.size,
+        (90000 / Math.max(d, 30) + 300) * (0.5 + h.size * 0.5));
       b.vx += (dx / d) * pull * dt;
       b.vy += (dy / d) * pull * dt;
       // PEOPLE get the full cinematic treatment: a DECAYING ORBIT.
       // we steer them sideways at just under circular-orbit speed, so
       // gravity wins a little bit every lap — a spiral to the SLURP.
-      if (b.type === 'person' && d < 340) {
+      if (b.type === 'person' && !b.tentacled && d < 340 * h.size) {
         const nx = dx / d, ny = dy / d;              // toward the hole
         if (!b.orbitDir) {
           // keep circling whichever way they were already drifting
@@ -386,14 +394,54 @@ function update(dt) {
         b.angVel = b.orbitDir * 4;                   // spin with the ride
         b.dizzy = Math.max(b.dizzy, 0.3);            // stars ON, obviously
       } else if (b.type === 'person') b.orbitDir = 0;
-      if (d < 28) {
-        // down the hatch
+      if (d < 28 * h.size) {
+        // down the hatch — and the hole gets a little bigger for it
         b.gone = true;
+        h.size = Math.min(4, h.size + 0.08);
         slurpSound();
-        floatTexts.push({ x: h.x, y: h.y - 34, t: 1, text: 'SLURP!' });
+        floatTexts.push({ x: h.x, y: h.y - 34 * h.size, t: 1, text: 'SLURP!' });
         if (b.type === 'bomb') burps.push({ hole: h, t: 0.6 });
       }
     }
+
+    // ---- THE TENTACLES: they reach out, latch on, and REEL IN ----
+    h.tentT -= dt;
+    if (h.tentT <= 0 && h.tents.length < 2) {
+      h.tentT = 2.4;
+      let prey = null, preyD = 460 * h.size;
+      for (const b of bodies) {
+        if (b.type !== 'person' || b.tentacled || b === grabbed || b.gone) continue;
+        const d = Math.hypot(b.x - h.x, b.y - h.y);
+        if (d > 60 && d < preyD) { prey = b; preyD = d; }
+      }
+      if (prey) {
+        prey.tentacled = true;
+        h.tents.push({ target: prey, prog: 0, phase: 'reach' });
+        slitherSound();
+      }
+    }
+    for (const t of h.tents) {
+      const b = t.target;
+      // let go if the prey is gone, or the player wrestled it free
+      if (!b || b.gone || b === grabbed || !bodies.includes(b)) {
+        if (b) b.tentacled = false;
+        t.dead = true;
+        continue;
+      }
+      if (t.phase === 'reach') {
+        t.prog += dt * 2.4;                // the tip whips outward
+        if (t.prog >= 1) { t.prog = 1; t.phase = 'drag'; }
+      } else {
+        // hauled in, kicking, at tentacle speed
+        const dx = h.x - b.x, dy = h.y - b.y;
+        const d = Math.hypot(dx, dy) || 1;
+        b.vx = (dx / d) * 270;
+        b.vy = (dy / d) * 270;
+        b.dizzy = Math.max(b.dizzy, 0.3);
+        b.orbitDir = 0;
+      }
+    }
+    h.tents = h.tents.filter(t => !t.dead);
     // confetti and smoke spiral in too — it sells the whole thing
     for (const p of particles) {
       const dx = h.x - p.x, dy = h.y - p.y;
@@ -467,8 +515,11 @@ function eraseAt(x, y) {
     }
   }
   for (let i = holes.length - 1; i >= 0; i--) {
-    if (Math.hypot(holes[i].x - x, holes[i].y - y) < 44) {
+    if (Math.hypot(holes[i].x - x, holes[i].y - y) < 44 * (holes[i].size || 1)) {
       puff(holes[i].x, holes[i].y);
+      for (const t of holes[i].tents || []) {
+        if (t.target) t.target.tentacled = false;   // freed by the eraser
+      }
       holes.splice(i, 1);
       return true;
     }
@@ -529,7 +580,7 @@ addEventListener('pointerdown', e => {
   }
   // black holes can be grabbed and walked like a very dangerous dog
   for (const h of holes) {
-    if (Math.hypot(h.x - e.clientX, h.y - e.clientY) < 44) {
+    if (Math.hypot(h.x - e.clientX, h.y - e.clientY) < 44 * (h.size || 1)) {
       grabbedHole = h;
       return;
     }
@@ -672,27 +723,57 @@ function draw() {
   ctx.fillStyle = gravityOn ? '#4a5a78' : '#7a5aff';
   ctx.fillRect(-20, floorY(), W + 40, 5);
 
-  // black holes: a dark heart, a glowing purple swirl, endless appetite
+  // black holes: a dark heart, a glowing swirl, tentacles, appetite —
+  // and they've been GROWING while you weren't watching
   for (const h of holes) {
     h.swirl = (h.swirl || 0) + 0.05;
-    const g = ctx.createRadialGradient(h.x, h.y, 4, h.x, h.y, 80);
+    const S = h.size || 1;
+    // the tentacles first, so they come from BEHIND the dark heart
+    for (const t of h.tents || []) {
+      const b = t.target;
+      if (!b) continue;
+      const p = t.phase === 'reach' ? t.prog : 1;
+      const tipX = h.x + (b.x - h.x) * p;
+      const tipY = h.y + (b.y - h.y) * p;
+      for (const pass of [[9 * S, '#3a2560'], [5 * S, '#5a3a8f']]) {
+        ctx.strokeStyle = pass[1];
+        ctx.lineWidth = pass[0];
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        for (let i = 0; i <= 8; i++) {
+          const f = i / 8;
+          const wob = Math.sin(elapsed * 9 + i * 1.4 + h.x) * 11 * S * (1 - f) * f * 4;
+          const nx = -(tipY - h.y), ny = (tipX - h.x);
+          const nl = Math.hypot(nx, ny) || 1;
+          const px2 = h.x + (tipX - h.x) * f + (nx / nl) * wob;
+          const py2 = h.y + (tipY - h.y) * f + (ny / nl) * wob;
+          if (i === 0) ctx.moveTo(px2, py2); else ctx.lineTo(px2, py2);
+        }
+        ctx.stroke();
+      }
+      ctx.fillStyle = '#7a5aba';                 // the gripping tip
+      ctx.beginPath();
+      ctx.arc(tipX, tipY, 6 * S, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    const g = ctx.createRadialGradient(h.x, h.y, 4, h.x, h.y, 80 * S);
     g.addColorStop(0, 'rgba(180, 130, 255, 0.5)');
     g.addColorStop(0.5, 'rgba(90, 60, 160, 0.2)');
     g.addColorStop(1, 'rgba(90, 60, 160, 0)');
     ctx.fillStyle = g;
-    ctx.fillRect(h.x - 80, h.y - 80, 160, 160);
+    ctx.fillRect(h.x - 80 * S, h.y - 80 * S, 160 * S, 160 * S);
     for (let ring = 0; ring < 3; ring++) {
       ctx.strokeStyle = `rgba(${ring % 2 ? '125, 211, 255' : '180, 130, 255'}, ${0.5 - ring * 0.12})`;
-      ctx.lineWidth = 3 - ring * 0.7;
+      ctx.lineWidth = (3 - ring * 0.7) * S;
       ctx.beginPath();
-      ctx.arc(h.x, h.y, 26 + ring * 12,
+      ctx.arc(h.x, h.y, (26 + ring * 12) * S,
               h.swirl * (ring % 2 ? 1.4 : -1.1) + ring,
               h.swirl * (ring % 2 ? 1.4 : -1.1) + ring + 4.2);
       ctx.stroke();
     }
     ctx.fillStyle = '#000000';
     ctx.beginPath();
-    ctx.arc(h.x, h.y, 20, 0, Math.PI * 2);
+    ctx.arc(h.x, h.y, 20 * S, 0, Math.PI * 2);
     ctx.fill();
     ctx.strokeStyle = 'rgba(200, 170, 255, 0.8)';
     ctx.lineWidth = 2;
