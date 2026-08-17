@@ -192,6 +192,48 @@ function addBomb(x, y) {
   bodies.push({ type: 'bomb', x, y, vx: 0, vy: 0, r: 14, angle: 0, angVel: 0,
                 fuse: 3, tickT: 0 });
 }
+function addMutant(x, y) {
+  bodies.push({ type: 'mutant', x, y, vx: 0, vy: 0, r: 14, angle: 0, angVel: 0,
+                fuse: 3, tickT: 0 });
+}
+function mutateSound() {
+  if (!audio) return;
+  for (const det of [0, 7]) {
+    const o = audio.createOscillator(), g = audio.createGain();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(180 + det * 10, audio.currentTime);
+    o.frequency.exponentialRampToValueAtTime(700 + det * 40, audio.currentTime + 0.35);
+    g.gain.setValueAtTime(0.09, audio.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + 0.4);
+    o.connect(g); g.connect(audio.destination);
+    o.start(); o.stop(audio.currentTime + 0.45);
+  }
+}
+// the mutant blast: nobody pops. everybody gets... MORE.
+function mutantExplode(bx, by) {
+  mutateSound();
+  shake = Math.max(shake, 0.25);
+  for (let i = 0; i < 34; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const sp = 80 + Math.random() * 320;
+    particles.push({
+      x: bx, y: by, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+      life: 0.4 + Math.random() * 0.5,
+      color: ['#7ddf5f', '#4faf3f', '#b4ff8f', '#2a7a2a'][i % 4],
+    });
+  }
+  for (const b of bodies) {
+    const d = Math.hypot(b.x - bx, b.y - by);
+    if (d > 210) continue;
+    if (b.type === 'person') {
+      b.limbs = Math.min(10, (b.limbs || 0) + 2 + Math.floor(Math.random() * 2));
+      b.dizzy = 1.5;
+      b.vx += (b.x - bx) * 2;
+      b.vy -= 120;
+      floatTexts.push({ x: b.x, y: b.y - 30, t: 1, text: 'MUTATE!' });
+    }
+  }
+}
 function addSpike(x, y) {
   spikes.push({ x: Math.round(x / 46) * 46, y: Math.round(y / 46) * 46 });
 }
@@ -332,7 +374,8 @@ function update(dt) {
       if (b.dizzy > 0) b.dizzy -= dt;
       const grounded = gravityOn && b.y + b.r * 2 >= floorY() - 2 && Math.abs(b.vy) < 30;
       if (grounded && b.dizzy <= 0 && b !== grabbed) {
-        b.vx = b.walkDir * 42;
+        // more legs = more speed. that's just biology.
+        b.vx = b.walkDir * (42 + (b.limbs || 0) * 7);
         if (Math.random() < 0.005) b.walkDir *= -1;
         b.angle *= 0.8;                // stand up straight, citizen
         b.angVel = 0;
@@ -345,13 +388,17 @@ function update(dt) {
 
     // bombs tick down. and then they don't.
     // (launcher bombs tick silently — 30 tickers at once is a headache)
-    if (b.type === 'bomb') {
+    if (b.type === 'bomb' || b.type === 'mutant') {
       b.fuse -= dt;
       if (!b.quiet) {
         b.tickT -= dt;
         if (b.tickT <= 0) { b.tickT = Math.max(0.12, b.fuse / 6); tickSound(); }
       }
-      if (b.fuse <= 0) { b.gone = true; explode(b.x, b.y); }
+      if (b.fuse <= 0) {
+        b.gone = true;
+        if (b.type === 'mutant') mutantExplode(b.x, b.y);
+        else explode(b.x, b.y);
+      }
     }
 
     b.x += b.vx * dt;
@@ -404,7 +451,7 @@ function update(dt) {
         b.vx += (Math.random() - 0.5) * 200;
         b.angVel += (Math.random() - 0.5) * 10;
         boingSound();
-        if (b.type === 'bomb') b.fuse = Math.min(b.fuse, 0.4);   // rude awakening
+        if (b.type === 'bomb' || b.type === 'mutant') b.fuse = Math.min(b.fuse, 0.4);
       }
     }
   }
@@ -499,12 +546,18 @@ function update(dt) {
         slurpSound();
         floatTexts.push({ x: h.x, y: h.y - 34 * h.size, t: 1, text: 'SLURP!' });
         if (b.type === 'bomb') burps.push({ hole: h, t: 0.6 });
+        if (b.type === 'mutant') {
+          // a hole that eats mutant goo grows... an extra tentacle slot
+          h.tentMax = Math.min(6, (h.tentMax || 2) + 1);
+          floatTexts.push({ x: h.x, y: h.y - 60 * h.size, t: 1.3, text: 'MUTATED!' });
+          mutateSound();
+        }
       }
     }
 
     // ---- THE TENTACLES: they reach out, latch on, and REEL IN ----
     h.tentT -= dt;
-    if (tentaclesOn && h.tentT <= 0 && h.tents.length < 2) {
+    if (tentaclesOn && h.tentT <= 0 && h.tents.length < (h.tentMax || 2)) {
       h.tentT = 2.4;
       let prey = null, preyD = 460 * h.size;
       for (const b of bodies) {
@@ -728,6 +781,7 @@ addEventListener('pointerdown', e => {
   if (tool === 'person') addPerson(w.x, w.y);
   else if (tool === 'crate') addCrate(w.x, w.y);
   else if (tool === 'bomb') addBomb(w.x, w.y);
+  else if (tool === 'mutant') addMutant(w.x, w.y);
   else if (tool === 'spike') addSpike(w.x - 23, w.y);
   else if (tool === 'hole') addHole(w.x, w.y);
   else if (tool === 'launcher') addLauncher(w.x, w.y);
@@ -753,6 +807,28 @@ function drawPerson(b) {
   ctx.save();
   ctx.translate(b.x, b.y);
   ctx.rotate(b.angle);
+  // mutant limbs first, so they wave from BEHIND the body — each one
+  // sprouts at a golden-angle spot and wiggles on its own beat
+  if (b.limbs) {
+    ctx.strokeStyle = b.skin;
+    ctx.lineWidth = 4;
+    ctx.lineCap = 'round';
+    for (let i = 0; i < b.limbs; i++) {
+      const a = i * 2.39996 + 0.7;
+      const wig = Math.sin(elapsed * 6 + i * 1.7) * 0.5;
+      const L = 16 + (i % 3) * 5;
+      const bx2 = Math.cos(a + wig) * L;
+      const by2 = 8 + Math.sin(a + wig) * L;
+      ctx.beginPath();
+      ctx.moveTo(0, 8);
+      ctx.quadraticCurveTo(bx2 * 0.5, 8 + (by2 - 8) * 0.5 - 6, bx2, by2);
+      ctx.stroke();
+      ctx.fillStyle = b.skin;                  // a tiny hand on each
+      ctx.beginPath();
+      ctx.arc(bx2, by2, 3.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
   // body
   ctx.fillStyle = b.shirt;
   ctx.fillRect(-9, -2, 18, 22);
@@ -815,11 +891,23 @@ function drawBomb(b) {
   ctx.save();
   ctx.translate(b.x, b.y);
   ctx.rotate(b.angle);
+  const mutant = b.type === 'mutant';
   const panic = b.fuse < 1 && Math.floor(elapsed * 10) % 2;
-  ctx.fillStyle = panic ? '#e8453c' : '#22262e';
+  ctx.fillStyle = panic ? (mutant ? '#b4ff8f' : '#e8453c')
+                        : (mutant ? '#3f8f3f' : '#22262e');
   ctx.beginPath();
   ctx.arc(0, 0, b.r, 0, Math.PI * 2);
   ctx.fill();
+  if (mutant) {
+    // goo bubbles crawling up the glass
+    ctx.fillStyle = 'rgba(180, 255, 143, 0.8)';
+    for (let i = 0; i < 3; i++) {
+      const bt = (elapsed * 0.8 + i * 0.33) % 1;
+      ctx.beginPath();
+      ctx.arc(-5 + i * 5, 6 - bt * 14, 2 + i * 0.7, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
   ctx.strokeStyle = '#101418';
   ctx.lineWidth = 2;
   ctx.stroke();
@@ -1104,6 +1192,7 @@ function draw() {
   uiRects = [];
   const TOOLS = [
     ['person', '🧍 PERSON'], ['crate', '📦 CRATE'], ['bomb', '💣 BOMB'],
+    ['mutant', '🧪 MUTANT'],
     ['spike', '⚠ SPIKE'], ['hole', '🕳 HOLE'], ['launcher', '💥 LAUNCHER'],
     ['sun', '☀ SUN'],
     ['gravity', gravityOn ? '🌍 GRAVITY: ON' : '🚀 GRAVITY: OFF'],
