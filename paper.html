@@ -93,6 +93,8 @@ function makeEnt(p, cx, cy) {
   return {
     p, x: cx + 0.5, y: cy + 0.5, dx: 1, dy: 0,
     nextDx: 1, nextDy: 0,
+    angle: 0,               // you steer by ANGLE now — real curves
+    keyAngle: null,
     lastCell: idx(cx, cy),
     myTrail: [],
     out: false,
@@ -152,10 +154,10 @@ addEventListener('keydown', e => {
   const you = ents[0];
   if (gameOver && e.key === ' ') { resetGame(); return; }
   const k = e.key.toLowerCase();
-  if ((k === 'arrowleft' || k === 'a') && you.dx !== 1) { you.nextDx = -1; you.nextDy = 0; }
-  if ((k === 'arrowright' || k === 'd') && you.dx !== -1) { you.nextDx = 1; you.nextDy = 0; }
-  if ((k === 'arrowup' || k === 'w') && you.dy !== 1) { you.nextDx = 0; you.nextDy = -1; }
-  if ((k === 'arrowdown' || k === 's') && you.dy !== -1) { you.nextDx = 0; you.nextDy = 1; }
+  if (k === 'arrowleft' || k === 'a') you.keyAngle = Math.PI;
+  if (k === 'arrowright' || k === 'd') you.keyAngle = 0;
+  if (k === 'arrowup' || k === 'w') you.keyAngle = -Math.PI / 2;
+  if (k === 'arrowdown' || k === 's') you.keyAngle = Math.PI / 2;
 });
 // the head CHASES the mouse — hover on desktop, drag on phones
 let mouseX = null, mouseY = null, mouseAt = -99;
@@ -168,22 +170,25 @@ addEventListener('pointermove', e => {
   mouseX = e.clientX; mouseY = e.clientY; mouseAt = elapsed;
 });
 
-// at each cell boundary: which legal turn points most at the cursor?
-function steerToMouse(you) {
-  if (mouseX === null || elapsed - mouseAt > 3) return;   // mouse gone quiet: keys rule
-  const wx = (mouseX + camX) / CELL, wy = (mouseY + camY) / CELL;
-  const dx = wx - you.x, dy = wy - you.y;
-  if (Math.hypot(dx, dy) < 0.9) return;      // cursor right on top: hold course
-  const cand = Math.abs(dx) >= Math.abs(dy)
-    ? [[Math.sign(dx), 0], [0, Math.sign(dy)]]
-    : [[0, Math.sign(dy)], [Math.sign(dx), 0]];
-  for (const [ndx, ndy] of cand) {
-    if (!ndx && !ndy) continue;
-    if (ndx === -you.dx && ndy === -you.dy) continue;     // still no U-turns
-    you.nextDx = ndx;
-    you.nextDy = ndy;
-    return;
+// every frame: swing your heading smoothly toward the cursor. the
+// turn rate is the secret — it's what makes your path a CIRCLE
+// instead of a corner. turning circle ≈ 2 cells.
+const TURN_RATE = 4.2;      // radians per second
+function steerSmooth(you, dt) {
+  let tgt = null;
+  if (mouseX !== null && elapsed - mouseAt <= 3) {
+    const wx = (mouseX + camX) / CELL, wy = (mouseY + camY) / CELL;
+    if (Math.hypot(wx - you.x, wy - you.y) > 0.7) {
+      tgt = Math.atan2(wy - you.y, wx - you.x);
+    }
+  } else if (you.keyAngle !== null) tgt = you.keyAngle;
+  if (tgt !== null) {
+    let da = ((tgt - you.angle + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+    const maxTurn = TURN_RATE * dt;
+    you.angle += Math.max(-maxTurn, Math.min(maxTurn, da));
   }
+  you.dx = Math.cos(you.angle);
+  you.dy = Math.sin(you.angle);
 }
 
 // ---------------------------------------------------------------------
@@ -250,11 +255,17 @@ function kill(ent, byYou) {
 // one entity arrives at a fresh cell — the heart of the whole game
 function enterCell(ent, cx, cy) {
   const c = idx(cx, cy);
-  // touching ANY wet trail pops its owner — even your own
+  // touching ANY wet trail pops its owner — even your own. the ONLY
+  // mercy: the last few cells you inked yourself, because a smooth
+  // curve brushes its own fresh paint without truly crossing it.
   if (trail[c]) {
-    const victim = ents.find(o => o.alive && o.p.id === trail[c]);
-    if (victim) kill(victim, ent.p.isYou && victim !== ent);
-    if (victim === ent) return;              // you popped yourself. rough.
+    const grazingOwnFreshInk =
+      trail[c] === ent.p.id && ent.myTrail.slice(-3).includes(c);
+    if (!grazingOwnFreshInk) {
+      const victim = ents.find(o => o.alive && o.p.id === trail[c]);
+      if (victim) kill(victim, ent.p.isYou && victim !== ent);
+      if (victim === ent) return;            // you popped yourself. rough.
+    } else return;                           // grazed it. breathe. drive on.
   }
   if (!ent.alive) return;
   if (own[c] === ent.p.id) {
@@ -336,8 +347,18 @@ function update(dt) {
       }
       continue;
     }
+    if (ent.p.isYou) steerSmooth(ent, dt);    // you: silky angle steering
     ent.x += ent.dx * SPEED * dt;
     ent.y += ent.dy * SPEED * dt;
+    // the paper's edge gently turns you instead of squishing you flat
+    if (ent.p.isYou) {
+      if ((ent.x <= 0.6 && ent.dx < 0) || (ent.x >= GW - 0.6 && ent.dx > 0)) {
+        ent.angle = Math.PI - ent.angle;
+      }
+      if ((ent.y <= 0.6 && ent.dy < 0) || (ent.y >= GH - 0.6 && ent.dy > 0)) {
+        ent.angle = -ent.angle;
+      }
+    }
     ent.x = Math.max(0.5, Math.min(GW - 0.5, ent.x));
     ent.y = Math.max(0.5, Math.min(GH - 0.5, ent.y));
     const cx = Math.floor(ent.x), cy = Math.floor(ent.y);
@@ -346,14 +367,15 @@ function update(dt) {
       ent.lastCell = c;
       enterCell(ent, cx, cy);
       if (!ent.alive) continue;
-      // turning happens cleanly at cell boundaries
-      if (ent.p.isYou) steerToMouse(ent);
-      else botThink(ent);
-      if ((ent.nextDx !== ent.dx || ent.nextDy !== ent.dy)) {
-        ent.dx = ent.nextDx;
-        ent.dy = ent.nextDy;
-        ent.x = cx + 0.5;
-        ent.y = cy + 0.5;
+      // bots still turn at cell boundaries, square and steady
+      if (!ent.p.isYou) {
+        botThink(ent);
+        if ((ent.nextDx !== ent.dx || ent.nextDy !== ent.dy)) {
+          ent.dx = ent.nextDx;
+          ent.dy = ent.nextDy;
+          ent.x = cx + 0.5;
+          ent.y = cy + 0.5;
+        }
       }
     }
   }
