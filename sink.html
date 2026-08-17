@@ -107,14 +107,37 @@ const MAP3_SRC = [
   '1111111111111111',
 ];
 
+// CHAPTER 4: THE ESCAPE — the kraken's last thrash tore the rescue
+// ship open. Find the SAILOR (7). Launch the LIFEBOAT (6). Faster.
+const MAP4_SRC = [
+  '1111111111111111',
+  '16.............1',
+  '11111111111118.1',
+  '1..............1',
+  '1.111111.11111.1',
+  '1.1..........1.1',
+  '1.1.11111111.1.1',
+  '1.1.1......1.1.1',
+  '1.1.1.11.1.1.1.1',
+  '1.1.1.17.1.1.1.1',
+  '1.1.1.1111.1.1.1',
+  '1.1.1......1.1.1',
+  '1.1.11114111.1.1',
+  '1.1..........1.1',
+  '1S.............1',
+  '1111111111111111',
+];
+
 // everything that changes between chapters lives here
 const CHCFG = [
   { name: 'Abandon Ship', map: MAP_SRC, threat: 'water', hasAlarm: true,
-    item: 'KEY CARD', goal: 'ESCAPE HATCH', flag: 'sink_ch1' },
+    item: 'KEY CARD', goal: 'ESCAPE HATCH', flag: 'sink_ch1', rise: 60 },
   { name: 'The Island', map: MAP2_SRC, threat: 'night', hasAlarm: false,
-    item: 'MATCHES', goal: 'SIGNAL FIRE', flag: 'sink_ch2' },
+    item: 'MATCHES', goal: 'SIGNAL FIRE', flag: 'sink_ch2', rise: 60 },
   { name: 'The Rescue', map: MAP3_SRC, threat: 'kraken', hasAlarm: false,
-    item: 'BLUNDERBUSS', goal: 'KRAKEN', flag: 'sink_ch3' },
+    item: 'BLUNDERBUSS', goal: 'KRAKEN', flag: 'sink_ch3', rise: 60 },
+  { name: 'The Escape', map: MAP4_SRC, threat: 'water', hasAlarm: true,
+    item: 'SAILOR', goal: 'LIFEBOAT', flag: 'sink_ch4', rise: 40 },
 ];
 let chapter = 0;
 
@@ -122,14 +145,17 @@ const MAPW = 16, MAPH = 16;
 let map = [];
 let palms = [];       // island palms are SPRITES, not walls — see below
 let sailor = null;    // chapter 3's gun-giving friend
+let itemPos = null;   // where the chapter's treasure sits (for sprites)
 let startX = 2.5, startY = 1.5;
 function loadMap() {
   palms = [];
   sailor = null;
+  itemPos = null;
   map = CHCFG[chapter].map.map((row, y) => row.split('').map((ch, x) => {
     if (ch === 'S') { startX = x + 0.5; startY = y + 0.5; return 0; }
     if (ch === '.') return 0;
     if (ch === '9') { sailor = { x: x + 0.5, y: y + 0.5 }; return 0; }
+    if (ch === '7') itemPos = { x: x + 0.5, y: y + 0.5 };
     if (ch === '2' && CHCFG[chapter].threat === 'night') {
       palms.push({ x: x + 0.5, y: y + 0.5 });
     }
@@ -375,11 +401,12 @@ let screen = 'menu';        // 'menu' | 'story' | 'playing' | 'dead' | 'won'
 let ch1Done = localStorage.getItem('sink_ch1') === 'yes';
 let ch2Done = localStorage.getItem('sink_ch2') === 'yes';
 let ch3Done = localStorage.getItem('sink_ch3') === 'yes';
+let ch4Done = localStorage.getItem('sink_ch4') === 'yes';
 const CHAPTERS = [
   { name: 'Abandon Ship', unlocked: true },
   { name: 'The Island', unlocked: ch1Done },
   { name: 'The Rescue', unlocked: ch2Done },
-  { name: '???', unlocked: false },
+  { name: 'The Escape', unlocked: ch3Done },
 ];
 let menuCards = [];
 let storyLines = [];
@@ -441,7 +468,8 @@ function resetGame() {
   shake = 0;
   setStatus(chapter === 0 ? 'the ship groans... find a way UP. (E opens doors)'
           : chapter === 1 ? 'find the MATCHES. light the SIGNAL FIRE. beat the dark.'
-                          : 'safe at last... the sailor wants a word. (walk up, press E)', 6);
+          : chapter === 2 ? 'safe at last... the sailor wants a word. (walk up, press E)'
+                          : 'FIND THE SAILOR. LAUNCH THE LIFEBOAT. GO GO GO.', 6);
   screen = 'playing';
 }
 
@@ -498,6 +526,7 @@ function fireGun() {
       winTime = gameTime;
       localStorage.setItem('sink_ch3', 'yes');
       ch3Done = true;
+      CHAPTERS[3].unlocked = true;
       bigSplash();
       winSound();
       if (document.exitPointerLock) document.exitPointerLock();
@@ -519,6 +548,7 @@ function openChapter(i) {
   if (!CHAPTERS[i] || !CHAPTERS[i].unlocked) {
     setStatus(i === 1 ? 'finish Chapter 1 first — escape the ship!'
             : i === 2 ? 'finish Chapter 2 first — light the fire!'
+            : i === 3 ? 'finish Chapter 3 first — beat the kraken!'
                       : "that chapter hasn't been written yet...", 3);
     return;
   }
@@ -538,6 +568,23 @@ function openChapter(i) {
     ' find the red panel and press E)',
     '',
     '( click to begin )',
+  ] : i === 3 ? [
+    'CHAPTER 4: THE ESCAPE',
+    '',
+    'The kraken is gone. The cheering stops fast.',
+    '',
+    'Its last thrash tore the hull wide open —',
+    'the alarm you know too well begins to wail,',
+    'and the rescue ship starts to go down.',
+    '',
+    'The water rises FASTER this time.',
+    'Every FORTY seconds.',
+    '',
+    'The sailor went below to help the others.',
+    'FIND HIM. Then launch the LIFEBOAT.',
+    'You do not leave your friends. Not ever.',
+    '',
+    '( click to begin the FINAL chapter )',
   ] : i === 2 ? [
     'CHAPTER 3: THE RESCUE',
     '',
@@ -701,12 +748,14 @@ function interact() {
       winTime = gameTime;
       localStorage.setItem(CHCFG[chapter].flag, 'yes');
       if (chapter === 0) { ch1Done = true; CHAPTERS[1].unlocked = true; }
-      if (chapter === 1) ch2Done = true;
+      if (chapter === 1) { ch2Done = true; CHAPTERS[2].unlocked = true; }
+      if (chapter === 3) ch4Done = true;
       winSound();
       if (document.exitPointerLock) document.exitPointerLock();
     } else {
       beep(140, 0.2, 'square', 0.1);
       setStatus(chapter === 0 ? 'LOCKED. the hatch needs the KEY CARD.'
+              : chapter === 3 ? "the lifeboat is ready... but you can't leave the SAILOR."
                               : 'the wood is stacked and waiting... you need MATCHES.');
     }
   }
@@ -723,7 +772,8 @@ function update(dt) {
   gameTime += dt;
   const night = CHCFG[chapter].threat === 'night';
   const kraken = CHCFG[chapter].threat === 'kraken';
-  const newStage = kraken ? 0 : Math.min(3, Math.floor(gameTime / RISE_EVERY));
+  const rise = CHCFG[chapter].rise || RISE_EVERY;
+  const newStage = kraken ? 0 : Math.min(3, Math.floor(gameTime / rise));
   if (newStage !== stage) {
     stage = newStage;
     if (night) {
@@ -778,7 +828,8 @@ function update(dt) {
     map[Math.floor(py)][Math.floor(px)] = 0;
     hasKey = true;
     chime();
-    setStatus(night ? 'MATCHES!! now reach the SIGNAL FIRE!'
+    setStatus(chapter === 3 ? 'the SAILOR!! he grabs your arm — "the lifeboat. GO."'
+            : night ? 'MATCHES!! now reach the SIGNAL FIRE!'
                     : 'KEY CARD!! now find the glowing ESCAPE HATCH!', 5);
   }
 
@@ -998,6 +1049,10 @@ function draw() {
   for (const p of palms) {
     sprites.push({ img: palmCanvas, x: p.x, y: p.y, h: 1.5, w: 1.0 });
   }
+  // chapter 4: the sailor waits below decks, drawn where the "item" is
+  if (chapter === 3 && !hasKey && itemPos) {
+    sprites.push({ img: sailorCanvas, x: itemPos.x, y: itemPos.y, h: 1.05, w: 0.6 });
+  }
   if (kraken) {
     if (sailor) sprites.push({ img: sailorCanvas, x: sailor.x, y: sailor.y, h: 1.05, w: 0.6 });
     for (const t of tentacles) {
@@ -1095,7 +1150,8 @@ function drawHud(W, H) {
   // the countdown to the next rise
   const night = CHCFG[chapter].threat === 'night';
   const kraken = CHCFG[chapter].threat === 'kraken';
-  const left = Math.max(0, RISE_EVERY * (stage + 1) - gameTime);
+  const rise = CHCFG[chapter].rise || RISE_EVERY;
+  const left = Math.max(0, rise * (stage + 1) - gameTime);
   const mm = Math.floor(left / 60), ss = Math.floor(left % 60);
   ctx.textAlign = 'center';
 
@@ -1189,8 +1245,10 @@ function drawHud(W, H) {
     ctx.font = 'bold 17px monospace';
     ctx.fillText(facing === 4 ? (night ? '[ E ] shove the driftwood' : '[ E ] open the door')
                : facing === 8 ? '[ E ] SILENCE THAT ALARM'
-               : hasKey ? (night ? '[ E ] LIGHT THE FIRE!!' : '[ E ] ESCAPE!!')
-               : (night ? '[ E ] ...cold wood. you need MATCHES'
+               : hasKey ? (chapter === 3 ? '[ E ] LAUNCH THE LIFEBOAT!!'
+                         : night ? '[ E ] LIGHT THE FIRE!!' : '[ E ] ESCAPE!!')
+               : (chapter === 3 ? '[ E ] ...not without the SAILOR'
+                : night ? '[ E ] ...cold wood. you need MATCHES'
                         : '[ E ] ...locked. find the KEY CARD'), W / 2, H - 76);
   }
 
@@ -1214,7 +1272,8 @@ function drawHud(W, H) {
     ctx.textAlign = 'left';
     ctx.fillStyle = hasKey ? '#ffd23f' : 'rgba(255,255,255,0.35)';
     ctx.font = 'bold 15px monospace';
-    ctx.fillText(night ? (hasKey ? '🔥 MATCHES' : '🔥 no matches yet')
+    ctx.fillText(chapter === 3 ? (hasKey ? '⛵ SAILOR WITH YOU' : '⛵ find the SAILOR')
+               : night ? (hasKey ? '🔥 MATCHES' : '🔥 no matches yet')
                        : (hasKey ? '🗝 KEY CARD' : '🗝 no key yet'), 14, 30);
   }
 
@@ -1280,10 +1339,18 @@ function drawHud(W, H) {
         ctx.fillText('the fire ROARS into the night sky...', W / 2, H / 2 + 28);
         ctx.fillText('and far out on the black sea, a light answers. a ship is coming.', W / 2, H / 2 + 50);
         ctx.fillText('Chapter 3 unlocked: the rescue is here. probably.', W / 2, H / 2 + 72);
-      } else {
+      } else if (chapter === 2) {
         ctx.fillText('with one last furious gurgle, the kraken sinks away.', W / 2, H / 2 + 28);
         ctx.fillText('the crew ROARS. the sailor nods. that nod means everything.', W / 2, H / 2 + 50);
-        ctx.fillText('Chapter 4 is unwritten... where does the rescue ship sail, captain?', W / 2, H / 2 + 72);
+        ctx.fillText('Chapter 4 unlocked: THE ESCAPE. because nothing stays saved for long.', W / 2, H / 2 + 72);
+      } else {
+        ctx.fillStyle = '#ffd23f';
+        ctx.font = 'bold 26px monospace';
+        ctx.fillText('⚓ THE END ⚓', W / 2, H / 2 + 34);
+        ctx.fillStyle = '#8aa4c8';
+        ctx.font = '15px monospace';
+        ctx.fillText('you row. the sailor rows. behind you, two good ships rest.', W / 2, H / 2 + 62);
+        ctx.fillText('ahead of you, the sun comes up. thanks for playing, captain.', W / 2, H / 2 + 84);
       }
     } else {
       ctx.fillStyle = '#ff5a4a';
