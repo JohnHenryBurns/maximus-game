@@ -105,6 +105,8 @@ const SKINS = [
 ];
 let camX = 0, camY = 0;
 let gameOver = false;
+let totalWin = false;    // every rival gone AND the whole page painted
+let lastStand = false;   // every rival gone — the mop-up begins
 let bestPct = 0;
 let milestone = 0;          // the next % worth celebrating
 let banner = '', bannerT = 0;
@@ -144,6 +146,8 @@ function resetGame() {
     ents.push(makeEnt(p, cx, cy));
   });
   gameOver = false;
+  totalWin = false;
+  lastStand = false;
   milestone = 25;
   banner = 'steer with your MOUSE (or finger, or arrows)';
   bannerT = 5;
@@ -385,17 +389,8 @@ function update(dt) {
   if (gameOver) return;
 
   for (const ent of ents) {
-    if (!ent.alive) {
-      ent.respawnT -= dt;
-      if (ent.respawnT <= 0 && !ent.p.isYou) {
-        // a bot returns, humbly, somewhere random-ish and empty-ish
-        const cx = 6 + Math.floor(Math.random() * (GW - 12));
-        const cy = 6 + Math.floor(Math.random() * (GH - 12));
-        stampSquare(ent.p.id, cx, cy, 2);
-        Object.assign(ent, makeEnt(ent.p, cx, cy));
-      }
-      continue;
-    }
+    // destroyed means DESTROYED. nobody comes back. sharpen up.
+    if (!ent.alive) continue;
     if (ent.p.isYou) steerSmooth(ent, dt);    // you: silky angle steering
     ent.x += ent.dx * SPEED * dt;
     ent.y += ent.dy * SPEED * dt;
@@ -495,6 +490,19 @@ function update(dt) {
     setBanner(milestone + '% OF THE PAPER IS YOURS!');
     claimSound(200);
     milestone += 25;
+  }
+
+  // the moment the last rival pops, the war becomes a coronation
+  if (!lastStand && ents.slice(1).every(e => !e.alive)) {
+    lastStand = true;
+    setBanner('ALL RIVALS DESTROYED — the page is yours. PAINT IT.');
+    towerSound();
+  }
+  if (lastStand && !totalWin && pct >= 99.9) {
+    totalWin = true;
+    gameOver = true;              // reuses the same "round over" plumbing
+    towerSound();
+    setTimeout(() => claimSound(300), 400);
   }
 
   const you = ents[0];
@@ -779,10 +787,13 @@ function drawHud(W, H) {
   ctx.textAlign = 'right';
   ctx.font = 'bold 14px monospace';
   board.forEach((row, i) => {
-    ctx.fillStyle = row.p.color;
+    const ent = ents.find(e => e.p === row.p);
+    const dead = ent && !ent.alive && !gameOver;
+    ctx.fillStyle = dead ? '#b8b098' : row.p.color;
     ctx.fillRect(W - 150, 20 + i * 24, 14, 14);
-    ctx.fillStyle = 'rgba(40, 36, 24, 0.85)';
-    ctx.fillText(row.p.name + '  ' + row.pct.toFixed(1) + '%', W - 20, 32 + i * 24);
+    ctx.fillStyle = dead ? 'rgba(40, 36, 24, 0.4)' : 'rgba(40, 36, 24, 0.85)';
+    ctx.fillText((dead ? '💀 ' : '') + row.p.name + '  ' +
+                 (dead ? '—' : row.pct.toFixed(1) + '%'), W - 20, 32 + i * 24);
   });
   ctx.textAlign = 'center';
 
@@ -800,16 +811,22 @@ function drawHud(W, H) {
   }
 
   if (gameOver) {
-    ctx.fillStyle = 'rgba(30, 26, 18, 0.75)';
+    ctx.fillStyle = totalWin ? 'rgba(40, 90, 140, 0.8)' : 'rgba(30, 26, 18, 0.75)';
     ctx.fillRect(0, 0, W, H);
     ctx.fillStyle = '#f2ecd8';
     ctx.font = `bold ${Math.min(44, W / 14)}px monospace`;
-    ctx.fillText('CUT!', W / 2, H / 2 - 40);
-    ctx.font = '18px monospace';
-    ctx.fillText('you held ' + bestPct.toFixed(1) + '% of the paper at your best', W / 2, H / 2 + 4);
+    if (totalWin) {
+      ctx.fillText('👑 TOTAL CONQUEST 👑', W / 2, H / 2 - 40);
+      ctx.font = '18px monospace';
+      ctx.fillText('every rival destroyed. every square painted. THE PAGE IS YOU.', W / 2, H / 2 + 4);
+    } else {
+      ctx.fillText('CUT!', W / 2, H / 2 - 40);
+      ctx.font = '18px monospace';
+      ctx.fillText('you held ' + bestPct.toFixed(1) + '% of the paper at your best', W / 2, H / 2 + 4);
+    }
     ctx.fillStyle = 'rgba(242, 236, 216, 0.7)';
     ctx.font = '15px monospace';
-    ctx.fillText('tap or space to try again', W / 2, H / 2 + 40);
+    ctx.fillText('tap or space for the menu', W / 2, H / 2 + 40);
   }
 }
 
