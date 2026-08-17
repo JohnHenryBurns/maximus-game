@@ -130,6 +130,7 @@ let launchers = [];     // bomb fountains: ten per second, forever
 let grabbedLauncher = null;
 let gravityOn = true;
 let timeOn = true;      // ...until somebody freezes it
+let tentaclesOn = true; // the holes' grabby arms — switchable, mercifully
 let shake = 0;
 let elapsed = 0;
 let grabbed = null;
@@ -406,7 +407,7 @@ function update(dt) {
 
     // ---- THE TENTACLES: they reach out, latch on, and REEL IN ----
     h.tentT -= dt;
-    if (h.tentT <= 0 && h.tents.length < 2) {
+    if (tentaclesOn && h.tentT <= 0 && h.tents.length < 2) {
       h.tentT = 2.4;
       let prey = null, preyD = 460 * h.size;
       for (const b of bodies) {
@@ -555,6 +556,18 @@ addEventListener('pointerdown', e => {
           // a little send-off so everything visibly lifts
           for (const b of bodies) b.vy -= 60 + Math.random() * 80;
         }
+      } else if (r.id === 'tent') {
+        tentaclesOn = !tentaclesOn;
+        if (!tentaclesOn) {
+          // every tentacle lets go, everywhere, right now
+          for (const h of holes) {
+            for (const t of h.tents || []) {
+              if (t.target) t.target.tentacled = false;
+            }
+            h.tents = [];
+          }
+          beep(220, 0.15, 'sine', 0.1);
+        } else beep(440, 0.15, 'sine', 0.1);
       } else if (r.id === 'time') {
         timeOn = !timeOn;
         if (timeOn) {
@@ -860,6 +873,7 @@ function draw() {
     ['spike', '⚠ SPIKE'], ['hole', '🕳 HOLE'], ['launcher', '💥 LAUNCHER'],
     ['gravity', gravityOn ? '🌍 GRAVITY: ON' : '🚀 GRAVITY: OFF'],
     ['time', timeOn ? '⏱ TIME: ON' : '❄ TIME: FROZEN'],
+    ['tent', tentaclesOn ? '🐙 TENTACLES: ON' : '🐙 TENTACLES: OFF'],
     ['erase', '🧽 ERASE'],
     ['clear', '✖ CLEAR'],
   ];
@@ -879,17 +893,21 @@ function draw() {
     const active = tool === p.id;
     const isGrav = p.id === 'gravity';
     const isTime = p.id === 'time';
+    const isTent = p.id === 'tent';
     ctx.fillStyle = isGrav ? (gravityOn ? 'rgba(125, 223, 143, 0.15)' : 'rgba(122, 90, 255, 0.3)')
                   : isTime ? (timeOn ? 'rgba(125, 223, 143, 0.15)' : 'rgba(90, 200, 255, 0.3)')
+                  : isTent ? (tentaclesOn ? 'rgba(180, 130, 255, 0.2)' : 'rgba(255,255,255,0.05)')
                   : active ? 'rgba(255, 210, 63, 0.25)' : 'rgba(255,255,255,0.07)';
     ctx.fillRect(p.x, p.y, p.w, 40);
     ctx.strokeStyle = isGrav ? (gravityOn ? '#7ddf8f' : '#9a7aff')
                     : isTime ? (timeOn ? '#7ddf8f' : '#5ac8ff')
+                    : isTent ? (tentaclesOn ? '#b482ff' : '#5a5450')
                     : active ? '#ffd23f' : '#5a5450';
     ctx.lineWidth = 2;
     ctx.strokeRect(p.x, p.y, p.w, 40);
     ctx.fillStyle = isGrav ? (gravityOn ? '#7ddf8f' : '#c8b4ff')
                   : isTime ? (timeOn ? '#7ddf8f' : '#b4e4ff')
+                  : isTent ? (tentaclesOn ? '#c8a4ff' : '#8a8478')
                   : active ? '#ffd23f' : '#c8c0b8';
     ctx.font = 'bold 14px monospace';
     ctx.textAlign = 'center';
