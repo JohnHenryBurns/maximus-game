@@ -460,8 +460,9 @@ function update(dt) {
   // ---- BLACK HOLES: they pull. they swallow. sometimes they burp. ----
   for (const h of holes) {
     if (h === grabbedHole) { h.x = pointer.x; h.y = pointer.y; }
-    // black holes GROW: slowly with age, and a spurt with every meal
-    h.size = Math.min(4, h.size + dt * 0.022);
+    // black holes GROW: slowly with age, a spurt with every meal —
+    // and they NEVER stop. no cap. no mercy. eventually, no lab.
+    h.size += dt * 0.022;
     for (const b of bodies) {
       if (b === grabbed) continue;
       const dx = h.x - b.x, dy = h.y - b.y;
@@ -494,7 +495,7 @@ function update(dt) {
       if (d < 28 * h.size) {
         // down the hatch — and the hole gets a little bigger for it
         b.gone = true;
-        h.size = Math.min(4, h.size + 0.08);
+        h.size += 0.08;
         slurpSound();
         floatTexts.push({ x: h.x, y: h.y - 34 * h.size, t: 1, text: 'SLURP!' });
         if (b.type === 'bomb') burps.push({ hole: h, t: 0.6 });
