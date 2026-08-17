@@ -97,15 +97,75 @@ let chapter = 0;
 
 const MAPW = 16, MAPH = 16;
 let map = [];
+let palms = [];       // island palms are SPRITES, not walls — see below
 let startX = 2.5, startY = 1.5;
 function loadMap() {
+  palms = [];
   map = CHCFG[chapter].map.map((row, y) => row.split('').map((ch, x) => {
     if (ch === 'S') { startX = x + 0.5; startY = y + 0.5; return 0; }
     if (ch === '.') return 0;
+    if (ch === '2' && CHCFG[chapter].threat === 'night') {
+      palms.push({ x: x + 0.5, y: y + 0.5 });
+    }
     return parseInt(ch);
   }));
 }
 loadMap();
+
+// ---------------------------------------------------------------------
+// THE PALM TREE — drawn ONCE onto a hidden canvas, then shown in the
+// world as a "billboard sprite": it always faces you, grows as you
+// approach, and hides behind rocks. Same trick 90s games used for
+// every barrel, lamp and tree you ever walked past.
+// ---------------------------------------------------------------------
+const palmCanvas = document.createElement('canvas');
+palmCanvas.width = 96;
+palmCanvas.height = 144;
+(function paintPalm() {
+  const c = palmCanvas.getContext('2d');
+  // the trunk: curved, like it grew leaning into the sea wind
+  c.strokeStyle = '#8a6a42';
+  c.lineWidth = 9;
+  c.lineCap = 'round';
+  c.beginPath();
+  c.moveTo(44, 144);
+  c.quadraticCurveTo(58, 90, 50, 44);
+  c.stroke();
+  c.strokeStyle = '#6a4e2e';                  // trunk rings
+  c.lineWidth = 2;
+  for (let i = 0; i < 7; i++) {
+    const yy = 132 - i * 14;
+    c.beginPath();
+    c.moveTo(42 + i * 1.5, yy);
+    c.lineTo(56 + i * 0.8, yy - 3);
+    c.stroke();
+  }
+  // the fronds: long arcs bursting from the crown
+  const crown = [50, 40];
+  const ends = [[8, 52], [14, 22], [38, 6], [66, 8], [88, 26], [92, 56], [26, 66]];
+  c.strokeStyle = '#3f9f4f';
+  c.lineWidth = 7;
+  for (const [ex, ey] of ends) {
+    c.beginPath();
+    c.moveTo(crown[0], crown[1]);
+    c.quadraticCurveTo((crown[0] + ex) / 2, Math.min(crown[1], ey) - 18, ex, ey);
+    c.stroke();
+  }
+  c.strokeStyle = '#57c267';                  // sunlit edges on every frond
+  c.lineWidth = 3;
+  for (const [ex, ey] of ends) {
+    c.beginPath();
+    c.moveTo(crown[0], crown[1]);
+    c.quadraticCurveTo((crown[0] + ex) / 2, Math.min(crown[1], ey) - 16, ex, ey);
+    c.stroke();
+  }
+  c.fillStyle = '#6a4e2e';                    // coconuts. mandatory.
+  [[44, 47], [57, 45], [50, 53]].forEach(([x, y]) => {
+    c.beginPath();
+    c.arc(x, y, 5, 0, Math.PI * 2);
+    c.fill();
+  });
+})();
 function cellAt(x, y) {
   if (x < 0 || y < 0 || x >= MAPW || y >= MAPH) return 1;
   return map[Math.floor(y)][Math.floor(x)];
@@ -509,6 +569,7 @@ function draw() {
 
   // ---- fire one ray per 2-pixel column ----
   const STEP = 2;
+  const zbuf = new Array(Math.ceil(W / STEP)).fill(999);  // wall depth per column
   for (let sx = 0; sx < W; sx += STEP) {
     const rayA = ang - FOV / 2 + (sx / W) * FOV;
     const cos = Math.cos(rayA), sin = Math.sin(rayA);
@@ -526,11 +587,15 @@ function draw() {
       else { sideY += dY; mapY += stepY; side = 1; }
       cell = (mapY < 0 || mapX < 0 || mapY >= MAPH || mapX >= MAPW)
            ? 1 : map[mapY][mapX];
-      if (cell === 1 || cell === 2 || cell === 4 || cell === 6 || cell === 8) break;
+      // on the island, rays fly straight THROUGH palm cells (2) —
+      // the trees are drawn as sprites afterward instead
+      if (cell === 1 || cell === 4 || cell === 6 || cell === 8 ||
+          (cell === 2 && !night)) break;
     }
     let dist = side === 0 ? sideX - dX : sideY - dY;
     dist *= Math.cos(rayA - ang);            // undo the fisheye
     dist = Math.max(0.05, dist);
+    zbuf[sx / STEP] = dist;
 
     let wallH = H / dist;
     if (!night && stage >= 3) wallH += Math.sin(sx * 0.05 + elapsed * 3) * 8;  // underwater wobble
@@ -559,6 +624,40 @@ function draw() {
     let shade = Math.max(0.12, 1 - dist / viewDist) * (side === 1 ? 0.75 : 1);
     ctx.fillStyle = `rgb(${r * shade | 0}, ${g * shade | 0}, ${b * shade | 0})`;
     ctx.fillRect(sx, horizon - wallH / 2, STEP, wallH);
+  }
+
+  // ---- the palms, farthest first so near ones stand in front ----
+  if (palms.length) {
+    const seen = [];
+    for (const p of palms) {
+      let relAng = Math.atan2(p.y - py, p.x - px) - ang;
+      relAng = ((relAng + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+      if (Math.abs(relAng) > FOV / 2 + 0.5) continue;
+      const d = Math.hypot(p.x - px, p.y - py);
+      const depth = Math.max(0.15, d * Math.cos(relAng));
+      seen.push({ depth, screenX: ((relAng + FOV / 2) / FOV) * W });
+    }
+    seen.sort((a, b) => b.depth - a.depth);
+    for (const s of seen) {
+      const size = H / s.depth;
+      const drawH = size * 1.5, drawW = size * 1.0;
+      const bottom = horizon + size / 2;
+      const left = s.screenX - drawW / 2;
+      const fade = Math.max(0, Math.min(1, 1.15 - s.depth / viewDist));
+      if (fade <= 0.03) continue;
+      ctx.globalAlpha = fade;
+      // drawn in skinny strips so rocks can hide the RIGHT parts of it
+      const SW = palmCanvas.width;
+      for (let stripe = 0; stripe < drawW; stripe += STEP) {
+        const col = Math.floor((left + stripe) / STEP);
+        if (col < 0 || col >= zbuf.length) continue;
+        if (zbuf[col] < s.depth) continue;           // a rock is in front
+        ctx.drawImage(palmCanvas,
+                      (stripe / drawW) * SW, 0, SW * STEP / drawW, palmCanvas.height,
+                      left + stripe, bottom - drawH, STEP, drawH);
+      }
+      ctx.globalAlpha = 1;
+    }
   }
 
   // ---- THE WATER — climbing the screen, stage by stage ----
@@ -671,6 +770,7 @@ function drawHud(W, H) {
       if (c === 0) continue;
       ctx.fillStyle = c === 4 ? '#96703c' : c === 6 ? '#7ddf8f'
                     : c === 7 ? (Math.floor(elapsed * 3) % 2 ? '#ffd23f' : '#8a7420')
+                    : c === 2 && night ? '#3f9f4f'
                     : '#5a6a80';
       ctx.fillRect(mmX + x * MM, mmY + y * MM, MM, MM);
     }
