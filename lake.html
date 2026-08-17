@@ -1,0 +1,719 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>SOMETHING'S DOWN THERE</title>
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #0a0d14; }
+  canvas { display: block; touch-action: none; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+// =====================================================================
+// SOMETHING'S DOWN THERE — a fishing game about curiosity.
+// The surface is sunny. The minnows are cute. But the lake is
+// 1,200 meters deep, your line only reaches 300... at first...
+// and every upgrade buys you another look at what lives further down.
+// Fill the FISHDEX. Buy the lamp. You'll want the lamp.
+// =====================================================================
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+function fit() { canvas.width = innerWidth; canvas.height = innerHeight; }
+addEventListener('resize', fit);
+fit();
+
+window.onerror = (msg, src, line) => {
+  const d = document.createElement('div');
+  d.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#c0392b;' +
+    'color:#fff;font:14px monospace;padding:8px;z-index:9';
+  d.textContent = '🐛 BUG on line ' + line + ': ' + msg;
+  document.body.appendChild(d);
+};
+
+// ---------------------------------------------------------------------
+// SOUND
+// ---------------------------------------------------------------------
+let audio = null;
+function ensureAudio() {
+  if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)();
+}
+function beep(freq, dur, type, vol) {
+  if (!audio) return;
+  const o = audio.createOscillator(), g = audio.createGain();
+  o.type = type || 'sine';
+  o.frequency.value = freq;
+  g.gain.setValueAtTime(vol || 0.08, audio.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + dur);
+  o.connect(g); g.connect(audio.destination);
+  o.start(); o.stop(audio.currentTime + dur + 0.02);
+}
+function plop() { beep(300, 0.12, 'sine', 0.12); setTimeout(() => beep(180, 0.15, 'sine', 0.1), 60); }
+function catchChime() { [660, 880, 1100].forEach((n, i) => setTimeout(() => beep(n, 0.15, 'sine', 0.1), i * 90)); }
+function coinSound() { beep(988, 0.06, 'square', 0.06); setTimeout(() => beep(1319, 0.12, 'square', 0.06), 50); }
+function tootSound() {
+  if (!audio) return;
+  const o = audio.createOscillator(), g = audio.createGain();
+  const lfo = audio.createOscillator(), lg = audio.createGain();
+  o.type = 'sawtooth';
+  o.frequency.setValueAtTime(130, audio.currentTime);
+  o.frequency.exponentialRampToValueAtTime(70, audio.currentTime + 0.25);
+  lfo.type = 'square'; lfo.frequency.value = 26; lg.gain.value = 0.05;
+  lfo.connect(lg); lg.connect(g.gain);
+  g.gain.setValueAtTime(0.12, audio.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + 0.3);
+  o.connect(g); g.connect(audio.destination);
+  o.start(); o.stop(audio.currentTime + 0.35);
+  lfo.start(); lfo.stop(audio.currentTime + 0.35);
+}
+let droneOsc = null, droneGain = null;
+function setDrone(on) {
+  if (!audio) return;
+  if (on && !droneOsc) {
+    droneOsc = audio.createOscillator();
+    droneGain = audio.createGain();
+    droneOsc.type = 'sine';
+    droneOsc.frequency.value = 38;
+    droneGain.gain.value = 0.04;
+    droneOsc.connect(droneGain); droneGain.connect(audio.destination);
+    droneOsc.start();
+  } else if (!on && droneOsc) {
+    droneGain.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + 0.5);
+    const o = droneOsc;
+    setTimeout(() => o.stop(), 600);
+    droneOsc = null;
+  }
+}
+
+// ---------------------------------------------------------------------
+// THE RESIDENTS OF THE LAKE — shallow and cute up top,
+// increasingly Not Okay as the meters go by
+// ---------------------------------------------------------------------
+const SPECIES = [
+  { id: 'minnow', name: 'Pond Minnow', lore: 'small. round. blameless.',
+    min: 0, max: 160, size: 9, speed: 60, coins: 2, weight: 10,
+    body: '#8fb8d8', belly: '#c8dce8' },
+  { id: 'gerald', name: 'Gerald', lore: 'just Gerald.',
+    min: 0, max: 220, size: 12, speed: 45, coins: 5, weight: 6,
+    body: '#e8953c', belly: '#f0c896', mustache: true },
+  { id: 'sock', name: 'Sock Eater', lore: 'so THAT\'S where they go.',
+    min: 100, max: 320, size: 14, speed: 50, coins: 8, weight: 5,
+    body: '#8a8fa0', belly: '#b8bcc8', sock: true },
+  { id: 'wobbler', name: 'The Wobbler', lore: 'has never swum straight. never will.',
+    min: 150, max: 380, size: 13, speed: 70, coins: 10, weight: 5,
+    body: '#7ddf8f', belly: '#c8f0c8', wobble: true },
+  { id: 'fartfish', name: 'Fartfish', lore: 'you will hear it before you see it.',
+    min: 200, max: 470, size: 13, speed: 85, coins: 12, weight: 4,
+    body: '#b4de5f', belly: '#e0f0a8', bubbles: true },
+  { id: 'barry', name: 'Barry', lore: 'an eel with a lot on his mind.',
+    min: 300, max: 540, size: 11, speed: 55, coins: 15, weight: 4,
+    body: '#6a5aaf', belly: '#9a8fd0', long: true },
+  { id: 'glow', name: 'Glowbelly', lore: 'the deep\'s own night-light.',
+    min: 400, max: 680, size: 12, speed: 40, coins: 20, weight: 4,
+    body: '#3a6a7a', belly: '#aff8ff', glow: true },
+  { id: 'bone', name: 'Bone Cod', lore: 'mostly retired.',
+    min: 500, max: 780, size: 15, speed: 35, coins: 25, weight: 3,
+    body: '#4a5060', belly: '#5a6070', bones: true },
+  { id: 'eye', name: 'The Unblinker', lore: 'it has seen you. it has always seen you.',
+    min: 620, max: 880, size: 16, speed: 30, coins: 30, weight: 3,
+    body: '#5a3a6a', belly: '#7a5a8a', bigeye: true },
+  { id: 'grum', name: 'Grumbler', lore: 'woke up like this. stayed like this.',
+    min: 720, max: 980, size: 20, speed: 45, coins: 40, weight: 2,
+    body: '#7a3a3a', belly: '#9a5a4a', teeth: true },
+  { id: 'angler', name: 'Void Angler', lore: 'its little light is a LIE.',
+    min: 860, max: 1120, size: 18, speed: 30, coins: 60, weight: 2,
+    body: '#25182e', belly: '#3a2a44', lure: true, glow: true },
+  { id: 'longone', name: 'The Long One', lore: 'you never see all of it at once.',
+    min: 920, max: 1180, size: 14, speed: 65, coins: 80, weight: 1,
+    body: '#1a2a2a', belly: '#2a3e3a', long: true, glow: true },
+  { id: 'it', name: '???', lore: 'it was waiting for you, specifically.',
+    min: 1195, max: 1200, size: 60, speed: 8, coins: 250, weight: 0,
+    body: '#0a0a0f', belly: '#141420', bigeye: true, isIT: true },
+];
+
+const LAKE_DEPTH = 1200;
+const SURFACE_Y = 130;      // where the water begins, on screen
+
+// ---------------------------------------------------------------------
+// SAVING — coins, upgrades, and the FISHDEX live in the browser
+// ---------------------------------------------------------------------
+let save = { coins: 0, line: 1, reel: 1, lamp: 0, dex: {} };
+try {
+  const s = JSON.parse(localStorage.getItem('lake_save'));
+  if (s) save = Object.assign(save, s);
+} catch (err) {}
+function persist() { localStorage.setItem('lake_save', JSON.stringify(save)); }
+
+const LINE_LEVELS = [300, 500, 700, 900, 1200];
+const REEL_LEVELS = [90, 130, 180, 240];
+const LAMP_LEVELS = [0, 90, 140, 200];
+function maxLine() { return LINE_LEVELS[Math.min(save.line - 1, LINE_LEVELS.length - 1)]; }
+function reelSpeed() { return REEL_LEVELS[Math.min(save.reel - 1, REEL_LEVELS.length - 1)]; }
+function lampR() { return LAMP_LEVELS[Math.min(save.lamp, LAMP_LEVELS.length - 1)]; }
+
+// ---------------------------------------------------------------------
+// GAME STATE
+// ---------------------------------------------------------------------
+let mode = 'idle';          // 'idle' | 'drop' | 'reel'
+let hook = { d: 0, x: 0 };  // d = depth in meters, x = sideways offset
+let caught = null;          // the fish on the hook right now
+let fishes = [];
+let elapsed = 0;
+let camD = 0;               // how far down the camera is looking
+let steer = 0;
+let statusMsg = '', statusT = 0;
+let overlay = null;         // 'dex' | 'shop' | null
+let uiRects = [];
+let boatX = 0.5;            // fraction of screen width
+let itCaughtEver = save.dex['it'] > 0;
+
+function setStatus(m, t) { statusMsg = m; statusT = t || 3; }
+
+// keep the lake stocked: fish live in bands, drifting side to side
+function spawnFish(count) {
+  for (let i = 0; i < count; i++) {
+    // pick a species weighted by rarity, then place it in its band
+    const pool = [];
+    for (const sp of SPECIES) for (let w = 0; w < sp.weight; w++) pool.push(sp);
+    const sp = pool[Math.floor(Math.random() * pool.length)];
+    fishes.push({
+      sp,
+      d: Math.max(18, sp.min + Math.random() * (sp.max - sp.min)),
+      x: Math.random() * 2 - 1,               // -1..1 across the lake
+      dir: Math.random() < 0.5 ? -1 : 1,
+      phase: Math.random() * 7,
+    });
+  }
+}
+spawnFish(46);
+// and exactly one of IT, at the very bottom, always
+fishes.push({ sp: SPECIES[SPECIES.length - 1], d: 1198, x: 0, dir: 1, phase: 0 });
+
+// ---------------------------------------------------------------------
+// INPUT — tap/space to cast and reel, steer with arrows or pointer
+// ---------------------------------------------------------------------
+const keys = {};
+addEventListener('keydown', e => {
+  ensureAudio();
+  keys[e.key.toLowerCase()] = true;
+  if (e.key === ' ') action();
+});
+addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+
+let pointerX = null;
+addEventListener('pointerdown', e => {
+  ensureAudio();
+  for (const r of uiRects) {
+    if (e.clientX > r.x && e.clientX < r.x + r.w &&
+        e.clientY > r.y && e.clientY < r.y + r.h) { uiAction(r.id); return; }
+  }
+  if (overlay) { overlay = null; return; }
+  pointerX = e.clientX;
+  action();
+});
+addEventListener('pointermove', e => { pointerX = e.clientX; });
+addEventListener('pointerup', () => { pointerX = null; });
+
+function action() {
+  if (overlay) return;
+  if (mode === 'idle') {
+    mode = 'drop';
+    hook.d = 0;
+    hook.x = 0;
+    caught = null;
+    plop();
+    setStatus('down we go... (steer with ← → or your finger)', 3);
+  } else if (mode === 'drop') {
+    mode = 'reel';               // changed your mind? come back up
+  }
+}
+
+function uiAction(id) {
+  if (id === 'dex') { overlay = overlay === 'dex' ? null : 'dex'; return; }
+  if (id === 'shop') { overlay = overlay === 'shop' ? null : 'shop'; return; }
+  if (id.startsWith('buy_')) {
+    const what = id.slice(4);
+    const cost = shopCost(what);
+    if (cost !== null && save.coins >= cost) {
+      save.coins -= cost;
+      save[what]++;
+      persist();
+      coinSound();
+    }
+  }
+}
+
+function shopCost(what) {
+  if (what === 'line') return save.line >= LINE_LEVELS.length ? null : save.line * 40;
+  if (what === 'reel') return save.reel >= REEL_LEVELS.length ? null : save.reel * 30;
+  if (what === 'lamp') return save.lamp >= LAMP_LEVELS.length - 1 ? null : 25 + save.lamp * 45;
+  return null;
+}
+
+// ---------------------------------------------------------------------
+// UPDATE
+// ---------------------------------------------------------------------
+function update(dt) {
+  elapsed += dt;
+  if (statusT > 0) statusT -= dt;
+
+  // the fish get on with their lives whether you're fishing or not
+  for (const f of fishes) {
+    const wob = f.sp.wobble ? Math.sin(elapsed * 6 + f.phase) * 0.4 : 0;
+    f.x += f.dir * (f.sp.speed / 900) * dt;
+    f.d += Math.sin(elapsed * 1.5 + f.phase) * 6 * dt + wob;
+    f.d = Math.max(Math.max(18, f.sp.min), Math.min(f.sp.max, f.d));
+    if (f.x > 1.1) { f.x = 1.1; f.dir = -1; }
+    if (f.x < -1.1) { f.x = -1.1; f.dir = 1; }
+  }
+
+  if (mode === 'drop') {
+    hook.d += 85 * dt;
+    const left = keys['arrowleft'] || keys['a'];
+    const right = keys['arrowright'] || keys['d'];
+    steer = (right ? 1 : 0) - (left ? 1 : 0);
+    if (pointerX !== null) {
+      const targetX = (pointerX / canvas.width) * 2 - 1;
+      steer = Math.sign(targetX - (boatX * 2 - 1) - hook.x) *
+              (Math.abs(targetX - (boatX * 2 - 1) - hook.x) > 0.03 ? 1 : 0);
+    }
+    hook.x += steer * 0.55 * dt;
+    hook.x = Math.max(-1, Math.min(1, hook.x));
+
+    // did the hook meet a resident?
+    for (const f of fishes) {
+      if (f.caught) continue;
+      const fx = f.x, hd = hook.d;
+      const dx = (fx - (hook.x + boatX * 2 - 1)) * canvas.width * 0.5;
+      const dd = f.d - hd;
+      if (Math.abs(dx) < f.sp.size + 14 && Math.abs(dd) < f.sp.size + 10) {
+        caught = f;
+        f.caught = true;
+        mode = 'reel';
+        catchChime();
+        if (f.sp.bubbles) tootSound();
+        break;
+      }
+    }
+    if (hook.d >= maxLine()) {
+      mode = 'reel';
+      setStatus('that\'s all the line you\'ve got... for now.', 3);
+    }
+  } else if (mode === 'reel') {
+    hook.d -= reelSpeed() * dt;
+    if (caught) { caught.d = hook.d; caught.x = hook.x + boatX * 2 - 1; }
+    if (hook.d <= 0) {
+      if (caught) {
+        const sp = caught.sp;
+        save.coins += sp.coins;
+        save.dex[sp.id] = (save.dex[sp.id] || 0) + 1;
+        persist();
+        coinSound();
+        if (sp.isIT) {
+          itCaughtEver = true;
+          setStatus('you caught... IT. it looked at you. you put it back. +' + sp.coins, 6);
+          setDrone(false);
+        } else {
+          setStatus('caught: ' + sp.name + '! +' + sp.coins + ' coins — "' + sp.lore + '"', 4);
+        }
+        // the lake replaces what it loses (except IT — IT returns on its own)
+        fishes = fishes.filter(f => f !== caught);
+        if (sp.isIT) {
+          setTimeout(() => fishes.push({ sp, d: 1198, x: 0, dir: 1, phase: 0 }), 30000);
+        } else spawnFish(1);
+        caught = null;
+      }
+      mode = 'idle';
+      hook.d = 0;
+    }
+  }
+
+  // the camera follows the hook into the dark
+  const targetCam = Math.max(0, hook.d - 260);
+  camD += (targetCam - camD) * Math.min(1, dt * 3);
+
+  // the deep hums. you'll feel it before you understand it.
+  setDrone(mode !== 'idle' && hook.d > 600);
+}
+
+// ---------------------------------------------------------------------
+// DRAWING
+// ---------------------------------------------------------------------
+function depthToY(d) { return SURFACE_Y + (d - camD); }
+
+function drawFish(f) {
+  const W = canvas.width;
+  const x = ((f.x + 1) / 2) * W;
+  const y = depthToY(f.d);
+  if (y < -60 || y > canvas.height + 60) return;
+  const s = f.sp.size;
+  const flip = f.dir;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(flip, 1);
+  if (f.sp.glow) {
+    const g = ctx.createRadialGradient(0, 0, 2, 0, 0, s * 4);
+    g.addColorStop(0, 'rgba(175, 248, 255, 0.25)');
+    g.addColorStop(1, 'rgba(175, 248, 255, 0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(-s * 4, -s * 4, s * 8, s * 8);
+  }
+  if (f.sp.long) {
+    // eels: a sine-wave ribbon with a face at the front
+    ctx.strokeStyle = f.sp.body;
+    ctx.lineWidth = s * 0.9;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    for (let i = 0; i <= 8; i++) {
+      const px = -i * s * 0.9;
+      const py = Math.sin(elapsed * 6 + f.phase + i * 0.8) * s * 0.45;
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+  } else {
+    ctx.fillStyle = f.sp.body;                   // the body
+    ctx.beginPath();
+    ctx.ellipse(0, 0, s * 1.4, s, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = f.sp.belly;                  // the belly
+    ctx.beginPath();
+    ctx.ellipse(0, s * 0.3, s * 1.1, s * 0.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = f.sp.body;                   // the tail
+    ctx.beginPath();
+    ctx.moveTo(-s * 1.2, 0);
+    ctx.lineTo(-s * 2, -s * 0.8 + Math.sin(elapsed * 8 + f.phase) * 3);
+    ctx.lineTo(-s * 2, s * 0.8 + Math.sin(elapsed * 8 + f.phase) * 3);
+    ctx.fill();
+  }
+  if (f.sp.bones) {
+    ctx.strokeStyle = f.sp.belly;
+    ctx.lineWidth = 2;
+    for (let i = -1; i <= 1; i++) {
+      ctx.beginPath();
+      ctx.moveTo(i * s * 0.6, -s * 0.7);
+      ctx.lineTo(i * s * 0.6, s * 0.7);
+      ctx.stroke();
+    }
+  }
+  // the eye — or the EYE
+  if (f.sp.bigeye) {
+    ctx.fillStyle = '#f0ead8';
+    ctx.beginPath();
+    ctx.arc(s * 0.3, -s * 0.1, s * 0.55, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#101014';
+    ctx.beginPath();
+    ctx.arc(s * 0.38, -s * 0.1, s * 0.25, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    ctx.fillStyle = '#101418';
+    ctx.beginPath();
+    ctx.arc(s * 0.7, -s * 0.25, Math.max(2, s * 0.16), 0, Math.PI * 2);
+    ctx.fill();
+  }
+  if (f.sp.mustache) {
+    ctx.strokeStyle = '#7a4a1e';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(s * 0.9, s * 0.15);
+    ctx.quadraticCurveTo(s * 0.5, s * 0.5, s * 0.1, s * 0.3);
+    ctx.stroke();
+  }
+  if (f.sp.teeth) {
+    ctx.fillStyle = '#f0ead8';
+    for (let i = 0; i < 3; i++) {
+      ctx.beginPath();
+      ctx.moveTo(s * (0.5 + i * 0.25), s * 0.45);
+      ctx.lineTo(s * (0.58 + i * 0.25), s * 0.8);
+      ctx.lineTo(s * (0.66 + i * 0.25), s * 0.45);
+      ctx.fill();
+    }
+  }
+  if (f.sp.sock) {
+    ctx.fillStyle = '#e84a5f';                   // half-swallowed sock. tragic.
+    ctx.fillRect(s * 1.1, -s * 0.15, s * 0.7, s * 0.35);
+  }
+  if (f.sp.lure) {
+    ctx.strokeStyle = f.sp.belly;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(s * 0.5, -s * 0.8);
+    ctx.quadraticCurveTo(s * 1.3, -s * 1.6, s * 1.6, -s * 0.9);
+    ctx.stroke();
+    ctx.fillStyle = '#fff8c8';
+    ctx.beginPath();
+    ctx.arc(s * 1.6, -s * 0.9, 4 + Math.sin(elapsed * 5) * 1.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  if (f.sp.bubbles && Math.random() < 0.2) {
+    ctx.fillStyle = 'rgba(200, 240, 160, 0.6)';
+    ctx.beginPath();
+    ctx.arc(-s * 2.2 - Math.random() * 8, (Math.random() - 0.5) * 10, 2 + Math.random() * 2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function draw() {
+  const W = canvas.width, H = canvas.height;
+
+  // water: a gradient that goes from holiday to horror
+  const g = ctx.createLinearGradient(0, depthToY(0), 0, depthToY(LAKE_DEPTH));
+  g.addColorStop(0, '#3a7ab8');
+  g.addColorStop(0.2, '#2a5a8f');
+  g.addColorStop(0.45, '#1a3a5f');
+  g.addColorStop(0.7, '#101f38');
+  g.addColorStop(1, '#050810');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+
+  // drifting motes, so the water feels thick
+  ctx.fillStyle = 'rgba(255,255,255,0.12)';
+  for (let i = 0; i < 40; i++) {
+    const my = ((i * 173 + elapsed * 6) % LAKE_DEPTH);
+    const y = depthToY(my);
+    if (y < 0 || y > H) continue;
+    ctx.fillRect((i * 97 + Math.sin(elapsed * 0.5 + i) * 20) % W, y, 2, 2);
+  }
+
+  // the sky and the boat, when the surface is in view
+  const surfY = depthToY(0);
+  if (surfY > -80) {
+    ctx.fillStyle = '#dfb98a';                    // permanent lake-evening
+    ctx.fillRect(0, 0, W, Math.max(0, surfY));
+    ctx.fillStyle = '#f0d8a8';
+    ctx.beginPath();
+    ctx.arc(W * 0.8, surfY - 70, 26, 0, Math.PI * 2);
+    ctx.fill();
+    // the water line
+    ctx.strokeStyle = 'rgba(255, 240, 200, 0.5)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let x = 0; x <= W; x += 20) {
+      const y = surfY + Math.sin(x * 0.03 + elapsed * 2) * 3;
+      if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    // the boat and its optimist
+    const bx = boatX * W;
+    const bob = Math.sin(elapsed * 2) * 3;
+    ctx.fillStyle = '#6a4a2a';
+    ctx.beginPath();
+    ctx.moveTo(bx - 55, surfY - 8 + bob);
+    ctx.lineTo(bx + 55, surfY - 8 + bob);
+    ctx.lineTo(bx + 38, surfY + 12 + bob);
+    ctx.lineTo(bx - 38, surfY + 12 + bob);
+    ctx.fill();
+    ctx.strokeStyle = '#e8dcc8';                 // our fisher
+    ctx.lineWidth = 4;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.arc(bx + 10, surfY - 38 + bob, 8, 0, Math.PI * 2);   // head
+    ctx.moveTo(bx + 10, surfY - 30 + bob);
+    ctx.lineTo(bx + 6, surfY - 12 + bob);                    // body
+    ctx.moveTo(bx + 10, surfY - 24 + bob);
+    ctx.lineTo(bx + 26, surfY - 30 + bob);                   // rod arm
+    ctx.stroke();
+    ctx.strokeStyle = '#4a3a2a';                 // the rod
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(bx + 26, surfY - 30 + bob);
+    ctx.lineTo(bx + 44, surfY - 52 + bob);
+    ctx.stroke();
+  }
+
+  // the darkness below ~380m — and the lamp, if you bought one
+  const darkStart = 380;
+  if (camD + H > depthToY(darkStart)) {
+    const hookY = depthToY(hook.d);
+    const hookX = ((hook.x + boatX * 2 - 1) + 1) / 2 * W;
+    const dg = ctx.createLinearGradient(0, depthToY(darkStart), 0, depthToY(darkStart + 260));
+    dg.addColorStop(0, 'rgba(3, 5, 10, 0)');
+    dg.addColorStop(1, 'rgba(3, 5, 10, 0.88)');
+    ctx.fillStyle = dg;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  // fish under the darkness get redrawn if the lamp finds them
+  for (const f of fishes) drawFish(f);
+
+  // darkness again on top, with a lamp-hole around the hook
+  if (hook.d > darkStart - 100 && mode !== 'idle') {
+    const hookY = depthToY(hook.d);
+    const hookX = ((hook.x + boatX * 2 - 1) + 1) / 2 * W;
+    const deepness = Math.min(1, Math.max(0, (hook.d - darkStart) / 200));
+    if (deepness > 0) {
+      const R = Math.max(60, lampR());
+      const lamp = ctx.createRadialGradient(hookX, hookY, R * 0.4, hookX, hookY, R * 2.2);
+      lamp.addColorStop(0, 'rgba(3, 5, 10, 0)');
+      lamp.addColorStop(1, `rgba(3, 5, 10, ${0.94 * deepness})`);
+      ctx.fillStyle = lamp;
+      ctx.fillRect(0, 0, W, H);
+      if (save.lamp > 0) {
+        const warm = ctx.createRadialGradient(hookX, hookY, 4, hookX, hookY, lampR());
+        warm.addColorStop(0, 'rgba(255, 230, 160, 0.25)');
+        warm.addColorStop(1, 'rgba(255, 230, 160, 0)');
+        ctx.fillStyle = warm;
+        ctx.fillRect(hookX - lampR(), hookY - lampR(), lampR() * 2, lampR() * 2);
+      }
+    }
+  }
+
+  // the line and the hook
+  if (mode !== 'idle') {
+    const hookY = depthToY(hook.d);
+    const hookX = ((hook.x + boatX * 2 - 1) + 1) / 2 * W;
+    ctx.strokeStyle = 'rgba(230, 230, 240, 0.5)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(boatX * W + 44, Math.min(depthToY(0) - 52, 40));
+    ctx.quadraticCurveTo(hookX, depthToY(Math.max(0, hook.d - 120)), hookX, hookY);
+    ctx.stroke();
+    ctx.strokeStyle = '#d8d2c8';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(hookX, hookY + 6, 6, -0.4, Math.PI * 1.1);
+    ctx.stroke();
+    if (caught) drawFish(caught);
+  }
+
+  drawHud(W, H);
+}
+
+function drawHud(W, H) {
+  uiRects = [];
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#ffd23f';
+  ctx.font = 'bold 17px monospace';
+  ctx.fillText('🪙 ' + save.coins, 14, 30);
+  ctx.fillStyle = '#9ab8d8';
+  ctx.font = '14px monospace';
+  ctx.fillText('depth: ' + Math.floor(hook.d) + 'm / ' + maxLine() + 'm', 14, 52);
+
+  for (const [id, label, x] of [['dex', '📖 FISHDEX', W - 260], ['shop', '⚓ SHOP', W - 120]]) {
+    uiRects.push({ x, y: 12, w: 118, h: 36, id });
+    ctx.fillStyle = 'rgba(255,255,255,0.08)';
+    ctx.fillRect(x, 12, 118, 36);
+    ctx.strokeStyle = '#5a7a9a';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x, 12, 118, 36);
+    ctx.fillStyle = '#cfe4ff';
+    ctx.font = 'bold 14px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(label, x + 59, 35);
+  }
+  ctx.textAlign = 'center';
+
+  if (mode === 'idle' && !overlay) {
+    ctx.fillStyle = `rgba(255, 240, 200, ${0.6 + Math.sin(elapsed * 2) * 0.25})`;
+    ctx.font = 'bold 16px monospace';
+    ctx.fillText('tap (or space) to lower the hook', W / 2, H - 40);
+  }
+  if (statusT > 0) {
+    ctx.fillStyle = 'rgba(255, 255, 255, ' + Math.min(1, statusT) + ')';
+    ctx.font = '15px monospace';
+    ctx.fillText(statusMsg, W / 2, H - 70);
+  }
+
+  if (overlay === 'dex') drawDex(W, H);
+  if (overlay === 'shop') drawShop(W, H);
+}
+
+function drawDex(W, H) {
+  ctx.fillStyle = 'rgba(5, 8, 14, 0.92)';
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#cfe4ff';
+  ctx.font = `bold ${Math.min(30, W / 18)}px monospace`;
+  ctx.fillText('📖 THE FISHDEX', W / 2, 52);
+  const caughtCount = SPECIES.filter(sp => save.dex[sp.id]).length;
+  ctx.font = '14px monospace';
+  ctx.fillStyle = '#9ab8d8';
+  ctx.fillText(caughtCount + ' of ' + SPECIES.length + ' residents known', W / 2, 78);
+  const cols = W > 700 ? 2 : 1;
+  const cw = Math.min(430, (W - 40) / cols);
+  SPECIES.forEach((sp, i) => {
+    const col = i % cols, row = Math.floor(i / cols);
+    const x = W / 2 - (cw * cols + 10 * (cols - 1)) / 2 + col * (cw + 10);
+    const y = 100 + row * 44;
+    if (y > H - 30) return;
+    const known = save.dex[sp.id];
+    ctx.textAlign = 'left';
+    ctx.fillStyle = known ? '#e8dcc0' : '#3a4a5f';
+    ctx.font = 'bold 15px monospace';
+    ctx.fillText(known ? sp.name : '???', x, y);
+    ctx.fillStyle = known ? '#9ab8d8' : '#2a3a4f';
+    ctx.font = '12px monospace';
+    ctx.fillText(known ? ('×' + known + ' — ' + sp.lore) : ('lives near ' + sp.min + 'm...'),
+                 x, y + 17);
+  });
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.font = '13px monospace';
+  ctx.fillText('tap anywhere to close', W / 2, H - 20);
+}
+
+function drawShop(W, H) {
+  ctx.fillStyle = 'rgba(5, 8, 14, 0.92)';
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#cfe4ff';
+  ctx.font = `bold ${Math.min(30, W / 18)}px monospace`;
+  ctx.fillText('⚓ THE BAIT SHOP', W / 2, 52);
+  ctx.fillStyle = '#ffd23f';
+  ctx.font = 'bold 16px monospace';
+  ctx.fillText('🪙 ' + save.coins, W / 2, 80);
+  const items = [
+    ['line', 'LONGER LINE', 'reach: ' + maxLine() + 'm' +
+      (save.line < LINE_LEVELS.length ? ' → ' + LINE_LEVELS[save.line] + 'm' : ' (MAX)')],
+    ['reel', 'FASTER REEL', 'speed: ' + reelSpeed() +
+      (save.reel < REEL_LEVELS.length ? ' → ' + REEL_LEVELS[save.reel] : ' (MAX)')],
+    ['lamp', 'THE LAMP', save.lamp === 0 ? 'the deep is DARK. fix that.'
+      : 'glow: ' + lampR() + (save.lamp < LAMP_LEVELS.length - 1 ? ' → ' + LAMP_LEVELS[save.lamp + 1] : ' (MAX)')],
+  ];
+  items.forEach(([id, name, desc], i) => {
+    const cw = Math.min(W - 40, 440), x = W / 2 - cw / 2, y = 110 + i * 92;
+    const cost = shopCost(id);
+    const can = cost !== null && save.coins >= cost;
+    uiRects.push({ x, y, w: cw, h: 78, id: 'buy_' + id });
+    ctx.fillStyle = 'rgba(255,255,255,0.06)';
+    ctx.fillRect(x, y, cw, 78);
+    ctx.strokeStyle = cost === null ? '#7ddf8f' : can ? '#ffd23f' : '#3a4a5f';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x, y, cw, 78);
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#e8dcc0';
+    ctx.font = 'bold 17px monospace';
+    ctx.fillText(name, x + 16, y + 30);
+    ctx.fillStyle = '#9ab8d8';
+    ctx.font = '13px monospace';
+    ctx.fillText(desc, x + 16, y + 54);
+    ctx.textAlign = 'right';
+    ctx.fillStyle = cost === null ? '#7ddf8f' : can ? '#ffd23f' : '#5a6a7f';
+    ctx.font = 'bold 16px monospace';
+    ctx.fillText(cost === null ? 'MAX!' : cost + ' 🪙', x + cw - 14, y + 44);
+  });
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.font = '13px monospace';
+  ctx.fillText('tap anywhere else to close', W / 2, H - 20);
+}
+
+// ---------------------------------------------------------------------
+// THE GAME LOOP
+// ---------------------------------------------------------------------
+let lastTime = 0;
+function loop(time) {
+  const dt = Math.min(0.05, (time - lastTime) / 1000);
+  lastTime = time;
+  update(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
