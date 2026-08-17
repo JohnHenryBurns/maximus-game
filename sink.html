@@ -62,11 +62,41 @@ const MAP_SRC = [
   '1.1...111117.1.1',
   '1111111111111111',
 ];
+// CHAPTER 2: THE ISLAND — 1 rock, 2 palms, 4 driftwood (E shoves it),
+// 6 the signal fire pyre, 7 the matches, S where the raft grounds
+const MAP2_SRC = [
+  '1111111111111111',
+  '1....2..1.....61',
+  '1.22.2..1..11111',
+  '1....2..4..1...1',
+  '12.2....1111.2.1',
+  '1..............1',
+  '1.2.111..22.2..1',
+  '1...1.1........1',
+  '1.2.1.1.2.1112.1',
+  '1...111...1..1.1',
+  '1.2........2.1.1',
+  '1...2.2......1.1',
+  '12.2....2.17.1.1',
+  '1....2.....111.1',
+  '1S.2....2......1',
+  '1111111111111111',
+];
+
+// everything that changes between chapters lives here
+const CHCFG = [
+  { name: 'Abandon Ship', map: MAP_SRC, threat: 'water', hasAlarm: true,
+    item: 'KEY CARD', goal: 'ESCAPE HATCH', flag: 'sink_ch1' },
+  { name: 'The Island', map: MAP2_SRC, threat: 'night', hasAlarm: false,
+    item: 'MATCHES', goal: 'SIGNAL FIRE', flag: 'sink_ch2' },
+];
+let chapter = 0;
+
 const MAPW = 16, MAPH = 16;
 let map = [];
 let startX = 2.5, startY = 1.5;
 function loadMap() {
-  map = MAP_SRC.map((row, y) => row.split('').map((ch, x) => {
+  map = CHCFG[chapter].map.map((row, y) => row.split('').map((ch, x) => {
     if (ch === 'S') { startX = x + 0.5; startY = y + 0.5; return 0; }
     if (ch === '.') return 0;
     return parseInt(ch);
@@ -138,8 +168,10 @@ function deadSound() { [300, 240, 180, 120, 80].forEach((n, i) => setTimeout(() 
 let screen = 'menu';        // 'menu' | 'story' | 'playing' | 'dead' | 'won'
 // ---- the book of chapters ----
 let ch1Done = localStorage.getItem('sink_ch1') === 'yes';
+let ch2Done = localStorage.getItem('sink_ch2') === 'yes';
 const CHAPTERS = [
   { name: 'Abandon Ship', unlocked: true },
+  { name: 'The Island', unlocked: ch1Done },
   { name: '???', unlocked: false },
 ];
 let menuCards = [];
@@ -175,18 +207,21 @@ function resetGame() {
   oxygen = 1;
   hasKey = false;
   bob = 0;
-  alarmOn = true;             // chapter 1 begins mid-emergency
+  alarmOn = CHCFG[chapter].hasAlarm;   // chapter 1 begins mid-emergency
   alarmT = 0;
-  setStatus('the ship groans... find a way UP. (E opens doors)', 5);
+  setStatus(chapter === 0 ? 'the ship groans... find a way UP. (E opens doors)'
+                          : 'find the MATCHES. light the SIGNAL FIRE. beat the dark.', 5);
   screen = 'playing';
 }
 
 function openChapter(i) {
   if (!CHAPTERS[i] || !CHAPTERS[i].unlocked) {
-    setStatus(i === 1 ? "that chapter hasn't been written yet..." : 'locked!', 3);
+    setStatus(i === 1 ? 'finish Chapter 1 first — escape the ship!'
+                      : "that chapter hasn't been written yet...", 3);
     return;
   }
-  storyLines = [
+  chapter = i;
+  storyLines = i === 0 ? [
     'CHAPTER 1: ABANDON SHIP',
     '',
     'Something hit the hull. Hard.',
@@ -199,6 +234,23 @@ function openChapter(i) {
     'Find the KEY CARD. Reach the ESCAPE HATCH.',
     '(and if that alarm is driving you mad —',
     ' find the red panel and press E)',
+    '',
+    '( click to begin )',
+  ] : [
+    'CHAPTER 2: THE ISLAND',
+    '',
+    'The raft grinds onto warm sand.',
+    'Palm trees. Wreckage. Nobody.',
+    '',
+    'On the far shore stands a great unlit',
+    'SIGNAL FIRE, stacked by some other survivor,',
+    'long ago.',
+    '',
+    'The sun is going down. Every minute, the',
+    'night gets closer. And the nights here are COLD.',
+    '',
+    'Find the MATCHES in the wreckage.',
+    'Light the fire before dark.',
     '',
     '( click to begin )',
   ];
@@ -300,7 +352,8 @@ function interact() {
   if (cell === 4) {
     map[my][mx] = 0;
     creakSound();
-    setStatus('the door creaks open...');
+    setStatus(chapter === 0 ? 'the door creaks open...'
+                            : 'you heave the driftwood aside.');
   } else if (cell === 8) {
     if (alarmOn) {
       alarmOn = false;
@@ -311,13 +364,15 @@ function interact() {
     if (hasKey) {
       screen = 'won';
       winTime = gameTime;
-      ch1Done = true;
-      localStorage.setItem('sink_ch1', 'yes');
+      localStorage.setItem(CHCFG[chapter].flag, 'yes');
+      if (chapter === 0) { ch1Done = true; CHAPTERS[1].unlocked = true; }
+      if (chapter === 1) ch2Done = true;
       winSound();
       if (document.exitPointerLock) document.exitPointerLock();
     } else {
       beep(140, 0.2, 'square', 0.1);
-      setStatus('LOCKED. the hatch needs the KEY CARD.');
+      setStatus(chapter === 0 ? 'LOCKED. the hatch needs the KEY CARD.'
+                              : 'the wood is stacked and waiting... you need MATCHES.');
     }
   }
 }
@@ -331,17 +386,26 @@ function update(dt) {
   if (screen !== 'playing') return;
 
   gameTime += dt;
+  const night = CHCFG[chapter].threat === 'night';
   const newStage = Math.min(3, Math.floor(gameTime / RISE_EVERY));
   if (newStage !== stage) {
     stage = newStage;
-    klaxon();
-    setStatus(stage === 1 ? 'THE WATER IS RISING. it laps at your boots.'
-            : stage === 2 ? 'WAIST DEEP NOW. wading is slow. HURRY.'
-            : 'THE DECK IS UNDERWATER. swim. do not breathe.', 5);
+    if (night) {
+      // dusk doesn't scream. it just... arrives.
+      [520, 390, 260].forEach((n, i) => setTimeout(() => beep(n, 0.4, 'sine', 0.08), i * 300));
+      setStatus(stage === 1 ? 'the sun touches the sea. hurry.'
+              : stage === 2 ? 'the last light is going. FIND THE FIRE.'
+              : 'night. cold. keep moving or stop forever.', 5);
+    } else {
+      klaxon();
+      setStatus(stage === 1 ? 'THE WATER IS RISING. it laps at your boots.'
+              : stage === 2 ? 'WAIST DEEP NOW. wading is slow. HURRY.'
+              : 'THE DECK IS UNDERWATER. swim. do not breathe.', 5);
+    }
   }
 
   // ---- walking (W — and quietly, S/A/D for the fancy sailors) ----
-  const speed = SPEEDS[stage];
+  const speed = night ? [3.2, 3.2, 2.8, 2.2][stage] : SPEEDS[stage];
   let mx = 0, my = 0;
   const fwd = (keys['w'] || keys['arrowup'] || touchWalk ? 1 : 0) -
               (keys['s'] || keys['arrowdown'] ? 1 : 0);
@@ -358,19 +422,28 @@ function update(dt) {
   if (!cellIsSolid(px, py + my + Math.sign(my) * R)) py += my;
 
   if (fwd !== 0 || strafe !== 0) {
-    bob += dt * (stage >= 2 ? 4 : 7);
-    if (stage >= 1 && stage < 3) {
+    bob += dt * (stage >= 2 && !night ? 4 : 7);
+    if (!night && stage >= 1 && stage < 3) {
       splashT -= dt;
       if (splashT <= 0) { splashT = 0.35; splash(); }
     }
   }
+  // island evenings come with crickets. obviously.
+  if (night && stage >= 1) {
+    bubbleT -= dt;
+    if (bubbleT <= 0) {
+      bubbleT = 0.7 + Math.random() * 1.6;
+      beep(2200 + Math.random() * 600, 0.05, 'sine', 0.03);
+    }
+  }
 
-  // ---- picking up the key card ----
+  // ---- picking up the chapter's treasure ----
   if (cellAt(px, py) === 7) {
     map[Math.floor(py)][Math.floor(px)] = 0;
     hasKey = true;
     chime();
-    setStatus('KEY CARD!! now find the glowing ESCAPE HATCH!', 5);
+    setStatus(night ? 'MATCHES!! now reach the SIGNAL FIRE!'
+                    : 'KEY CARD!! now find the glowing ESCAPE HATCH!', 5);
   }
 
   // ---- the crash alarm wails until someone shows it the E key ----
@@ -383,11 +456,13 @@ function update(dt) {
     }
   }
 
-  // ---- breathing (or not) ----
+  // ---- breathing (or freezing) ----
   if (stage >= 3) {
     oxygen -= dt / 30;
-    bubbleT -= dt;
-    if (bubbleT <= 0) { bubbleT = 0.5 + Math.random() * 0.6; bubble(); }
+    if (!night) {
+      bubbleT -= dt;
+      if (bubbleT <= 0) { bubbleT = 0.5 + Math.random() * 0.6; bubble(); }
+    }
     if (oxygen <= 0) {
       screen = 'dead';
       deadSound();
@@ -412,12 +487,22 @@ function draw() {
   const FOV = Math.PI / 3;
   const bobY = Math.sin(bob) * 6;
   const horizon = H / 2 + bobY;
+  const night = CHCFG[chapter].threat === 'night';
+  // how far you can see: fixed in the ship, shrinking as night falls
+  const viewDist = night ? [12, 8, 5, 2.8][stage] : 10;
 
-  // ceiling and floor
-  ctx.fillStyle = '#141a22';
-  ctx.fillRect(0, 0, W, horizon);
-  ctx.fillStyle = '#242a30';
-  ctx.fillRect(0, horizon, W, H - horizon);
+  // ceiling and floor — ship steel, or an island sky burning down to dark
+  if (night) {
+    ctx.fillStyle = ['#8fc6ff', '#f0a060', '#4a3a6a', '#0a0a14'][stage];
+    ctx.fillRect(0, 0, W, horizon);
+    ctx.fillStyle = ['#c8b083', '#a8865a', '#584a4a', '#161218'][stage];
+    ctx.fillRect(0, horizon, W, H - horizon);
+  } else {
+    ctx.fillStyle = '#141a22';
+    ctx.fillRect(0, 0, W, horizon);
+    ctx.fillStyle = '#242a30';
+    ctx.fillRect(0, horizon, W, H - horizon);
+  }
 
   // ---- fire one ray per 2-pixel column ----
   const STEP = 2;
@@ -445,13 +530,14 @@ function draw() {
     dist = Math.max(0.05, dist);
 
     let wallH = H / dist;
-    if (stage >= 3) wallH += Math.sin(sx * 0.05 + elapsed * 3) * 8;  // underwater wobble
+    if (!night && stage >= 3) wallH += Math.sin(sx * 0.05 + elapsed * 3) * 8;  // underwater wobble
     // wall colors, dimmer when farther and on side-hits
     let r, g, b;
-    if (cell === 4) { r = 150; g = 110; b = 60; }        // wooden door
-    else if (cell === 6) {                                // the glowing hatch
+    if (cell === 4) { r = 150; g = 110; b = 60; }        // wooden door / driftwood
+    else if (cell === 6) {                                // hatch — or the waiting pyre
       const pulse = 0.7 + Math.sin(elapsed * 4) * 0.3;
-      r = 120 * pulse + 60; g = 220 * pulse; b = 90 * pulse;
+      if (night) { r = 230 * pulse; g = 130 * pulse; b = 40 * pulse; }
+      else { r = 120 * pulse + 60; g = 220 * pulse; b = 90 * pulse; }
     }
     else if (cell === 8) {                                // the alarm panel
       if (alarmOn) {
@@ -459,16 +545,28 @@ function draw() {
         r = 180 + 75 * throb; g = 40; b = 35;
       } else { r = 70; g = 110; b = 80; }                 // silenced: calm green
     }
-    else if (cell === 2) { r = 130; g = 80; b = 55; }     // rust
-    else { r = 95; g = 110; b = 130; }                    // steel hull
-    let shade = Math.max(0.15, 1 - dist / 10) * (side === 1 ? 0.75 : 1);
+    else if (cell === 2) {
+      if (night) { r = 65; g = 145; b = 75; }             // palm trees
+      else { r = 130; g = 80; b = 55; }                   // rust
+    }
+    else {
+      if (night) { r = 145; g = 125; b = 100; }           // island rock
+      else { r = 95; g = 110; b = 130; }                  // steel hull
+    }
+    let shade = Math.max(0.12, 1 - dist / viewDist) * (side === 1 ? 0.75 : 1);
     ctx.fillStyle = `rgb(${r * shade | 0}, ${g * shade | 0}, ${b * shade | 0})`;
     ctx.fillRect(sx, horizon - wallH / 2, STEP, wallH);
   }
 
   // ---- THE WATER — climbing the screen, stage by stage ----
-  const frac = WATER_FRAC[stage];
-  if (stage >= 3) {
+  const frac = night ? 0 : WATER_FRAC[stage];
+  if (night) {
+    // instead of water, the dark itself settles over everything
+    if (stage >= 1) {
+      ctx.fillStyle = `rgba(8, 8, 24, ${[0, 0.1, 0.24, 0.45][stage]})`;
+      ctx.fillRect(0, 0, W, H);
+    }
+  } else if (stage >= 3) {
     // fully under: the whole world turns blue and slow
     ctx.fillStyle = `rgba(20, 60, 110, ${0.45 + Math.sin(elapsed * 2) * 0.05})`;
     ctx.fillRect(0, 0, W, H);
@@ -504,6 +602,7 @@ function draw() {
 
 function drawHud(W, H) {
   // the countdown to the next rise
+  const night = CHCFG[chapter].threat === 'night';
   const left = Math.max(0, RISE_EVERY * (stage + 1) - gameTime);
   const mm = Math.floor(left / 60), ss = Math.floor(left % 60);
   ctx.textAlign = 'center';
@@ -511,16 +610,17 @@ function drawHud(W, H) {
     const urgent = left < 10;
     ctx.fillStyle = urgent && Math.floor(elapsed * 3) % 2 ? '#ff5a4a' : '#cfe4ff';
     ctx.font = `bold ${urgent ? 26 : 20}px monospace`;
-    ctx.fillText('WATER RISES IN ' + mm + ':' + String(ss).padStart(2, '0'), W / 2, 36);
+    ctx.fillText((night ? 'NIGHT FALLS IN ' : 'WATER RISES IN ') +
+                 mm + ':' + String(ss).padStart(2, '0'), W / 2, 36);
   } else {
-    // the oxygen bar — your whole world now
+    // the last bar — oxygen underwater, body heat in the dark
     ctx.fillStyle = 'rgba(0,0,0,0.5)';
     ctx.fillRect(W / 2 - 130, 18, 260, 22);
-    ctx.fillStyle = oxygen > 0.3 ? '#4ac6ff' : '#ff5a4a';
+    ctx.fillStyle = oxygen > 0.3 ? (night ? '#ff9f43' : '#4ac6ff') : '#ff5a4a';
     ctx.fillRect(W / 2 - 128, 20, 256 * Math.max(0, oxygen), 18);
     ctx.fillStyle = '#fff';
     ctx.font = 'bold 13px monospace';
-    ctx.fillText('OXYGEN', W / 2, 34);
+    ctx.fillText(night ? 'BODY HEAT' : 'OXYGEN', W / 2, 34);
   }
 
   // what E would do right now
@@ -529,9 +629,11 @@ function drawHud(W, H) {
   if (facing === 4 || facing === 6 || (facing === 8 && alarmOn)) {
     ctx.fillStyle = '#ffd23f';
     ctx.font = 'bold 17px monospace';
-    ctx.fillText(facing === 4 ? '[ E ] open the door'
+    ctx.fillText(facing === 4 ? (night ? '[ E ] shove the driftwood' : '[ E ] open the door')
                : facing === 8 ? '[ E ] SILENCE THAT ALARM'
-               : hasKey ? '[ E ] ESCAPE!!' : '[ E ] ...locked. find the KEY CARD', W / 2, H - 76);
+               : hasKey ? (night ? '[ E ] LIGHT THE FIRE!!' : '[ E ] ESCAPE!!')
+               : (night ? '[ E ] ...cold wood. you need MATCHES'
+                        : '[ E ] ...locked. find the KEY CARD'), W / 2, H - 76);
   }
 
   // the alarm's nagging little badge
@@ -553,7 +655,8 @@ function drawHud(W, H) {
   ctx.textAlign = 'left';
   ctx.fillStyle = hasKey ? '#ffd23f' : 'rgba(255,255,255,0.35)';
   ctx.font = 'bold 15px monospace';
-  ctx.fillText(hasKey ? '🗝 KEY CARD' : '🗝 no key yet', 14, 30);
+  ctx.fillText(night ? (hasKey ? '🔥 MATCHES' : '🔥 no matches yet')
+                     : (hasKey ? '🗝 KEY CARD' : '🗝 no key yet'), 14, 30);
 
   // ---- minimap, so the ship can be learned ----
   const MM = 5, mmX = W - MAPW * MM - 14, mmY = 14;
@@ -600,20 +703,27 @@ function drawHud(W, H) {
     if (screen === 'won') {
       ctx.fillStyle = '#7ddf8f';
       ctx.font = `bold ${Math.min(44, W / 14)}px monospace`;
-      ctx.fillText('CHAPTER 1 COMPLETE', W / 2, H / 2 - 44);
+      ctx.fillText('CHAPTER ' + (chapter + 1) + ' COMPLETE', W / 2, H / 2 - 44);
       ctx.fillStyle = '#fff';
       ctx.font = '18px monospace';
       const t = Math.floor(winTime);
-      ctx.fillText('you escaped in ' + Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0'),
-                   W / 2, H / 2 - 4);
+      ctx.fillText((night ? 'fire lit with ' : 'you escaped in ') +
+                   Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0') +
+                   (night ? ' on the clock' : ''), W / 2, H / 2 - 4);
       ctx.fillStyle = '#8aa4c8';
       ctx.font = '15px monospace';
-      ctx.fillText('you float in the life raft, watching your ship go under.', W / 2, H / 2 + 28);
-      ctx.fillText('Chapter 2 is unwritten... where does the sea take you, captain?', W / 2, H / 2 + 50);
+      if (chapter === 0) {
+        ctx.fillText('you float in the life raft, watching your ship go under.', W / 2, H / 2 + 28);
+        ctx.fillText('Chapter 2 unlocked: the sea carries you somewhere...', W / 2, H / 2 + 50);
+      } else {
+        ctx.fillText('the fire ROARS into the night sky...', W / 2, H / 2 + 28);
+        ctx.fillText('and far out on the black sea, a light answers. a ship is coming.', W / 2, H / 2 + 50);
+        ctx.fillText('Chapter 3 is unwritten... who answers a fire like that, captain?', W / 2, H / 2 + 72);
+      }
     } else {
       ctx.fillStyle = '#ff5a4a';
       ctx.font = `bold ${Math.min(44, W / 14)}px monospace`;
-      ctx.fillText('THE SEA KEPT YOU...', W / 2, H / 2 - 20);
+      ctx.fillText(night ? 'THE COLD TOOK YOU...' : 'THE SEA KEPT YOU...', W / 2, H / 2 - 20);
     }
     ctx.fillStyle = 'rgba(255,255,255,0.7)';
     ctx.font = '16px monospace';
