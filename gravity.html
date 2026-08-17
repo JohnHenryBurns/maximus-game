@@ -85,6 +85,7 @@ let bodies = [];        // everything that moves
 let spikes = [];        // static pointy strips
 let particles = [];
 let gravityOn = true;
+let timeOn = true;      // ...until somebody freezes it
 let shake = 0;
 let elapsed = 0;
 let grabbed = null;
@@ -153,6 +154,18 @@ function explode(bx, by) {
 function update(dt) {
   elapsed += dt;
   if (shake > 0) shake -= dt;
+
+  // ---- FROZEN TIME: the world holds its breath. only YOUR hand
+  // still works — grab frozen things and rearrange the moment. ----
+  if (!timeOn) {
+    if (grabbed) {
+      grabbed.vx = (pointer.x - grabbed.x) * 14;
+      grabbed.vy = (pointer.y - grabbed.y) * 14;
+      grabbed.x += grabbed.vx * dt;
+      grabbed.y += grabbed.vy * dt;
+    }
+    return;
+  }
 
   for (const b of bodies) {
     // the grabbed body chases the finger like it's magnetized
@@ -272,6 +285,15 @@ addEventListener('pointerdown', e => {
         if (!gravityOn) {
           // a little send-off so everything visibly lifts
           for (const b of bodies) b.vy -= 60 + Math.random() * 80;
+        }
+      } else if (r.id === 'time') {
+        timeOn = !timeOn;
+        if (timeOn) {
+          beep(300, 0.1, 'sine', 0.1);
+          setTimeout(() => beep(600, 0.15, 'sine', 0.1), 90);
+        } else {
+          beep(600, 0.1, 'sine', 0.1);
+          setTimeout(() => beep(300, 0.25, 'sine', 0.1), 90);
         }
       } else if (r.id === 'clear') {
         bodies = []; spikes = []; particles = [];
@@ -435,6 +457,21 @@ function draw() {
     ctx.fillRect(p.x - 3, p.y - 3, 7, 7);
   }
   ctx.globalAlpha = 1;
+
+  // frozen time washes the whole lab in pale ice-light
+  if (!timeOn) {
+    ctx.fillStyle = 'rgba(150, 210, 255, 0.08)';
+    ctx.fillRect(-20, -20, W + 40, H + 40);
+    ctx.strokeStyle = `rgba(90, 200, 255, ${0.3 + Math.sin(elapsed * 3) * 0.15})`;
+    ctx.lineWidth = 6;
+    ctx.strokeRect(3, 3, W - 6, H - 6);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = `rgba(180, 228, 255, ${0.5 + Math.sin(elapsed * 3) * 0.2})`;
+    ctx.font = 'bold 17px monospace';
+    ctx.fillText('❄ TIME IS FROZEN — arrange the moment, then let it go ❄',
+                 W / 2, H - 54);
+    ctx.textAlign = 'left';
+  }
   ctx.restore();
 
   // ---- toolbar ----
@@ -443,6 +480,7 @@ function draw() {
     ['person', '🧍 PERSON'], ['crate', '📦 CRATE'], ['bomb', '💣 BOMB'],
     ['spike', '⚠ SPIKE'],
     ['gravity', gravityOn ? '🌍 GRAVITY: ON' : '🚀 GRAVITY: OFF'],
+    ['time', timeOn ? '⏱ TIME: ON' : '❄ TIME: FROZEN'],
     ['clear', '✖ CLEAR'],
   ];
   let bx = 8, by = 8;
@@ -460,14 +498,18 @@ function draw() {
     uiRects.push({ x: p.x, y: p.y, w: p.w, h: 40, id: p.id });
     const active = tool === p.id;
     const isGrav = p.id === 'gravity';
+    const isTime = p.id === 'time';
     ctx.fillStyle = isGrav ? (gravityOn ? 'rgba(125, 223, 143, 0.15)' : 'rgba(122, 90, 255, 0.3)')
+                  : isTime ? (timeOn ? 'rgba(125, 223, 143, 0.15)' : 'rgba(90, 200, 255, 0.3)')
                   : active ? 'rgba(255, 210, 63, 0.25)' : 'rgba(255,255,255,0.07)';
     ctx.fillRect(p.x, p.y, p.w, 40);
     ctx.strokeStyle = isGrav ? (gravityOn ? '#7ddf8f' : '#9a7aff')
+                    : isTime ? (timeOn ? '#7ddf8f' : '#5ac8ff')
                     : active ? '#ffd23f' : '#5a5450';
     ctx.lineWidth = 2;
     ctx.strokeRect(p.x, p.y, p.w, 40);
     ctx.fillStyle = isGrav ? (gravityOn ? '#7ddf8f' : '#c8b4ff')
+                  : isTime ? (timeOn ? '#7ddf8f' : '#b4e4ff')
                   : active ? '#ffd23f' : '#c8c0b8';
     ctx.font = 'bold 14px monospace';
     ctx.textAlign = 'center';
