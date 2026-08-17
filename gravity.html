@@ -126,6 +126,8 @@ let floatTexts = [];    // POP! and friends, drifting upward
 let holes = [];         // black holes. yes, plural. good luck.
 let burps = [];         // swallowed bombs, waiting to come back up
 let grabbedHole = null;
+let launchers = [];     // bomb fountains: ten per second, forever
+let grabbedLauncher = null;
 let gravityOn = true;
 let timeOn = true;      // ...until somebody freezes it
 let shake = 0;
@@ -164,6 +166,10 @@ function addSpike(x, y) {
 function addHole(x, y) {
   holes.push({ x, y, swirl: Math.random() * 7 });
   if (holes.length > 3) holes.shift();     // three black holes is plenty. THREE.
+}
+function addLauncher(x, y) {
+  launchers.push({ x, y, cd: 0, recoil: 0 });
+  if (launchers.length > 3) launchers.shift();
 }
 
 // people don't get hurt in this lab. they POP — like a balloon full
@@ -264,10 +270,13 @@ function update(dt) {
     }
 
     // bombs tick down. and then they don't.
+    // (launcher bombs tick silently — 30 tickers at once is a headache)
     if (b.type === 'bomb') {
       b.fuse -= dt;
-      b.tickT -= dt;
-      if (b.tickT <= 0) { b.tickT = Math.max(0.12, b.fuse / 6); tickSound(); }
+      if (!b.quiet) {
+        b.tickT -= dt;
+        if (b.tickT <= 0) { b.tickT = Math.max(0.12, b.fuse / 6); tickSound(); }
+      }
       if (b.fuse <= 0) { b.gone = true; explode(b.x, b.y); }
     }
 
@@ -326,6 +335,26 @@ function update(dt) {
     }
   }
   bodies = bodies.filter(b => !b.gone);
+
+  // ---- BOMB LAUNCHERS: ten per second. forever. as ordered. ----
+  for (const L of launchers) {
+    if (L === grabbedLauncher) { L.x = pointer.x; L.y = pointer.y; }
+    if (L.recoil > 0) L.recoil -= dt;
+    L.cd -= dt;
+    // (the lab refuses to hold more than ~240 objects — even chaos
+    // has a fire marshal)
+    if (L.cd <= 0 && bodies.length < 240) {
+      L.cd = 0.1;
+      const a = -Math.PI / 2 + (Math.random() - 0.5) * 1.2;
+      const sp = 350 + Math.random() * 350;
+      bodies.push({ type: 'bomb', x: L.x, y: L.y - 24,
+                    vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+                    r: 14, angle: 0, angVel: (Math.random() - 0.5) * 8,
+                    fuse: 1.4 + Math.random() * 0.8, tickT: 99, quiet: true });
+      L.recoil = 0.08;
+      beep(150 + Math.random() * 70, 0.04, 'square', 0.035);
+    }
+  }
 
   // ---- BLACK HOLES: they pull. they swallow. sometimes they burp. ----
   for (const h of holes) {
@@ -422,6 +451,7 @@ addEventListener('pointerdown', e => {
         }
       } else if (r.id === 'clear') {
         bodies = []; spikes = []; particles = []; holes = []; burps = [];
+        launchers = [];
       } else tool = r.id;
       return;
     }
@@ -431,6 +461,13 @@ addEventListener('pointerdown', e => {
   for (const h of holes) {
     if (Math.hypot(h.x - e.clientX, h.y - e.clientY) < 44) {
       grabbedHole = h;
+      return;
+    }
+  }
+  // launchers reposition the same way — a bomb hose you can aim
+  for (const L of launchers) {
+    if (Math.hypot(L.x - e.clientX, L.y - e.clientY) < 44) {
+      grabbedLauncher = L;
       return;
     }
   }
@@ -447,10 +484,11 @@ addEventListener('pointerdown', e => {
   else if (tool === 'bomb') addBomb(e.clientX, e.clientY);
   else if (tool === 'spike') addSpike(e.clientX - 23, e.clientY);
   else if (tool === 'hole') addHole(e.clientX, e.clientY);
+  else if (tool === 'launcher') addLauncher(e.clientX, e.clientY);
 });
 addEventListener('pointermove', e => { pointer = { x: e.clientX, y: e.clientY }; });
-addEventListener('pointerup', () => { grabbed = null; grabbedHole = null; });
-addEventListener('pointercancel', () => { grabbed = null; grabbedHole = null; });
+addEventListener('pointerup', () => { grabbed = null; grabbedHole = null; grabbedLauncher = null; });
+addEventListener('pointercancel', () => { grabbed = null; grabbedHole = null; grabbedLauncher = null; });
 
 // ---------------------------------------------------------------------
 // DRAWING
@@ -588,6 +626,24 @@ function draw() {
     ctx.stroke();
   }
 
+  // bomb launchers: a stout little mortar with a wobbling aim
+  for (const L of launchers) {
+    ctx.save();
+    ctx.translate(L.x, L.y);
+    ctx.fillStyle = '#3a4050';                    // the base
+    ctx.beginPath();
+    ctx.moveTo(-22, 12); ctx.lineTo(22, 12); ctx.lineTo(14, -4); ctx.lineTo(-14, -4);
+    ctx.fill();
+    const wob = Math.sin(elapsed * 5 + L.x) * 0.12;
+    ctx.rotate(wob);
+    ctx.fillStyle = '#22262e';                    // the barrel
+    const kick = L.recoil > 0 ? 5 : 0;
+    ctx.fillRect(-8, -34 + kick, 16, 34);
+    ctx.fillStyle = '#e8453c';
+    ctx.fillRect(-8, -34 + kick, 16, 6);
+    ctx.restore();
+  }
+
   // spikes
   for (const s of spikes) {
     ctx.fillStyle = '#8a8378';
@@ -647,7 +703,7 @@ function draw() {
   uiRects = [];
   const TOOLS = [
     ['person', '🧍 PERSON'], ['crate', '📦 CRATE'], ['bomb', '💣 BOMB'],
-    ['spike', '⚠ SPIKE'], ['hole', '🕳 HOLE'],
+    ['spike', '⚠ SPIKE'], ['hole', '🕳 HOLE'], ['launcher', '💥 LAUNCHER'],
     ['gravity', gravityOn ? '🌍 GRAVITY: ON' : '🚀 GRAVITY: OFF'],
     ['time', timeOn ? '⏱ TIME: ON' : '❄ TIME: FROZEN'],
     ['clear', '✖ CLEAR'],
