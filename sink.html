@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>THE SINKING SHIP</title>
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #05070c; }
+  canvas { display: block; touch-action: none; cursor: crosshair; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+// =====================================================================
+// THE SINKING SHIP — a FIRST-PERSON escape. You're below decks in a
+// crashed ship. Every minute, the water rises. W walks, the mouse
+// looks, E interacts. Find the KEY CARD. Reach the ESCAPE HATCH.
+//
+// The 3D is done with RAYCASTING: for every column of pixels on the
+// screen, we fire one invisible ray into the map, see how far it
+// flies before hitting a wall, and draw that wall-slice taller the
+// closer it is. Hundreds of skinny rectangles = a 3D corridor.
+// Wolfenstein 3D did it in 1992. Tonight, so do we.
+// =====================================================================
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+function fit() { canvas.width = innerWidth; canvas.height = innerHeight; }
+addEventListener('resize', fit);
+fit();
+
+window.onerror = (msg, src, line) => {
+  const d = document.createElement('div');
+  d.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#c0392b;' +
+    'color:#fff;font:14px monospace;padding:8px;z-index:9';
+  d.textContent = '🐛 BUG on line ' + line + ': ' + msg;
+  document.body.appendChild(d);
+};
+
+// ---------------------------------------------------------------------
+// THE SHIP — each character is one square of the deck.
+// 1 = hull wall   2 = rusty wall   4 = door (E opens it)
+// 6 = escape hatch (E + key card = freedom)   7 = the KEY CARD
+// S = where you wake up   . = floor
+// ---------------------------------------------------------------------
+const MAP_SRC = [
+  '1111111111111111',
+  '1S....1........1',
+  '11111.1.111111.1',
+  '1...1.1.1....1.1',
+  '1.1.1.1.1.11.1.1',
+  '1.1...1...11.1.1',
+  '1.11111111111..1',
+  '1.....4........1',
+  '11111.111111.111',
+  '1...1.1....1..61',
+  '1.1.1.1.11.11111',
+  '1.1.1.1..1.....1',
+  '1.1.1.1111111..1',
+  '1.1.1........1.1',
+  '1.1...111117.1.1',
+  '1111111111111111',
+];
+const MAPW = 16, MAPH = 16;
+let map = [];
+let startX = 2.5, startY = 1.5;
+function loadMap() {
+  map = MAP_SRC.map((row, y) => row.split('').map((ch, x) => {
+    if (ch === 'S') { startX = x + 0.5; startY = y + 0.5; return 0; }
+    if (ch === '.') return 0;
+    return parseInt(ch);
+  }));
+}
+loadMap();
+function cellAt(x, y) {
+  if (x < 0 || y < 0 || x >= MAPW || y >= MAPH) return 1;
+  return map[Math.floor(y)][Math.floor(x)];
+}
+
+// ---------------------------------------------------------------------
+// SOUND
+// ---------------------------------------------------------------------
+let audio = null;
+function ensureAudio() {
+  if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)();
+}
+function beep(freq, dur, type, vol) {
+  if (!audio) return;
+  const o = audio.createOscillator(), g = audio.createGain();
+  o.type = type || 'square';
+  o.frequency.value = freq;
+  g.gain.setValueAtTime(vol || 0.1, audio.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + dur);
+  o.connect(g); g.connect(audio.destination);
+  o.start(); o.stop(audio.currentTime + dur + 0.02);
+}
+function klaxon() {
+  [0, 1, 2].forEach(i => {
+    setTimeout(() => { beep(620, 0.28, 'square', 0.12); }, i * 620);
+    setTimeout(() => { beep(440, 0.28, 'square', 0.12); }, i * 620 + 300);
+  });
+}
+function creakSound() {
+  if (!audio) return;
+  const o = audio.createOscillator(), g = audio.createGain();
+  o.type = 'sawtooth';
+  o.frequency.setValueAtTime(110, audio.currentTime);
+  o.frequency.linearRampToValueAtTime(70, audio.currentTime + 0.5);
+  g.gain.setValueAtTime(0.08, audio.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + 0.55);
+  o.connect(g); g.connect(audio.destination);
+  o.start(); o.stop(audio.currentTime + 0.6);
+}
+function chime() { [880, 1175, 1568].forEach((n, i) => setTimeout(() => beep(n, 0.2, 'sine', 0.1), i * 100)); }
+function splash() { beep(180 + Math.random() * 120, 0.08, 'sine', 0.07); }
+function bubble() { beep(700 + Math.random() * 500, 0.1, 'sine', 0.05); }
+function winSound() { [523, 659, 784, 1047, 1319].forEach((n, i) => setTimeout(() => beep(n, 0.25, 'square', 0.1), i * 130)); }
+function deadSound() { [300, 240, 180, 120, 80].forEach((n, i) => setTimeout(() => beep(n, 0.3, 'sine', 0.12), i * 200)); }
+
+// ---------------------------------------------------------------------
+// GAME STATE
+// ---------------------------------------------------------------------
+let screen = 'title';       // 'title' | 'playing' | 'dead' | 'won'
+let px = startX, py = startY, ang = 0;
+let gameTime = 0;           // seconds since the crash
+let stage = 0;              // 0 dry, 1 ankles, 2 waist, 3 UNDER
+let oxygen = 1;             // only matters at stage 3
+let hasKey = false;
+let status = '';            // the message line at the bottom
+let statusT = 0;
+let bob = 0;
+let splashT = 0, bubbleT = 0;
+let winTime = 0;
+let elapsed = 0;
+
+// water: how much of the screen the sea has claimed at each stage
+const WATER_FRAC = [0, 0.16, 0.36, 1];
+const SPEEDS = [3.2, 2.5, 1.8, 1.3];
+const RISE_EVERY = 60;      // seconds — "the water rises every minute"
+
+function setStatus(msg, secs) { status = msg; statusT = secs || 3; }
+
+function resetGame() {
+  loadMap();
+  px = startX; py = startY;
+  ang = 0;
+  gameTime = 0;
+  stage = 0;
+  oxygen = 1;
+  hasKey = false;
+  bob = 0;
+  setStatus('the ship groans... find a way UP. (E opens doors)', 5);
+  screen = 'playing';
+}
+
+// ---------------------------------------------------------------------
+// INPUT — W walks, mouse looks, E interacts (plus phone controls)
+// ---------------------------------------------------------------------
+const keys = {};
+addEventListener('keydown', e => {
+  ensureAudio();
+  keys[e.key.toLowerCase()] = true;
+  if (e.key.toLowerCase() === 'e' && screen === 'playing') interact();
+  if ((screen === 'dead' || screen === 'won') && e.key === ' ') resetGame();
+});
+addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+
+canvas.addEventListener('click', () => {
+  ensureAudio();
+  if (screen === 'title') { resetGame(); }
+  else if (screen === 'dead' || screen === 'won') { screen = 'title'; return; }
+  if (screen === 'playing' && !('ontouchstart' in window)) {
+    canvas.requestPointerLock();          // the mouse becomes your NECK
+  }
+});
+addEventListener('mousemove', e => {
+  if (screen === 'playing' && document.pointerLockElement === canvas) {
+    ang += e.movementX * 0.0024;
+  }
+});
+
+// phone controls: drag left half to look, hold buttons to walk/interact
+let touchWalk = false, lookId = null, lookLastX = 0;
+addEventListener('touchstart', e => {
+  e.preventDefault();
+  ensureAudio();
+  if (screen === 'title') { resetGame(); return; }
+  if (screen === 'dead' || screen === 'won') { screen = 'title'; return; }
+  for (const t of e.changedTouches) {
+    const H = canvas.height, W = canvas.width;
+    if (t.clientX > W * 0.72 && t.clientY > H * 0.7) {
+      if (t.clientY > H * 0.86) interact();
+      else touchWalk = true;
+    } else if (lookId === null) {
+      lookId = t.identifier;
+      lookLastX = t.clientX;
+    }
+  }
+}, { passive: false });
+addEventListener('touchmove', e => {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    if (t.identifier === lookId) {
+      ang += (t.clientX - lookLastX) * 0.006;
+      lookLastX = t.clientX;
+    }
+  }
+}, { passive: false });
+addEventListener('touchend', e => {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    if (t.identifier === lookId) lookId = null;
+  }
+  if (e.touches.length === 0) touchWalk = false;
+  else touchWalk = [...e.touches].some(t =>
+    t.clientX > canvas.width * 0.72 && t.clientY > canvas.height * 0.7 &&
+    t.clientY <= canvas.height * 0.86);
+}, { passive: false });
+
+// E: whatever you're facing, within arm's reach
+function interact() {
+  const tx = px + Math.cos(ang) * 1.1;
+  const ty = py + Math.sin(ang) * 1.1;
+  const cell = cellAt(tx, ty);
+  const mx = Math.floor(tx), my = Math.floor(ty);
+  if (cell === 4) {
+    map[my][mx] = 0;
+    creakSound();
+    setStatus('the door creaks open...');
+  } else if (cell === 6) {
+    if (hasKey) {
+      screen = 'won';
+      winTime = gameTime;
+      winSound();
+      if (document.exitPointerLock) document.exitPointerLock();
+    } else {
+      beep(140, 0.2, 'square', 0.1);
+      setStatus('LOCKED. the hatch needs the KEY CARD.');
+    }
+  }
+}
+
+// ---------------------------------------------------------------------
+// UPDATE
+// ---------------------------------------------------------------------
+function update(dt) {
+  elapsed += dt;
+  if (statusT > 0) statusT -= dt;
+  if (screen !== 'playing') return;
+
+  gameTime += dt;
+  const newStage = Math.min(3, Math.floor(gameTime / RISE_EVERY));
+  if (newStage !== stage) {
+    stage = newStage;
+    klaxon();
+    setStatus(stage === 1 ? 'THE WATER IS RISING. it laps at your boots.'
+            : stage === 2 ? 'WAIST DEEP NOW. wading is slow. HURRY.'
+            : 'THE DECK IS UNDERWATER. swim. do not breathe.', 5);
+  }
+
+  // ---- walking (W — and quietly, S/A/D for the fancy sailors) ----
+  const speed = SPEEDS[stage];
+  let mx = 0, my = 0;
+  const fwd = (keys['w'] || keys['arrowup'] || touchWalk ? 1 : 0) -
+              (keys['s'] || keys['arrowdown'] ? 1 : 0);
+  const strafe = (keys['d'] ? 1 : 0) - (keys['a'] ? 1 : 0);
+  mx = Math.cos(ang) * fwd * speed * dt + Math.cos(ang + Math.PI / 2) * strafe * speed * dt;
+  my = Math.sin(ang) * fwd * speed * dt + Math.sin(ang + Math.PI / 2) * strafe * speed * dt;
+  // arrow-key looking, for keyboard-only sailors
+  if (keys['arrowleft']) ang -= 2.4 * dt;
+  if (keys['arrowright']) ang += 2.4 * dt;
+
+  // slide along walls: try each axis on its own (with a little margin)
+  const R = 0.22;
+  if (!cellIsSolid(px + mx + Math.sign(mx) * R, py)) px += mx;
+  if (!cellIsSolid(px, py + my + Math.sign(my) * R)) py += my;
+
+  if (fwd !== 0 || strafe !== 0) {
+    bob += dt * (stage >= 2 ? 4 : 7);
+    if (stage >= 1 && stage < 3) {
+      splashT -= dt;
+      if (splashT <= 0) { splashT = 0.35; splash(); }
+    }
+  }
+
+  // ---- picking up the key card ----
+  if (cellAt(px, py) === 7) {
+    map[Math.floor(py)][Math.floor(px)] = 0;
+    hasKey = true;
+    chime();
+    setStatus('KEY CARD!! now find the glowing ESCAPE HATCH!', 5);
+  }
+
+  // ---- breathing (or not) ----
+  if (stage >= 3) {
+    oxygen -= dt / 30;
+    bubbleT -= dt;
+    if (bubbleT <= 0) { bubbleT = 0.5 + Math.random() * 0.6; bubble(); }
+    if (oxygen <= 0) {
+      screen = 'dead';
+      deadSound();
+      if (document.exitPointerLock) document.exitPointerLock();
+    }
+  } else oxygen = Math.min(1, oxygen + dt / 4);
+}
+
+function cellIsSolid(x, y) {
+  const c = cellAt(x, y);
+  return c === 1 || c === 2 || c === 4 || c === 6;   // key card (7) is walkable
+}
+
+// ---------------------------------------------------------------------
+// DRAWING — the raycaster
+// ---------------------------------------------------------------------
+function draw() {
+  const W = canvas.width, H = canvas.height;
+  if (screen === 'title') { drawTitle(W, H); return; }
+
+  const FOV = Math.PI / 3;
+  const bobY = Math.sin(bob) * 6;
+  const horizon = H / 2 + bobY;
+
+  // ceiling and floor
+  ctx.fillStyle = '#141a22';
+  ctx.fillRect(0, 0, W, horizon);
+  ctx.fillStyle = '#242a30';
+  ctx.fillRect(0, horizon, W, H - horizon);
+
+  // ---- fire one ray per 2-pixel column ----
+  const STEP = 2;
+  for (let sx = 0; sx < W; sx += STEP) {
+    const rayA = ang - FOV / 2 + (sx / W) * FOV;
+    const cos = Math.cos(rayA), sin = Math.sin(rayA);
+    // DDA: march the ray cell-by-cell until it smacks a wall
+    let mapX = Math.floor(px), mapY = Math.floor(py);
+    const dX = Math.abs(1 / (cos || 0.00001)), dY = Math.abs(1 / (sin || 0.00001));
+    let stepX, stepY, sideX, sideY;
+    if (cos < 0) { stepX = -1; sideX = (px - mapX) * dX; }
+    else { stepX = 1; sideX = (mapX + 1 - px) * dX; }
+    if (sin < 0) { stepY = -1; sideY = (py - mapY) * dY; }
+    else { stepY = 1; sideY = (mapY + 1 - py) * dY; }
+    let side = 0, cell = 0, guard = 0;
+    while (guard++ < 64) {
+      if (sideX < sideY) { sideX += dX; mapX += stepX; side = 0; }
+      else { sideY += dY; mapY += stepY; side = 1; }
+      cell = (mapY < 0 || mapX < 0 || mapY >= MAPH || mapX >= MAPW)
+           ? 1 : map[mapY][mapX];
+      if (cell === 1 || cell === 2 || cell === 4 || cell === 6) break;
+    }
+    let dist = side === 0 ? sideX - dX : sideY - dY;
+    dist *= Math.cos(rayA - ang);            // undo the fisheye
+    dist = Math.max(0.05, dist);
+
+    let wallH = H / dist;
+    if (stage >= 3) wallH += Math.sin(sx * 0.05 + elapsed * 3) * 8;  // underwater wobble
+    // wall colors, dimmer when farther and on side-hits
+    let r, g, b;
+    if (cell === 4) { r = 150; g = 110; b = 60; }        // wooden door
+    else if (cell === 6) {                                // the glowing hatch
+      const pulse = 0.7 + Math.sin(elapsed * 4) * 0.3;
+      r = 120 * pulse + 60; g = 220 * pulse; b = 90 * pulse;
+    }
+    else if (cell === 2) { r = 130; g = 80; b = 55; }     // rust
+    else { r = 95; g = 110; b = 130; }                    // steel hull
+    let shade = Math.max(0.15, 1 - dist / 10) * (side === 1 ? 0.75 : 1);
+    ctx.fillStyle = `rgb(${r * shade | 0}, ${g * shade | 0}, ${b * shade | 0})`;
+    ctx.fillRect(sx, horizon - wallH / 2, STEP, wallH);
+  }
+
+  // ---- THE WATER — climbing the screen, stage by stage ----
+  const frac = WATER_FRAC[stage];
+  if (stage >= 3) {
+    // fully under: the whole world turns blue and slow
+    ctx.fillStyle = `rgba(20, 60, 110, ${0.45 + Math.sin(elapsed * 2) * 0.05})`;
+    ctx.fillRect(0, 0, W, H);
+  } else if (frac > 0) {
+    const waterY = H - frac * H + Math.sin(elapsed * 2) * 4 + bobY * 0.5;
+    ctx.fillStyle = 'rgba(30, 80, 140, 0.55)';
+    ctx.beginPath();
+    ctx.moveTo(0, waterY);
+    for (let x = 0; x <= W; x += 24) {
+      ctx.lineTo(x, waterY + Math.sin(x * 0.03 + elapsed * 3) * 5);
+    }
+    ctx.lineTo(W, H); ctx.lineTo(0, H);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(160, 220, 255, 0.5)';        // the waterline glints
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let x = 0; x <= W; x += 24) {
+      const yy = waterY + Math.sin(x * 0.03 + elapsed * 3) * 5;
+      if (x === 0) ctx.moveTo(x, yy); else ctx.lineTo(x, yy);
+    }
+    ctx.stroke();
+  }
+
+  drawHud(W, H);
+}
+
+function drawHud(W, H) {
+  // the countdown to the next rise
+  const left = Math.max(0, RISE_EVERY * (stage + 1) - gameTime);
+  const mm = Math.floor(left / 60), ss = Math.floor(left % 60);
+  ctx.textAlign = 'center';
+  if (stage < 3) {
+    const urgent = left < 10;
+    ctx.fillStyle = urgent && Math.floor(elapsed * 3) % 2 ? '#ff5a4a' : '#cfe4ff';
+    ctx.font = `bold ${urgent ? 26 : 20}px monospace`;
+    ctx.fillText('WATER RISES IN ' + mm + ':' + String(ss).padStart(2, '0'), W / 2, 36);
+  } else {
+    // the oxygen bar — your whole world now
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(W / 2 - 130, 18, 260, 22);
+    ctx.fillStyle = oxygen > 0.3 ? '#4ac6ff' : '#ff5a4a';
+    ctx.fillRect(W / 2 - 128, 20, 256 * Math.max(0, oxygen), 18);
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 13px monospace';
+    ctx.fillText('OXYGEN', W / 2, 34);
+  }
+
+  // what E would do right now
+  const tx = px + Math.cos(ang) * 1.1, ty = py + Math.sin(ang) * 1.1;
+  const facing = cellAt(tx, ty);
+  if (facing === 4 || facing === 6) {
+    ctx.fillStyle = '#ffd23f';
+    ctx.font = 'bold 17px monospace';
+    ctx.fillText(facing === 4 ? '[ E ] open the door'
+               : hasKey ? '[ E ] ESCAPE!!' : '[ E ] ...locked. find the KEY CARD', W / 2, H - 76);
+  }
+
+  if (statusT > 0) {
+    ctx.fillStyle = 'rgba(255, 255, 255, ' + Math.min(1, statusT) + ')';
+    ctx.font = '16px monospace';
+    ctx.fillText(status, W / 2, H - 44);
+  }
+
+  // key card indicator
+  ctx.textAlign = 'left';
+  ctx.fillStyle = hasKey ? '#ffd23f' : 'rgba(255,255,255,0.35)';
+  ctx.font = 'bold 15px monospace';
+  ctx.fillText(hasKey ? '🗝 KEY CARD' : '🗝 no key yet', 14, 30);
+
+  // ---- minimap, so the ship can be learned ----
+  const MM = 5, mmX = W - MAPW * MM - 14, mmY = 14;
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+  ctx.fillRect(mmX - 4, mmY - 4, MAPW * MM + 8, MAPH * MM + 8);
+  for (let y = 0; y < MAPH; y++) {
+    for (let x = 0; x < MAPW; x++) {
+      const c = map[y][x];
+      if (c === 0) continue;
+      ctx.fillStyle = c === 4 ? '#96703c' : c === 6 ? '#7ddf8f'
+                    : c === 7 ? (Math.floor(elapsed * 3) % 2 ? '#ffd23f' : '#8a7420')
+                    : '#5a6a80';
+      ctx.fillRect(mmX + x * MM, mmY + y * MM, MM, MM);
+    }
+  }
+  ctx.fillStyle = '#ff5a4a';
+  ctx.fillRect(mmX + px * MM - 2, mmY + py * MM - 2, 4, 4);
+  ctx.strokeStyle = '#ff5a4a';
+  ctx.beginPath();
+  ctx.moveTo(mmX + px * MM, mmY + py * MM);
+  ctx.lineTo(mmX + (px + Math.cos(ang)) * MM, mmY + (py + Math.sin(ang)) * MM);
+  ctx.stroke();
+
+  // touch buttons
+  if ('ontouchstart' in window) {
+    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    ctx.fillRect(W * 0.74, H * 0.7, W * 0.24, H * 0.14);
+    ctx.fillRect(W * 0.74, H * 0.86, W * 0.24, H * 0.12);
+    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 20px monospace';
+    ctx.fillText('WALK', W * 0.86, H * 0.78);
+    ctx.fillText('E', W * 0.86, H * 0.93);
+    ctx.textAlign = 'left';
+    ctx.font = '12px monospace';
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.fillText('drag left side to look', 14, H - 16);
+  }
+
+  if (screen === 'dead' || screen === 'won') {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = 'center';
+    if (screen === 'won') {
+      ctx.fillStyle = '#7ddf8f';
+      ctx.font = `bold ${Math.min(44, W / 14)}px monospace`;
+      ctx.fillText('YOU ESCAPED THE SHIP!', W / 2, H / 2 - 20);
+      ctx.fillStyle = '#fff';
+      ctx.font = '18px monospace';
+      const t = Math.floor(winTime);
+      ctx.fillText('escape time: ' + Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0'),
+                   W / 2, H / 2 + 20);
+    } else {
+      ctx.fillStyle = '#ff5a4a';
+      ctx.font = `bold ${Math.min(44, W / 14)}px monospace`;
+      ctx.fillText('THE SEA KEPT YOU...', W / 2, H / 2 - 20);
+    }
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.font = '16px monospace';
+    ctx.fillText('click or tap to try again', W / 2, H / 2 + 56);
+  }
+}
+
+function drawTitle(W, H) {
+  ctx.fillStyle = '#05070c';
+  ctx.fillRect(0, 0, W, H);
+  // the dark sea below the title
+  ctx.fillStyle = 'rgba(30, 80, 140, 0.5)';
+  ctx.beginPath();
+  ctx.moveTo(0, H * 0.72);
+  for (let x = 0; x <= W; x += 24) {
+    ctx.lineTo(x, H * 0.72 + Math.sin(x * 0.02 + elapsed * 2) * 8);
+  }
+  ctx.lineTo(W, H); ctx.lineTo(0, H);
+  ctx.fill();
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#cfe4ff';
+  ctx.font = `bold ${Math.min(52, W / 12)}px monospace`;
+  ctx.fillText('THE SINKING SHIP', W / 2, H * 0.26);
+  ctx.fillStyle = '#8aa4c8';
+  ctx.font = '16px monospace';
+  ctx.fillText('the ship has crashed. the sea is coming in.', W / 2, H * 0.34);
+  ctx.fillText('every minute, the water rises.', W / 2, H * 0.34 + 26);
+  ctx.fillStyle = '#ffd23f';
+  ctx.font = 'bold 17px monospace';
+  ctx.fillText('W — walk      MOUSE — look      E — doors & hatches', W / 2, H * 0.5);
+  ctx.fillStyle = '#8aa4c8';
+  ctx.font = '15px monospace';
+  ctx.fillText('find the KEY CARD. reach the ESCAPE HATCH.', W / 2, H * 0.5 + 30);
+  ctx.fillStyle = Math.floor(elapsed * 2) % 2 ? '#ffffff' : '#8aa4c8';
+  ctx.font = 'bold 18px monospace';
+  ctx.fillText('click to board', W / 2, H * 0.62);
+}
+
+// ---------------------------------------------------------------------
+// THE GAME LOOP
+// ---------------------------------------------------------------------
+let lastTime = 0;
+function loop(time) {
+  const dt = Math.min(0.05, (time - lastTime) / 1000);
+  lastTime = time;
+  update(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
