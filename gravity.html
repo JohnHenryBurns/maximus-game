@@ -363,7 +363,10 @@ function update(dt) {
       if (b === grabbed) continue;
       const dx = h.x - b.x, dy = h.y - b.y;
       const d = Math.hypot(dx, dy) || 1;
-      const pull = Math.min(2200, 260000 / Math.max(d * d, 900));
+      // strong up close, but NEVER zero — a black hole owns the whole
+      // room. far things slide along the floor toward it; near things
+      // get lifted clean off the ground, gravity or no gravity.
+      const pull = Math.min(2600, 90000 / Math.max(d, 30) + 300);
       b.vx += (dx / d) * pull * dt;
       b.vy += (dy / d) * pull * dt;
       // PEOPLE get the full cinematic treatment: a DECAYING ORBIT.
@@ -395,7 +398,7 @@ function update(dt) {
     for (const p of particles) {
       const dx = h.x - p.x, dy = h.y - p.y;
       const d = Math.hypot(dx, dy) || 1;
-      const pull = Math.min(1600, 140000 / Math.max(d * d, 900));
+      const pull = Math.min(1800, 60000 / Math.max(d, 30) + 150);
       p.vx += (dx / d) * pull * dt + (-dy / d) * pull * 0.5 * dt;   // with a swirl
       p.vy += (dy / d) * pull * dt + (dx / d) * pull * 0.5 * dt;
       if (d < 16) p.life = 0;
