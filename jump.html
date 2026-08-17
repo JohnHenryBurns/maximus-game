@@ -396,6 +396,7 @@ function heldJump()  { return keys[' '] || keys['arrowup'] || keys['w'] || touch
 // Buttons (uiRects) are drawn each frame and clicked here.
 // ---------------------------------------------------------------------
 let tool = 'ground';
+let toolbarH = 96;      // how tall the builder's button bar is right now
 let editCamX = 0, editCamY = 260;
 let painting = false;
 let panLast = null;
@@ -441,7 +442,7 @@ function uiAction(id) {
 }
 
 function applyTool(sx, sy) {
-  if (sy < 96) return;                  // don't paint underneath the buttons
+  if (sy < toolbarH) return;            // don't paint underneath the buttons
   const cx = Math.floor((sx + editCamX) / TILE);
   const cy = Math.floor((sy + editCamY) / TILE);
   const key = cx + ',' + cy;
@@ -1401,7 +1402,7 @@ function drawEditor() {
   ctx.lineTo(exx + 8, exy); ctx.fill();
 
   // a ghost square under your pointer, so you can aim
-  if (hoverPt && hoverPt.y > 96 && tool !== 'pan') {
+  if (hoverPt && hoverPt.y > toolbarH && tool !== 'pan') {
     const hcx = Math.floor((hoverPt.x + editCamX) / TILE);
     const hcy = Math.floor((hoverPt.y + editCamY) / TILE);
     ctx.strokeStyle = 'rgba(255, 210, 63, 0.8)';
@@ -1410,33 +1411,39 @@ function drawEditor() {
   }
   ctx.restore();
 
-  // ---- the toolbar ----
-  ctx.fillStyle = 'rgba(10, 7, 5, 0.85)';
-  ctx.fillRect(0, 0, W, 96);
-  let bx = 8, by = 8;
+  // ---- the toolbar — measured first, so it GROWS when the buttons
+  // wrap into extra rows on a narrow screen ----
   const resetArmed = performance.now() < resetArmUntil;
   const all = TOOLS.concat([['test', '▶ TEST'], ['story', 'STORY'],
                             ['reset', resetArmed ? 'REALLY?' : 'RESET']]);
+  const places = [];
+  let bx = 8, by = 8;
   for (const [id, label] of all) {
     const bw = Math.max(64, label.length * 11 + 20);
     if (bx + bw > W - 8) { bx = 8; by += 42; }
-    uiRects.push({ x: bx, y: by, w: bw, h: 38, id });
-    const active = tool === id;
-    const danger = id === 'reset' && resetArmed;
+    places.push({ id, label, x: bx, y: by, w: bw });
+    bx += bw + 8;
+  }
+  toolbarH = by + 38 + 26;
+  ctx.fillStyle = 'rgba(10, 7, 5, 0.85)';
+  ctx.fillRect(0, 0, W, toolbarH);
+  for (const p of places) {
+    uiRects.push({ x: p.x, y: p.y, w: p.w, h: 38, id: p.id });
+    const active = tool === p.id;
+    const danger = p.id === 'reset' && resetArmed;
     ctx.fillStyle = danger ? 'rgba(232, 69, 60, 0.35)'
-                  : id === 'test' ? 'rgba(125, 223, 143, 0.2)'
+                  : p.id === 'test' ? 'rgba(125, 223, 143, 0.2)'
                   : active ? 'rgba(255, 210, 63, 0.25)' : 'rgba(255, 255, 255, 0.07)';
-    ctx.fillRect(bx, by, bw, 38);
+    ctx.fillRect(p.x, p.y, p.w, 38);
     ctx.strokeStyle = danger ? '#e8453c'
-                    : id === 'test' ? '#7ddf8f' : active ? '#ffd23f' : '#5a5450';
+                    : p.id === 'test' ? '#7ddf8f' : active ? '#ffd23f' : '#5a5450';
     ctx.lineWidth = 2;
-    ctx.strokeRect(bx, by, bw, 38);
+    ctx.strokeRect(p.x, p.y, p.w, 38);
     ctx.fillStyle = danger ? '#ff9f97'
-                  : id === 'test' ? '#7ddf8f' : active ? '#ffd23f' : '#c8c0b8';
+                  : p.id === 'test' ? '#7ddf8f' : active ? '#ffd23f' : '#c8c0b8';
     ctx.font = 'bold 14px monospace';
     ctx.textAlign = 'center';
-    ctx.fillText(label, bx + bw / 2, by + 25);
-    bx += bw + 8;
+    ctx.fillText(p.label, p.x + p.w / 2, p.y + 25);
   }
   ctx.textAlign = 'left';
   ctx.fillStyle = 'rgba(255,255,255,0.45)';
@@ -1448,7 +1455,7 @@ function drawEditor() {
     ? (pendingPlat ? 'now tap where it should FLING you — any distance, any direction'
                    : 'tap once to plant the bouncy mushroom...')
     : 'tap or drag to place — swipe with TWO fingers (or right-drag, or arrow keys) to look around — everything saves itself',
-               10, by + 60 > 90 ? by + 52 : 88);
+               10, toolbarH - 10);
 }
 
 // ---------------------------------------------------------------------
