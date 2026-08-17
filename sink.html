@@ -86,24 +86,50 @@ const MAP2_SRC = [
   '1111111111111111',
 ];
 
+// CHAPTER 3: THE RESCUE — the deck of the ship that answered your
+// fire. 1 = the heaving sea, 3 = masts and cabins, 9 = the sailor
+const MAP3_SRC = [
+  '1111111111111111',
+  '1..............1',
+  '1..............1',
+  '1...3......3...1',
+  '1..............1',
+  '1..............1',
+  '1..............1',
+  '1......33......1',
+  '1......33......1',
+  '1..............1',
+  '1..............1',
+  '1...3......3...1',
+  '1..............1',
+  '1....9.........1',
+  '1.....S........1',
+  '1111111111111111',
+];
+
 // everything that changes between chapters lives here
 const CHCFG = [
   { name: 'Abandon Ship', map: MAP_SRC, threat: 'water', hasAlarm: true,
     item: 'KEY CARD', goal: 'ESCAPE HATCH', flag: 'sink_ch1' },
   { name: 'The Island', map: MAP2_SRC, threat: 'night', hasAlarm: false,
     item: 'MATCHES', goal: 'SIGNAL FIRE', flag: 'sink_ch2' },
+  { name: 'The Rescue', map: MAP3_SRC, threat: 'kraken', hasAlarm: false,
+    item: 'BLUNDERBUSS', goal: 'KRAKEN', flag: 'sink_ch3' },
 ];
 let chapter = 0;
 
 const MAPW = 16, MAPH = 16;
 let map = [];
 let palms = [];       // island palms are SPRITES, not walls — see below
+let sailor = null;    // chapter 3's gun-giving friend
 let startX = 2.5, startY = 1.5;
 function loadMap() {
   palms = [];
+  sailor = null;
   map = CHCFG[chapter].map.map((row, y) => row.split('').map((ch, x) => {
     if (ch === 'S') { startX = x + 0.5; startY = y + 0.5; return 0; }
     if (ch === '.') return 0;
+    if (ch === '9') { sailor = { x: x + 0.5, y: y + 0.5 }; return 0; }
     if (ch === '2' && CHCFG[chapter].threat === 'night') {
       palms.push({ x: x + 0.5, y: y + 0.5 });
     }
@@ -172,6 +198,100 @@ function cellAt(x, y) {
 }
 
 // ---------------------------------------------------------------------
+// CHAPTER 3's CAST — each drawn once onto a hidden canvas, shown in
+// the world as billboard sprites just like the palms
+// ---------------------------------------------------------------------
+function makeSprite(w, h, paint) {
+  const cv = document.createElement('canvas');
+  cv.width = w; cv.height = h;
+  paint(cv.getContext('2d'));
+  return cv;
+}
+// a curling sea-green tentacle, suckers and all
+const tentacleCanvas = makeSprite(80, 160, c => {
+  c.strokeStyle = '#3a7a6a';
+  c.lineWidth = 26;
+  c.lineCap = 'round';
+  c.beginPath();
+  c.moveTo(40, 160);
+  c.bezierCurveTo(20, 110, 66, 80, 44, 40);
+  c.stroke();
+  c.strokeStyle = '#2a5a50';
+  c.lineWidth = 18;
+  c.beginPath();
+  c.moveTo(44, 40);
+  c.bezierCurveTo(30, 18, 56, 14, 60, 4);
+  c.stroke();
+  c.fillStyle = '#c8e8d8';                    // the suckers
+  [[34, 130], [42, 108], [52, 88], [50, 64], [42, 46], [52, 26]].forEach(([x, y], i) => {
+    c.beginPath();
+    c.arc(x, y, 6 - i * 0.6, 0, Math.PI * 2);
+    c.fill();
+  });
+});
+// the kraken itself: a vast head, two furious golden eyes, a beak
+const headCanvas = makeSprite(160, 160, c => {
+  c.fillStyle = '#3a7a6a';
+  c.beginPath();
+  c.ellipse(80, 70, 70, 62, 0, 0, Math.PI * 2);
+  c.fill();
+  c.fillStyle = '#2a5a50';                    // tentacle fringe below
+  for (let i = 0; i < 6; i++) {
+    c.beginPath();
+    c.ellipse(24 + i * 22, 128, 10, 26, (i - 2.5) * 0.15, 0, Math.PI * 2);
+    c.fill();
+  }
+  c.fillStyle = '#ffd23f';                    // the eyes: huge, gold, cross
+  c.beginPath();
+  c.ellipse(52, 62, 18, 22, 0, 0, Math.PI * 2);
+  c.ellipse(108, 62, 18, 22, 0, 0, Math.PI * 2);
+  c.fill();
+  c.fillStyle = '#101418';
+  c.beginPath();
+  c.ellipse(52, 66, 7, 14, 0, 0, Math.PI * 2);
+  c.ellipse(108, 66, 7, 14, 0, 0, Math.PI * 2);
+  c.fill();
+  c.strokeStyle = '#2a5a50';                  // angry brows
+  c.lineWidth = 8;
+  c.beginPath();
+  c.moveTo(30, 38); c.lineTo(66, 50);
+  c.moveTo(130, 38); c.lineTo(94, 50);
+  c.stroke();
+  c.fillStyle = '#1a3a34';                    // the beak
+  c.beginPath();
+  c.moveTo(80, 92); c.lineTo(94, 112); c.lineTo(80, 124); c.lineTo(66, 112);
+  c.fill();
+});
+// the sailor: yellow raincoat, lantern, seen-it-all expression
+const sailorCanvas = makeSprite(64, 128, c => {
+  c.fillStyle = '#e8b93f';                    // raincoat
+  c.beginPath();
+  c.moveTo(32, 34); c.lineTo(54, 120); c.lineTo(10, 120);
+  c.fill();
+  c.fillStyle = '#f0cf9f';                    // face
+  c.beginPath();
+  c.arc(32, 26, 13, 0, Math.PI * 2);
+  c.fill();
+  c.fillStyle = '#e8b93f';                    // sou'wester hat
+  c.beginPath();
+  c.ellipse(32, 16, 17, 7, 0, 0, Math.PI * 2);
+  c.fill();
+  c.fillRect(22, 6, 20, 10);
+  c.fillStyle = '#4a3a2a';                    // the beard of experience
+  c.beginPath();
+  c.arc(32, 33, 9, 0, Math.PI);
+  c.fill();
+  c.fillStyle = '#101418';
+  c.fillRect(26, 22, 3, 4);
+  c.fillRect(35, 22, 3, 4);
+  c.fillStyle = '#ffd23f';                    // the lantern
+  c.fillRect(6, 74, 10, 14);
+  c.strokeStyle = '#4a3a2a';
+  c.lineWidth = 2;
+  c.strokeRect(6, 74, 10, 14);
+});
+
+// ---------------------------------------------------------------------
 // SOUND
 // ---------------------------------------------------------------------
 let audio = null;
@@ -209,6 +329,28 @@ function chime() { [880, 1175, 1568].forEach((n, i) => setTimeout(() => beep(n, 
 function splash() { beep(180 + Math.random() * 120, 0.08, 'sine', 0.07); }
 function bubble() { beep(700 + Math.random() * 500, 0.1, 'sine', 0.05); }
 function winSound() { [523, 659, 784, 1047, 1319].forEach((n, i) => setTimeout(() => beep(n, 0.25, 'square', 0.1), i * 130)); }
+function gunBang() {
+  beep(70, 0.14, 'sawtooth', 0.25);
+  beep(220, 0.06, 'square', 0.15);
+  setTimeout(() => beep(50, 0.12, 'triangle', 0.15), 30);
+}
+function screech() {
+  if (!audio) return;
+  const o = audio.createOscillator(), g = audio.createGain();
+  o.type = 'sawtooth';
+  o.frequency.setValueAtTime(900, audio.currentTime);
+  o.frequency.linearRampToValueAtTime(1400, audio.currentTime + 0.3);
+  o.frequency.linearRampToValueAtTime(700, audio.currentTime + 0.6);
+  g.gain.setValueAtTime(0.05, audio.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + 0.65);
+  o.connect(g); g.connect(audio.destination);
+  o.start(); o.stop(audio.currentTime + 0.7);
+}
+function bigSplash() { [140, 90, 60].forEach((n, i) => setTimeout(() => beep(n, 0.2, 'sine', 0.15), i * 70)); }
+function shipHorn() {
+  beep(160, 1.2, 'square', 0.1);
+  setTimeout(() => beep(160, 1.2, 'square', 0.1), 1500);
+}
 // the crash-siren: a long wail that sweeps up and back down
 function sirenWail() {
   if (!audio) return;
@@ -232,9 +374,11 @@ let screen = 'menu';        // 'menu' | 'story' | 'playing' | 'dead' | 'won'
 // ---- the book of chapters ----
 let ch1Done = localStorage.getItem('sink_ch1') === 'yes';
 let ch2Done = localStorage.getItem('sink_ch2') === 'yes';
+let ch3Done = localStorage.getItem('sink_ch3') === 'yes';
 const CHAPTERS = [
   { name: 'Abandon Ship', unlocked: true },
   { name: 'The Island', unlocked: ch1Done },
+  { name: 'The Rescue', unlocked: ch2Done },
   { name: '???', unlocked: false },
 ];
 let menuCards = [];
@@ -242,6 +386,18 @@ let storyLines = [];
 // ---- the crash alarm (chapter 1's screaming companion) ----
 let alarmOn = false;
 let alarmT = 0;
+// ---- the KRAKEN fight (chapter 3) ----
+let armed = false;          // has the sailor handed over the blunderbuss?
+let hearts = 5;
+let hurtFlash = 0;
+let fireCd = 0;
+let muzzle = 0;
+let tentacles = [];         // the ones currently over the railing
+let pool = 12;              // tentacles left before the head shows itself
+let headOn = false;
+let head = null;
+let spawnT = 2;
+let shake = 0;
 let px = startX, py = startY, ang = 0;
 let gameTime = 0;           // seconds since the crash
 let stage = 0;              // 0 dry, 1 ankles, 2 waist, 3 UNDER
@@ -272,14 +428,97 @@ function resetGame() {
   bob = 0;
   alarmOn = CHCFG[chapter].hasAlarm;   // chapter 1 begins mid-emergency
   alarmT = 0;
+  armed = false;
+  hearts = 5;
+  hurtFlash = 0;
+  fireCd = 0;
+  muzzle = 0;
+  tentacles = [];
+  pool = 12;
+  headOn = false;
+  head = null;
+  spawnT = 2;
+  shake = 0;
   setStatus(chapter === 0 ? 'the ship groans... find a way UP. (E opens doors)'
-                          : 'find the MATCHES. light the SIGNAL FIRE. beat the dark.', 5);
+          : chapter === 1 ? 'find the MATCHES. light the SIGNAL FIRE. beat the dark.'
+                          : 'safe at last... the sailor wants a word. (walk up, press E)', 6);
   screen = 'playing';
+}
+
+// one ray, fired by the BLUNDERBUSS instead of the renderer — tells
+// us how far a shot can fly before hitting a wall or mast
+function castRay(a) {
+  const cos = Math.cos(a), sin = Math.sin(a);
+  let mapX = Math.floor(px), mapY = Math.floor(py);
+  const dX = Math.abs(1 / (cos || 0.00001)), dY = Math.abs(1 / (sin || 0.00001));
+  let stepX, stepY, sideX, sideY;
+  if (cos < 0) { stepX = -1; sideX = (px - mapX) * dX; }
+  else { stepX = 1; sideX = (mapX + 1 - px) * dX; }
+  if (sin < 0) { stepY = -1; sideY = (py - mapY) * dY; }
+  else { stepY = 1; sideY = (mapY + 1 - py) * dY; }
+  let side = 0, guard = 0;
+  while (guard++ < 64) {
+    if (sideX < sideY) { sideX += dX; mapX += stepX; side = 0; }
+    else { sideY += dY; mapY += stepY; side = 1; }
+    const c = (mapY < 0 || mapX < 0 || mapY >= MAPH || mapX >= MAPW)
+            ? 1 : map[mapY][mapX];
+    if (c === 1 || c === 3 || c === 4 || c === 6 || c === 8) break;
+  }
+  return side === 0 ? sideX - dX : sideY - dY;
+}
+
+function fireGun() {
+  if (!armed || fireCd > 0 || screen !== 'playing') return;
+  fireCd = 0.5;
+  muzzle = 0.09;
+  gunBang();
+  const wallDist = castRay(ang);
+  // did the shot line up with a monster? (checked by angle + distance)
+  const targets = tentacles.filter(t => t.hp > 0 && t.rise > 0.4)
+    .concat(headOn && head ? [head] : []);
+  let best = null;
+  for (const t of targets) {
+    let relAng = Math.atan2(t.y - py, t.x - px) - ang;
+    relAng = ((relAng + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+    const d = Math.hypot(t.x - px, t.y - py);
+    const halfW = Math.atan((t === head ? 1.2 : 0.5) / Math.max(0.4, d));
+    if (Math.abs(relAng) < halfW && d < wallDist + 0.6) {
+      if (!best || d < best.d) best = { t, d };
+    }
+  }
+  if (!best) return;
+  const t = best.t;
+  t.hp--;
+  t.flash = 0.15;
+  screech();
+  if (t.hp <= 0) {
+    if (t === head) {
+      // THE KRAKEN IS BEATEN
+      screen = 'won';
+      winTime = gameTime;
+      localStorage.setItem('sink_ch3', 'yes');
+      ch3Done = true;
+      bigSplash();
+      winSound();
+      if (document.exitPointerLock) document.exitPointerLock();
+    } else {
+      t.dying = 0.5;
+      pool--;
+      bigSplash();
+      if (pool <= 0 && !headOn) {
+        headOn = true;
+        head = { x: 8, y: 1.2, hp: 8, timer: 3, telegraph: 0, rise: 0 };
+        shipHorn();
+        setStatus('the sea BULGES at the bow... IT is coming up.', 5);
+      }
+    }
+  }
 }
 
 function openChapter(i) {
   if (!CHAPTERS[i] || !CHAPTERS[i].unlocked) {
     setStatus(i === 1 ? 'finish Chapter 1 first — escape the ship!'
+            : i === 2 ? 'finish Chapter 2 first — light the fire!'
                       : "that chapter hasn't been written yet...", 3);
     return;
   }
@@ -297,6 +536,21 @@ function openChapter(i) {
     'Find the KEY CARD. Reach the ESCAPE HATCH.',
     '(and if that alarm is driving you mad —',
     ' find the red panel and press E)',
+    '',
+    '( click to begin )',
+  ] : i === 2 ? [
+    'CHAPTER 3: THE RESCUE',
+    '',
+    'Strong hands haul you out of the cold.',
+    'Hot soup. A dry blanket. A deck that rolls',
+    'gently under a stormy sky.',
+    '',
+    'But the sailors keep glancing at the water.',
+    'And one of them is waiting to talk to you,',
+    'holding something long, wrapped in oilcloth.',
+    '',
+    'Because the thing that sank YOUR ship...',
+    'followed you.',
     '',
     '( click to begin )',
   ] : [
@@ -350,7 +604,11 @@ canvas.addEventListener('click', e => {
   if (screen === 'story') { resetGame(); }
   else if (screen === 'dead' || screen === 'won') { screen = 'menu'; return; }
   if (screen === 'playing' && !('ontouchstart' in window)) {
-    canvas.requestPointerLock();          // the mouse becomes your NECK
+    if (document.pointerLockElement === canvas) {
+      fireGun();                          // locked in: the click is a TRIGGER
+    } else {
+      canvas.requestPointerLock();        // the mouse becomes your NECK
+    }
   }
 });
 addEventListener('mousemove', e => {
@@ -410,6 +668,20 @@ addEventListener('touchend', e => {
 function interact() {
   const tx = px + Math.cos(ang) * 1.1;
   const ty = py + Math.sin(ang) * 1.1;
+  // chapter 3: the sailor, and the handing-over of the blunderbuss
+  if (CHCFG[chapter].threat === 'kraken') {
+    if (armed) { fireGun(); return; }       // on phones, E is the trigger too
+    if (sailor && Math.hypot(px - sailor.x, py - sailor.y) < 1.6) {
+      armed = true;
+      chime();
+      setStatus('"Take her," the sailor says. "You\'ll be wanting it." — CLICK TO FIRE', 6);
+      setTimeout(() => { shipHorn(); }, 2500);
+      setTimeout(() => {
+        setStatus('something ENORMOUS just bumped the hull...', 5);
+      }, 3000);
+    }
+    return;
+  }
   const cell = cellAt(tx, ty);
   const mx = Math.floor(tx), my = Math.floor(ty);
   if (cell === 4) {
@@ -450,7 +722,8 @@ function update(dt) {
 
   gameTime += dt;
   const night = CHCFG[chapter].threat === 'night';
-  const newStage = Math.min(3, Math.floor(gameTime / RISE_EVERY));
+  const kraken = CHCFG[chapter].threat === 'kraken';
+  const newStage = kraken ? 0 : Math.min(3, Math.floor(gameTime / RISE_EVERY));
   if (newStage !== stage) {
     stage = newStage;
     if (night) {
@@ -519,6 +792,72 @@ function update(dt) {
     }
   }
 
+  // ---- THE KRAKEN FIGHT ----
+  if (kraken) {
+    if (fireCd > 0) fireCd -= dt;
+    if (muzzle > 0) muzzle -= dt;
+    if (hurtFlash > 0) hurtFlash -= dt;
+    if (shake > 0) shake -= dt;
+    if (armed) {
+      // tentacles keep coming while the pool lasts
+      spawnT -= dt;
+      const active = tentacles.filter(t => !t.dying).length;
+      if (spawnT <= 0 && active < (pool > 6 ? 2 : 3) && pool > 0 && !headOn) {
+        spawnT = 2.2;
+        const spots = [];
+        for (let i = 2; i < 14; i++) {
+          spots.push([i + 0.5, 1.5], [i + 0.5, 14.5], [1.5, i + 0.5], [14.5, i + 0.5]);
+        }
+        const [sx2, sy2] = spots[Math.floor(Math.random() * spots.length)];
+        tentacles.push({ x: sx2, y: sy2, hp: 2, rise: 0, phase: 'rise',
+                         t: 0, flash: 0, dying: 0 });
+        screech();
+      }
+      for (const t of tentacles) {
+        if (t.flash > 0) t.flash -= dt;
+        if (t.dying) { t.dying -= dt; t.rise -= dt * 2; continue; }
+        t.t += dt;
+        if (t.phase === 'rise') {
+          t.rise = Math.min(1, t.rise + dt * 1.3);
+          if (t.rise >= 1) { t.phase = 'menace'; t.t = 0; }
+        } else if (t.phase === 'menace' && t.t > 1.6) {
+          t.phase = 'slam'; t.t = 0;
+          // SLAM — get away from it or lose a heart
+          if (Math.hypot(px - t.x, py - t.y) < 2.4) hurtPlayer();
+          shake = 0.4;
+          bigSplash();
+        } else if (t.phase === 'slam' && t.t > 0.5) {
+          t.phase = 'retreat'; t.t = 0;
+        } else if (t.phase === 'retreat') {
+          t.rise -= dt * 1.5;
+          if (t.rise <= 0) t.gone = true;
+        }
+      }
+      tentacles = tentacles.filter(t => !t.gone && !(t.dying && t.dying <= 0));
+      // the head: rise, glare, LUNGE
+      if (headOn && head) {
+        if (head.flash > 0) head.flash -= dt;
+        head.rise = Math.min(1, head.rise + dt * 0.5);
+        if (head.rise >= 1) {
+          head.timer -= dt;
+          if (head.timer <= 0 && head.telegraph <= 0) {
+            head.telegraph = 0.9;                    // eyes flash: incoming!
+            screech();
+          }
+          if (head.telegraph > 0) {
+            head.telegraph -= dt;
+            if (head.telegraph <= 0) {
+              head.timer = 2.6;
+              shake = 0.5;
+              bigSplash();
+              if (Math.hypot(px - head.x, py - head.y) < 5.5) hurtPlayer();
+            }
+          }
+        }
+      }
+    }
+  }
+
   // ---- breathing (or freezing) ----
   if (stage >= 3) {
     oxygen -= dt / 30;
@@ -534,9 +873,20 @@ function update(dt) {
   } else oxygen = Math.min(1, oxygen + dt / 4);
 }
 
+function hurtPlayer() {
+  hearts--;
+  hurtFlash = 0.6;
+  beep(120, 0.3, 'sawtooth', 0.15);
+  if (hearts <= 0) {
+    screen = 'dead';
+    deadSound();
+    if (document.exitPointerLock) document.exitPointerLock();
+  }
+}
+
 function cellIsSolid(x, y) {
   const c = cellAt(x, y);
-  return c === 1 || c === 2 || c === 4 || c === 6 || c === 8;   // key card (7) is walkable
+  return c === 1 || c === 2 || c === 3 || c === 4 || c === 6 || c === 8;   // key card (7) is walkable
 }
 
 // ---------------------------------------------------------------------
@@ -551,14 +901,26 @@ function draw() {
   const bobY = Math.sin(bob) * 6;
   const horizon = H / 2 + bobY;
   const night = CHCFG[chapter].threat === 'night';
+  const kraken = CHCFG[chapter].threat === 'kraken';
   // how far you can see: fixed in the ship, shrinking as night falls
   const viewDist = night ? [12, 8, 5, 2.8][stage] : 10;
 
-  // ceiling and floor — ship steel, or an island sky burning down to dark
+  // the whole world judders when something enormous hits the ship
+  ctx.save();
+  if (shake > 0) {
+    ctx.translate((Math.random() - 0.5) * 16 * shake, (Math.random() - 0.5) * 12 * shake);
+  }
+
+  // ceiling and floor — steel, island sky, or storm over a wooden deck
   if (night) {
     ctx.fillStyle = ['#8fc6ff', '#f0a060', '#4a3a6a', '#0a0a14'][stage];
     ctx.fillRect(0, 0, W, horizon);
     ctx.fillStyle = ['#c8b083', '#a8865a', '#584a4a', '#161218'][stage];
+    ctx.fillRect(0, horizon, W, H - horizon);
+  } else if (kraken) {
+    ctx.fillStyle = '#2a3240';
+    ctx.fillRect(0, 0, W, horizon);
+    ctx.fillStyle = '#6a4e32';                 // the deck planks
     ctx.fillRect(0, horizon, W, H - horizon);
   } else {
     ctx.fillStyle = '#141a22';
@@ -589,7 +951,7 @@ function draw() {
            ? 1 : map[mapY][mapX];
       // on the island, rays fly straight THROUGH palm cells (2) —
       // the trees are drawn as sprites afterward instead
-      if (cell === 1 || cell === 4 || cell === 6 || cell === 8 ||
+      if (cell === 1 || cell === 3 || cell === 4 || cell === 6 || cell === 8 ||
           (cell === 2 && !night)) break;
     }
     let dist = side === 0 ? sideX - dX : sideY - dY;
@@ -613,12 +975,17 @@ function draw() {
         r = 180 + 75 * throb; g = 40; b = 35;
       } else { r = 70; g = 110; b = 80; }                 // silenced: calm green
     }
+    else if (cell === 3) { r = 150; g = 115; b = 70; }    // mast & cabin wood
     else if (cell === 2) {
       if (night) { r = 65; g = 145; b = 75; }             // palm trees
       else { r = 130; g = 80; b = 55; }                   // rust
     }
     else {
-      if (night) { r = 145; g = 125; b = 100; }           // island rock
+      if (kraken) {                                       // walls of heaving sea
+        const wave = Math.sin(elapsed * 2.5 + mapX * 1.3 + mapY) * 18;
+        r = 25; g = 70 + wave; b = 85 + wave * 0.6;
+      }
+      else if (night) { r = 145; g = 125; b = 100; }      // island rock
       else { r = 95; g = 110; b = 130; }                  // steel hull
     }
     let shade = Math.max(0.12, 1 - dist / viewDist) * (side === 1 ? 0.75 : 1);
@@ -626,34 +993,55 @@ function draw() {
     ctx.fillRect(sx, horizon - wallH / 2, STEP, wallH);
   }
 
-  // ---- the palms, farthest first so near ones stand in front ----
-  if (palms.length) {
+  // ---- world sprites: palms, sailors, tentacles, kraken heads ----
+  const sprites = [];
+  for (const p of palms) {
+    sprites.push({ img: palmCanvas, x: p.x, y: p.y, h: 1.5, w: 1.0 });
+  }
+  if (kraken) {
+    if (sailor) sprites.push({ img: sailorCanvas, x: sailor.x, y: sailor.y, h: 1.05, w: 0.6 });
+    for (const t of tentacles) {
+      if (t.rise <= 0.02) continue;
+      const squash = t.phase === 'slam' ? 0.55 : 1;
+      sprites.push({ img: tentacleCanvas, x: t.x, y: t.y,
+                     h: 1.7 * Math.max(0.05, t.rise) * squash, w: 0.9,
+                     blink: t.flash > 0 });
+    }
+    if (headOn && head) {
+      sprites.push({ img: headCanvas, x: head.x, y: head.y,
+                     h: 2.6 * Math.max(0.05, head.rise), w: 2.6,
+                     blink: (head.flash > 0) || head.telegraph > 0 });
+    }
+  }
+  if (sprites.length) {
     const seen = [];
-    for (const p of palms) {
+    for (const p of sprites) {
       let relAng = Math.atan2(p.y - py, p.x - px) - ang;
       relAng = ((relAng + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
-      if (Math.abs(relAng) > FOV / 2 + 0.5) continue;
+      if (Math.abs(relAng) > FOV / 2 + 0.6) continue;
       const d = Math.hypot(p.x - px, p.y - py);
-      const depth = Math.max(0.15, d * Math.cos(relAng));
-      seen.push({ depth, screenX: ((relAng + FOV / 2) / FOV) * W });
+      seen.push({ p, depth: Math.max(0.15, d * Math.cos(relAng)),
+                  screenX: ((relAng + FOV / 2) / FOV) * W });
     }
     seen.sort((a, b) => b.depth - a.depth);
     for (const s of seen) {
+      const p = s.p;
+      if (p.blink && Math.floor(elapsed * 20) % 2) continue;   // hit-flash
       const size = H / s.depth;
-      const drawH = size * 1.5, drawW = size * 1.0;
+      const drawH = size * p.h, drawW = size * p.w;
       const bottom = horizon + size / 2;
       const left = s.screenX - drawW / 2;
       const fade = Math.max(0, Math.min(1, 1.15 - s.depth / viewDist));
       if (fade <= 0.03) continue;
       ctx.globalAlpha = fade;
-      // drawn in skinny strips so rocks can hide the RIGHT parts of it
-      const SW = palmCanvas.width;
+      // drawn in skinny strips so walls can hide the RIGHT parts
+      const SW = p.img.width;
       for (let stripe = 0; stripe < drawW; stripe += STEP) {
         const col = Math.floor((left + stripe) / STEP);
         if (col < 0 || col >= zbuf.length) continue;
-        if (zbuf[col] < s.depth) continue;           // a rock is in front
-        ctx.drawImage(palmCanvas,
-                      (stripe / drawW) * SW, 0, SW * STEP / drawW, palmCanvas.height,
+        if (zbuf[col] < s.depth) continue;           // something's in front
+        ctx.drawImage(p.img,
+                      (stripe / drawW) * SW, 0, SW * STEP / drawW, p.img.height,
                       left + stripe, bottom - drawH, STEP, drawH);
       }
       ctx.globalAlpha = 1;
@@ -699,16 +1087,84 @@ function draw() {
     ctx.fillRect(0, 0, W, H);
   }
 
+  ctx.restore();               // the shake stops here — the HUD holds steady
   drawHud(W, H);
 }
 
 function drawHud(W, H) {
   // the countdown to the next rise
   const night = CHCFG[chapter].threat === 'night';
+  const kraken = CHCFG[chapter].threat === 'kraken';
   const left = Math.max(0, RISE_EVERY * (stage + 1) - gameTime);
   const mm = Math.floor(left / 60), ss = Math.floor(left % 60);
   ctx.textAlign = 'center';
-  if (stage < 3) {
+
+  if (kraken) {
+    // hearts, the beast's health, the crosshair, and the blunderbuss
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#ff5a4a';
+    ctx.font = 'bold 22px monospace';
+    ctx.fillText('❤'.repeat(Math.max(0, hearts)) + '♡'.repeat(Math.max(0, 5 - hearts)), 14, 32);
+    ctx.fillStyle = armed ? '#ffd23f' : 'rgba(255,255,255,0.35)';
+    ctx.font = 'bold 15px monospace';
+    ctx.fillText(armed ? '🔫 THE BLUNDERBUSS' : 'unarmed... talk to the sailor', 14, 56);
+    ctx.textAlign = 'center';
+    if (armed && (tentacles.length || headOn || pool < 12)) {
+      const remaining = pool + (headOn && head ? head.hp : (pool > 0 ? 8 : 0));
+      ctx.fillStyle = 'rgba(0,0,0,0.5)';
+      ctx.fillRect(W / 2 - 150, 16, 300, 20);
+      ctx.fillStyle = '#7a3aaf';
+      ctx.fillRect(W / 2 - 148, 18, 296 * Math.max(0, remaining / 20), 16);
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 12px monospace';
+      ctx.fillText('THE KRAKEN', W / 2, 30);
+    }
+    if (armed) {
+      // crosshair
+      ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(W / 2 - 10, H / 2); ctx.lineTo(W / 2 - 3, H / 2);
+      ctx.moveTo(W / 2 + 3, H / 2); ctx.lineTo(W / 2 + 10, H / 2);
+      ctx.moveTo(W / 2, H / 2 - 10); ctx.lineTo(W / 2, H / 2 - 3);
+      ctx.moveTo(W / 2, H / 2 + 3); ctx.lineTo(W / 2, H / 2 + 10);
+      ctx.stroke();
+      // the blunderbuss, riding the bottom of the screen
+      const gy = H + Math.sin(bob) * 8;
+      ctx.fillStyle = '#5a4028';
+      ctx.beginPath();
+      ctx.moveTo(W * 0.6, gy);
+      ctx.lineTo(W * 0.56, gy - H * 0.16);
+      ctx.lineTo(W * 0.545, gy - H * 0.22);
+      ctx.lineTo(W * 0.585, gy - H * 0.23);
+      ctx.lineTo(W * 0.62, gy - H * 0.15);
+      ctx.lineTo(W * 0.72, gy);
+      ctx.fill();
+      ctx.fillStyle = '#8a8378';                  // the flared muzzle
+      ctx.beginPath();
+      ctx.moveTo(W * 0.545, gy - H * 0.22);
+      ctx.lineTo(W * 0.525, gy - H * 0.3);
+      ctx.lineTo(W * 0.6, gy - H * 0.29);
+      ctx.lineTo(W * 0.585, gy - H * 0.23);
+      ctx.fill();
+      if (muzzle > 0) {                           // BANG
+        ctx.fillStyle = `rgba(255, 220, 120, ${muzzle * 9})`;
+        ctx.beginPath();
+        ctx.arc(W * 0.56, gy - H * 0.32, 30 + Math.random() * 14, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    if (hurtFlash > 0) {
+      ctx.fillStyle = `rgba(232, 40, 30, ${hurtFlash * 0.4})`;
+      ctx.fillRect(0, 0, W, H);
+    }
+    // sailor prompt
+    if (!armed && sailor && Math.hypot(px - sailor.x, py - sailor.y) < 1.6) {
+      ctx.fillStyle = '#ffd23f';
+      ctx.font = 'bold 17px monospace';
+      ctx.fillText('[ E ] talk to the sailor', W / 2, H - 76);
+    }
+  } else if (stage < 3) {
     const urgent = left < 10;
     ctx.fillStyle = urgent && Math.floor(elapsed * 3) % 2 ? '#ff5a4a' : '#cfe4ff';
     ctx.font = `bold ${urgent ? 26 : 20}px monospace`;
@@ -754,11 +1210,13 @@ function drawHud(W, H) {
   }
 
   // key card indicator
-  ctx.textAlign = 'left';
-  ctx.fillStyle = hasKey ? '#ffd23f' : 'rgba(255,255,255,0.35)';
-  ctx.font = 'bold 15px monospace';
-  ctx.fillText(night ? (hasKey ? '🔥 MATCHES' : '🔥 no matches yet')
-                     : (hasKey ? '🗝 KEY CARD' : '🗝 no key yet'), 14, 30);
+  if (!kraken) {
+    ctx.textAlign = 'left';
+    ctx.fillStyle = hasKey ? '#ffd23f' : 'rgba(255,255,255,0.35)';
+    ctx.font = 'bold 15px monospace';
+    ctx.fillText(night ? (hasKey ? '🔥 MATCHES' : '🔥 no matches yet')
+                       : (hasKey ? '🗝 KEY CARD' : '🗝 no key yet'), 14, 30);
+  }
 
   // ---- minimap, so the ship can be learned ----
   const MM = 5, mmX = W - MAPW * MM - 14, mmY = 14;
@@ -810,7 +1268,7 @@ function drawHud(W, H) {
       ctx.fillStyle = '#fff';
       ctx.font = '18px monospace';
       const t = Math.floor(winTime);
-      ctx.fillText((night ? 'fire lit with ' : 'you escaped in ') +
+      ctx.fillText((kraken ? 'kraken beaten in ' : night ? 'fire lit with ' : 'you escaped in ') +
                    Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0') +
                    (night ? ' on the clock' : ''), W / 2, H / 2 - 4);
       ctx.fillStyle = '#8aa4c8';
@@ -818,15 +1276,20 @@ function drawHud(W, H) {
       if (chapter === 0) {
         ctx.fillText('you float in the life raft, watching your ship go under.', W / 2, H / 2 + 28);
         ctx.fillText('Chapter 2 unlocked: the sea carries you somewhere...', W / 2, H / 2 + 50);
-      } else {
+      } else if (chapter === 1) {
         ctx.fillText('the fire ROARS into the night sky...', W / 2, H / 2 + 28);
         ctx.fillText('and far out on the black sea, a light answers. a ship is coming.', W / 2, H / 2 + 50);
-        ctx.fillText('Chapter 3 is unwritten... who answers a fire like that, captain?', W / 2, H / 2 + 72);
+        ctx.fillText('Chapter 3 unlocked: the rescue is here. probably.', W / 2, H / 2 + 72);
+      } else {
+        ctx.fillText('with one last furious gurgle, the kraken sinks away.', W / 2, H / 2 + 28);
+        ctx.fillText('the crew ROARS. the sailor nods. that nod means everything.', W / 2, H / 2 + 50);
+        ctx.fillText('Chapter 4 is unwritten... where does the rescue ship sail, captain?', W / 2, H / 2 + 72);
       }
     } else {
       ctx.fillStyle = '#ff5a4a';
       ctx.font = `bold ${Math.min(44, W / 14)}px monospace`;
-      ctx.fillText(night ? 'THE COLD TOOK YOU...' : 'THE SEA KEPT YOU...', W / 2, H / 2 - 20);
+      ctx.fillText(kraken ? 'THE KRAKEN TOOK YOU...'
+                 : night ? 'THE COLD TOOK YOU...' : 'THE SEA KEPT YOU...', W / 2, H / 2 - 20);
     }
     ctx.fillStyle = 'rgba(255,255,255,0.7)';
     ctx.font = '16px monospace';
