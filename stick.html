@@ -210,6 +210,7 @@ addEventListener('touchend', e => { e.preventDefault(); readTouches(e); }, { pas
 
 // build-mode state (same builder muscles as the fart cave)
 let tool = 'ground';
+let toolbarH = 96;      // how tall the builder's button bar is right now
 let editCamX = -100, editCamY = 100;
 let painting = false, panLast = null, hoverPt = null;
 let resetArmUntil = 0;
@@ -246,7 +247,7 @@ function uiAction(id) {
 }
 
 function applyTool(sx, sy) {
-  if (sy < 96) return;
+  if (sy < toolbarH) return;
   const cx = Math.floor((sx + editCamX) / TILE);
   const cy = Math.floor((sy + editCamY) / TILE);
   const key = cx + ',' + cy;
@@ -759,7 +760,7 @@ function drawBuild() {
   }
   fightersPose(arena.you[0] * TILE + TILE / 2, arena.you[1] * TILE + TILE / 2, '#7dd3ff', 0);
   fightersPose(arena.enemy[0] * TILE + TILE / 2, arena.enemy[1] * TILE + TILE / 2, '#ff6b5e', 0);
-  if (hoverPt && hoverPt.y > 96 && tool !== 'pan') {
+  if (hoverPt && hoverPt.y > toolbarH && tool !== 'pan') {
     const hcx = Math.floor((hoverPt.x + editCamX) / TILE);
     const hcy = Math.floor((hoverPt.y + editCamY) / TILE);
     ctx.strokeStyle = 'rgba(255, 210, 63, 0.8)';
@@ -768,39 +769,45 @@ function drawBuild() {
   }
   ctx.restore();
 
-  // toolbar
-  ctx.fillStyle = 'rgba(8, 10, 14, 0.9)';
-  ctx.fillRect(0, 0, W, 96);
-  let bx = 8, by = 8;
+  // toolbar — measured first so it can GROW when buttons wrap on
+  // narrow screens (no more hidden ERASE button!)
   const resetArmed = performance.now() < resetArmUntil;
   const all = TOOLS.concat([['battle', '⚔ FIGHT'], ['menu', 'MENU'],
                             ['reset', resetArmed ? 'REALLY?' : 'RESET']]);
+  const places = [];
+  let bx = 8, by = 8;
   for (const [id, label] of all) {
     const bw = Math.max(64, label.length * 11 + 20);
     if (bx + bw > W - 8) { bx = 8; by += 42; }
-    uiRects.push({ x: bx, y: by, w: bw, h: 38, id });
-    const active = tool === id;
-    const danger = id === 'reset' && resetArmed;
+    places.push({ id, label, x: bx, y: by, w: bw });
+    bx += bw + 8;
+  }
+  toolbarH = by + 38 + 26;
+  ctx.fillStyle = 'rgba(8, 10, 14, 0.9)';
+  ctx.fillRect(0, 0, W, toolbarH);
+  for (const p of places) {
+    uiRects.push({ x: p.x, y: p.y, w: p.w, h: 38, id: p.id });
+    const active = tool === p.id;
+    const danger = p.id === 'reset' && resetArmed;
     ctx.fillStyle = danger ? 'rgba(232, 69, 60, 0.35)'
-                  : id === 'battle' ? 'rgba(255, 107, 94, 0.2)'
+                  : p.id === 'battle' ? 'rgba(255, 107, 94, 0.2)'
                   : active ? 'rgba(255, 210, 63, 0.25)' : 'rgba(255,255,255,0.07)';
-    ctx.fillRect(bx, by, bw, 38);
-    ctx.strokeStyle = danger ? '#e8453c' : id === 'battle' ? '#ff6b5e'
+    ctx.fillRect(p.x, p.y, p.w, 38);
+    ctx.strokeStyle = danger ? '#e8453c' : p.id === 'battle' ? '#ff6b5e'
                     : active ? '#ffd23f' : '#5a5450';
     ctx.lineWidth = 2;
-    ctx.strokeRect(bx, by, bw, 38);
-    ctx.fillStyle = danger ? '#ff9f97' : id === 'battle' ? '#ff6b5e'
+    ctx.strokeRect(p.x, p.y, p.w, 38);
+    ctx.fillStyle = danger ? '#ff9f97' : p.id === 'battle' ? '#ff6b5e'
                   : active ? '#ffd23f' : '#c8c0b8';
     ctx.font = 'bold 14px monospace';
     ctx.textAlign = 'center';
-    ctx.fillText(label, bx + bw / 2, by + 25);
-    bx += bw + 8;
+    ctx.fillText(p.label, p.x + p.w / 2, p.y + 25);
   }
   ctx.textAlign = 'left';
   ctx.fillStyle = 'rgba(255,255,255,0.45)';
   ctx.font = '13px monospace';
   ctx.fillText('paint the arena — YOU and ENEMY place the fighters — two-finger swipe (or right-drag) to look around',
-               10, by + 60 > 90 ? by + 52 : 88);
+               10, toolbarH - 10);
 }
 
 // ---------------------------------------------------------------------
