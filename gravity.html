@@ -32,6 +32,34 @@ window.onerror = (msg, src, line) => {
 };
 
 // ---------------------------------------------------------------------
+// THE WORLD IS BIGGER THAN THE WINDOW — a camera looks into it, and
+// the scroll wheel zooms it out until the whole lab fits your eye
+// ---------------------------------------------------------------------
+const WORLD_W = 2800, WORLD_H = 1600;
+const cam = { x: 0, y: 0, zoom: 1 };
+let camReady = false;
+
+function clampCam() {
+  const vw = canvas.width / cam.zoom, vh = canvas.height / cam.zoom;
+  cam.x = vw >= WORLD_W ? (WORLD_W - vw) / 2
+        : Math.max(0, Math.min(WORLD_W - vw, cam.x));
+  cam.y = vh >= WORLD_H ? (WORLD_H - vh) / 2
+        : Math.max(0, Math.min(WORLD_H - vh, cam.y));
+}
+function screenToWorld(sx, sy) {
+  return { x: cam.x + sx / cam.zoom, y: cam.y + sy / cam.zoom };
+}
+addEventListener('wheel', e => {
+  e.preventDefault();
+  // zoom toward the pointer: the spot under your cursor stays put
+  const before = screenToWorld(e.clientX, e.clientY);
+  cam.zoom = Math.max(0.3, Math.min(1.6, cam.zoom * (e.deltaY > 0 ? 0.88 : 1.14)));
+  cam.x = before.x - e.clientX / cam.zoom;
+  cam.y = before.y - e.clientY / cam.zoom;
+  clampCam();
+}, { passive: false });
+
+// ---------------------------------------------------------------------
 // SOUND
 // ---------------------------------------------------------------------
 let audio = null;
@@ -142,7 +170,7 @@ let pointer = { x: 0, y: 0 };
 const GRAV = 1500;
 const FLOOR_H = 36;
 
-function floorY() { return canvas.height - FLOOR_H; }
+function floorY() { return WORLD_H - FLOOR_H; }
 
 const SKINS = ['#ffcc99', '#c68642', '#8d5524', '#f0cf9f'];
 const SHIRTS = ['#e8453c', '#3a9ad9', '#7ddf8f', '#ffd23f', '#b482ff', '#ff9f43'];
@@ -344,7 +372,7 @@ function update(dt) {
     }
     if (b.y - R < 0) { b.y = R; b.vy *= -0.5; }
     if (b.x - R < 0) { b.x = R; b.vx *= -0.6; if (b.type === 'person') b.walkDir = 1; }
-    if (b.x + R > canvas.width) { b.x = canvas.width - R; b.vx *= -0.6; if (b.type === 'person') b.walkDir = -1; }
+    if (b.x + R > WORLD_W) { b.x = WORLD_W - R; b.vx *= -0.6; if (b.type === 'person') b.walkDir = -1; }
 
     // bodies gently shoulder each other out of the way
     for (const o of bodies) {
@@ -659,30 +687,31 @@ addEventListener('pointerdown', e => {
       return;
     }
   }
-  pointer = { x: e.clientX, y: e.clientY };
+  const w = screenToWorld(e.clientX, e.clientY);
+  pointer = w;
   // the eraser takes priority over grabbing — tap or sweep to remove
   if (tool === 'erase') {
     erasing = true;
-    eraseAt(e.clientX, e.clientY);
+    eraseAt(w.x, w.y);
     return;
   }
   // black holes can be grabbed and walked like a very dangerous dog
   for (const h of holes) {
-    if (Math.hypot(h.x - e.clientX, h.y - e.clientY) < 44 * (h.size || 1)) {
+    if (Math.hypot(h.x - w.x, h.y - w.y) < 44 * (h.size || 1)) {
       grabbedHole = h;
       return;
     }
   }
   // launchers reposition the same way — a bomb hose you can aim
   for (const L of launchers) {
-    if (Math.hypot(L.x - e.clientX, L.y - e.clientY) < 44) {
+    if (Math.hypot(L.x - w.x, L.y - w.y) < 44) {
       grabbedLauncher = L;
       return;
     }
   }
   // dying suns can be carried too. carefully. they're on a timer.
   for (const s of suns) {
-    if (Math.hypot(s.x - e.clientX, s.y - e.clientY) < 60) {
+    if (Math.hypot(s.x - w.x, s.y - w.y) < 60) {
       grabbedSun = s;
       return;
     }
@@ -690,22 +719,22 @@ addEventListener('pointerdown', e => {
   // grab the nearest body if one is close enough...
   let best = null, bestD = 48;
   for (const b of bodies) {
-    const d = Math.hypot(b.x - e.clientX, b.y - e.clientY);
+    const d = Math.hypot(b.x - w.x, b.y - w.y);
     if (d < bestD + b.r) { best = b; bestD = d; }
   }
   if (best) { grabbed = best; return; }
   // ...otherwise, place whatever the tool says
-  if (tool === 'person') addPerson(e.clientX, e.clientY);
-  else if (tool === 'crate') addCrate(e.clientX, e.clientY);
-  else if (tool === 'bomb') addBomb(e.clientX, e.clientY);
-  else if (tool === 'spike') addSpike(e.clientX - 23, e.clientY);
-  else if (tool === 'hole') addHole(e.clientX, e.clientY);
-  else if (tool === 'launcher') addLauncher(e.clientX, e.clientY);
-  else if (tool === 'sun') addSun(e.clientX, e.clientY);
+  if (tool === 'person') addPerson(w.x, w.y);
+  else if (tool === 'crate') addCrate(w.x, w.y);
+  else if (tool === 'bomb') addBomb(w.x, w.y);
+  else if (tool === 'spike') addSpike(w.x - 23, w.y);
+  else if (tool === 'hole') addHole(w.x, w.y);
+  else if (tool === 'launcher') addLauncher(w.x, w.y);
+  else if (tool === 'sun') addSun(w.x, w.y);
 });
 addEventListener('pointermove', e => {
-  pointer = { x: e.clientX, y: e.clientY };
-  if (erasing) eraseAt(e.clientX, e.clientY);
+  pointer = screenToWorld(e.clientX, e.clientY);
+  if (erasing) eraseAt(pointer.x, pointer.y);
 });
 addEventListener('pointerup', () => {
   grabbed = null; grabbedHole = null; grabbedLauncher = null; grabbedSun = null;
@@ -808,22 +837,88 @@ function drawBomb(b) {
   ctx.restore();
 }
 
+// how much spacetime bends at (x, y): every hole (and sun) drags the
+// grid toward itself — strong up close, gentle far away. this is the
+// classic "rubber sheet" picture of gravity, drawn live.
+function warpOffset(x, y) {
+  let ox = 0, oy = 0;
+  for (const h of holes) {
+    const dx = h.x - x, dy = h.y - y;
+    const d2 = dx * dx + dy * dy;
+    const d = Math.sqrt(d2) || 1;
+    const S = h.size || 1;
+    const m = Math.min(36 * S, 300000 * S / (d2 + 6000));
+    ox += (dx / d) * m;
+    oy += (dy / d) * m;
+  }
+  for (const s of suns) {
+    const dx = s.x - x, dy = s.y - y;
+    const d2 = dx * dx + dy * dy;
+    const d = Math.sqrt(d2) || 1;
+    const m = Math.min(16, 110000 / (d2 + 9000));
+    ox += (dx / d) * m;
+    oy += (dy / d) * m;
+  }
+  return [ox, oy];
+}
+
+function drawWarpedGrid() {
+  const step = 60, seg = 40;
+  const vw = canvas.width / cam.zoom, vh = canvas.height / cam.zoom;
+  const x0 = Math.max(0, Math.floor((cam.x - 60) / step) * step);
+  const x1 = Math.min(WORLD_W, cam.x + vw + 60);
+  const y0 = Math.max(0, Math.floor((cam.y - 60) / step) * step);
+  const y1 = Math.min(WORLD_H, cam.y + vh + 60);
+  const bend = holes.length || suns.length;
+  ctx.strokeStyle = 'rgba(140, 170, 255, 0.09)';
+  ctx.lineWidth = 1;
+  for (let x = x0; x <= x1; x += step) {
+    ctx.beginPath();
+    for (let y = y0; y <= y1; y += seg) {
+      const [ox, oy] = bend ? warpOffset(x, y) : [0, 0];
+      if (y === y0) ctx.moveTo(x + ox, y + oy);
+      else ctx.lineTo(x + ox, y + oy);
+    }
+    ctx.stroke();
+  }
+  for (let y = y0; y <= y1; y += step) {
+    ctx.beginPath();
+    for (let x = x0; x <= x1; x += seg) {
+      const [ox, oy] = bend ? warpOffset(x, y) : [0, 0];
+      if (x === x0) ctx.moveTo(x + ox, y + oy);
+      else ctx.lineTo(x + ox, y + oy);
+    }
+    ctx.stroke();
+  }
+}
+
 function draw() {
   const W = canvas.width, H = canvas.height;
+  if (!camReady) {
+    // start looking at the middle of the lab floor, slightly zoomed out
+    cam.zoom = Math.min(1, W / WORLD_W * 1.6);
+    cam.x = (WORLD_W - W / cam.zoom) / 2;
+    cam.y = WORLD_H - H / cam.zoom;
+    clampCam();
+    camReady = true;
+  }
+  // the void outside the lab walls
+  ctx.fillStyle = '#07080d';
+  ctx.fillRect(0, 0, W, H);
   ctx.save();
-  if (shake > 0) ctx.translate((Math.random() - 0.5) * 18 * shake, (Math.random() - 0.5) * 14 * shake);
+  ctx.scale(cam.zoom, cam.zoom);
+  const shx = shake > 0 ? (Math.random() - 0.5) * 18 * shake : 0;
+  const shy = shake > 0 ? (Math.random() - 0.5) * 14 * shake : 0;
+  ctx.translate(-cam.x + shx, -cam.y + shy);
 
   // the lab: dark walls, grid lines, glowing floor strip
   ctx.fillStyle = gravityOn ? '#12141c' : '#0e1626';   // zero-g tints the room
-  ctx.fillRect(-20, -20, W + 40, H + 40);
-  ctx.strokeStyle = 'rgba(255,255,255,0.04)';
-  ctx.lineWidth = 1;
-  for (let x = 0; x < W; x += 60) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
-  for (let y = 0; y < H; y += 60) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+  ctx.fillRect(0, 0, WORLD_W, WORLD_H);
+  drawWarpedGrid();                        // spacetime, doing its thing
   ctx.fillStyle = '#2a3040';
-  ctx.fillRect(-20, floorY(), W + 40, FLOOR_H + 20);
+  ctx.fillRect(0, floorY(), WORLD_W, FLOOR_H + 20);
   ctx.fillStyle = gravityOn ? '#4a5a78' : '#7a5aff';
-  ctx.fillRect(-20, floorY(), W + 40, 5);
+  ctx.fillRect(0, floorY(), WORLD_W, 5);
 
   // black holes: a dark heart, a glowing swirl, tentacles, appetite —
   // and they've been GROWING while you weren't watching
@@ -981,16 +1076,18 @@ function draw() {
   ctx.globalAlpha = 1;
   ctx.textAlign = 'left';
 
+  ctx.restore();
+
   // the supernova whiteout — for half a second, there is only light
   if (flashT > 0) {
     ctx.fillStyle = `rgba(255, 250, 235, ${Math.min(0.9, flashT * 2)})`;
-    ctx.fillRect(-20, -20, W + 40, H + 40);
+    ctx.fillRect(0, 0, W, H);
   }
 
   // frozen time washes the whole lab in pale ice-light
   if (!timeOn) {
     ctx.fillStyle = 'rgba(150, 210, 255, 0.08)';
-    ctx.fillRect(-20, -20, W + 40, H + 40);
+    ctx.fillRect(0, 0, W, H);
     ctx.strokeStyle = `rgba(90, 200, 255, ${0.3 + Math.sin(elapsed * 3) * 0.15})`;
     ctx.lineWidth = 6;
     ctx.strokeRect(3, 3, W - 6, H - 6);
@@ -1001,7 +1098,6 @@ function draw() {
                  W / 2, H - 54);
     ctx.textAlign = 'left';
   }
-  ctx.restore();
 
   // ---- toolbar ----
   uiRects = [];
@@ -1054,7 +1150,7 @@ function draw() {
   ctx.textAlign = 'left';
   ctx.fillStyle = 'rgba(255,255,255,0.4)';
   ctx.font = '13px monospace';
-  ctx.fillText('tap to place — drag things to FLING them — bombs chain-react', 10, barH + 20);
+  ctx.fillText('tap to place — drag to FLING — scroll wheel zooms — the grid IS spacetime', 10, barH + 20);
 }
 
 // ---------------------------------------------------------------------
@@ -1072,9 +1168,9 @@ requestAnimationFrame(loop);
 
 // a little welcome committee, so the lab is never empty
 setTimeout(() => {
-  for (let i = 0; i < 4; i++) addPerson(200 + i * 120, 200);
-  addCrate(500, 100);
-  addCrate(560, 60);
+  for (let i = 0; i < 4; i++) addPerson(WORLD_W / 2 - 240 + i * 120, WORLD_H - 400);
+  addCrate(WORLD_W / 2 + 200, WORLD_H - 500);
+  addCrate(WORLD_W / 2 + 260, WORLD_H - 560);
 }, 300);
 </script>
 </body>
