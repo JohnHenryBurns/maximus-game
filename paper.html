@@ -59,6 +59,8 @@ function claimSound(size) {
 }
 function deathSound() { [300, 220, 150, 90].forEach((n, i) => setTimeout(() => beep(n, 0.18, 'sawtooth', 0.1), i * 100)); }
 function killSound() { beep(880, 0.08, 'square', 0.1); setTimeout(() => beep(590, 0.15, 'square', 0.1), 70); }
+function towerSound() { [392, 523, 659, 784].forEach((n, i) => setTimeout(() => beep(n, 0.14, 'square', 0.09), i * 80)); }
+function miniPopSound() { beep(700, 0.06, 'sine', 0.08); }
 
 // ---------------------------------------------------------------------
 // THE PAPER — a big grid; every cell remembers who owns it,
@@ -78,6 +80,8 @@ const PLAYERS = [
 ];
 
 let ents = [];
+let towers = [];        // circle one into your land: it joins you
+let minis = [];         // ...and sends out three tiny helpers
 let elapsed = 0;
 let camX = 0, camY = 0;
 let gameOver = false;
@@ -121,8 +125,24 @@ function resetGame() {
   milestone = 25;
   banner = '';
   bannerT = 0;
+  minis = [];
+  towers = [[30, 15], [60, 15], [14, 30], [76, 30], [30, 45], [60, 45]]
+    .map(([x, y]) => ({ x, y, claimedBy: 0 }));
 }
 resetGame();
+
+// three tiny copies of the tower's new owner march out to help
+function spawnMinis(ownerId, tx, ty) {
+  const dirs = [[1, 0], [-1, 0], [0, 1]];
+  for (let i = 0; i < 3; i++) {
+    if (minis.filter(m => m.ownerId === ownerId).length >= 9) break;
+    minis.push({
+      ownerId, x: tx + 0.5, y: ty + 0.5,
+      dx: dirs[i][0], dy: dirs[i][1],
+      life: 18, lastCell: -1,
+    });
+  }
+}
 
 // ---------------------------------------------------------------------
 // INPUT — arrows / WASD, or swipe anywhere on a phone
@@ -213,6 +233,7 @@ function kill(ent, byYou) {
   for (const c of ent.myTrail) trail[c] = 0;
   ent.myTrail = [];
   for (let i = 0; i < own.length; i++) if (own[i] === ent.p.id) own[i] = 0;
+  minis = minis.filter(m => m.ownerId !== ent.p.id);   // minis mourn instantly
   if (ent.p.isYou) {
     gameOver = true;
     deathSound();
@@ -329,6 +350,56 @@ function update(dt) {
     }
   }
 
+  // ---- towers change hands with the land they stand on ----
+  for (const t of towers) {
+    const o = own[idx(t.x, t.y)];
+    if (o && o !== t.claimedBy) {
+      t.claimedBy = o;
+      spawnMinis(o, t.x, t.y);
+      if (o === 1) {
+        setBanner('TOWER CAPTURED — 3 mini-yous deployed!!');
+        towerSound();
+      }
+    }
+  }
+
+  // ---- the minis: tiny, loyal, hungry for squares ----
+  for (const m of minis) {
+    m.life -= dt;
+    m.x += m.dx * 6 * dt;
+    m.y += m.dy * 6 * dt;
+    m.x = Math.max(0.5, Math.min(GW - 0.5, m.x));
+    m.y = Math.max(0.5, Math.min(GH - 0.5, m.y));
+    const cx = Math.floor(m.x), cy = Math.floor(m.y);
+    const c = idx(cx, cy);
+    if (c !== m.lastCell) {
+      m.lastCell = c;
+      // a mini paints every square it crosses (but never touches ink)
+      if (own[c] !== m.ownerId && !trail[c]) own[c] = m.ownerId;
+      // steering: hunt for squares that aren't ours yet
+      const options = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+        .filter(([dx, dy]) => !(dx === -m.dx && dy === -m.dy))
+        .filter(([dx, dy]) => cx + dx > 0 && cx + dx < GW - 1 &&
+                              cy + dy > 0 && cy + dy < GH - 1);
+      const tasty = options.filter(([dx, dy]) => own[idx(cx + dx, cy + dy)] !== m.ownerId);
+      const pool = tasty.length && Math.random() < 0.8 ? tasty : options;
+      const pick = pool[Math.floor(Math.random() * pool.length)];
+      if (pick && (Math.random() < 0.4 || own[idx(cx + m.dx, cy + m.dy)] === m.ownerId)) {
+        m.dx = pick[0]; m.dy = pick[1];
+        m.x = cx + 0.5; m.y = cy + 0.5;
+      }
+    }
+    // an enemy head squishes a mini on contact
+    for (const ent of ents) {
+      if (!ent.alive || ent.p.id === m.ownerId) continue;
+      if (Math.hypot(ent.x - m.x, ent.y - m.y) < 0.9) {
+        m.life = 0;
+        miniPopSound();
+      }
+    }
+  }
+  minis = minis.filter(m => m.life > 0);
+
   // milestones deserve a little noise
   const pct = pctOwned(1);
   bestPct = Math.max(bestPct, pct);
@@ -390,6 +461,57 @@ function draw() {
   }
   for (let y = y0; y <= y1; y++) {
     ctx.beginPath(); ctx.moveTo(x0 * CELL, y * CELL); ctx.lineTo(x1 * CELL, y * CELL); ctx.stroke();
+  }
+
+  // the towers: stone turrets flying the flag of whoever holds them
+  for (const t of towers) {
+    const px = t.x * CELL + CELL / 2, py = t.y * CELL + CELL / 2;
+    ctx.fillStyle = '#9a9284';
+    ctx.fillRect(px - 9, py - 8, 18, 18);
+    ctx.fillStyle = '#7a7264';                       // crenellations
+    for (let i = -1; i <= 1; i++) ctx.fillRect(px - 9 + (i + 1) * 6.5 - 1.5, py - 13, 5, 6);
+    ctx.fillStyle = '#5a5244';                       // the little door
+    ctx.fillRect(px - 3, py + 2, 6, 8);
+    // the flag
+    ctx.strokeStyle = '#5a5244';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(px, py - 13);
+    ctx.lineTo(px, py - 24);
+    ctx.stroke();
+    ctx.fillStyle = t.claimedBy ? PLAYERS[t.claimedBy - 1].color : '#c8c0a8';
+    ctx.beginPath();
+    ctx.moveTo(px, py - 24);
+    ctx.lineTo(px + 11 + Math.sin(elapsed * 4 + t.x) * 2, py - 20);
+    ctx.lineTo(px, py - 16);
+    ctx.fill();
+  }
+
+  // the minis: half-pint clones with maximum determination
+  for (const m of minis) {
+    const p = PLAYERS[m.ownerId - 1];
+    const px = m.x * CELL, py = m.y * CELL;
+    const fade = Math.min(1, m.life / 2);            // they fade near the end
+    ctx.globalAlpha = fade;
+    ctx.fillStyle = p.dark;
+    ctx.beginPath();
+    ctx.roundRect(px - CELL * 0.34, py - CELL * 0.34, CELL * 0.68, CELL * 0.68, 4);
+    ctx.fill();
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.roundRect(px - CELL * 0.26, py - CELL * 0.26, CELL * 0.52, CELL * 0.52, 3);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(px - 3 + m.dx * 2, py - 1 + m.dy * 2, 2.4, 0, Math.PI * 2);
+    ctx.arc(px + 3 + m.dx * 2, py - 1 + m.dy * 2, 2.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#1a1a22';
+    ctx.beginPath();
+    ctx.arc(px - 3 + m.dx * 3, py - 1 + m.dy * 3, 1.2, 0, Math.PI * 2);
+    ctx.arc(px + 3 + m.dx * 3, py - 1 + m.dy * 3, 1.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
   }
 
   // the heads: rounded blocks with determined little faces
