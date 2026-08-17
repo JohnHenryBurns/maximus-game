@@ -465,6 +465,7 @@ function fighterPhysics(f, dt, dir, jumpHeld) {
   if (jumpHeld && f.onGround) {
     f.vy = -f.jump;
     f.onGround = false;
+    f.flipA = 0.0001;                  // every jump is a BACKFLIP. obviously.
   }
   f.vy += GRAVITY * dt;
   f.x += f.vx * dt;
@@ -483,6 +484,12 @@ function fighterPhysics(f, dt, dir, jumpHeld) {
   if (f.cooldown > 0) f.cooldown -= dt;
   if (f.attack > 0) f.attack -= dt;
   if (f.hurtFlash > 0) f.hurtFlash -= dt;
+  // the backflip spins through a full circle while airborne,
+  // and sticks the landing the moment feet touch ground
+  if (!f.onGround && f.flipA > 0) {
+    f.flipA = Math.min(Math.PI * 2, f.flipA + dt * 9);
+  }
+  if (f.onGround) f.flipA = 0;
 }
 
 function attackBox(f) {
@@ -648,6 +655,11 @@ function drawStickman(f, color) {
   if (f.ko) {
     ctx.translate(cx, f.y + f.h / 2);
     ctx.rotate(f.koSpin);
+    ctx.translate(-cx, -(f.y + f.h / 2));
+  } else if (f.flipA > 0) {
+    // mid-backflip: rotate the whole fighter BACKWARD around its middle
+    ctx.translate(cx, f.y + f.h / 2);
+    ctx.rotate(-f.facing * f.flipA);
     ctx.translate(-cx, -(f.y + f.h / 2));
   }
   ctx.strokeStyle = f.hurtFlash > 0 && Math.floor(elapsed * 20) % 2 ? '#ffffff' : color;
