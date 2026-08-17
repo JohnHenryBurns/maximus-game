@@ -43,10 +43,11 @@ window.onerror = (msg, src, line) => {
 // 6 = escape hatch (E + key card = freedom)   7 = the KEY CARD
 // S = where you wake up   . = floor
 // ---------------------------------------------------------------------
+// 8 = the ALARM PANEL (E silences the crash-siren)
 const MAP_SRC = [
   '1111111111111111',
   '1S....1........1',
-  '11111.1.111111.1',
+  '18111.1.111111.1',
   '1...1.1.1....1.1',
   '1.1.1.1.1.11.1.1',
   '1.1...1...11.1.1',
@@ -115,12 +116,37 @@ function chime() { [880, 1175, 1568].forEach((n, i) => setTimeout(() => beep(n, 
 function splash() { beep(180 + Math.random() * 120, 0.08, 'sine', 0.07); }
 function bubble() { beep(700 + Math.random() * 500, 0.1, 'sine', 0.05); }
 function winSound() { [523, 659, 784, 1047, 1319].forEach((n, i) => setTimeout(() => beep(n, 0.25, 'square', 0.1), i * 130)); }
+// the crash-siren: a long wail that sweeps up and back down
+function sirenWail() {
+  if (!audio) return;
+  const o = audio.createOscillator(), g = audio.createGain();
+  o.type = 'sawtooth';
+  o.frequency.setValueAtTime(460, audio.currentTime);
+  o.frequency.linearRampToValueAtTime(840, audio.currentTime + 0.55);
+  o.frequency.linearRampToValueAtTime(460, audio.currentTime + 1.1);
+  g.gain.setValueAtTime(0.055, audio.currentTime);
+  g.gain.setValueAtTime(0.055, audio.currentTime + 1.0);
+  g.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + 1.2);
+  o.connect(g); g.connect(audio.destination);
+  o.start(); o.stop(audio.currentTime + 1.25);
+}
 function deadSound() { [300, 240, 180, 120, 80].forEach((n, i) => setTimeout(() => beep(n, 0.3, 'sine', 0.12), i * 200)); }
 
 // ---------------------------------------------------------------------
 // GAME STATE
 // ---------------------------------------------------------------------
-let screen = 'title';       // 'title' | 'playing' | 'dead' | 'won'
+let screen = 'menu';        // 'menu' | 'story' | 'playing' | 'dead' | 'won'
+// ---- the book of chapters ----
+let ch1Done = localStorage.getItem('sink_ch1') === 'yes';
+const CHAPTERS = [
+  { name: 'Abandon Ship', unlocked: true },
+  { name: '???', unlocked: false },
+];
+let menuCards = [];
+let storyLines = [];
+// ---- the crash alarm (chapter 1's screaming companion) ----
+let alarmOn = false;
+let alarmT = 0;
 let px = startX, py = startY, ang = 0;
 let gameTime = 0;           // seconds since the crash
 let stage = 0;              // 0 dry, 1 ankles, 2 waist, 3 UNDER
@@ -149,8 +175,34 @@ function resetGame() {
   oxygen = 1;
   hasKey = false;
   bob = 0;
+  alarmOn = true;             // chapter 1 begins mid-emergency
+  alarmT = 0;
   setStatus('the ship groans... find a way UP. (E opens doors)', 5);
   screen = 'playing';
+}
+
+function openChapter(i) {
+  if (!CHAPTERS[i] || !CHAPTERS[i].unlocked) {
+    setStatus(i === 1 ? "that chapter hasn't been written yet..." : 'locked!', 3);
+    return;
+  }
+  storyLines = [
+    'CHAPTER 1: ABANDON SHIP',
+    '',
+    'Something hit the hull. Hard.',
+    'The lights flicker. The alarm is SCREAMING.',
+    'And below your boots, you can hear it:',
+    'the sea, pouring in.',
+    '',
+    'Every minute, the water will rise.',
+    '',
+    'Find the KEY CARD. Reach the ESCAPE HATCH.',
+    '(and if that alarm is driving you mad —',
+    ' find the red panel and press E)',
+    '',
+    '( click to begin )',
+  ];
+  screen = 'story';
 }
 
 // ---------------------------------------------------------------------
@@ -161,14 +213,27 @@ addEventListener('keydown', e => {
   ensureAudio();
   keys[e.key.toLowerCase()] = true;
   if (e.key.toLowerCase() === 'e' && screen === 'playing') interact();
-  if ((screen === 'dead' || screen === 'won') && e.key === ' ') resetGame();
+  if (screen === 'dead' && e.key === ' ') resetGame();
+  if (screen === 'won' && e.key === ' ') screen = 'menu';
+  if (screen === 'menu') {
+    const n = parseInt(e.key) - 1;
+    if (n >= 0 && n < CHAPTERS.length) openChapter(n);
+  }
 });
 addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
 
-canvas.addEventListener('click', () => {
+canvas.addEventListener('click', e => {
   ensureAudio();
-  if (screen === 'title') { resetGame(); }
-  else if (screen === 'dead' || screen === 'won') { screen = 'title'; return; }
+  if (screen === 'menu') {
+    for (let i = 0; i < menuCards.length; i++) {
+      const r = menuCards[i];
+      if (e.clientX > r.x && e.clientX < r.x + r.w &&
+          e.clientY > r.y && e.clientY < r.y + r.h) { openChapter(i); return; }
+    }
+    return;
+  }
+  if (screen === 'story') { resetGame(); }
+  else if (screen === 'dead' || screen === 'won') { screen = 'menu'; return; }
   if (screen === 'playing' && !('ontouchstart' in window)) {
     canvas.requestPointerLock();          // the mouse becomes your NECK
   }
@@ -184,8 +249,17 @@ let touchWalk = false, lookId = null, lookLastX = 0;
 addEventListener('touchstart', e => {
   e.preventDefault();
   ensureAudio();
-  if (screen === 'title') { resetGame(); return; }
-  if (screen === 'dead' || screen === 'won') { screen = 'title'; return; }
+  if (screen === 'menu') {
+    const t = e.changedTouches[0];
+    for (let i = 0; i < menuCards.length; i++) {
+      const r = menuCards[i];
+      if (t.clientX > r.x && t.clientX < r.x + r.w &&
+          t.clientY > r.y && t.clientY < r.y + r.h) { openChapter(i); return; }
+    }
+    return;
+  }
+  if (screen === 'story') { resetGame(); return; }
+  if (screen === 'dead' || screen === 'won') { screen = 'menu'; return; }
   for (const t of e.changedTouches) {
     const H = canvas.height, W = canvas.width;
     if (t.clientX > W * 0.72 && t.clientY > H * 0.7) {
@@ -227,10 +301,18 @@ function interact() {
     map[my][mx] = 0;
     creakSound();
     setStatus('the door creaks open...');
+  } else if (cell === 8) {
+    if (alarmOn) {
+      alarmOn = false;
+      beep(300, 0.15, 'square', 0.1);
+      setStatus('alarm silenced. finally, you can hear yourself think.', 4);
+    }
   } else if (cell === 6) {
     if (hasKey) {
       screen = 'won';
       winTime = gameTime;
+      ch1Done = true;
+      localStorage.setItem('sink_ch1', 'yes');
       winSound();
       if (document.exitPointerLock) document.exitPointerLock();
     } else {
@@ -291,6 +373,16 @@ function update(dt) {
     setStatus('KEY CARD!! now find the glowing ESCAPE HATCH!', 5);
   }
 
+  // ---- the crash alarm wails until someone shows it the E key ----
+  if (alarmOn) {
+    alarmT -= dt;
+    if (alarmT <= 0) { alarmT = 1.35; sirenWail(); }
+    if (stage >= 3) {
+      alarmOn = false;                   // the sea silences everything
+      setStatus('...the alarm gurgles, and dies.', 3);
+    }
+  }
+
   // ---- breathing (or not) ----
   if (stage >= 3) {
     oxygen -= dt / 30;
@@ -306,7 +398,7 @@ function update(dt) {
 
 function cellIsSolid(x, y) {
   const c = cellAt(x, y);
-  return c === 1 || c === 2 || c === 4 || c === 6;   // key card (7) is walkable
+  return c === 1 || c === 2 || c === 4 || c === 6 || c === 8;   // key card (7) is walkable
 }
 
 // ---------------------------------------------------------------------
@@ -314,7 +406,8 @@ function cellIsSolid(x, y) {
 // ---------------------------------------------------------------------
 function draw() {
   const W = canvas.width, H = canvas.height;
-  if (screen === 'title') { drawTitle(W, H); return; }
+  if (screen === 'menu') { drawMenu(W, H); return; }
+  if (screen === 'story') { drawStory(W, H); return; }
 
   const FOV = Math.PI / 3;
   const bobY = Math.sin(bob) * 6;
@@ -345,7 +438,7 @@ function draw() {
       else { sideY += dY; mapY += stepY; side = 1; }
       cell = (mapY < 0 || mapX < 0 || mapY >= MAPH || mapX >= MAPW)
            ? 1 : map[mapY][mapX];
-      if (cell === 1 || cell === 2 || cell === 4 || cell === 6) break;
+      if (cell === 1 || cell === 2 || cell === 4 || cell === 6 || cell === 8) break;
     }
     let dist = side === 0 ? sideX - dX : sideY - dY;
     dist *= Math.cos(rayA - ang);            // undo the fisheye
@@ -359,6 +452,12 @@ function draw() {
     else if (cell === 6) {                                // the glowing hatch
       const pulse = 0.7 + Math.sin(elapsed * 4) * 0.3;
       r = 120 * pulse + 60; g = 220 * pulse; b = 90 * pulse;
+    }
+    else if (cell === 8) {                                // the alarm panel
+      if (alarmOn) {
+        const throb = 0.5 + Math.sin(elapsed * 8) * 0.5;
+        r = 180 + 75 * throb; g = 40; b = 35;
+      } else { r = 70; g = 110; b = 80; }                 // silenced: calm green
     }
     else if (cell === 2) { r = 130; g = 80; b = 55; }     // rust
     else { r = 95; g = 110; b = 130; }                    // steel hull
@@ -393,6 +492,13 @@ function draw() {
     ctx.stroke();
   }
 
+  // the alarm floods everything in throbbing red until it's silenced
+  if (alarmOn) {
+    const throb = (Math.sin(elapsed * 8) + 1) / 2;
+    ctx.fillStyle = `rgba(232, 40, 30, ${0.05 + throb * 0.1})`;
+    ctx.fillRect(0, 0, W, H);
+  }
+
   drawHud(W, H);
 }
 
@@ -420,11 +526,21 @@ function drawHud(W, H) {
   // what E would do right now
   const tx = px + Math.cos(ang) * 1.1, ty = py + Math.sin(ang) * 1.1;
   const facing = cellAt(tx, ty);
-  if (facing === 4 || facing === 6) {
+  if (facing === 4 || facing === 6 || (facing === 8 && alarmOn)) {
     ctx.fillStyle = '#ffd23f';
     ctx.font = 'bold 17px monospace';
     ctx.fillText(facing === 4 ? '[ E ] open the door'
+               : facing === 8 ? '[ E ] SILENCE THAT ALARM'
                : hasKey ? '[ E ] ESCAPE!!' : '[ E ] ...locked. find the KEY CARD', W / 2, H - 76);
+  }
+
+  // the alarm's nagging little badge
+  if (alarmOn && Math.floor(elapsed * 4) % 2) {
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#ff5a4a';
+    ctx.font = 'bold 15px monospace';
+    ctx.fillText('⚠ ALARM', 14, 54);
+    ctx.textAlign = 'center';
   }
 
   if (statusT > 0) {
@@ -484,12 +600,16 @@ function drawHud(W, H) {
     if (screen === 'won') {
       ctx.fillStyle = '#7ddf8f';
       ctx.font = `bold ${Math.min(44, W / 14)}px monospace`;
-      ctx.fillText('YOU ESCAPED THE SHIP!', W / 2, H / 2 - 20);
+      ctx.fillText('CHAPTER 1 COMPLETE', W / 2, H / 2 - 44);
       ctx.fillStyle = '#fff';
       ctx.font = '18px monospace';
       const t = Math.floor(winTime);
-      ctx.fillText('escape time: ' + Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0'),
-                   W / 2, H / 2 + 20);
+      ctx.fillText('you escaped in ' + Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0'),
+                   W / 2, H / 2 - 4);
+      ctx.fillStyle = '#8aa4c8';
+      ctx.font = '15px monospace';
+      ctx.fillText('you float in the life raft, watching your ship go under.', W / 2, H / 2 + 28);
+      ctx.fillText('Chapter 2 is unwritten... where does the sea take you, captain?', W / 2, H / 2 + 50);
     } else {
       ctx.fillStyle = '#ff5a4a';
       ctx.font = `bold ${Math.min(44, W / 14)}px monospace`;
@@ -501,35 +621,77 @@ function drawHud(W, H) {
   }
 }
 
-function drawTitle(W, H) {
+function drawMenu(W, H) {
   ctx.fillStyle = '#05070c';
   ctx.fillRect(0, 0, W, H);
   // the dark sea below the title
   ctx.fillStyle = 'rgba(30, 80, 140, 0.5)';
   ctx.beginPath();
-  ctx.moveTo(0, H * 0.72);
+  ctx.moveTo(0, H * 0.78);
   for (let x = 0; x <= W; x += 24) {
-    ctx.lineTo(x, H * 0.72 + Math.sin(x * 0.02 + elapsed * 2) * 8);
+    ctx.lineTo(x, H * 0.78 + Math.sin(x * 0.02 + elapsed * 2) * 8);
   }
   ctx.lineTo(W, H); ctx.lineTo(0, H);
   ctx.fill();
   ctx.textAlign = 'center';
   ctx.fillStyle = '#cfe4ff';
   ctx.font = `bold ${Math.min(52, W / 12)}px monospace`;
-  ctx.fillText('THE SINKING SHIP', W / 2, H * 0.26);
+  ctx.fillText('THE SINKING SHIP', W / 2, H * 0.2);
   ctx.fillStyle = '#8aa4c8';
   ctx.font = '16px monospace';
-  ctx.fillText('the ship has crashed. the sea is coming in.', W / 2, H * 0.34);
-  ctx.fillText('every minute, the water rises.', W / 2, H * 0.34 + 26);
+  ctx.fillText('a story in chapters', W / 2, H * 0.2 + 30);
+
+  // the chapter cards
+  const count = CHAPTERS.length;
+  const cw = Math.min(240, W / (count + 1)), chh = cw * 0.66, gap = cw * 0.15;
+  const totalW = cw * count + gap * (count - 1);
+  menuCards = [];
+  for (let i = 0; i < count; i++) {
+    const cx = W / 2 - totalW / 2 + i * (cw + gap);
+    const cy = H * 0.38;
+    menuCards.push({ x: cx, y: cy, w: cw, h: chh });
+    const ch = CHAPTERS[i];
+    ctx.fillStyle = ch.unlocked ? '#0e1c2a' : '#10141c';
+    ctx.fillRect(cx, cy, cw, chh);
+    ctx.strokeStyle = ch.unlocked ? '#4ac6ff' : '#2c3040';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(cx, cy, cw, chh);
+    ctx.fillStyle = ch.unlocked ? '#ffffff' : '#555b77';
+    ctx.font = `bold ${chh * 0.16}px monospace`;
+    ctx.fillText('CHAPTER ' + (i + 1), cx + cw / 2, cy + chh * 0.32);
+    ctx.font = `${chh * 0.13}px monospace`;
+    ctx.fillText(ch.name, cx + cw / 2, cy + chh * 0.56);
+    ctx.font = `${chh * 0.11}px monospace`;
+    ctx.fillText(ch.unlocked ? (i === 0 && ch1Done ? 'complete ✓ — replay' : 'click or press ' + (i + 1))
+                             : 'locked', cx + cw / 2, cy + chh * 0.8);
+  }
+
   ctx.fillStyle = '#ffd23f';
-  ctx.font = 'bold 17px monospace';
-  ctx.fillText('W — walk      MOUSE — look      E — doors & hatches', W / 2, H * 0.5);
-  ctx.fillStyle = '#8aa4c8';
-  ctx.font = '15px monospace';
-  ctx.fillText('find the KEY CARD. reach the ESCAPE HATCH.', W / 2, H * 0.5 + 30);
-  ctx.fillStyle = Math.floor(elapsed * 2) % 2 ? '#ffffff' : '#8aa4c8';
-  ctx.font = 'bold 18px monospace';
-  ctx.fillText('click to board', W / 2, H * 0.62);
+  ctx.font = 'bold 16px monospace';
+  ctx.fillText('W — walk      MOUSE — look      E — interact', W / 2, H * 0.64);
+  if (statusT > 0) {
+    ctx.fillStyle = '#ff9f43';
+    ctx.font = '15px monospace';
+    ctx.fillText(status, W / 2, H * 0.64 + 30);
+  }
+}
+
+function drawStory(W, H) {
+  ctx.fillStyle = '#05070c';
+  ctx.fillRect(0, 0, W, H);
+  // red emergency light already washing over the story page
+  const throb = (Math.sin(elapsed * 6) + 1) / 2;
+  ctx.fillStyle = `rgba(232, 40, 30, ${0.04 + throb * 0.05})`;
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  const fs = Math.max(13, Math.min(17, W / 34));
+  const y0 = H / 2 - storyLines.length * fs * 0.85;
+  for (let i = 0; i < storyLines.length; i++) {
+    const line = storyLines[i];
+    ctx.fillStyle = i === 0 ? '#4ac6ff' : line.startsWith('(') ? '#555b77' : '#cfe4ff';
+    ctx.font = i === 0 ? `bold ${fs * 1.5}px monospace` : `${fs}px monospace`;
+    ctx.fillText(line, W / 2, y0 + i * fs * 1.7);
+  }
 }
 
 // ---------------------------------------------------------------------
