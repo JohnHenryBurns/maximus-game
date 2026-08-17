@@ -185,6 +185,7 @@ function makeFighter(cellX, cellY, isBot) {
     think: 0,           // the bot re-decides a few times a second
     wantDir: 0, wantJump: false,
     lastBlast: 0,       // which shotgun blast already hit this fighter
+    gunCd: 0, portalCd: 0, paintCd: 0, paint: isBot ? 10 : 15,
   };
 }
 
@@ -192,12 +193,10 @@ function startBattle() {
   buildSolids();
   fighters = [makeFighter(arena.you[0], arena.you[1], false),
               makeFighter(arena.enemy[0], arena.enemy[1], true)];
-  // the weapon lottery — every battle deals you something different
+  // the weapon lottery — BOTH fighters draw, every battle
   const you = fighters[0];
   you.weapon = WEAPONS[Math.floor(Math.random() * WEAPONS.length)];
-  you.paint = 15;        // brush ammo
-  you.gunCd = 0;
-  you.portalCd = 0;
+  fighters[1].weapon = ['sword'].concat(WEAPONS)[Math.floor(Math.random() * 4)];
   pellets = [];
   fxRings = [];
   weaponNotice = 3;
@@ -218,31 +217,31 @@ function damageFighter(t, amt, dir) {
   if (t.hp <= 0 && !t.ko) { t.ko = true; t.vy = -560; t.vx = dir * 220; koSound(); }
 }
 
-// ---- the three weapons ----
-function fireShotgunAt(wx, wy) {
-  const you = fighters[0];
-  if (you.ko || you.gunCd > 0 || banner) return;
-  you.gunCd = 0.9;
-  const ang = Math.atan2(wy - (you.y + 20), wx - (you.x + you.w / 2));
-  you.facing = Math.cos(ang) >= 0 ? 1 : -1;
+// ---- the three weapons — either fighter can wield any of them ----
+function fireShotgun(f, wx, wy) {
+  if (f.ko || f.gunCd > 0 || banner) return;
+  f.gunCd = f.bot ? 1.3 : 0.9;         // the bot reloads a touch slower
+  const ang = Math.atan2(wy - (f.y + 20), wx - (f.x + f.w / 2));
+  f.facing = Math.cos(ang) >= 0 ? 1 : -1;
   blastCounter++;
   for (let i = -1; i <= 1; i++) {
     const a = ang + i * 0.11;
-    pellets.push({ x: you.x + you.w / 2 + Math.cos(a) * 22,
-                   y: you.y + 20 + Math.sin(a) * 22,
+    pellets.push({ x: f.x + f.w / 2 + Math.cos(a) * 22,
+                   y: f.y + 20 + Math.sin(a) * 22,
                    vx: Math.cos(a) * 950, vy: Math.sin(a) * 950,
-                   life: 0.5, blast: blastCounter });
+                   life: 0.5, blast: blastCounter,
+                   ownerIdx: f.bot ? 1 : 0 });
   }
   shotgunSound();
 }
 
-function paintAt(wx, wy) {
-  const you = fighters[0];
-  if (you.ko || banner) return;
+function paintAt(f, wx, wy) {
+  if (f.ko || banner) return;
+  const who = f.bot ? 'bot' : 'you';
   const cx = Math.floor(wx / TILE), cy = Math.floor(wy / TILE);
   const cell = { x: cx * TILE, y: cy * TILE, w: TILE, h: TILE };
-  // painting your own wall a second time makes it SPIKY
-  const idx = solids.findIndex(s => s.painted && s.x === cell.x && s.y === cell.y);
+  // painting YOUR OWN wall a second time makes it SPIKY
+  const idx = solids.findIndex(s => s.painted === who && s.x === cell.x && s.y === cell.y);
   if (idx >= 0) {
     solids.splice(idx, 1);
     spikeRects.push({ x: cell.x + 4, y: cell.y + TILE * 0.45,
@@ -250,29 +249,29 @@ function paintAt(wx, wy) {
     paintSound();
     return;
   }
-  if (you.paint <= 0) return;
+  if (f.paint <= 0) return;
   if (solids.some(s => overlaps(cell, s))) return;          // no double-painting
-  if (overlaps(cell, you) || overlaps(cell, fighters[1])) return;
-  solids.push({ ...cell, lid: true, painted: true });
-  you.paint--;
+  if (overlaps(cell, fighters[0]) || overlaps(cell, fighters[1])) return;
+  solids.push({ ...cell, lid: true, painted: who });
+  f.paint--;
   paintSound();
 }
 
-function teleportTo(wx, wy) {
-  const you = fighters[0];
-  if (you.ko || you.portalCd > 0 || banner) return;
-  const dest = { x: wx - you.w / 2, y: wy - you.h / 2, w: you.w, h: you.h };
+function teleportTo(f, wx, wy) {
+  if (f.ko || f.portalCd > 0 || banner) return false;
+  const dest = { x: wx - f.w / 2, y: wy - f.h / 2, w: f.w, h: f.h };
   if (solids.some(s => overlaps(dest, s))) {                // no zapping into rock
-    beep(120, 0.15, 'square', 0.08);
-    return;
+    if (!f.bot) beep(120, 0.15, 'square', 0.08);
+    return false;
   }
-  fxRings.push({ x: you.x + you.w / 2, y: you.y + you.h / 2, t: 0.4, color: '#ff9f43' });
-  you.x = dest.x;
-  you.y = dest.y;
-  you.vy = Math.min(you.vy, 0);
-  you.portalCd = 2.5;
-  fxRings.push({ x: wx, y: wy, t: 0.4, color: '#7dd3ff' });
+  fxRings.push({ x: f.x + f.w / 2, y: f.y + f.h / 2, t: 0.4, color: '#ff9f43' });
+  f.x = dest.x;
+  f.y = dest.y;
+  f.vy = Math.min(f.vy, 0);
+  f.portalCd = f.bot ? 3 : 2.5;
+  fxRings.push({ x: wx, y: wy, t: 0.4, color: f.bot ? '#ff6b5e' : '#7dd3ff' });
   portalSound();
+  return true;
 }
 
 // ---------------------------------------------------------------------
@@ -386,15 +385,15 @@ addEventListener('pointerdown', e => {
       // screen is the weapon-aiming area for touch players
       const fx = e.clientX / canvas.width;
       if (fx < 0.44 || fx > 0.6) return;
-      if (you.weapon === 'shotgun') fireShotgunAt(wx, wy);
-      else if (you.weapon === 'portal') teleportTo(wx, wy);
-      else if (you.weapon === 'brush') paintAt(wx, wy);
+      if (you.weapon === 'shotgun') fireShotgun(you, wx, wy);
+      else if (you.weapon === 'portal') teleportTo(you, wx, wy);
+      else if (you.weapon === 'brush') paintAt(you, wx, wy);
       return;
     }
     // mouse: the click IS the weapon
-    if (you.weapon === 'shotgun') fireShotgunAt(wx, wy);
-    else if (you.weapon === 'portal') teleportTo(wx, wy);
-    else if (you.weapon === 'brush') paintAt(wx, wy);
+    if (you.weapon === 'shotgun') fireShotgun(you, wx, wy);
+    else if (you.weapon === 'portal') teleportTo(you, wx, wy);
+    else if (you.weapon === 'brush') paintAt(you, wx, wy);
     else tryAttack(you);
     return;
   }
@@ -439,11 +438,11 @@ function tryAttack(f) {
   if (!f || f.ko || banner) return;
   // the attack button speaks whatever weapon you're holding
   if (!f.bot && f.weapon === 'shotgun') {
-    fireShotgunAt(f.x + f.w / 2 + f.facing * 400, f.y + 20);
+    fireShotgun(f, f.x + f.w / 2 + f.facing * 400, f.y + 20);
     return;
   }
   if (!f.bot && f.weapon === 'portal') {
-    teleportTo(f.x + f.w / 2 + f.facing * 230, f.y + f.h / 2);
+    teleportTo(f, f.x + f.w / 2 + f.facing * 230, f.y + f.h / 2);
     return;
   }
   if (f.cooldown > 0) return;
@@ -504,18 +503,42 @@ function update(dt) {
   const jump = keys[' '] || keys['arrowup'] || keys['w'] || touchJump;
   fighterPhysics(you, dt, you.ko ? 0 : dir, jump);
 
-  // ---- the bot's tiny brain: chase, jump when stuck, swing in range ----
+  // ---- the bot's tiny brain: chase, jump when stuck, and USE its
+  // weapon the way that weapon wants to be used ----
   bot.think -= dt;
   if (bot.think <= 0 && !bot.ko) {
     bot.think = 0.15 + Math.random() * 0.2;
     const dx = (you.x + you.w / 2) - (bot.x + bot.w / 2);
-    bot.wantDir = Math.abs(dx) < 30 ? 0 : Math.sign(dx);
+    const dist = Math.abs(dx);
+    bot.wantDir = dist < 30 ? 0 : Math.sign(dx);
+    if (bot.weapon === 'shotgun') {
+      // a gunslinger keeps its distance and shoots the gap
+      if (dist < 240) bot.wantDir = -Math.sign(dx);
+      else if (dist < 420) bot.wantDir = 0;
+      if (dist < 540 && Math.abs(you.y - bot.y) < 220 && bot.gunCd <= 0 && !you.ko) {
+        fireShotgun(bot, you.x + you.w / 2, you.y + 20);
+      }
+    }
+    if (bot.weapon === 'portal' && dist < 130 && bot.portalCd <= 0) {
+      // you got too close — it panics and blinks somewhere surprising
+      for (let tries = 0; tries < 6; tries++) {
+        const tx = you.x + (Math.random() < 0.5 ? -1 : 1) * (180 + Math.random() * 240);
+        const ty = bot.y + 20 - Math.random() * 120;
+        if (teleportTo(bot, tx, ty)) break;
+      }
+    }
+    if (bot.weapon === 'brush' && bot.paintCd <= 0 && bot.paint > 0 &&
+        dist > 80 && dist < 330) {
+      // a panicked artist walls itself off from you
+      bot.paintCd = 2.5;
+      paintAt(bot, bot.x + bot.w / 2 + Math.sign(dx) * 64, bot.y + 24);
+    }
     // jump if you're above, or if a wall is in the way, or for drama
     const wallAhead = solids.some(s =>
       overlaps({ x: bot.x + bot.wantDir * 20, y: bot.y, w: bot.w, h: bot.h - 6 }, s));
-    bot.wantJump = (you.y + you.h < bot.y - 20 && Math.abs(dx) < 260) ||
+    bot.wantJump = (you.y + you.h < bot.y - 20 && dist < 260) ||
                    wallAhead || Math.random() < 0.05;
-    if (Math.abs(dx) < 62 && Math.abs(you.y - bot.y) < 60 && !you.ko) tryAttack(bot);
+    if (dist < 62 && Math.abs(you.y - bot.y) < 60 && !you.ko) tryAttack(bot);
   }
   fighterPhysics(bot, dt, bot.ko ? 0 : bot.wantDir, bot.wantJump);
   if (bot.wantJump && bot.onGround === false) bot.wantJump = false;
@@ -542,22 +565,27 @@ function update(dt) {
   for (const fx of hitFx) fx.t -= dt;
   hitFx = hitFx.filter(fx => fx.t > 0);
 
-  // ---- weapon housekeeping ----
-  if (you.gunCd > 0) you.gunCd -= dt;
-  if (you.portalCd > 0) you.portalCd -= dt;
+  // ---- weapon housekeeping, for both fighters ----
+  for (const f of fighters) {
+    if (f.gunCd > 0) f.gunCd -= dt;
+    if (f.portalCd > 0) f.portalCd -= dt;
+    if (f.paintCd > 0) f.paintCd -= dt;
+  }
   if (weaponNotice > 0) weaponNotice -= dt;
   for (const r of fxRings) r.t -= dt;
   fxRings = fxRings.filter(r => r.t > 0);
 
-  // ---- shotgun pellets fly, hit, or fizzle on the rocks ----
+  // ---- shotgun pellets fly, hit whoever they were fired AT, or
+  // fizzle on the rocks ----
   for (const p of pellets) {
     p.x += p.vx * dt;
     p.y += p.vy * dt;
     p.life -= dt;
     const box = { x: p.x - 3, y: p.y - 3, w: 6, h: 6 };
-    if (!bot.ko && bot.lastBlast !== p.blast && overlaps(box, bot)) {
-      bot.lastBlast = p.blast;                     // one blast = one hit of 7
-      damageFighter(bot, 7, Math.sign(p.vx) || 1);
+    const target = fighters[1 - p.ownerIdx];
+    if (!target.ko && target.lastBlast !== p.blast && overlaps(box, target)) {
+      target.lastBlast = p.blast;                  // one blast = one hit of 7
+      damageFighter(target, 7, Math.sign(p.vx) || 1);
       p.life = 0;
       continue;
     }
@@ -708,10 +736,13 @@ function drawStickman(f, color) {
 function drawArenaWorld() {
   for (const s of solids) {
     if (s.x + s.w < camX - 40 || s.x > camX + canvas.width + 40) continue;
-    ctx.fillStyle = s.painted ? '#1e4a5a' : '#2a3040';   // painted walls wear your color
+    // painted walls wear their painter's color — blue yours, red the bot's
+    ctx.fillStyle = s.painted === 'bot' ? '#5a1e28'
+                  : s.painted ? '#1e4a5a' : '#2a3040';
     ctx.fillRect(s.x, s.y, s.w, s.h);
     if (s.lid) {
-      ctx.fillStyle = s.painted ? '#7dd3ff' : '#4a5a78';
+      ctx.fillStyle = s.painted === 'bot' ? '#ff6b5e'
+                    : s.painted ? '#7dd3ff' : '#4a5a78';
       ctx.fillRect(s.x, s.y, s.w, 8);
     }
   }
@@ -811,13 +842,16 @@ function drawBattle() {
   ctx.fillText(wtxt, 14, 52);
 
   if (weaponNotice > 0 && !banner) {
+    const wname = w => w === 'shotgun' ? 'the SHOTGUN' : w === 'portal' ? 'the PORTAL GUN'
+                     : w === 'brush' ? 'the PAINT BRUSH' : 'the STICK SWORD';
     ctx.textAlign = 'center';
     ctx.globalAlpha = Math.min(1, weaponNotice);
     ctx.fillStyle = '#ffd23f';
     ctx.font = `bold ${Math.min(30, canvas.width / 20)}px monospace`;
-    ctx.fillText('you drew: ' + (you.weapon === 'shotgun' ? 'the SHOTGUN!'
-                 : you.weapon === 'portal' ? 'the PORTAL GUN!'
-                 : 'the PAINT BRUSH!'), canvas.width / 2, canvas.height * 0.24);
+    ctx.fillText('you drew: ' + wname(you.weapon) + '!', canvas.width / 2, canvas.height * 0.22);
+    ctx.fillStyle = '#ff6b5e';
+    ctx.font = `bold ${Math.min(22, canvas.width / 28)}px monospace`;
+    ctx.fillText('the bot drew: ' + wname(bot.weapon) + '...', canvas.width / 2, canvas.height * 0.22 + 36);
     ctx.globalAlpha = 1;
   }
 
