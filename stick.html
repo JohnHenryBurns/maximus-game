@@ -69,9 +69,9 @@ try {
 function persist() { localStorage.setItem('stick_save', JSON.stringify(save)); }
 
 // the arena: a set of ground cells plus the two starting corners
-let arena = { tiles: new Set(), you: [3, 9], enemy: [16, 9] };
+let arena = { tiles: new Set(), spikes: [], you: [3, 9], enemy: [16, 9] };
 function defaultArena() {
-  arena = { tiles: new Set(), you: [3, 9], enemy: [16, 9] };
+  arena = { tiles: new Set(), spikes: [], you: [3, 9], enemy: [16, 9] };
   for (let i = 0; i < 20; i++) arena.tiles.add(i + ',10');
   for (let i = 4; i < 8; i++) arena.tiles.add(i + ',7');
   for (let i = 12; i < 16; i++) arena.tiles.add(i + ',7');
@@ -79,12 +79,14 @@ function defaultArena() {
 defaultArena();
 function saveArena() {
   localStorage.setItem('stick_arena', JSON.stringify({
-    tiles: [...arena.tiles], you: arena.you, enemy: arena.enemy }));
+    tiles: [...arena.tiles], spikes: arena.spikes,
+    you: arena.you, enemy: arena.enemy }));
 }
 try {
   const a = JSON.parse(localStorage.getItem('stick_arena'));
   if (a && a.tiles && a.tiles.length) {
-    arena = { tiles: new Set(a.tiles), you: a.you || [3, 9], enemy: a.enemy || [16, 9] };
+    arena = { tiles: new Set(a.tiles), spikes: a.spikes || [],
+              you: a.you || [3, 9], enemy: a.enemy || [16, 9] };
   }
 } catch (err) {}
 
@@ -121,6 +123,7 @@ let hitFx = [];         // little impact stars
 let banner = null;      // { text, timer, coins } after a KO
 let camX = 0, camY = 0;
 
+let spikeRects = [];
 function buildSolids() {
   solids = [];
   let maxX = 900, maxBottom = 500;
@@ -131,6 +134,10 @@ function buildSolids() {
     maxX = Math.max(maxX, cx * TILE + TILE);
     maxBottom = Math.max(maxBottom, cy * TILE + TILE);
   }
+  spikeRects = arena.spikes.map(k => {
+    const [cx, cy] = k.split(',').map(Number);
+    return { x: cx * TILE + 4, y: cy * TILE + TILE * 0.45, w: TILE - 8, h: TILE * 0.55 };
+  });
   worldW = maxX + 300;
   levelBottom = maxBottom;
 }
@@ -243,10 +250,17 @@ function applyTool(sx, sy) {
   const cx = Math.floor((sx + editCamX) / TILE);
   const cy = Math.floor((sy + editCamY) / TILE);
   const key = cx + ',' + cy;
-  if (tool === 'ground') arena.tiles.add(key);
-  else if (tool === 'you') arena.you = [cx, cy];
+  if (tool === 'ground') {
+    arena.tiles.add(key);
+    arena.spikes = arena.spikes.filter(k => k !== key);
+  } else if (tool === 'spike') {
+    if (!arena.tiles.has(key) && !arena.spikes.includes(key)) arena.spikes.push(key);
+  } else if (tool === 'you') arena.you = [cx, cy];
   else if (tool === 'enemy') arena.enemy = [cx, cy];
-  else if (tool === 'erase') arena.tiles.delete(key);
+  else if (tool === 'erase') {
+    arena.tiles.delete(key);
+    arena.spikes = arena.spikes.filter(k => k !== key);
+  }
   saveArena();
 }
 
@@ -397,6 +411,21 @@ function update(dt) {
   for (const fx of hitFx) fx.t -= dt;
   hitFx = hitFx.filter(fx => fx.t > 0);
 
+  // ---- spikes don't care WHOSE team you're on ----
+  for (const f of fighters) {
+    if (f.ko || f.hurtFlash > 0) continue;
+    for (const sp of spikeRects) {
+      if (!overlaps(f, sp)) continue;
+      f.hp -= 8;
+      f.hurtFlash = 0.5;
+      f.vy = -450;                                   // OW. up you go.
+      bonkSound();
+      hitFx.push({ x: f.x + f.w / 2, y: f.y + 14, t: 0.35 });
+      if (f.hp <= 0) { f.ko = true; f.vy = -560; koSound(); }
+      break;
+    }
+  }
+
   // ---- falling off the arena is a RING-OUT ----
   for (const f of fighters) {
     if (!f.ko && f.y > levelBottom + 320) {
@@ -489,6 +518,25 @@ function drawArenaWorld() {
       ctx.fillStyle = '#4a5a78';
       ctx.fillRect(s.x, s.y, s.w, 8);
     }
+  }
+  for (const sp of spikeRects) drawSpikeCell(sp.x - 4, sp.y - TILE * 0.45);
+}
+
+// a cell of gleaming arena spikes — impartial and very pointy
+function drawSpikeCell(x, y) {
+  ctx.fillStyle = '#8a8378';
+  ctx.beginPath();
+  for (let i = 0; i < 3; i++) {
+    const sx = x + 4 + i * 13;
+    ctx.moveTo(sx, y + TILE);
+    ctx.lineTo(sx + 6.5, y + TILE * 0.2);
+    ctx.lineTo(sx + 13, y + TILE);
+  }
+  ctx.fill();
+  ctx.fillStyle = '#d8d2c8';
+  for (let i = 0; i < 3; i++) {
+    const sx = x + 4 + i * 13;
+    ctx.fillRect(sx + 4.5, y + TILE * 0.2, 4, 8);
   }
 }
 
@@ -672,7 +720,7 @@ function drawShop() {
 }
 
 const TOOLS = [
-  ['ground', 'GROUND'], ['you', 'YOU'], ['enemy', 'ENEMY'],
+  ['ground', 'GROUND'], ['spike', 'SPIKE'], ['you', 'YOU'], ['enemy', 'ENEMY'],
   ['erase', 'ERASE'], ['pan', 'PAN'],
 ];
 function drawBuild() {
@@ -704,6 +752,10 @@ function drawBuild() {
       ctx.fillStyle = '#4a5a78';
       ctx.fillRect(cx * TILE, cy * TILE, TILE, 8);
     }
+  }
+  for (const key of arena.spikes) {
+    const [cx, cy] = key.split(',').map(Number);
+    drawSpikeCell(cx * TILE, cy * TILE);
   }
   fightersPose(arena.you[0] * TILE + TILE / 2, arena.you[1] * TILE + TILE / 2, '#7dd3ff', 0);
   fightersPose(arena.enemy[0] * TILE + TILE / 2, arena.enemy[1] * TILE + TILE / 2, '#ff6b5e', 0);
