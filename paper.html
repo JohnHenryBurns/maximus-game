@@ -66,7 +66,7 @@ function miniPopSound() { beep(700, 0.06, 'sine', 0.08); }
 // THE PAPER — a big grid; every cell remembers who owns it,
 // and whose trail is drawn on it right now
 // ---------------------------------------------------------------------
-const GW = 120, GH = 84, CELL = 22;   // the paper grew. the war grew with it.
+const GW = 220, GH = 150, CELL = 22;  // a CONTINENT of graph paper
 const own = new Uint8Array(GW * GH);     // 0 = blank paper, else player id
 const trail = new Uint8Array(GW * GH);   // same, for wet ink trails
 const idx = (x, y) => y * GW + x;
@@ -164,9 +164,11 @@ function resetGame() {
   own.fill(0);
   trail.fill(0);
   ents = [];
-  const spots = [[GW >> 1, GH >> 1], [12, 10], [GW - 13, 10], [12, GH - 11], [GW - 13, GH - 11],
-                 [GW >> 1, 8], [GW >> 1, GH - 9], [9, GH >> 1], [GW - 10, GH >> 1],
-                 [35, GH - 24], [GW - 36, 23]];
+  // everyone spawns at a fraction of the map, so any size works
+  const spots = [[0.5, 0.5], [0.1, 0.12], [0.9, 0.12], [0.1, 0.88], [0.9, 0.88],
+                 [0.5, 0.08], [0.5, 0.92], [0.07, 0.5], [0.93, 0.5],
+                 [0.3, 0.72], [0.7, 0.28]]
+    .map(([fx, fy]) => [Math.floor(fx * GW), Math.floor(fy * GH)]);
   PLAYERS.forEach((p, i) => {
     const [cx, cy] = spots[i];
     stampSquare(p.id, cx, cy, 2);
@@ -181,8 +183,9 @@ function resetGame() {
   banner = 'steer with your MOUSE (or finger, or arrows)';
   bannerT = 5;
   minis = [];
-  towers = [[30, 21], [90, 21], [18, 42], [102, 42], [30, 63], [90, 63], [60, 12], [60, 72]]
-    .map(([x, y]) => ({ x, y, claimedBy: 0 }));
+  towers = [[0.15, 0.2], [0.5, 0.15], [0.85, 0.2], [0.1, 0.5], [0.5, 0.5], [0.9, 0.5],
+            [0.15, 0.8], [0.5, 0.85], [0.85, 0.8], [0.32, 0.35], [0.68, 0.65], [0.68, 0.35]]
+    .map(([fx, fy]) => ({ x: Math.floor(fx * GW), y: Math.floor(fy * GH), claimedBy: 0 }));
 }
 resetGame();
 
@@ -274,10 +277,35 @@ function steerSmooth(you, dt) {
 // ---------------------------------------------------------------------
 // THE RULES OF PAPER
 // ---------------------------------------------------------------------
+// counting 33,000 squares once per frame is fine. eleven times per
+// frame is rude. so: one pass, shared by everybody.
+let ownCounts = new Uint32Array(PLAYERS.length + 1);
+function recount() {
+  ownCounts = new Uint32Array(PLAYERS.length + 1);
+  for (let i = 0; i < own.length; i++) ownCounts[own[i]]++;
+}
 function pctOwned(id) {
-  let n = 0;
-  for (let i = 0; i < own.length; i++) if (own[i] === id) n++;
-  return n / own.length * 100;
+  return ownCounts[id] / own.length * 100;
+}
+
+// ---- the minimap: the whole continent in the corner of your eye ----
+const mm = document.createElement('canvas');
+mm.width = GW;
+mm.height = GH;
+let mmT = 0;
+const RGB = PLAYERS.map(p => [1, 3, 5].map(i => parseInt(p.color.slice(i, i + 2), 16)));
+function updateMinimap() {
+  const c2 = mm.getContext('2d');
+  const img = c2.createImageData(GW, GH);
+  const d = img.data;
+  for (let i = 0; i < own.length; i++) {
+    let r = 232, g = 226, b = 206;
+    const t = trail[i], o = own[i];
+    if (t) { [r, g, b] = RGB[t - 1]; r = Math.min(255, r + 40); }
+    else if (o) [r, g, b] = RGB[o - 1];
+    d[i * 4] = r; d[i * 4 + 1] = g; d[i * 4 + 2] = b; d[i * 4 + 3] = 255;
+  }
+  c2.putImageData(img, 0, 0);
 }
 
 // coming home: your trail plus everything it enclosed becomes yours.
@@ -428,9 +456,10 @@ function botThink(ent) {
   const cx = Math.floor(ent.x), cy = Math.floor(ent.y);
   if (!ent.plan.length) {
     if (!ent.out) {
-      // plan a sortie: a rectangle loop out into the wild
-      const w = 4 + Math.floor(Math.random() * 9);
-      const h = 3 + Math.floor(Math.random() * 8);
+      // plan a sortie: a rectangle loop out into the wild —
+      // bigger strokes for a bigger world
+      const w = 7 + Math.floor(Math.random() * 15);
+      const h = 6 + Math.floor(Math.random() * 12);
       const dirH = Math.random() < 0.5 ? -1 : 1;
       const dirV = Math.random() < 0.5 ? -1 : 1;
       ent.plan = [
@@ -471,6 +500,9 @@ function update(dt) {
   elapsed += dt;
   if (bannerT > 0) bannerT -= dt;
   if (gameOver) return;
+  recount();                // the one census, used by everything below
+  mmT -= dt;
+  if (mmT <= 0) { mmT = 0.4; updateMinimap(); }
 
   for (const ent of ents) {
     // destroyed means DESTROYED. nobody comes back. sharpen up.
@@ -1341,6 +1373,31 @@ function drawHud(W, H) {
     ctx.fillStyle = `rgba(40, 36, 24, ${Math.min(1, bannerT)})`;
     ctx.font = `bold ${Math.min(26, W / 20)}px monospace`;
     ctx.fillText(banner, W / 2, H * 0.18);
+  }
+
+  // the minimap, bottom-left: territory, heads, towers, and your window
+  if (!gameOver) {
+    const mmW = 176, mmH = Math.round(mmW * GH / GW);
+    const mx = 14, my = H - mmH - 14;
+    ctx.fillStyle = 'rgba(40, 36, 24, 0.25)';
+    ctx.fillRect(mx - 3, my - 3, mmW + 6, mmH + 6);
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(mm, mx, my, mmW, mmH);
+    ctx.imageSmoothingEnabled = true;
+    const sx = mmW / GW, sy = mmH / GH;
+    for (const t of towers) {
+      ctx.fillStyle = t.claimedBy ? PLAYERS[t.claimedBy - 1].dark : '#7a7264';
+      ctx.fillRect(mx + t.x * sx - 1.5, my + t.y * sy - 1.5, 3, 3);
+    }
+    for (const ent of ents) {
+      if (!ent.alive) continue;
+      ctx.fillStyle = ent.p.isYou ? '#101418' : PLAYERS[ent.p.id - 1].dark;
+      ctx.fillRect(mx + ent.x * sx - 2, my + ent.y * sy - 2, 4, 4);
+    }
+    ctx.strokeStyle = 'rgba(40, 36, 24, 0.7)';   // what your screen can see
+    ctx.lineWidth = 1;
+    ctx.strokeRect(mx + (camX / CELL) * sx, my + (camY / CELL) * sy,
+                   (W / CELL) * sx, (H / CELL) * sy);
   }
 
   const you = ents[0];
