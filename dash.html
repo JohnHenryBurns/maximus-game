@@ -116,24 +116,52 @@ function winJingle() {
 //   _ ground   ^ spike   # block   2/3 stacked blocks   . pit   P pad
 // learn it. it isn't going to change. YOU are.
 // ---------------------------------------------------------------------
-const LEVEL =
-  '____________________' +
-  '^_______^______^_____' +
-  '^____^____^___^___' +
-  '____^^______^^_____' +
-  '___##_____##_____' +
-  '__##___22___##____' +
-  '____..____..______' +
-  '^__..__^^___##__^___' +
-  '____P^^^___________' +
-  '__##..##..##__' +
-  '____P___3______' +
-  '^___^___^___^___^__' +
-  '_______^^__..___##______' +
-  '____________';
+const LEVELS = [
+  { name: 'NEON RUNWAY', diff: 1, speed: 340, str:
+    '____________________' +
+    '^_______^______^_____' +
+    '^____^____^___^___' +
+    '____^^______^^_____' +
+    '___##_____##_____' +
+    '__##___22___##____' +
+    '____..____..______' +
+    '^__..__^^___##__^___' +
+    '____P^^^___________' +
+    '__##..##..##__' +
+    '____P___3______' +
+    '^___^___^___^___^__' +
+    '_______^^__..___##______' +
+    '____________' },
+  { name: 'SPIKE FACTORY', diff: 2, speed: 360, str:
+    '____________________' +
+    '^_____^^_____^___^^____' +
+    '__##____^____##____^_____' +
+    '_..___..___^^_____' +
+    '__##___22____22___##__' +
+    '^____^^____^______' +
+    '___P^^^_____P^^^______' +
+    '__##..##..##..##______' +
+    '^^___..___^^___##____' +
+    '_____P___3____^____' +
+    '^___^^___^___^^____' +
+    '____________' },
+  { name: 'FULL SPEED', diff: 3, speed: 385, str:
+    '____________________' +
+    '^^____^^____^^____^^____' +
+    '__##____^___22____^____##___' +
+    '_.._____..____^^______' +
+    '___P^^^___P^^^___P^^^____' +
+    '__##..22..##______' +
+    '^^__^^____^^__^^_____' +
+    '____P___3____22____' +
+    '^^___^^____^^___..___' +
+    '____________' },
+];
 
 const COL = 40;
-const SPEED = 340;
+let LEVEL = LEVELS[0].str;
+let SPEED = LEVELS[0].speed;
+let levelIx = 0;
 const GROUND_FRAC = 0.72;      // where the floor sits on screen
 const CUBE = 34;
 const GRAV = 4200;
@@ -149,7 +177,21 @@ function colInfo(i) {
     blocks: ch === '#' ? 1 : ch === '2' ? 2 : ch === '3' ? 3 : 0,
   };
 }
-const LEVEL_LEN = LEVEL.length * COL;
+let LEVEL_LEN = LEVEL.length * COL;
+
+function selectLevel(i) {
+  levelIx = i;
+  LEVEL = LEVELS[i].str;
+  SPEED = LEVELS[i].speed;
+  LEVEL_LEN = LEVEL.length * COL;
+  best = parseInt(localStorage.getItem('dash_best_' + i) || '0');
+  attempts = 1;
+  won = false;
+  started = false;
+  particles = [];
+  respawn();
+  screen = 'play';
+}
 
 // ---------------------------------------------------------------------
 // STATE
@@ -158,7 +200,7 @@ let px = 0, py = 0, vy = 0;    // cube position (world x, y ABOVE ground)
 let onGround = true;
 let angle = 0;
 let attempts = 1;
-let best = parseInt(localStorage.getItem('dash_best') || '0');
+let best = 0;
 let dead = 0;                  // respawn countdown after death
 let won = false;
 let started = false;
@@ -166,6 +208,8 @@ let holdJump = false;
 let particles = [];
 let camY = 0;
 let elapsed = 0;
+let screen = 'menu';           // 'menu' | 'play'
+let uiRects = [];
 
 function respawn() {
   px = 0; py = 0; vy = 0;
@@ -177,17 +221,32 @@ function respawn() {
 // ---------------------------------------------------------------------
 // INPUT — one button. that's the entire deal.
 // ---------------------------------------------------------------------
-addEventListener('pointerdown', () => {
+addEventListener('pointerdown', e => {
   ensureAudio();
-  if (won) { won = false; attempts = 1; respawn(); return; }
+  for (const r of uiRects) {
+    if (e.clientX > r.x && e.clientX < r.x + r.w &&
+        e.clientY > r.y && e.clientY < r.y + r.h) {
+      if (r.id === 'menu') { screen = 'menu'; return; }
+      if (r.id.startsWith('lv_')) { selectLevel(parseInt(r.id.slice(3))); return; }
+      return;
+    }
+  }
+  if (screen === 'menu') return;
+  if (won) { screen = 'menu'; return; }
   started = true;
   holdJump = true;
 });
 addEventListener('pointerup', () => { holdJump = false; });
 addEventListener('keydown', e => {
+  if (screen === 'menu') {
+    const n = parseInt(e.key) - 1;
+    if (n >= 0 && n < LEVELS.length) { ensureAudio(); selectLevel(n); }
+    return;
+  }
+  if (e.key === 'Escape') { screen = 'menu'; return; }
   if (e.key === ' ' || e.key === 'ArrowUp' || e.key.toLowerCase() === 'w') {
     ensureAudio();
-    if (won) { won = false; attempts = 1; respawn(); return; }
+    if (won) { screen = 'menu'; return; }
     started = true;
     holdJump = true;
   }
@@ -221,7 +280,7 @@ function die() {
 function update(dt) {
   elapsed += dt;
   tickMusic();
-  if (won || !started) return;
+  if (screen === 'menu' || won || !started) return;
   if (dead > 0) {
     dead -= dt;
     if (dead <= 0) respawn();
@@ -314,13 +373,13 @@ function update(dt) {
   if (px >= LEVEL_LEN - COL * 6) {
     won = true;
     best = 100;
-    localStorage.setItem('dash_best', '100');
+    localStorage.setItem('dash_best_' + levelIx, '100');
     winJingle();
   }
   const pct = Math.min(100, Math.round(px / (LEVEL_LEN - COL * 6) * 100));
   if (pct > best) {
     best = pct;
-    localStorage.setItem('dash_best', String(best));
+    localStorage.setItem('dash_best_' + levelIx, String(best));
   }
 
   camY += ((py > 100 ? py - 100 : 0) - camY) * Math.min(1, dt * 6);
@@ -329,8 +388,62 @@ function update(dt) {
 // ---------------------------------------------------------------------
 // DRAWING — neon, glow, and a background that pumps with the beat
 // ---------------------------------------------------------------------
+function drawMenu(W, H) {
+  uiRects = [];
+  const beatPulse = audio ? Math.max(0, 1 - (audio.currentTime - lastBeatAt) / BEAT) : 0;
+  const hue = (elapsed * 12) % 360;
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, `hsl(${hue}, 55%, ${10 + beatPulse * 5}%)`);
+  g.addColorStop(1, `hsl(${(hue + 60) % 360}, 60%, ${16 + beatPulse * 6}%)`);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+  // a decorative cube, bouncing to the beat
+  ctx.save();
+  ctx.translate(W / 2, H * 0.17 - beatPulse * 12);
+  ctx.rotate(elapsed * 1.2);
+  ctx.fillStyle = `hsl(${(hue + 180) % 360}, 90%, 60%)`;
+  ctx.fillRect(-22, -22, 44, 44);
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 3;
+  ctx.strokeRect(-19, -19, 38, 38);
+  ctx.restore();
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffffff';
+  ctx.font = `bold ${Math.min(52, W / 11)}px monospace`;
+  ctx.fillText('CUBE DASH', W / 2, H * 0.33);
+  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  ctx.font = '15px monospace';
+  ctx.fillText('pick your level — sound ON, thumbs ready', W / 2, H * 0.33 + 28);
+
+  LEVELS.forEach((L, i) => {
+    const bw = Math.min(W - 60, 400), bh = 74;
+    const x = W / 2 - bw / 2, y = H * 0.44 + i * (bh + 16);
+    uiRects.push({ x, y, w: bw, h: bh, id: 'lv_' + i });
+    const lb = parseInt(localStorage.getItem('dash_best_' + i) || '0');
+    ctx.fillStyle = `hsla(${(hue + 180) % 360}, 60%, 50%, ${0.12 + beatPulse * 0.05})`;
+    ctx.fillRect(x, y, bw, bh);
+    ctx.strokeStyle = lb >= 100 ? '#7ddf8f' : `hsl(${(hue + 180) % 360}, 90%, 65%)`;
+    ctx.lineWidth = 3;
+    ctx.strokeRect(x, y, bw, bh);
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 20px monospace';
+    ctx.fillText((i + 1) + '. ' + L.name, x + 18, y + 32);
+    ctx.fillStyle = '#ffd23f';
+    ctx.font = '15px monospace';
+    ctx.fillText('★'.repeat(L.diff) + '☆'.repeat(3 - L.diff), x + 18, y + 56);
+    ctx.textAlign = 'right';
+    ctx.fillStyle = lb >= 100 ? '#7ddf8f' : 'rgba(255,255,255,0.65)';
+    ctx.font = 'bold 17px monospace';
+    ctx.fillText(lb >= 100 ? 'DONE ✓' : 'best ' + lb + '%', x + bw - 18, y + 44);
+    ctx.textAlign = 'center';
+  });
+}
+
 function draw() {
   const W = canvas.width, H = canvas.height;
+  if (screen === 'menu') { drawMenu(W, H); return; }
+  uiRects = [];
   const groundY = H * GROUND_FRAC + camY;
   const beatPulse = audio ? Math.max(0, 1 - (audio.currentTime - lastBeatAt) / BEAT) : 0;
 
@@ -469,6 +582,20 @@ function draw() {
   ctx.textAlign = 'left';
   ctx.font = 'bold 16px monospace';
   ctx.fillText('attempt ' + attempts, 16, 30);
+  ctx.font = '13px monospace';
+  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  ctx.fillText(LEVELS[levelIx].name, 16, 50);
+
+  // the way back
+  uiRects.push({ x: W - 100, y: 10, w: 88, h: 34, id: 'menu' });
+  ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(W - 100, 10, 88, 34);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.font = 'bold 13px monospace';
+  ctx.fillText('MENU', W - 56, 32);
+  ctx.textAlign = 'left';
 
   if (!started) {
     ctx.textAlign = 'center';
@@ -492,7 +619,7 @@ function draw() {
                  W / 2, H / 2 + 20);
     ctx.fillStyle = 'rgba(255,255,255,0.6)';
     ctx.font = '14px monospace';
-    ctx.fillText('tap to run it again', W / 2, H / 2 + 50);
+    ctx.fillText('tap for the level menu', W / 2, H / 2 + 50);
   }
 }
 
