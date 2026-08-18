@@ -160,6 +160,7 @@ let totalDrops = 0;
 let anyPulled = false;
 let calmT = 0;
 let result = null;         // null | 'win' | 'fail'
+let winT = 0;              // the little victory pause before auto-advance
 let particles = [];
 let elapsed = 0;
 let uiRects = [];
@@ -281,6 +282,14 @@ function segPush(drop, s, R) {
 function update(dt) {
   elapsed += dt;
   if (blipT > 0) blipT -= dt;
+  // victory earns you the next level automatically
+  if (result === 'win') {
+    winT -= dt;
+    if (winT <= 0) {
+      loadLevel(levelIx + 1 < LEVELS.length ? levelIx + 1 : 0);
+    }
+    return;
+  }
   for (const p of pins) {
     if (p.pulled && p.anim < 1) p.anim = Math.min(1, p.anim + dt * 3);
   }
@@ -344,6 +353,7 @@ function update(dt) {
       const need = LEVELS[levelIx].need;
       if (frac >= need) {
         result = 'win';
+        winT = 2.2;                    // enjoy the glug, then onward
         save.done[levelIx] = Math.max(save.done[levelIx] || 0, Math.round(frac * 100));
         persist();
         winSound();
@@ -521,8 +531,9 @@ function draw() {
       ctx.fillText('GLUG! ' + Math.round(frac * 100) + '% DELIVERED', W / 2, H / 2 - 20);
       ctx.fillStyle = '#cfe4ff';
       ctx.font = '16px monospace';
-      ctx.fillText(levelIx + 1 < LEVELS.length ? 'tap for the next level'
-                                               : 'that was the last one! tap to loop back',
+      ctx.fillText(levelIx + 1 < LEVELS.length
+                     ? 'next level incoming... (tap to hurry)'
+                     : 'that was the last one! looping back around...',
                    W / 2, H / 2 + 20);
     } else {
       ctx.fillStyle = '#ff9f43';
