@@ -145,7 +145,7 @@ const LEVELS = [
     '_____P___3____^____' +
     '^___^^___^___^^____' +
     '____________' },
-  { name: 'FULL SPEED', diff: 3, speed: 385, str:
+  { name: 'PRIMAL MADNESS', diff: 3, speed: 385, str:
     '____________________' +
     '^^____^^____^^____^^____' +
     '__##____^___22____^____##___' +
@@ -429,9 +429,11 @@ function drawMenu(W, H) {
     ctx.fillStyle = '#ffffff';
     ctx.font = 'bold 20px monospace';
     ctx.fillText((i + 1) + '. ' + L.name, x + 18, y + 32);
-    ctx.fillStyle = '#ffd23f';
+    ctx.fillStyle = L.diff >= 3 ? '#ff5a4a' : '#ffd23f';
     ctx.font = '15px monospace';
-    ctx.fillText('★'.repeat(L.diff) + '☆'.repeat(3 - L.diff), x + 18, y + 56);
+    // the final level doesn't get stars. it gets SKULLS.
+    ctx.fillText(L.diff >= 3 ? '💀💀💀' : '★'.repeat(L.diff) + '☆'.repeat(3 - L.diff),
+                 x + 18, y + 56);
     ctx.textAlign = 'right';
     ctx.fillStyle = lb >= 100 ? '#7ddf8f' : 'rgba(255,255,255,0.65)';
     ctx.font = 'bold 17px monospace';
