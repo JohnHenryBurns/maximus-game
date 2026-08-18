@@ -90,6 +90,43 @@ function fit() { canvas.width = innerWidth; canvas.height = innerHeight; }
 addEventListener('resize', fit);
 fit();
 
+// ---------------------------------------------------------------------
+// FITTING ON A PHONE — a phone screen is narrow AND short. these three
+// little helpers are the whole trick: measure first, then draw.
+// ---------------------------------------------------------------------
+
+// Break a sentence into lines that actually FIT. We measure each word as
+// we add it, and the moment the line gets too wide we start a new one.
+function wrapText(text, maxW, font) {
+  ctx.font = font;
+  const lines = [];
+  let line = '';
+  for (const word of text.split(' ')) {
+    const test = line ? line + ' ' + word : word;
+    if (line && ctx.measureText(test).width > maxW) { lines.push(line); line = word; }
+    else line = test;
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+// Draw wrapped text and tell the caller how tall it turned out.
+function drawWrapped(text, cx, y, maxW, font, lineH) {
+  const lines = wrapText(text, maxW, font);
+  ctx.font = font;
+  lines.forEach((ln, i) => ctx.fillText(ln, cx, y + i * lineH));
+  return lines.length * lineH;
+}
+
+// The Arcade pill floats over the top-left corner as a real HTML link, so
+// the canvas has no idea it's there. Ask the browser where its bottom edge
+// is and start our own HUD below it — otherwise it sits on top of our words.
+// (That exact mistake bit us twice already. Measure, don't assume.)
+function pillBottom() {
+  const el = document.getElementById('back');
+  return el ? Math.ceil(el.getBoundingClientRect().bottom) : 38;
+}
+
 window.onerror = (msg, src, line) => {
   const d = document.createElement('div');
   d.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#c0392b;' +
@@ -780,64 +817,85 @@ function drawMenu(W, H) {
   g.addColorStop(1, `hsl(${(hue + 60) % 360}, 60%, ${16 + beatPulse * 6}%)`);
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, W, H);
-  // the mascot cube, bouncing to the beat, wearing YOUR equipped skin
+
+  // ---- work out the layout from the room we ACTUALLY have ----
+  // Fixed fractions of the height (0.44 and friends) looked fine on a laptop
+  // and shoved the buttons off the bottom of a phone held sideways. So:
+  // measure the space, then decide how big the cards get.
+  const top = pillBottom() + 10;
+  const avail = H - top - 14;
+  const headH = Math.max(78, Math.min(160, avail * 0.30));   // mascot + title
+  const doorH = Math.max(42, Math.min(52, avail * 0.11));
+  const gap = Math.max(7, Math.min(16, avail * 0.022));
+  // whatever is left over gets shared between the three level cards
+  const cardH = Math.max(40, Math.min(74, (avail - headH - doorH - gap * 4) / 3));
+  const stackH = headH + cardH * 3 + gap * 4 + doorH;
+  const y0 = top + Math.max(0, (avail - stackH) / 2);        // centre the lot
+
+  // the mascot cube, bouncing to the beat, wearing YOUR equipped skin.
+  // it gets the top quarter of the header, the title the middle, the
+  // little subtitle the bottom — so they never sit on top of each other.
+  const cubeR = Math.min(44, headH * 0.30);
   ctx.save();
-  ctx.translate(W / 2, H * 0.17 - beatPulse * 12);
+  ctx.translate(W / 2, y0 + headH * 0.24 - beatPulse * 12);
   ctx.rotate(elapsed * 1.2);
-  drawCube(44, hue, false);
+  drawCube(cubeR, hue, false);
   ctx.restore();
   ctx.textAlign = 'center';
   ctx.fillStyle = '#ffffff';
-  ctx.font = `bold ${Math.min(52, W / 11)}px monospace`;
-  ctx.fillText('CUBE DASH', W / 2, H * 0.33);
+  ctx.font = `bold ${Math.min(52, W / 11, headH * 0.34)}px monospace`;
+  ctx.fillText('CUBE DASH', W / 2, y0 + headH * 0.78);
   ctx.fillStyle = 'rgba(255,255,255,0.55)';
-  ctx.font = '15px monospace';
-  ctx.fillText('pick your level — sound ON, thumbs ready', W / 2, H * 0.33 + 28);
+  ctx.font = `${Math.min(15, W / 27)}px monospace`;
+  ctx.fillText(W < 460 ? 'pick your level — sound ON' : 'pick your level — sound ON, thumbs ready',
+               W / 2, y0 + headH - 4);
 
-  // three doors: your creation, the workshop, and the wardrobe
-  {
-    const bw = Math.min(W - 60, 400);
-    const y0 = H * 0.44 + 3 * 90;
-    const third = bw / 3 - 6;
-    const doors = [['playc', '▶ YOURS'], ['build', '🔨 BUILD'], ['skins', '👕 SKINS']];
-    doors.forEach(([id, label], i) => {
-      const x = W / 2 - bw / 2 + i * (third + 9);
-      uiRects.push({ x, y: y0, w: third, h: 52, id });
-      ctx.strokeStyle = '#ffd23f';
-      ctx.lineWidth = 2;
-      ctx.strokeRect(x, y0, third, 52);
-      ctx.fillStyle = '#ffd23f';
-      ctx.font = 'bold 15px monospace';
-      ctx.fillText(label, x + third / 2, y0 + 32);
-    });
-  }
+  const bw = Math.min(W - 32, 400);
+  const x = W / 2 - bw / 2;
 
   LEVELS.forEach((L, i) => {
     if (i > 2) return;                   // the custom slot has its own door
-    const bw = Math.min(W - 60, 400), bh = 74;
-    const x = W / 2 - bw / 2, y = H * 0.44 + i * (bh + 16);
-    uiRects.push({ x, y, w: bw, h: bh, id: 'lv_' + i });
+    const y = y0 + headH + i * (cardH + gap);
+    uiRects.push({ x, y, w: bw, h: cardH, id: 'lv_' + i });
     const lb = parseInt(localStorage.getItem('dash_best_' + i) || '0');
     ctx.fillStyle = `hsla(${(hue + 180) % 360}, 60%, 50%, ${0.12 + beatPulse * 0.05})`;
-    ctx.fillRect(x, y, bw, bh);
+    ctx.fillRect(x, y, bw, cardH);
     ctx.strokeStyle = lb >= 100 ? '#7ddf8f' : `hsl(${(hue + 180) % 360}, 90%, 65%)`;
     ctx.lineWidth = 3;
-    ctx.strokeRect(x, y, bw, bh);
+    ctx.strokeRect(x, y, bw, cardH);
     ctx.textAlign = 'left';
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 20px monospace';
-    ctx.fillText((i + 1) + '. ' + L.name, x + 18, y + 32);
+    // the card can shrink, so the writing inside shrinks with it
+    ctx.font = `bold ${Math.min(20, cardH * 0.27, (bw - 130) / 8)}px monospace`;
+    ctx.fillText((i + 1) + '. ' + L.name, x + 14, y + cardH * 0.44);
     ctx.fillStyle = L.diff >= 3 ? '#ff5a4a' : '#ffd23f';
-    ctx.font = '15px monospace';
+    ctx.font = `${Math.min(15, cardH * 0.21)}px monospace`;
     // the final level doesn't get stars. it gets SKULLS.
     ctx.fillText(L.diff >= 3 ? '💀💀💀' : '★'.repeat(L.diff) + '☆'.repeat(3 - L.diff),
-                 x + 18, y + 56);
+                 x + 14, y + cardH * 0.78);
     ctx.textAlign = 'right';
     ctx.fillStyle = lb >= 100 ? '#7ddf8f' : 'rgba(255,255,255,0.65)';
-    ctx.font = 'bold 17px monospace';
-    ctx.fillText(lb >= 100 ? 'DONE ✓' : 'best ' + lb + '%', x + bw - 18, y + 44);
+    ctx.font = `bold ${Math.min(17, cardH * 0.23)}px monospace`;
+    ctx.fillText(lb >= 100 ? 'DONE ✓' : 'best ' + lb + '%', x + bw - 14, y + cardH * 0.6);
     ctx.textAlign = 'center';
   });
+
+  // three doors: your creation, the workshop, and the wardrobe
+  {
+    const dy = y0 + headH + 3 * (cardH + gap);
+    const third = bw / 3 - 6;
+    const doors = [['playc', '▶ YOURS'], ['build', '🔨 BUILD'], ['skins', '👕 SKINS']];
+    doors.forEach(([id, label], i) => {
+      const dx = x + i * (third + 9);
+      uiRects.push({ x: dx, y: dy, w: third, h: doorH, id });
+      ctx.strokeStyle = '#ffd23f';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(dx, dy, third, doorH);
+      ctx.fillStyle = '#ffd23f';
+      ctx.font = `bold ${Math.min(15, third / 6)}px monospace`;
+      ctx.fillText(label, dx + third / 2, dy + doorH / 2 + 5);
+    });
+  }
 }
 
 function drawBuild(W, H) {
@@ -917,10 +975,14 @@ function drawBuild(W, H) {
   ctx.restore();
 
   // ---- toolbar (measured, grows to fit) ----
+  // On a phone the long labels wrapped the toolbar onto four fat rows and
+  // ate the level. So each button knows a short name for a narrow screen.
+  const narrow = W < 560;
   const TOOLS = [
-    ['bt_spike', '▲ SPIKE'], ['bt_block', '□+ BLOCK (tap = +1)'],
+    ['bt_spike', '▲ SPIKE'], ['bt_block', narrow ? '□+ BLOCK' : '□+ BLOCK (tap = +1)'],
     ['bt_pit', '⬛ PIT'], ['bt_pad', '● PAD'],
-    ['bt_saw', '⚙ SAW'], ['bt_airsaw', '⚙ AIR SAW'], ['bt_erase', '✖ ERASE'],
+    ['bt_saw', '⚙ SAW'], ['bt_airsaw', narrow ? '⚙ AIR' : '⚙ AIR SAW'],
+    ['bt_erase', narrow ? '✖ RUB' : '✖ ERASE'],
     ['bt_pan', '✋ PAN'],
     ['btest', '▶ TEST'], ['bcheck', '🤖 CHECK'],
     ['bspeed', '⚡ ' + bSpeed],
@@ -928,57 +990,67 @@ function drawBuild(W, H) {
     ['menu', 'MENU'],
     ['breset', performance.now() < bResetUntil ? 'REALLY?' : 'RESET'],
   ];
+  const btnH = narrow ? 30 : 34;
+  const fs = narrow ? 11 : 12;
   const places = [];
-  let bx = 8, by = 8;
+  // the Arcade pill floats over the top-left corner, so the toolbar starts
+  // underneath it rather than hiding behind it
+  let bx = 8, by = pillBottom() + 6;
   for (const [id, label] of TOOLS) {
-    const bw = Math.max(56, label.length * 9.5 + 18);
-    if (bx + bw > W - 8) { bx = 8; by += 40; }
+    const bw = Math.max(narrow ? 46 : 56, label.length * (fs * 0.72) + 16);
+    if (bx + bw > W - 8) { bx = 8; by += btnH + 6; }
     places.push({ id, label, x: bx, y: by, w: bw });
     bx += bw + 6;
   }
-  const barH = by + 36 + 8;
+  const barH = by + btnH + 8;
   ctx.fillStyle = 'rgba(8, 6, 18, 0.85)';
   ctx.fillRect(0, 0, W, barH);
   for (const p of places) {
-    uiRects.push({ x: p.x, y: p.y, w: p.w, h: 34, id: p.id });
+    uiRects.push({ x: p.x, y: p.y, w: p.w, h: btnH, id: p.id });
     const active = p.id === 'bt_' + bTool;
     const danger = p.id === 'breset' && performance.now() < bResetUntil;
     ctx.fillStyle = danger ? 'rgba(232, 69, 60, 0.35)'
                   : p.id === 'btest' ? 'rgba(125, 223, 143, 0.18)'
                   : p.id === 'bcheck' ? 'rgba(255, 210, 63, 0.15)'
                   : active ? 'rgba(125, 211, 255, 0.25)' : 'rgba(255,255,255,0.06)';
-    ctx.fillRect(p.x, p.y, p.w, 34);
+    ctx.fillRect(p.x, p.y, p.w, btnH);
     ctx.strokeStyle = danger ? '#e8453c' : p.id === 'btest' ? '#7ddf8f'
                     : p.id === 'bcheck' ? '#ffd23f'
                     : active ? '#7dd3ff' : '#4a4468';
     ctx.lineWidth = 2;
-    ctx.strokeRect(p.x, p.y, p.w, 34);
+    ctx.strokeRect(p.x, p.y, p.w, btnH);
     ctx.fillStyle = danger ? '#ff9f97' : p.id === 'btest' ? '#7ddf8f'
                   : p.id === 'bcheck' ? '#ffd23f'
                   : active ? '#7dd3ff' : '#b8b4c8';
-    ctx.font = 'bold 12px monospace';
+    ctx.font = `bold ${fs}px monospace`;
     ctx.textAlign = 'center';
-    ctx.fillText(p.label, p.x + p.w / 2, p.y + 22);
+    ctx.fillText(p.label, p.x + p.w / 2, p.y + btnH / 2 + fs * 0.36);
   }
   ctx.textAlign = 'left';
   ctx.fillStyle = 'rgba(255,255,255,0.45)';
-  ctx.font = '12px monospace';
-  ctx.fillText('tap/drag to place — ARROW KEYS look around (up for towers!) — scroll/swipe pans — ' +
-               bLevel.length + ' columns', 10, barH + 18);
+  const hint = narrow
+    ? 'tap/drag to place — swipe to pan — ' + bLevel.length + ' columns'
+    : 'tap/drag to place — ARROW KEYS look around (up for towers!) — ' +
+      'scroll/swipe pans — ' + bLevel.length + ' columns';
+  drawWrapped(hint, 10, barH + 16, W - 20, '12px monospace', 15);
 
-  // the inspector's report
+  // the inspector's report — wrapped, and sitting on its own dark strip so
+  // it stays readable no matter what's drawn behind it
   if (bCheck) {
+    const msg = bCheck.won
+      ? '🤖 BEATABLE! the robot cleared it (' + bCheck.attempts +
+        ' attempt' + (bCheck.attempts === 1 ? '' : 's') + ')'
+      : '🤖 the robot DIED every time at the red arrow (reached ' +
+        bCheck.maxPct + '%) — fix that spot!';
+    const font = `bold ${Math.min(16, W / 26)}px monospace`;
+    const lines = wrapText(msg, W - 28, font);
+    const boxH = lines.length * 21 + 14;
+    ctx.fillStyle = 'rgba(8, 6, 18, 0.85)';
+    ctx.fillRect(0, H - boxH - 8, W, boxH + 8);
     ctx.textAlign = 'center';
-    ctx.font = 'bold 16px monospace';
-    if (bCheck.won) {
-      ctx.fillStyle = '#7ddf8f';
-      ctx.fillText('🤖 BEATABLE! the robot cleared it (' + bCheck.attempts +
-                   ' attempt' + (bCheck.attempts === 1 ? '' : 's') + ')', W / 2, H - 30);
-    } else {
-      ctx.fillStyle = '#ff5a4a';
-      ctx.fillText('🤖 the robot DIED every time at the red arrow (reached ' +
-                   bCheck.maxPct + '%) — fix that spot!', W / 2, H - 30);
-    }
+    ctx.fillStyle = bCheck.won ? '#7ddf8f' : '#ff5a4a';
+    ctx.font = font;
+    lines.forEach((ln, i) => ctx.fillText(ln, W / 2, H - boxH + 8 + i * 21));
     ctx.textAlign = 'left';
   }
 }
@@ -1072,61 +1144,77 @@ function drawSkins(W, H) {
   uiRects = [];
   ctx.fillStyle = '#12102a';
   ctx.fillRect(0, 0, W, H);
+  // same idea as the level menu: measure the room, then size the cards
+  const top = pillBottom() + 10;
+  const avail = H - top - 14;
+  const headH = Math.max(52, Math.min(84, avail * 0.16));
+  const gap = Math.max(6, Math.min(16, avail * 0.02));
+  const backH = 40;
+  const cardH = Math.max(56, Math.min(84,
+    (avail - headH - backH - gap * (SKINS.length + 1)) / SKINS.length));
+  const y00 = top;
+
   ctx.textAlign = 'center';
   ctx.fillStyle = '#ffd23f';
-  ctx.font = `bold ${Math.min(42, W / 14)}px monospace`;
-  ctx.fillText('SKINS', W / 2, H * 0.14);
-  ctx.font = '14px monospace';
+  ctx.font = `bold ${Math.min(42, W / 10, headH * 0.55)}px monospace`;
+  ctx.fillText('SKINS', W / 2, y00 + headH * 0.55);
+  ctx.font = `${Math.min(14, W / 29)}px monospace`;
   ctx.fillStyle = 'rgba(255,255,255,0.5)';
-  ctx.fillText('beat levels to earn them — tap to wear', W / 2, H * 0.14 + 26);
+  ctx.fillText(W < 460 ? 'beat levels to earn them' : 'beat levels to earn them — tap to wear',
+               W / 2, y00 + headH * 0.55 + 22);
 
-  const cw = Math.min(W - 60, 460);
+  const cw = Math.min(W - 24, 460);
+  const x0 = W / 2 - cw / 2;
+  const podium = Math.min(52, cardH * 0.62);       // the spinning model's box
   SKINS.forEach((sk, i) => {
-    const y0 = H * 0.26 + i * 100;
-    const x0 = W / 2 - cw / 2;
+    const y0 = y00 + headH + i * (cardH + gap);
     const open = sk.unlocked();
     const worn = cubeSkin === sk.id;
-    if (open) uiRects.push({ x: x0, y: y0, w: cw, h: 84, id: 'sk_' + sk.id });
+    if (open) uiRects.push({ x: x0, y: y0, w: cw, h: cardH, id: 'sk_' + sk.id });
     ctx.fillStyle = worn ? 'rgba(255, 210, 63, 0.12)' : 'rgba(255,255,255,0.04)';
-    ctx.fillRect(x0, y0, cw, 84);
+    ctx.fillRect(x0, y0, cw, cardH);
     ctx.strokeStyle = worn ? '#ffd23f' : open ? 'rgba(255,255,255,0.4)' : 'rgba(255,255,255,0.15)';
     ctx.lineWidth = worn ? 3 : 2;
-    ctx.strokeRect(x0, y0, cw, 84);
+    ctx.strokeRect(x0, y0, cw, cardH);
     // the model, spinning slowly on its podium
     ctx.save();
-    ctx.translate(x0 + 52, y0 + 42);
+    ctx.translate(x0 + 12 + podium / 2, y0 + cardH / 2);
     ctx.rotate(Math.sin(elapsed * 1.2 + i) * 0.25);
     if (open) {
-      drawCube(46, (elapsed * 12) % 360, false, sk.id);
+      drawCube(podium * 0.88, (elapsed * 12) % 360, false, sk.id);
     } else {
+      const r = podium * 0.44;
       ctx.fillStyle = 'rgba(255,255,255,0.08)';
-      ctx.fillRect(-23, -23, 46, 46);
+      ctx.fillRect(-r, -r, r * 2, r * 2);
       ctx.strokeStyle = 'rgba(255,255,255,0.25)';
       ctx.lineWidth = 2;
-      ctx.strokeRect(-23, -23, 46, 46);
-      ctx.font = '26px monospace';
+      ctx.strokeRect(-r, -r, r * 2, r * 2);
+      ctx.font = `${Math.round(r)}px monospace`;
       ctx.fillStyle = 'rgba(255,255,255,0.5)';
-      ctx.fillText('🔒', 0, 9);
+      ctx.fillText('🔒', 0, r * 0.4);
     }
     ctx.restore();
+    // the writing gets whatever room is left AFTER the podium — and it wraps
+    const tx = x0 + podium + 24;
+    const tw = x0 + cw - 12 - tx;
     ctx.textAlign = 'left';
-    ctx.font = 'bold 19px monospace';
+    ctx.font = `bold ${Math.min(19, tw / 11)}px monospace`;
     ctx.fillStyle = open ? '#fff' : 'rgba(255,255,255,0.35)';
-    ctx.fillText(sk.name + (worn ? '  ◀ wearing' : ''), x0 + 104, y0 + 36);
-    ctx.font = '13px monospace';
+    ctx.fillText(sk.name + (worn ? '  ◀ wearing' : ''), tx, y0 + cardH * 0.4);
     ctx.fillStyle = open ? 'rgba(125, 223, 143, 0.9)' : 'rgba(255,255,255,0.4)';
-    ctx.fillText(open ? (i === 0 ? sk.how : '✓ earned! ' + sk.how) : '🔒 ' + sk.how,
-                 x0 + 104, y0 + 60);
+    drawWrapped(open ? (i === 0 ? sk.how : '✓ earned! ' + sk.how) : '🔒 ' + sk.how,
+                tx, y0 + cardH * 0.62, tw, '12px monospace', 15);
     ctx.textAlign = 'center';
   });
 
-  uiRects.push({ x: W / 2 - 70, y: H * 0.26 + SKINS.length * 100 + 6, w: 140, h: 40, id: 'menu' });
+  const by = y00 + headH + SKINS.length * (cardH + gap);
+  uiRects.push({ x: W / 2 - 70, y: by, w: 140, h: backH, id: 'menu' });
   ctx.strokeStyle = 'rgba(255,255,255,0.5)';
   ctx.lineWidth = 2;
-  ctx.strokeRect(W / 2 - 70, H * 0.26 + SKINS.length * 100 + 6, 140, 40);
+  ctx.strokeRect(W / 2 - 70, by, 140, backH);
   ctx.fillStyle = 'rgba(255,255,255,0.7)';
   ctx.font = 'bold 14px monospace';
-  ctx.fillText('◀ BACK', W / 2, H * 0.26 + SKINS.length * 100 + 31);
+  ctx.fillText('◀ BACK', W / 2, by + 25);
   ctx.textAlign = 'left';
 }
 
@@ -1253,41 +1341,49 @@ function draw() {
   ctx.restore();
 
   // ---- HUD ----
+  // Row 1 is the Arcade pill (left, drawn by the browser) and MENU (right).
+  // Everything of ours starts BELOW both of them, so nothing gets covered.
   const pct = Math.min(100, Math.round(px / (LEVEL_LEN - COL * 6) * 100));
-  ctx.fillStyle = 'rgba(0,0,0,0.35)';
-  ctx.fillRect(W * 0.2, 14, W * 0.6, 14);
-  ctx.fillStyle = '#7ddf8f';
-  ctx.fillRect(W * 0.2 + 2, 16, (W * 0.6 - 4) * pct / 100, 10);
-  ctx.textAlign = 'center';
-  ctx.fillStyle = 'rgba(255,255,255,0.85)';
-  ctx.font = 'bold 14px monospace';
-  ctx.fillText(pct + '%   —   best ' + best + '%', W / 2, 44);
-  ctx.textAlign = 'left';
-  ctx.font = 'bold 16px monospace';
-  ctx.fillText('attempt ' + attempts, 16, 30);
-  ctx.font = '13px monospace';
-  ctx.fillStyle = 'rgba(255,255,255,0.55)';
-  ctx.fillText(LEVELS[levelIx].name, 16, 50);
 
-  // the way back
-  uiRects.push({ x: W - 100, y: 10, w: 88, h: 34, id: 'menu' });
+  // the way back — top right, opposite the Arcade pill
+  const menuW = 88, menuH = 34, menuY = 10;
+  uiRects.push({ x: W - menuW - 12, y: menuY, w: menuW, h: menuH, id: 'menu' });
   ctx.strokeStyle = 'rgba(255,255,255,0.5)';
   ctx.lineWidth = 2;
-  ctx.strokeRect(W - 100, 10, 88, 34);
+  ctx.strokeRect(W - menuW - 12, menuY, menuW, menuH);
   ctx.textAlign = 'center';
   ctx.fillStyle = 'rgba(255,255,255,0.7)';
   ctx.font = 'bold 13px monospace';
-  ctx.fillText('MENU', W - 56, 32);
+  ctx.fillText('MENU', W - menuW / 2 - 12, menuY + 22);
+
+  const hudY = Math.max(pillBottom(), menuY + menuH) + 8;
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  ctx.fillRect(12, hudY, W - 24, 14);
+  ctx.fillStyle = '#7ddf8f';
+  ctx.fillRect(14, hudY + 2, (W - 28) * pct / 100, 10);
+  ctx.textAlign = 'left';
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  ctx.font = 'bold 14px monospace';
+  ctx.fillText('attempt ' + attempts, 12, hudY + 32);
+  ctx.textAlign = 'right';
+  ctx.fillText(pct + '%  ·  best ' + best + '%', W - 12, hudY + 32);
+  ctx.textAlign = 'left';
+  ctx.font = '13px monospace';
+  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  ctx.fillText(LEVELS[levelIx].name, 12, hudY + 50);
   ctx.textAlign = 'left';
 
   if (!started) {
+    // the two coaching lines, wrapped so they never run off a phone screen
     ctx.textAlign = 'center';
+    const maxW = W - 32;
     ctx.fillStyle = `rgba(255, 255, 255, ${0.6 + Math.sin(elapsed * 3) * 0.3})`;
-    ctx.font = `bold ${Math.min(30, W / 18)}px monospace`;
-    ctx.fillText('tap to JUMP — tap AGAIN in the air to DOUBLE JUMP', W / 2, H * 0.4);
-    ctx.font = '15px monospace';
+    const bigFont = `bold ${Math.min(30, W / 15)}px monospace`;
+    const tall = drawWrapped('tap to JUMP — tap AGAIN in the air to DOUBLE JUMP',
+                             W / 2, H * 0.38, maxW, bigFont, Math.min(34, W / 13));
     ctx.fillStyle = 'rgba(255,255,255,0.5)';
-    ctx.fillText('stay LOW under floating blades. you cannot stop. good luck.', W / 2, H * 0.4 + 32);
+    drawWrapped('stay LOW under floating blades. you cannot stop. good luck.',
+                W / 2, H * 0.38 + tall + 12, maxW, '15px monospace', 20);
   }
   if (won) {
     ctx.fillStyle = 'rgba(10, 8, 26, 0.7)';
