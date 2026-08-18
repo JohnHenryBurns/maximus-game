@@ -374,17 +374,12 @@ function kill(ent, byYou) {
 // one entity arrives at a fresh cell — the heart of the whole game
 function enterCell(ent, cx, cy) {
   const c = idx(cx, cy);
-  // touching ANY wet trail pops its owner — even your own. the ONLY
-  // mercy: the last few cells you inked yourself, because a smooth
-  // curve brushes its own fresh paint without truly crossing it.
-  if (trail[c]) {
-    const grazingOwnFreshInk =
-      trail[c] === ent.p.id && ent.myTrail.slice(-3).includes(c);
-    if (!grazingOwnFreshInk) {
-      const victim = ents.find(o => o.alive && o.p.id === trail[c]);
-      if (victim) kill(victim, ent.p.isYou && victim !== ent);
-      if (victim === ent) return;            // you popped yourself. rough.
-    } else return;                           // grazed it. breathe. drive on.
+  // wet trail rules: YOUR OWN ink is always safe to cross — loop,
+  // double back, draw figure-eights, live your life. but touching
+  // SOMEBODY ELSE'S trail pops its owner, no appeals.
+  if (trail[c] && trail[c] !== ent.p.id) {
+    const victim = ents.find(o => o.alive && o.p.id === trail[c]);
+    if (victim) kill(victim, ent.p.isYou);
   }
   if (!ent.alive) return;
   if (own[c] === ent.p.id) {
@@ -394,7 +389,8 @@ function enterCell(ent, cx, cy) {
         setBanner('+' + gained + ' squares!');
       }
     }
-  } else {
+  } else if (trail[c] !== ent.p.id) {
+    // fresh paper (or enemy land): lay ink. already-inked: just drive.
     ent.out = true;
     ent.myTrail.push(c);
     trail[c] = ent.p.id;
