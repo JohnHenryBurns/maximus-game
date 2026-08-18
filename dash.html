@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>CUBE DASH</title>
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #12102a; }
+  canvas { display: block; touch-action: none; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+// =====================================================================
+// CUBE DASH — you are a cube. you cannot stop. you can only JUMP.
+// the level is a rhythm: learn it with your eyes, then play it with
+// your thumb. every death teaches the next attempt. GO.
+// =====================================================================
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+function fit() { canvas.width = innerWidth; canvas.height = innerHeight; }
+addEventListener('resize', fit);
+fit();
+
+window.onerror = (msg, src, line) => {
+  const d = document.createElement('div');
+  d.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#c0392b;' +
+    'color:#fff;font:14px monospace;padding:8px;z-index:9';
+  d.textContent = '🐛 BUG on line ' + line + ': ' + msg;
+  document.body.appendChild(d);
+};
+
+// ---------------------------------------------------------------------
+// THE MUSIC — a driving beat built from raw math: kick, hat, bassline.
+// scheduled a little ahead of time so it never stutters.
+// ---------------------------------------------------------------------
+let audio = null;
+const BPM = 128;
+const BEAT = 60 / BPM;
+let nextBeat = 0, beatN = 0, lastBeatAt = 0;
+function ensureAudio() {
+  if (!audio) {
+    audio = new (window.AudioContext || window.webkitAudioContext)();
+    nextBeat = audio.currentTime + 0.1;
+  }
+}
+function kick(t) {
+  const o = audio.createOscillator(), g = audio.createGain();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(150, t);
+  o.frequency.exponentialRampToValueAtTime(45, t + 0.12);
+  g.gain.setValueAtTime(0.35, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+  o.connect(g); g.connect(audio.destination);
+  o.start(t); o.stop(t + 0.16);
+}
+function hat(t) {
+  const o = audio.createOscillator(), g = audio.createGain();
+  o.type = 'square';
+  o.frequency.value = 7000 + Math.random() * 1500;
+  g.gain.setValueAtTime(0.025, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.03);
+  o.connect(g); g.connect(audio.destination);
+  o.start(t); o.stop(t + 0.035);
+}
+const BASSLINE = [0, 0, 3, 0, 5, 3, 0, -2];   // semitones — moody and driving
+function bass(t, step) {
+  const o = audio.createOscillator(), g = audio.createGain();
+  o.type = 'sawtooth';
+  o.frequency.value = 55 * Math.pow(2, BASSLINE[step % 8] / 12);
+  g.gain.setValueAtTime(0.11, t);
+  g.gain.setValueAtTime(0.11, t + BEAT * 0.4);
+  g.gain.exponentialRampToValueAtTime(0.001, t + BEAT * 0.55);
+  o.connect(g); g.connect(audio.destination);
+  o.start(t); o.stop(t + BEAT * 0.6);
+}
+function tickMusic() {
+  if (!audio) return;
+  while (nextBeat < audio.currentTime + 0.15) {
+    kick(nextBeat);
+    hat(nextBeat + BEAT / 2);
+    bass(nextBeat, beatN);
+    lastBeatAt = nextBeat;
+    nextBeat += BEAT;
+    beatN++;
+  }
+}
+function deathSound() {
+  if (!audio) return;
+  const o = audio.createOscillator(), g = audio.createGain();
+  o.type = 'sawtooth';
+  o.frequency.setValueAtTime(400, audio.currentTime);
+  o.frequency.exponentialRampToValueAtTime(60, audio.currentTime + 0.3);
+  g.gain.setValueAtTime(0.2, audio.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + 0.32);
+  o.connect(g); g.connect(audio.destination);
+  o.start(); o.stop(audio.currentTime + 0.35);
+}
+function winJingle() {
+  if (!audio) return;
+  [523, 659, 784, 1047, 1319, 1568].forEach((n, i) => {
+    const t = audio.currentTime + i * 0.09;
+    const o = audio.createOscillator(), g = audio.createGain();
+    o.type = 'square';
+    o.frequency.value = n;
+    g.gain.setValueAtTime(0.1, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+    o.connect(g); g.connect(audio.destination);
+    o.start(t); o.stop(t + 0.3);
+  });
+}
+
+// ---------------------------------------------------------------------
+// THE LEVEL — one long string. every character is one column (40px):
+//   _ ground   ^ spike   # block   2/3 stacked blocks   . pit   P pad
+// learn it. it isn't going to change. YOU are.
+// ---------------------------------------------------------------------
+const LEVEL =
+  '____________________' +
+  '^_______^______^_____' +
+  '^____^____^___^___' +
+  '____^^______^^_____' +
+  '___##_____##_____' +
+  '__##___22___##____' +
+  '____..____..______' +
+  '^__..__^^___##__^___' +
+  '____P^^^___________' +
+  '__##..##..##__' +
+  '____P___3______' +
+  '^___^___^___^___^__' +
+  '_______^^__..___##______' +
+  '____________';
+
+const COL = 40;
+const SPEED = 340;
+const GROUND_FRAC = 0.72;      // where the floor sits on screen
+const CUBE = 34;
+const GRAV = 4200;
+const VJUMP = -880;
+const VPAD = -1400;
+
+function colInfo(i) {
+  const ch = LEVEL[i] || '_';
+  return {
+    spike: ch === '^',
+    pit: ch === '.',
+    pad: ch === 'P',
+    blocks: ch === '#' ? 1 : ch === '2' ? 2 : ch === '3' ? 3 : 0,
+  };
+}
+const LEVEL_LEN = LEVEL.length * COL;
+
+// ---------------------------------------------------------------------
+// STATE
+// ---------------------------------------------------------------------
+let px = 0, py = 0, vy = 0;    // cube position (world x, y ABOVE ground)
+let onGround = true;
+let angle = 0;
+let attempts = 1;
+let best = parseInt(localStorage.getItem('dash_best') || '0');
+let dead = 0;                  // respawn countdown after death
+let won = false;
+let started = false;
+let holdJump = false;
+let particles = [];
+let camY = 0;
+let elapsed = 0;
+
+function respawn() {
+  px = 0; py = 0; vy = 0;
+  onGround = true;
+  angle = 0;
+  dead = 0;
+}
+
+// ---------------------------------------------------------------------
+// INPUT — one button. that's the entire deal.
+// ---------------------------------------------------------------------
+addEventListener('pointerdown', () => {
+  ensureAudio();
+  if (won) { won = false; attempts = 1; respawn(); return; }
+  started = true;
+  holdJump = true;
+});
+addEventListener('pointerup', () => { holdJump = false; });
+addEventListener('keydown', e => {
+  if (e.key === ' ' || e.key === 'ArrowUp' || e.key.toLowerCase() === 'w') {
+    ensureAudio();
+    if (won) { won = false; attempts = 1; respawn(); return; }
+    started = true;
+    holdJump = true;
+  }
+});
+addEventListener('keyup', e => {
+  if (e.key === ' ' || e.key === 'ArrowUp' || e.key.toLowerCase() === 'w') holdJump = false;
+});
+
+// ---------------------------------------------------------------------
+// UPDATE
+// ---------------------------------------------------------------------
+function groundTopAt(x) {
+  // the height of whatever you can stand on at world-x (0 = flat ground)
+  const info = colInfo(Math.floor(x / COL));
+  if (info.pit) return -999;             // nothing to stand on. nothing at all.
+  return info.blocks * COL;
+}
+
+function die() {
+  dead = 0.7;
+  attempts++;
+  deathSound();
+  for (let i = 0; i < 26; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const sp = 120 + Math.random() * 380;
+    particles.push({ x: px, y: py, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 100,
+                     life: 0.5 + Math.random() * 0.4 });
+  }
+}
+
+function update(dt) {
+  elapsed += dt;
+  tickMusic();
+  if (won || !started) return;
+  if (dead > 0) {
+    dead -= dt;
+    if (dead <= 0) respawn();
+    for (const p of particles) {
+      p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 900 * dt; p.life -= dt;
+    }
+    particles = particles.filter(p => p.life > 0);
+    return;
+  }
+
+  px += SPEED * dt;
+
+  // what's under (and ahead of) the cube right now?
+  const support = Math.max(groundTopAt(px - CUBE * 0.35), groundTopAt(px + CUBE * 0.35));
+
+  // jumping: hold the button and the cube leaps every time it lands
+  if (onGround && holdJump) {
+    vy = VJUMP;
+    onGround = false;
+  }
+
+  if (!onGround) {
+    vy += GRAV * dt;
+    py -= vy * dt;                       // py is height ABOVE the ground line
+    angle += (Math.PI / 0.42) * dt;      // one clean flip per jump arc
+    if (py <= support && vy > 0) {
+      if (support < -100) {
+        // there is no floor here. there is only regret.
+        if (py < -60) { die(); return; }
+      } else if (support - py > 26) {
+        // that's not a landing, that's a WALL. geometry wins.
+        die();
+        return;
+      } else {
+        py = support;
+        onGround = true;
+        vy = 0;
+        angle = Math.round(angle / (Math.PI / 2)) * (Math.PI / 2);
+      }
+    }
+  } else {
+    // walked off an edge (or the floor became a pit / rose into a wall)
+    if (support < py - 2) {
+      onGround = false;
+      vy = 0;
+    } else if (support > py + 2) {
+      die();                             // face, meet block side
+      return;
+    }
+  }
+  if (py < -60) { die(); return; }
+
+  // spikes: the pointy tax on bad timing
+  const c0 = Math.floor((px - CUBE * 0.3) / COL);
+  const c1 = Math.floor((px + CUBE * 0.3) / COL);
+  for (let c = c0; c <= c1; c++) {
+    const info = colInfo(c);
+    if (info.spike) {
+      const spikeBase = 0;
+      if (py < spikeBase + COL * 0.62) { die(); return; }
+    }
+    if (info.pad && py < COL * 0.5 && vy >= 0) {
+      vy = VPAD;
+      onGround = false;
+      if (audio) {
+        const o = audio.createOscillator(), g = audio.createGain();
+        o.type = 'sine';
+        o.frequency.setValueAtTime(300, audio.currentTime);
+        o.frequency.exponentialRampToValueAtTime(900, audio.currentTime + 0.15);
+        g.gain.setValueAtTime(0.15, audio.currentTime);
+        g.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + 0.18);
+        o.connect(g); g.connect(audio.destination);
+        o.start(); o.stop(audio.currentTime + 0.2);
+      }
+    }
+  }
+
+  // the trail — proof of speed
+  if (Math.random() < 0.6) {
+    particles.push({ x: px - CUBE / 2, y: py + Math.random() * CUBE * 0.5,
+                     vx: -60 - Math.random() * 60, vy: (Math.random() - 0.5) * 60,
+                     life: 0.35 });
+  }
+  for (const p of particles) {
+    p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt;
+  }
+  particles = particles.filter(p => p.life > 0);
+
+  // finish line
+  if (px >= LEVEL_LEN - COL * 6) {
+    won = true;
+    best = 100;
+    localStorage.setItem('dash_best', '100');
+    winJingle();
+  }
+  const pct = Math.min(100, Math.round(px / (LEVEL_LEN - COL * 6) * 100));
+  if (pct > best) {
+    best = pct;
+    localStorage.setItem('dash_best', String(best));
+  }
+
+  camY += ((py > 100 ? py - 100 : 0) - camY) * Math.min(1, dt * 6);
+}
+
+// ---------------------------------------------------------------------
+// DRAWING — neon, glow, and a background that pumps with the beat
+// ---------------------------------------------------------------------
+function draw() {
+  const W = canvas.width, H = canvas.height;
+  const groundY = H * GROUND_FRAC + camY;
+  const beatPulse = audio ? Math.max(0, 1 - (audio.currentTime - lastBeatAt) / BEAT) : 0;
+
+  // the sky: deep neon, breathing with the music
+  const hue = (elapsed * 12) % 360;
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, `hsl(${hue}, 55%, ${10 + beatPulse * 5}%)`);
+  g.addColorStop(1, `hsl(${(hue + 60) % 360}, 60%, ${16 + beatPulse * 6}%)`);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+
+  // parallax deco: floating outline shapes drifting by
+  ctx.strokeStyle = `hsla(${(hue + 180) % 360}, 80%, 60%, 0.12)`;
+  ctx.lineWidth = 2;
+  for (let i = 0; i < 8; i++) {
+    const sx = ((i * 460 - px * 0.3) % (460 * 8) + 460 * 8) % (460 * 8) - 200;
+    const sy = 80 + (i * 97) % Math.max(120, H * 0.4);
+    const r = 30 + (i * 37) % 60;
+    ctx.save();
+    ctx.translate(sx, sy);
+    ctx.rotate(elapsed * 0.3 + i);
+    ctx.strokeRect(-r / 2, -r / 2, r, r);
+    ctx.restore();
+  }
+
+  const camX = px - W * 0.3;
+
+  // the ground line and everything bolted to it
+  ctx.save();
+  ctx.translate(-camX, 0);
+
+  // ground fill (skipping the pits)
+  const cStart = Math.floor(camX / COL) - 1;
+  const cEnd = Math.floor((camX + W) / COL) + 1;
+  for (let c = cStart; c <= cEnd; c++) {
+    const info = colInfo(c);
+    const x = c * COL;
+    if (!info.pit) {
+      ctx.fillStyle = `hsl(${(hue + 200) % 360}, 45%, ${18 + beatPulse * 4}%)`;
+      ctx.fillRect(x, groundY, COL + 1, H - groundY);
+      ctx.fillStyle = `hsla(${(hue + 180) % 360}, 90%, 65%, 0.9)`;
+      ctx.fillRect(x, groundY - 2, COL + 1, 3);
+    }
+    // blocks
+    for (let b = 0; b < info.blocks; b++) {
+      const by = groundY - (b + 1) * COL;
+      ctx.fillStyle = `hsl(${(hue + 200) % 360}, 40%, 26%)`;
+      ctx.fillRect(x + 1, by, COL - 2, COL - 1);
+      ctx.strokeStyle = `hsla(${(hue + 180) % 360}, 90%, 65%, 0.8)`;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x + 2, by + 1, COL - 4, COL - 3);
+    }
+    // spikes
+    if (info.spike) {
+      ctx.fillStyle = `hsl(${(hue + 330) % 360}, 80%, 60%)`;
+      ctx.beginPath();
+      ctx.moveTo(x + 2, groundY);
+      ctx.lineTo(x + COL / 2, groundY - COL * 0.95);
+      ctx.lineTo(x + COL - 2, groundY);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+    // pads
+    if (info.pad) {
+      ctx.fillStyle = '#ffd23f';
+      ctx.beginPath();
+      ctx.ellipse(x + COL / 2, groundY - 4, COL * 0.42, 7 + beatPulse * 3, 0, Math.PI, 0);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(255, 210, 63, 0.3)';
+      ctx.beginPath();
+      ctx.ellipse(x + COL / 2, groundY - 6, COL * 0.5, 12, 0, Math.PI, 0);
+      ctx.fill();
+    }
+  }
+
+  // the finish gate
+  const finX = LEVEL_LEN - COL * 6;
+  ctx.strokeStyle = '#7ddf8f';
+  ctx.lineWidth = 6;
+  ctx.beginPath();
+  ctx.moveTo(finX, groundY);
+  ctx.lineTo(finX, groundY - 200);
+  ctx.stroke();
+  ctx.fillStyle = '#7ddf8f';
+  for (let i = 0; i < 4; i++) {
+    for (let j = 0; j < 2; j++) {
+      if ((i + j) % 2 === 0) ctx.fillRect(finX + j * 14, groundY - 200 + i * 14, 14, 14);
+    }
+  }
+
+  // the trail
+  for (const p of particles) {
+    ctx.globalAlpha = Math.max(0, p.life * 2);
+    ctx.fillStyle = `hsl(${(hue + 180) % 360}, 90%, 70%)`;
+    ctx.fillRect(p.x - 3, groundY - p.y - CUBE / 2 - 3, 6, 6);
+  }
+  ctx.globalAlpha = 1;
+
+  // THE CUBE
+  if (dead <= 0) {
+    const cy = groundY - py - CUBE / 2;
+    ctx.save();
+    ctx.translate(px, cy);
+    ctx.rotate(angle);
+    const glow = ctx.createRadialGradient(0, 0, 4, 0, 0, CUBE * 1.4);
+    glow.addColorStop(0, `hsla(${(hue + 180) % 360}, 95%, 65%, 0.5)`);
+    glow.addColorStop(1, 'hsla(0, 0%, 0%, 0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(-CUBE * 1.4, -CUBE * 1.4, CUBE * 2.8, CUBE * 2.8);
+    ctx.fillStyle = `hsl(${(hue + 180) % 360}, 90%, 60%)`;
+    ctx.fillRect(-CUBE / 2, -CUBE / 2, CUBE, CUBE);
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(-CUBE / 2 + 2, -CUBE / 2 + 2, CUBE - 4, CUBE - 4);
+    // the determined little face
+    ctx.fillStyle = '#12102a';
+    ctx.fillRect(-9, -8, 6, 9);
+    ctx.fillRect(3, -8, 6, 9);
+    ctx.fillRect(-6, 6, 12, 3);
+    ctx.restore();
+  }
+  ctx.restore();
+
+  // ---- HUD ----
+  const pct = Math.min(100, Math.round(px / (LEVEL_LEN - COL * 6) * 100));
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  ctx.fillRect(W * 0.2, 14, W * 0.6, 14);
+  ctx.fillStyle = '#7ddf8f';
+  ctx.fillRect(W * 0.2 + 2, 16, (W * 0.6 - 4) * pct / 100, 10);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  ctx.font = 'bold 14px monospace';
+  ctx.fillText(pct + '%   —   best ' + best + '%', W / 2, 44);
+  ctx.textAlign = 'left';
+  ctx.font = 'bold 16px monospace';
+  ctx.fillText('attempt ' + attempts, 16, 30);
+
+  if (!started) {
+    ctx.textAlign = 'center';
+    ctx.fillStyle = `rgba(255, 255, 255, ${0.6 + Math.sin(elapsed * 3) * 0.3})`;
+    ctx.font = `bold ${Math.min(30, W / 18)}px monospace`;
+    ctx.fillText('tap / space to JUMP — hold to keep jumping', W / 2, H * 0.4);
+    ctx.font = '15px monospace';
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.fillText('you cannot stop. you can only jump. good luck.', W / 2, H * 0.4 + 32);
+  }
+  if (won) {
+    ctx.fillStyle = 'rgba(10, 8, 26, 0.7)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#7ddf8f';
+    ctx.font = `bold ${Math.min(46, W / 12)}px monospace`;
+    ctx.fillText('LEVEL COMPLETE!', W / 2, H / 2 - 20);
+    ctx.fillStyle = '#fff';
+    ctx.font = '17px monospace';
+    ctx.fillText('conquered in ' + attempts + ' attempt' + (attempts === 1 ? '' : 's'),
+                 W / 2, H / 2 + 20);
+    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+    ctx.font = '14px monospace';
+    ctx.fillText('tap to run it again', W / 2, H / 2 + 50);
+  }
+}
+
+// ---------------------------------------------------------------------
+// THE GAME LOOP
+// ---------------------------------------------------------------------
+let lastTime = 0;
+function loop(time) {
+  const dt = Math.min(0.025, (time - lastTime) / 1000);
+  lastTime = time;
+  update(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
