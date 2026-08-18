@@ -227,6 +227,8 @@ let bLevel = localStorage.getItem('dash_custom') || '_'.repeat(80);
 let bSpeed = parseInt(localStorage.getItem('dash_custom_speed') || '340');
 let bTool = 'spike';
 let bCam = 0;
+let bCamY = 0;                 // how far UP you're looking (for tall towers)
+const keysHeld = {};
 let bPaint = false;
 let bPanLast = null;
 let bResetUntil = 0;
@@ -416,7 +418,7 @@ addEventListener('pointerdown', e => {
     bPointers.set(e.pointerId, e.clientX);
     if (bPointers.size >= 2 || bTool === 'pan' || e.button === 2) {
       bPaint = false;
-      bPanLast = e.clientX;
+      bPanLast = { x: e.clientX, y: e.clientY };
       return;
     }
     bPaint = true;
@@ -434,9 +436,11 @@ addEventListener('pointermove', e => {
   if (screen !== 'build') return;
   if (bPointers.has(e.pointerId)) bPointers.set(e.pointerId, e.clientX);
   if (bPanLast !== null) {
-    bCam -= e.clientX - bPanLast;
+    bCam -= e.clientX - bPanLast.x;
+    bCamY += e.clientY - bPanLast.y;
     bCam = Math.max(0, Math.min(bLevel.length * COL - canvas.width + 100, bCam));
-    bPanLast = e.clientX;
+    bCamY = Math.max(0, Math.min(400, bCamY));
+    bPanLast = { x: e.clientX, y: e.clientY };
   } else if (bPaint) {
     bSetCol(Math.floor((e.clientX + bCam) / COL));
   }
@@ -455,12 +459,14 @@ addEventListener('wheel', e => {
 }, { passive: false });
 addEventListener('contextmenu', e => { if (screen === 'build') e.preventDefault(); });
 addEventListener('keydown', e => {
+  keysHeld[e.key] = true;
   if (screen === 'menu') {
     const n = parseInt(e.key) - 1;
     if (n >= 0 && n < LEVELS.length) { ensureAudio(); selectLevel(n); }
     return;
   }
   if (e.key === 'Escape') { screen = 'menu'; return; }
+  if (screen !== 'play') return;         // arrows steer the BUILDER's eye
   if (e.key === ' ' || e.key === 'ArrowUp' || e.key.toLowerCase() === 'w') {
     ensureAudio();
     if (won) { screen = 'menu'; return; }
@@ -470,6 +476,7 @@ addEventListener('keydown', e => {
   }
 });
 addEventListener('keyup', e => {
+  keysHeld[e.key] = false;
   if (e.key === ' ' || e.key === 'ArrowUp' || e.key.toLowerCase() === 'w') holdJump = false;
 });
 
@@ -746,12 +753,20 @@ function drawMenu(W, H) {
 
 function drawBuild(W, H) {
   uiRects = [];
+  // the arrow keys are your neck: look left, right, and UP your towers
+  if (keysHeld['ArrowLeft']) bCam -= 14;
+  if (keysHeld['ArrowRight']) bCam += 14;
+  if (keysHeld['ArrowUp']) bCamY += 10;
+  if (keysHeld['ArrowDown']) bCamY -= 10;
+  bCam = Math.max(0, Math.min(bLevel.length * COL - W + 100, bCam));
+  bCamY = Math.max(0, Math.min(400, bCamY));
+
   ctx.fillStyle = '#161226';
   ctx.fillRect(0, 0, W, H);
   const groundY = H * 0.62;
 
   ctx.save();
-  ctx.translate(-bCam, 0);
+  ctx.translate(-bCam, bCamY);
   // column grid + contents
   const c0 = Math.max(0, Math.floor(bCam / COL));
   const c1 = Math.min(bLevel.length - 1, Math.floor((bCam + W) / COL) + 1);
@@ -761,7 +776,7 @@ function drawBuild(W, H) {
     ctx.strokeStyle = 'rgba(255,255,255,0.06)';
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(x, 60);
+    ctx.moveTo(x, -400);
     ctx.lineTo(x, H);
     ctx.stroke();
     if (ch !== '.') {
@@ -859,7 +874,7 @@ function drawBuild(W, H) {
   ctx.textAlign = 'left';
   ctx.fillStyle = 'rgba(255,255,255,0.45)';
   ctx.font = '12px monospace';
-  ctx.fillText('tap/drag to place — scroll or two-finger swipe to move — length: ' +
+  ctx.fillText('tap/drag to place — ARROW KEYS look around (up for towers!) — scroll/swipe pans — ' +
                bLevel.length + ' columns', 10, barH + 18);
 
   // the inspector's report
