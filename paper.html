@@ -2,14 +2,81 @@
 <html>
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover">
 <title>PAPER WARS</title>
+
+<!-- ADD TO HOME SCREEN / CAST TO THE TELLY
+     This game has its OWN manifest, so "Add to Home Screen" gives it its own
+     icon that opens straight into this game - not the arcade menu. display is
+     "fullscreen", so it launches with no browser bar at all, which is also
+     what makes it look right mirrored onto a TV. -->
+<link rel="manifest" href="paper.webmanifest">
+<meta name="theme-color" content="#e8e0c8">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Paper Wars">
+<link rel="icon" href="icon-paper.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-paper.svg">
 <style>
   html, body { margin: 0; padding: 0; overflow: hidden; background: #e8e0c8; }
   canvas { display: block; touch-action: none; }
 </style>
+
+<style>
+/* ==== THE ARCADE PILL — every game in the arcade wears this ============
+   One look, one place, one way home. The appearance is forced (!important)
+   because these pages were written separately and each has its own ideas
+   about what a link should look like; this is the one thing they agree on. */
+a.arcade-pill {
+  display: inline-flex !important; align-items: center !important; gap: 6px !important;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif !important;
+  font-size: 13px !important; font-weight: 600 !important; letter-spacing: 0.3px !important;
+  line-height: 1 !important; text-decoration: none !important; text-transform: none !important;
+  color: #ffe0c4 !important;
+  background: rgba(24, 14, 28, 0.62) !important;
+  border: 1px solid rgba(255, 200, 150, 0.42) !important;
+  padding: 7px 13px !important; border-radius: 999px !important;
+  cursor: pointer !important; white-space: nowrap !important;
+  -webkit-backdrop-filter: blur(5px) !important; backdrop-filter: blur(5px) !important;
+  -webkit-tap-highlight-color: transparent !important;
+  transition: transform 0.12s, border-color 0.12s, background 0.12s !important;
+}
+a.arcade-pill:hover, a.arcade-pill:active, a.arcade-pill:focus-visible {
+  transform: scale(1.05) !important;
+  border-color: rgba(255, 200, 150, 0.9) !important;
+  background: rgba(40, 22, 44, 0.78) !important;
+  color: #fff5e8 !important;
+}
+a.arcade-pill .ah-arrow { font-size: 14px !important; opacity: 0.9 !important; }
+/* the floating version, for games that had nowhere to put it */
+a.arcade-pill.arcade-float {
+  position: fixed !important;
+  top: calc(8px + env(safe-area-inset-top, 0px)) !important;
+  left: calc(10px + env(safe-area-inset-left, 0px)) !important;
+  z-index: 2147483000 !important;
+}
+</style>
 </head>
 <body>
+<!-- THE WAY HOME. Every game in the arcade has this same pill in the same
+     corner, so wherever you are you can always get back to the menu. -->
+<a id="back" class="arcade-pill arcade-float" href="index.html"
+   aria-label="Back to Max's Arcade"><span class="ah-arrow">&larr;</span>Arcade</a>
+<script>
+/* Games grab every touch on the window and call preventDefault, which would
+   swallow a tap on this link. So the pill handles its own tap first and
+   stops the event going any further. */
+(function () {
+  var pill = document.getElementById('back');
+  if (!pill) return;
+  var go = function (e) { e.stopPropagation(); e.preventDefault(); location.href = 'index.html'; };
+  ['click', 'touchend'].forEach(function (t) { pill.addEventListener(t, go, { passive: false }); });
+  ['mousedown', 'touchstart', 'pointerdown'].forEach(function (t) {
+    pill.addEventListener(t, function (e) { e.stopPropagation(); }, { passive: false });
+  });
+})();
+</script>
 <canvas id="game"></canvas>
 <script>
 // =====================================================================
@@ -223,11 +290,36 @@ addEventListener('keydown', e => {
 // the head CHASES the mouse — hover on desktop, drag on phones
 let mouseX = null, mouseY = null, mouseAt = -99;
 let uiRects = [];
+// How far the skins list is scrolled. With eight skins the list is taller
+// than a phone, so the last few - and the BACK button - were unreachable.
+let skinScroll = 0, skinScrollMax = 0, pendingTap = null;
+let dragFrom = null, dragged = false;
+
+// Break a line into pieces that fit a given width. Canvas has no idea how
+// to wrap text, so we ask it how wide each word makes the line and start a
+// new one when it stops fitting.
+function wrapText(text, maxW, font) {
+  ctx.font = font;
+  const words = String(text).split(' ');
+  const lines = []; let line = '';
+  for (const w of words) {
+    const test = line ? line + ' ' + w : w;
+    if (ctx.measureText(test).width > maxW && line) { lines.push(line); line = w; }
+    else line = test;
+  }
+  if (line) lines.push(line);
+  return lines;
+}
 addEventListener('pointerdown', e => {
   ensureAudio();
+  dragFrom = { x: e.clientX, y: e.clientY, scroll: skinScroll };
+  dragged = false;
   for (const r of uiRects) {
     if (e.clientX > r.x && e.clientX < r.x + r.w &&
-        e.clientY > r.y && e.clientY < r.y + r.h) { uiAction(r.id); return; }
+        e.clientY > r.y && e.clientY < r.y + r.h) {
+      if (screen === 'skins') { pendingTap = r.id; return; }   // decided on release
+      uiAction(r.id); return;
+    }
   }
   if (screen !== 'play') return;
   if (gameOver) { screen = 'menu'; return; }
@@ -236,7 +328,7 @@ addEventListener('pointerdown', e => {
 
 function uiAction(id) {
   if (id === 'play') { resetGame(); screen = 'play'; return; }
-  if (id === 'skins') { screen = 'skins'; return; }
+  if (id === 'skins') { screen = 'skins'; skinScroll = 0; return; }
   if (id === 'back') { screen = 'menu'; return; }
   if (id.startsWith('skin_')) {
     const sk = SKINS.find(s => s.id === id.slice(5));
@@ -248,8 +340,23 @@ function uiAction(id) {
   }
 }
 addEventListener('pointermove', e => {
+  // DRAG THE SKINS LIST. Anything more than a few pixels of movement counts
+  // as a scroll rather than a tap, so you don't pick a skin by accident.
+  if (screen === 'skins' && dragFrom && e.buttons !== 0) {
+    const dy = e.clientY - dragFrom.y;
+    if (Math.abs(dy) > 4) dragged = true;
+    skinScroll = Math.max(0, Math.min(skinScrollMax, dragFrom.scroll - dy));
+  }
   mouseX = e.clientX; mouseY = e.clientY; mouseAt = elapsed;
 });
+addEventListener('pointerup', () => {
+  if (pendingTap && !dragged) uiAction(pendingTap);
+  pendingTap = null; dragFrom = null;
+});
+addEventListener('wheel', e => {
+  if (screen !== 'skins') return;
+  skinScroll = Math.max(0, Math.min(skinScrollMax, skinScroll + e.deltaY));
+}, { passive: true });
 
 // every frame: swing your heading smoothly toward the cursor. the
 // turn rate is the secret — it's what makes your path a CIRCLE
@@ -1305,12 +1412,38 @@ function drawSkins(W, H) {
   ctx.fillText('👕 SKINS', W / 2, 56);
   const cols = W >= 940 ? 2 : 1;
   const cw = Math.min(450, (W - 40 - (cols - 1) * 12) / cols);
-  const chh = 84;
-  SKINS.forEach((sk, i) => {
-    const col = i % cols, row = Math.floor(i / cols);
-    const x = W / 2 - (cw * cols + 12 * (cols - 1)) / 2 + col * (cw + 12);
-    const y = 84 + row * (chh + 10);
+  const textX = 88, textW = cw - textX - 14;   // the room the words actually have
+  const LH = 15;                               // one line of the small print
+
+  // WORK OUT THE HEIGHT OF EVERY CARD FIRST. The unlock text is long and has
+  // to wrap, so a card is as tall as its own words need - no more guessing at
+  // a fixed height and letting the sentence run off the side of the phone.
+  const cards = SKINS.map(sk => {
     const un = sk.unlocked();
+    const lines = wrapText((un ? '' : '🔒 ') + sk.how, textW, '12px monospace');
+    if (!un && sk.progress) lines.push('(' + sk.progress() + ')');
+    return { sk, un, lines, h: Math.max(76, 40 + lines.length * LH + 12) };
+  });
+
+  // stack them into columns and remember where each one ended up
+  const colH = new Array(cols).fill(0);
+  const top = 84;
+  cards.forEach((c, i) => {
+    const col = i % cols;
+    c.x = W / 2 - (cw * cols + 12 * (cols - 1)) / 2 + col * (cw + 12);
+    c.y = top + colH[col];
+    colH[col] += c.h + 10;
+  });
+  const contentH = top + Math.max(...colH) + 78;      // + room for the BACK button
+  skinScrollMax = Math.max(0, contentH - H);
+  skinScroll = Math.max(0, Math.min(skinScrollMax, skinScroll));
+
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, 78, W, H - 78); ctx.clip();   // don't draw over the title
+  for (const c of cards) {
+    const { sk, un, lines } = c;
+    const x = c.x, y = c.y - skinScroll, chh = c.h;
+    if (y > H || y + chh < 60) continue;               // off screen, skip it
     const worn = psave.skin === sk.id;
     uiRects.push({ x, y, w: cw, h: chh, id: 'skin_' + sk.id });
     ctx.fillStyle = 'rgba(255,255,255,0.5)';
@@ -1325,21 +1458,39 @@ function drawSkins(W, H) {
     ctx.textAlign = 'left';
     ctx.fillStyle = un ? '#3a3428' : '#9a9280';
     ctx.font = 'bold 16px monospace';
-    ctx.fillText(sk.name + (worn ? ' ✓' : ''), x + 88, y + 32);
+    ctx.fillText(sk.name + (worn ? ' ✓' : ''), x + textX, y + 28);
     ctx.font = '12px monospace';
     ctx.fillStyle = '#7a7260';
-    ctx.fillText(un ? sk.how : '🔒 ' + sk.how, x + 88, y + 52);
-    if (!un && sk.progress) ctx.fillText('(' + sk.progress() + ')', x + 88, y + 68);
+    lines.forEach((ln, k) => ctx.fillText(ln, x + textX, y + 48 + k * LH));
     ctx.textAlign = 'center';
-  });
-  const y = 84 + Math.ceil(SKINS.length / cols) * (chh + 10) + 8;
-  uiRects.push({ x: W / 2 - 100, y, w: 200, h: 50, id: 'back' });
+  }
+
+  const by = top + Math.max(...colH) + 8 - skinScroll;
+  uiRects.push({ x: W / 2 - 100, y: by, w: 200, h: 50, id: 'back' });
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.fillRect(W / 2 - 100, by, 200, 50);
   ctx.strokeStyle = '#3a9ad9';
   ctx.lineWidth = 3;
-  ctx.strokeRect(W / 2 - 100, y, 200, 50);
+  ctx.strokeRect(W / 2 - 100, by, 200, 50);
   ctx.fillStyle = '#3a9ad9';
   ctx.font = 'bold 20px monospace';
-  ctx.fillText('← BACK', W / 2, y + 33);
+  ctx.fillText('← BACK', W / 2, by + 33);
+  ctx.restore();                                   // end of the scrolling area
+
+  // a hint that there's more below, while there is
+  if (skinScroll < skinScrollMax - 2) {
+    ctx.fillStyle = 'rgba(122, 114, 96, 0.75)';
+    ctx.font = 'bold 13px monospace';
+    ctx.fillText('▾ scroll for more ▾', W / 2, H - 12);
+  }
+}
+
+// The arcade pill lives in the top-left corner, and on a phone with a notch
+// it is pushed further down still. Ask where it actually ended up so the
+// game's own readouts start underneath it instead of behind it.
+function hudTop() {
+  const pill = document.getElementById('back');
+  return pill ? Math.ceil(pill.getBoundingClientRect().bottom) + 10 : 48;
 }
 
 function drawHud(W, H) {
@@ -1348,31 +1499,67 @@ function drawHud(W, H) {
   const pct = pctOwned(1);
   ctx.textAlign = 'left';
   ctx.fillStyle = 'rgba(40, 36, 24, 0.85)';
+  const top = hudTop();
   ctx.font = `bold ${Math.min(34, W / 16)}px monospace`;
-  ctx.fillText(pct.toFixed(1) + '%', 16, 44);
+  ctx.fillText(pct.toFixed(1) + '%', 16, top + 26);
   ctx.font = '13px monospace';
-  ctx.fillText('best: ' + bestPct.toFixed(1) + '%', 16, 64);
+  ctx.fillText('best: ' + bestPct.toFixed(1) + '%', 16, top + 46);
 
-  // the leaderboard
+  // THE LEADERBOARD.
+  // Two things used to go wrong on a phone. The colour swatch sat at a fixed
+  // distance from the edge, so any name longer than that was drawn straight
+  // over it - and with eleven players the whole board ate a third of the
+  // screen. Now the swatch is placed against the MEASURED width of each line,
+  // and on a narrow screen the board shows the leaders plus you, tighter.
   const board = PLAYERS.map(p => ({ p, pct: pctOwned(p.id) }))
     .sort((a, b) => b.pct - a.pct);
+  const tight = W < 560;
+  const rowH = tight ? 18 : 24;
+  const fs = tight ? 12 : 14;
+  const sw = tight ? 10 : 14;                       // swatch size
+  let shown = board;
+  if (tight && board.length > 6) {
+    // the top five, then you if you're not already up there
+    shown = board.slice(0, 5);
+    const meAt = board.findIndex(r => r.p.isYou);
+    if (meAt >= 5) shown = shown.concat([board[meAt]]);
+  }
   ctx.textAlign = 'right';
-  ctx.font = 'bold 14px monospace';
-  board.forEach((row, i) => {
+  ctx.font = `bold ${fs}px monospace`;
+  shown.forEach((row, i) => {
     const ent = ents.find(e => e.p === row.p);
     const dead = ent && !ent.alive && !gameOver;
-    ctx.fillStyle = dead ? '#b8b098' : row.p.color;
-    ctx.fillRect(W - 150, 20 + i * 24, 14, 14);
+    const label = (dead ? '💀 ' : '') + row.p.name + '  ' +
+                  (dead ? '—' : row.pct.toFixed(1) + '%');
+    const ty = 30 + i * rowH;
     ctx.fillStyle = dead ? 'rgba(40, 36, 24, 0.4)' : 'rgba(40, 36, 24, 0.85)';
-    ctx.fillText((dead ? '💀 ' : '') + row.p.name + '  ' +
-                 (dead ? '—' : row.pct.toFixed(1) + '%'), W - 20, 32 + i * 24);
+    ctx.fillText(label, W - 16, ty);
+    // sit the swatch just clear of however wide that line turned out to be
+    const tw = ctx.measureText(label).width;
+    ctx.fillStyle = dead ? '#b8b098' : row.p.color;
+    ctx.fillRect(W - 16 - tw - sw - 8, ty - sw + 1, sw, sw);
   });
+  if (shown.length < board.length) {
+    ctx.fillStyle = 'rgba(40, 36, 24, 0.45)';
+    ctx.font = '11px monospace';
+    ctx.fillText('+' + (board.length - shown.length) + ' more', W - 16,
+                 30 + shown.length * rowH);
+  }
   ctx.textAlign = 'center';
 
   if (bannerT > 0) {
+    // Shrink the announcement until it actually fits the screen, and if it
+    // still won't, break it over two lines. It used to run off both edges.
     ctx.fillStyle = `rgba(40, 36, 24, ${Math.min(1, bannerT)})`;
-    ctx.font = `bold ${Math.min(26, W / 20)}px monospace`;
-    ctx.fillText(banner, W / 2, H * 0.18);
+    let bs = Math.min(26, W / 20);
+    ctx.font = `bold ${bs}px monospace`;
+    const room = W - 24;
+    if (ctx.measureText(banner).width > room) {
+      bs = Math.max(13, bs * room / ctx.measureText(banner).width);
+      ctx.font = `bold ${bs}px monospace`;
+    }
+    const lines = wrapText(banner, room, `bold ${bs}px monospace`);
+    lines.forEach((ln, i) => ctx.fillText(ln, W / 2, H * 0.18 + i * (bs + 4)));
   }
 
   // the minimap, bottom-left: territory, heads, towers, and your window
@@ -1402,9 +1589,13 @@ function drawHud(W, H) {
 
   const you = ents[0];
   if (you.out && !gameOver) {
+    // Sits ABOVE the minimap rather than across it - on a phone this warning
+    // is wider than the gap beside the map, so centring it buried both.
+    const mmH = Math.round(176 * GH / GW);
     ctx.fillStyle = `rgba(200, 60, 40, ${0.5 + Math.sin(elapsed * 5) * 0.3})`;
-    ctx.font = 'bold 14px monospace';
-    ctx.fillText('your trail is EXPOSED — get home!', W / 2, H - 30);
+    ctx.font = `bold ${W < 560 ? 13 : 14}px monospace`;
+    const msg = W < 560 ? 'trail EXPOSED — get home!' : 'your trail is EXPOSED — get home!';
+    ctx.fillText(msg, W / 2, H - mmH - 34);
   }
 
   if (gameOver) {
