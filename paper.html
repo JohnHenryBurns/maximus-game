@@ -96,10 +96,10 @@ function persistP() { localStorage.setItem('paper_save', JSON.stringify(psave));
 const SKINS = [
   { id: 'block', name: 'THE BLOCK', how: 'the original. a classic.',
     unlocked: () => true },
-  { id: 'toilet', name: 'THE TOILET', how: 'destroy 3 rivals',
+  { id: 'toilet', name: 'THE TOILET', how: 'destroy 3 rivals — PERK: +30% flush speed',
     unlocked: () => psave.kills >= 3,
     progress: () => Math.min(psave.kills, 3) + '/3 rivals destroyed' },
-  { id: 'donut', name: 'SHINY DONUT', how: 'cover 10.5% of the map',
+  { id: 'donut', name: 'SHINY DONUT', how: 'cover 10.5% of the map — PERK: pink sparkly trail',
     unlocked: () => psave.best >= 10.5,
     progress: () => 'best so far: ' + psave.best.toFixed(1) + '% / 10.5%' },
 ];
@@ -392,8 +392,10 @@ function update(dt) {
     // destroyed means DESTROYED. nobody comes back. sharpen up.
     if (!ent.alive) continue;
     if (ent.p.isYou) steerSmooth(ent, dt);    // you: silky angle steering
-    ent.x += ent.dx * SPEED * dt;
-    ent.y += ent.dy * SPEED * dt;
+    // the toilet skin is FLUSHED with speed. +30%. those are the rules.
+    const spd = SPEED * (ent.p.isYou && psave.skin === 'toilet' ? 1.3 : 1);
+    ent.x += ent.dx * spd * dt;
+    ent.y += ent.dy * spd * dt;
     // the paper's edge gently turns you instead of squishing you flat
     if (ent.p.isYou) {
       if ((ent.x <= 0.6 && ent.dx < 0) || (ent.x >= GW - 0.6 && ent.dx > 0)) {
@@ -542,10 +544,22 @@ function draw() {
       }
       if (trail[c]) {
         const p = PLAYERS[trail[c] - 1];
-        ctx.globalAlpha = 0.45;
-        ctx.fillStyle = p.color;
+        const donutInk = trail[c] === 1 && psave.skin === 'donut';
+        ctx.globalAlpha = donutInk ? 0.6 : 0.45;
+        ctx.fillStyle = donutInk ? '#ff8fc8' : p.color;   // icing-pink ink
         ctx.fillRect(x * CELL + 2, y * CELL + 2, CELL - 4, CELL - 4);
         ctx.globalAlpha = 1;
+        // ...and it SPARKLES. every cell twinkles on its own schedule.
+        if (donutInk && Math.sin(elapsed * 6 + c * 1.7) > 0.55) {
+          const sx = x * CELL + CELL / 2 + Math.sin(c * 7.3) * 6;
+          const sy = y * CELL + CELL / 2 + Math.cos(c * 3.1) * 6;
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.moveTo(sx - 4, sy); ctx.lineTo(sx + 4, sy);
+          ctx.moveTo(sx, sy - 4); ctx.lineTo(sx, sy + 4);
+          ctx.stroke();
+        }
       }
     }
   }
