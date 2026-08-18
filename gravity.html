@@ -293,13 +293,66 @@ let grabbedSun = null;
 let flashT = 0;         // the supernova whiteout
 let gravityOn = true;
 let timeOn = true;      // ...until somebody freezes it
-let tentaclesOn = true; // the holes' grabby arms — switchable, mercifully
+let tentaclesOn = false; // the holes' grabby arms — OFF to start with, so
+                         // you can watch things orbit without being fished out
 let shake = 0;
 let elapsed = 0;
 let grabbed = null;
 let pointer = { x: 0, y: 0 };
 
 const GRAV = 1500;
+
+// ---------------------------------------------------------------------
+// THE WELL — what a black hole actually does to everything near it
+// ---------------------------------------------------------------------
+// The old version faked it: it shoved PEOPLE sideways at a made-up speed
+// so they looked like they were circling. Everything else just got dragged
+// in a straight line. This is the real thing instead.
+//
+// Real gravity gets weaker with the SQUARE of the distance. Twice as far
+// away means FOUR times weaker. That one rule is what makes orbits
+// possible: close in you whip round fast, far out you drift round slowly.
+const HOLE_GM = 8.0e7;      // how heavy the hole is
+const HOLE_SOFT = 80;       // stops the sum blowing up to infinity at the centre
+
+// A spinning black hole drags spacetime around with it, so anything falling
+// straight in gets swept sideways instead of just plunging. That's what
+// turns a boring drop into a spiral.
+//
+// The catch: it must only act on the speed heading INWARD. The first version
+// shoved everything sideways all the time, which braked half the orbits into
+// the hole in under a second and flung the other half clean across the room,
+// depending on which way round they happened to be going. Something already
+// circling nicely has no inward speed, so now it's left alone.
+const HOLE_SPIN = 1.6;
+
+// A real orbit would go round for ever. This is the tiny bit of drag that
+// makes it DECAY — as if the room were full of very thin treacle. A little
+// speed bleeds off each lap, the circle tightens, and tightens, and then
+// it isn't a circle any more.
+const HOLE_DRAG = 0.16;
+
+function holeFieldAt(x, y, vx, vy) {
+  let ax = 0, ay = 0, strength = 0;
+  for (const h of holes) {
+    const dx = h.x - x, dy = h.y - y;
+    const d2 = dx * dx + dy * dy + HOLE_SOFT * HOLE_SOFT;
+    const d = Math.sqrt(d2);
+    const a = HOLE_GM * h.size / d2;          // <- the inverse square
+    const nx = dx / d, ny = dy / d;           // the direction of "inward"
+    ax += nx * a;
+    ay += ny * a;
+    // how fast is this thing heading straight at the hole right now?
+    const inward = (vx || 0) * nx + (vy || 0) * ny;
+    if (inward > 0) {
+      const sw = inward * HOLE_SPIN * (h.spin || 1) * (a / (a + 500));
+      ax += -ny * sw;                         // sideways, in the spin's direction
+      ay += nx * sw;
+    }
+    strength += a;
+  }
+  return { ax, ay, strength };
+}
 const FLOOR_H = 36;
 
 function floorY() { return WORLD_H - FLOOR_H; }
@@ -370,7 +423,9 @@ function addSpike(x, y) {
   spikes.push({ x: Math.round(x / 46) * 46, y: Math.round(y / 46) * 46 });
 }
 function addHole(x, y, size) {
-  holes.push({ x, y, swirl: Math.random() * 7, size: size || 1, tents: [], tentT: 1.5 });
+  // spin: which way this one winds spacetime. Half go clockwise.
+  holes.push({ x, y, swirl: Math.random() * 7, size: size || 1, tents: [], tentT: 1.5,
+               spin: Math.random() < 0.5 ? -1 : 1 });
   if (holes.length > 3) holes.shift();     // three black holes is plenty. THREE.
 }
 function addSun(x, y) {
@@ -489,16 +544,37 @@ function update(dt) {
   }
 
   for (const b of bodies) {
+    // every black hole in the room pulls on this thing
+    const field = holes.length ? holeFieldAt(b.x, b.y, b.vx, b.vy) : null;
     // the grabbed body chases the finger like it's magnetized
     if (b === grabbed) {
       b.vx = (pointer.x - b.x) * 14;
       b.vy = (pointer.y - b.y) * 14;
-    } else if (gravityOn) {
-      b.vy += GRAV * dt;
     } else {
-      // zero-g: the tiniest drift, so nothing ever quite sits still
-      b.vx += Math.sin(elapsed * 0.7 + b.x * 0.01) * 6 * dt;
-      b.vy += Math.cos(elapsed * 0.9 + b.y * 0.01) * 6 * dt;
+      if (field) {
+        b.vx += field.ax * dt;
+        b.vy += field.ay * dt;
+        const drag = Math.min(0.85, field.strength / 2400) * HOLE_DRAG;
+        b.vx -= b.vx * drag * dt;
+        b.vy -= b.vy * drag * dt;
+      }
+      if (gravityOn) {
+        // Close to a hole the lab's own gravity stops mattering. You aren't
+        // falling DOWN any more — you're falling AROUND. Without this the
+        // floor wins every argument and nothing ever gets to orbit: it just
+        // sags out of its circle and lands. Squared, so the hole takes over
+        // decisively inside its own patch and lets go quickly outside it.
+        b.vy += GRAV * (field ? 1 / (1 + (field.strength / 150) ** 2) : 1) * dt;
+      } else {
+        // zero-g: the tiniest drift, so nothing ever quite sits still
+        b.vx += Math.sin(elapsed * 0.7 + b.x * 0.01) * 6 * dt;
+        b.vy += Math.cos(elapsed * 0.9 + b.y * 0.01) * 6 * dt;
+      }
+    }
+    // anything properly caught in a well is tumbling, and people get dizzy
+    if (field && field.strength > 140 && b !== grabbed) {
+      b.angVel += (field.ax * -b.vy + field.ay * b.vx) * 0.000012;
+      if (b.type === 'person') b.dizzy = Math.max(b.dizzy, 0.3);
     }
 
     // people walk when they're grounded, flail when they're not
@@ -642,35 +718,12 @@ function update(dt) {
     // black holes GROW: slowly with age, a spurt with every meal —
     // and they NEVER stop. no cap. no mercy. eventually, no lab.
     h.size += dt * 0.022;
+    // The pull itself now lives with the rest of the physics, up in the
+    // body loop — see holeFieldAt. All that's left here is the eating.
     for (const b of bodies) {
       if (b === grabbed) continue;
       const dx = h.x - b.x, dy = h.y - b.y;
       const d = Math.hypot(dx, dy) || 1;
-      // strong up close, but NEVER zero — a black hole owns the whole
-      // room. far things slide along the floor toward it; near things
-      // get lifted clean off the ground, gravity or no gravity.
-      // and the bigger it's grown, the harder it pulls.
-      const pull = Math.min(2600 * h.size,
-        (90000 / Math.max(d, 30) + 300) * (0.5 + h.size * 0.5));
-      b.vx += (dx / d) * pull * dt;
-      b.vy += (dy / d) * pull * dt;
-      // PEOPLE get the full cinematic treatment: a DECAYING ORBIT.
-      // we steer them sideways at just under circular-orbit speed, so
-      // gravity wins a little bit every lap — a spiral to the SLURP.
-      if (b.type === 'person' && !b.tentacled && d < 340 * h.size) {
-        const nx = dx / d, ny = dy / d;              // toward the hole
-        if (!b.orbitDir) {
-          // keep circling whichever way they were already drifting
-          b.orbitDir = (b.vx * -ny + b.vy * nx) >= 0 ? 1 : -1;
-        }
-        const tx = -ny * b.orbitDir, ty = nx * b.orbitDir;   // around it
-        const orbV = Math.sqrt(pull * d) * 0.92;     // 92% of stable = doomed
-        const blend = Math.min(1, dt * 4);
-        b.vx += (tx * orbV + nx * 26 - b.vx) * blend;
-        b.vy += (ty * orbV + ny * 26 - b.vy) * blend;
-        b.angVel = b.orbitDir * 4;                   // spin with the ride
-        b.dizzy = Math.max(b.dizzy, 0.3);            // stars ON, obviously
-      } else if (b.type === 'person') b.orbitDir = 0;
       if (d < 28 * h.size) {
         // down the hatch — and the hole gets a little bigger for it
         b.gone = true;
@@ -1115,15 +1168,23 @@ function warpOffset(x, y) {
     const d2 = dx * dx + dy * dy;
     const d = Math.sqrt(d2) || 1;
     const S = h.size || 1;
-    const m = Math.min(36 * S, 300000 * S / (d2 + 6000));
+    // A much deeper, much wider dent than before — about six times the pull
+    // at arm's length, and it still shows a screen away. You should be able
+    // to SEE the funnel, not squint for it.
+    const m = Math.min(120 * S, 4000000 * S / (d2 + 26000));
     ox += (dx / d) * m;
     oy += (dy / d) * m;
+    // ...and a TWIST, because the hole is spinning. The sheet gets wound
+    // around it, not just sucked in. This is what makes it look alive.
+    const tw = Math.min(46 * S, 1200000 * S / (d2 + 34000)) * (h.spin || 1);
+    ox += (-dy / d) * tw;
+    oy += (dx / d) * tw;
   }
   for (const s of suns) {
     const dx = s.x - x, dy = s.y - y;
     const d2 = dx * dx + dy * dy;
     const d = Math.sqrt(d2) || 1;
-    const m = Math.min(16, 110000 / (d2 + 9000));
+    const m = Math.min(34, 420000 / (d2 + 12000));
     ox += (dx / d) * m;
     oy += (dy / d) * m;
   }
@@ -1131,32 +1192,64 @@ function warpOffset(x, y) {
 }
 
 function drawWarpedGrid() {
-  const step = 60, seg = 40;
+  const step = 60;
+  const bend = holes.length || suns.length;
+  // finer sampling where it's bending, so the curve is a CURVE and not a
+  // row of little straight bits
+  const seg = bend ? 14 : 40;
   const vw = canvas.width / cam.zoom, vh = canvas.height / cam.zoom;
   const x0 = Math.max(0, Math.floor((cam.x - 60) / step) * step);
   const x1 = Math.min(WORLD_W, cam.x + vw + 60);
   const y0 = Math.max(0, Math.floor((cam.y - 60) / step) * step);
   const y1 = Math.min(WORLD_H, cam.y + vh + 60);
-  const bend = holes.length || suns.length;
-  ctx.strokeStyle = 'rgba(140, 170, 255, 0.09)';
-  ctx.lineWidth = 1;
-  for (let x = x0; x <= x1; x += step) {
+
+  // A flat lab is one cheap path and we're done.
+  if (!bend) {
+    ctx.strokeStyle = 'rgba(140, 170, 255, 0.11)';
+    ctx.lineWidth = 1 / cam.zoom;
     ctx.beginPath();
-    for (let y = y0; y <= y1; y += seg) {
-      const [ox, oy] = bend ? warpOffset(x, y) : [0, 0];
-      if (y === y0) ctx.moveTo(x + ox, y + oy);
-      else ctx.lineTo(x + ox, y + oy);
-    }
+    for (let x = x0; x <= x1; x += step) { ctx.moveTo(x, y0); ctx.lineTo(x, y1); }
+    for (let y = y0; y <= y1; y += step) { ctx.moveTo(x0, y); ctx.lineTo(x1, y); }
     ctx.stroke();
+    return;
+  }
+
+  // Bent: each little piece of line is sorted into one of four brightness
+  // buckets by how hard IT is being pulled, so the strain glows exactly where
+  // spacetime is actually stretched instead of lighting the whole line.
+  // Sorting first means four stroke calls instead of a thousand.
+  const LEVELS = 4;
+  const paths = [];
+  for (let i = 0; i < LEVELS; i++) paths.push(new Path2D());
+  const addSeg = (ax, ay, bx, by, warp) => {
+    const k = Math.min(LEVELS - 1, Math.floor(Math.min(1, warp / 85) * LEVELS));
+    paths[k].moveTo(ax, ay);
+    paths[k].lineTo(bx, by);
+  };
+
+  for (let x = x0; x <= x1; x += step) {
+    let px = null, py = null, pw = 0;
+    for (let y = y0; y <= y1; y += seg) {
+      const [ox, oy] = warpOffset(x, y);
+      const w = Math.hypot(ox, oy);
+      if (px !== null) addSeg(px, py, x + ox, y + oy, Math.max(pw, w));
+      px = x + ox; py = y + oy; pw = w;
+    }
   }
   for (let y = y0; y <= y1; y += step) {
-    ctx.beginPath();
+    let px = null, py = null, pw = 0;
     for (let x = x0; x <= x1; x += seg) {
-      const [ox, oy] = bend ? warpOffset(x, y) : [0, 0];
-      if (x === x0) ctx.moveTo(x + ox, y + oy);
-      else ctx.lineTo(x + ox, y + oy);
+      const [ox, oy] = warpOffset(x, y);
+      const w = Math.hypot(ox, oy);
+      if (px !== null) addSeg(px, py, x + ox, y + oy, Math.max(pw, w));
+      px = x + ox; py = y + oy; pw = w;
     }
-    ctx.stroke();
+  }
+  for (let i = 0; i < LEVELS; i++) {
+    const t = i / (LEVELS - 1);
+    ctx.strokeStyle = `rgba(${Math.round(140 + t * 95)}, ${Math.round(170 - t * 55)}, 255, ${0.10 + t * 0.58})`;
+    ctx.lineWidth = (0.9 + t * 2.6) / cam.zoom;
+    ctx.stroke(paths[i]);
   }
 }
 
@@ -1402,7 +1495,9 @@ function draw() {
   if (W - left - 12 < 200) { rowY = pill.bottom + 8; left = 10; }
   const gap = 8;
   const btnW = Math.min(200, (W - left - 12 - gap) / 2);
-  const currentLabel = (BUILD.find(t => t[0] === tool) || BUILD[0])[1];
+  // the menu is called ITEMS, and wears the emoji of whatever you've got
+  // picked so you can still see what a tap is going to drop
+  const currentLabel = 'ITEMS ' + (BUILD.find(t => t[0] === tool) || BUILD[0])[1].split(' ')[0];
 
   const drawBtn = (x, y, w, h, label, id, on, colors) => {
     uiRects.push({ x, y, w, h, id });
