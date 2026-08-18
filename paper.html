@@ -79,6 +79,7 @@ const PLAYERS = [
   { id: 5, name: 'Barry',     color: '#a878e8', dark: '#7a52b0' },
   { id: 6, name: 'Chippy Jr', color: '#5a4a68', dark: '#382c48', skin: 'axe' },
   { id: 7, name: 'The Fart',  color: '#b4d45f', dark: '#84a03c', skin: 'fart' },
+  { id: 8, name: 'The Salmon', color: '#e88a7a', dark: '#b05a4c', skin: 'salmon' },
 ];
 
 let ents = [];
@@ -114,6 +115,9 @@ const SKINS = [
     unlocked: () => (psave.surv || 0) >= 180,
     progress: () => 'longest survival: ' + Math.floor((psave.surv || 0) / 60) + ':' +
                     String(Math.floor((psave.surv || 0) % 60)).padStart(2, '0') + ' / 3:00' },
+  { id: 'explorer', name: 'THE EXPLORER', how: 'visit all 4 corners in ONE run — PERK: sharper turns',
+    unlocked: () => (psave.corners || 0) >= 4,
+    progress: () => 'corners in one trip: ' + (psave.corners || 0) + '/4' },
 ];
 let camX = 0, camY = 0;
 let gameOver = false;
@@ -121,6 +125,7 @@ let totalWin = false;    // every rival gone AND the whole page painted
 let lastStand = false;   // every rival gone — the mop-up begins
 let bestPct = 0;
 let roundT = 0;          // how long you've stayed alive this round
+let roundCorners = new Set();   // which corners of the world you've seen
 let milestone = 0;          // the next % worth celebrating
 let banner = '', bannerT = 0;
 
@@ -153,7 +158,7 @@ function resetGame() {
   trail.fill(0);
   ents = [];
   const spots = [[GW >> 1, GH >> 1], [10, 8], [GW - 11, 8], [10, GH - 9], [GW - 11, GH - 9],
-                 [GW >> 1, 7], [GW >> 1, GH - 8]];
+                 [GW >> 1, 7], [GW >> 1, GH - 8], [8, GH >> 1]];
   PLAYERS.forEach((p, i) => {
     const [cx, cy] = spots[i];
     stampSquare(p.id, cx, cy, 2);
@@ -163,6 +168,7 @@ function resetGame() {
   totalWin = false;
   lastStand = false;
   roundT = 0;
+  roundCorners = new Set();
   milestone = 25;
   banner = 'steer with your MOUSE (or finger, or arrows)';
   bannerT = 5;
@@ -248,7 +254,8 @@ function steerSmooth(you, dt) {
   } else if (you.keyAngle !== null) tgt = you.keyAngle;
   if (tgt !== null) {
     let da = ((tgt - you.angle + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
-    const maxTurn = TURN_RATE * dt;
+    // explorers travel light: +30% turn rate, tighter loops
+    const maxTurn = TURN_RATE * (psave.skin === 'explorer' ? 1.3 : 1) * dt;
     you.angle += Math.max(-maxTurn, Math.min(maxTurn, da));
   }
   you.dx = Math.cos(you.angle);
@@ -554,6 +561,27 @@ function update(dt) {
     setBanner(milestone + '% OF THE PAPER IS YOURS!');
     claimSound(200);
     milestone += 25;
+  }
+
+  // the explorer's creed: have you SEEN this paper? all of it?
+  const you0 = ents[0];
+  if (you0.alive) {
+    [[2, 2], [GW - 3, 2], [2, GH - 3], [GW - 3, GH - 3]].forEach((corner, ci) => {
+      if (!roundCorners.has(ci) &&
+          Math.hypot(you0.x - corner[0], you0.y - corner[1]) < 8) {
+        roundCorners.add(ci);
+        if (roundCorners.size > (psave.corners || 0)) {
+          psave.corners = roundCorners.size;
+          persistP();
+          if (roundCorners.size >= 4) {
+            setBanner('🧭 THE EXPLORER SKIN IS UNLOCKED!!');
+            towerSound();
+          } else setBanner('🧭 corner ' + roundCorners.size + '/4 explored!');
+        } else if (roundCorners.size < 4) {
+          setBanner('🧭 corner ' + roundCorners.size + '/4 explored!');
+        }
+      }
+    });
   }
 
   // survival clock: UNIT-13 respects those who endure
@@ -964,6 +992,58 @@ function drawHead(px, py, sc, skin, dx, dy, p) {
     ctx.beginPath();
     ctx.arc(0, -19, 2, 0, Math.PI * 2);
     ctx.fill();
+  } else if (skin === 'explorer') {
+    // THE EXPLORER — where it all began
+    ctx.strokeStyle = '#8a8378';                   // the sword on the back
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(8, -14);
+    ctx.lineTo(15, 6);
+    ctx.stroke();
+    ctx.fillStyle = '#c8a05a';
+    ctx.fillRect(6, -12, 6, 3);
+    ctx.fillStyle = '#f0cf9f';                     // the face
+    ctx.beginPath();
+    ctx.arc(0, 0, 10, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#6a8a4a';                     // adventuring hood-cap
+    ctx.beginPath();
+    ctx.arc(0, -3, 10.5, Math.PI, 0);
+    ctx.fill();
+    ctx.fillRect(-13, -4, 26, 3);                  // the brim
+    ctx.fillStyle = '#101418';                     // eyes with distance in them
+    ctx.fillRect(-5 + dx * 2, 0 + dy * 2, 3, 4);
+    ctx.fillRect(2 + dx * 2, 0 + dy * 2, 3, 4);
+  } else if (skin === 'salmon') {
+    // THE SALMON — the river did not help it. the paper won't either.
+    ctx.save();
+    if (dx < 0) ctx.scale(-1, 1);
+    const leap = Math.sin(elapsed * 5) * 3;        // forever mid-leap
+    ctx.translate(0, leap);
+    ctx.fillStyle = '#e88a7a';                     // the body
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 14, 8, -0.15, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#f0b09a';                     // the belly
+    ctx.beginPath();
+    ctx.ellipse(0, 3, 11, 4, -0.15, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#e88a7a';                     // the tail, working hard
+    ctx.beginPath();
+    ctx.moveTo(-12, 0);
+    ctx.lineTo(-19, -7 + Math.sin(elapsed * 10) * 3);
+    ctx.lineTo(-19, 7 + Math.sin(elapsed * 10) * 3);
+    ctx.fill();
+    ctx.beginPath();                               // dorsal fin
+    ctx.moveTo(-3, -7);
+    ctx.lineTo(2, -12);
+    ctx.lineTo(6, -6);
+    ctx.fill();
+    ctx.fillStyle = '#101418';                     // the determined eye
+    ctx.beginPath();
+    ctx.arc(8, -2, 2.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
   } else {
     ctx.fillStyle = p.dark;
     ctx.beginPath();
