@@ -218,8 +218,125 @@ let airJumps = 1;
 let particles = [];
 let camY = 0;
 let elapsed = 0;
-let screen = 'menu';           // 'menu' | 'play'
+let screen = 'menu';           // 'menu' | 'play' | 'build'
 let uiRects = [];
+
+// ---- the LEVEL BUILDER's desk ----
+let bLevel = localStorage.getItem('dash_custom') || '_'.repeat(80);
+let bSpeed = parseInt(localStorage.getItem('dash_custom_speed') || '340');
+let bTool = 'spike';
+let bCam = 0;
+let bPaint = false;
+let bPanLast = null;
+let bResetUntil = 0;
+let bCheck = null;             // the robot inspector's latest report
+const bPointers = new Map();
+
+function saveBuild() {
+  localStorage.setItem('dash_custom', bLevel);
+  localStorage.setItem('dash_custom_speed', String(bSpeed));
+}
+
+function playCustom() {
+  LEVELS[3] = { name: 'YOUR LEVEL', diff: 0, speed: bSpeed,
+                str: bLevel + '________' };
+  selectLevel(3);
+}
+
+// ---------------------------------------------------------------------
+// THE ROBOT INSPECTOR — the same robot that certified my levels,
+// now living in the page, ready to certify YOURS. it uses the same
+// physics numbers as the real game, so its verdict is the truth.
+// ---------------------------------------------------------------------
+function simulate(str, speed) {
+  const L = str + '________';
+  const info = i => L[i] || '_';
+  const gTop = x => {
+    const ch = info(Math.floor(x / COL));
+    if (ch === '.') return -999;
+    return (ch === '#' ? 1 : ch === '2' ? 2 : ch === '3' ? 3 : 0) * COL;
+  };
+  let sx = 0, sy = 0, svy = 0, sOn = true, sAir = 1;
+  let sAttempts = 1;
+  const deaths = {};
+  const lenPx = L.length * COL;
+  let frames = 0, maxPct = 0, sWon = false;
+  const dt = 1 / 60;
+  while (!sWon && frames < 60 * 300) {
+    // ---- the robot's trained instincts ----
+    let jump = false;
+    if (sOn) {
+      const c1 = info(Math.floor((sx + 40) / 40));
+      if (c1 === '^' || c1 === '.' || c1 === 'O') jump = true;
+      for (let d = 1; d <= 2 && !jump; d++) {
+        const ch = info(Math.floor((sx + d * 40) / 40));
+        const h = ch === '#' ? 1 : ch === '2' ? 2 : ch === '3' ? 3 : 0;
+        if (h * 40 > sy + 2) jump = true;
+      }
+    }
+    if (info(Math.floor(sx / 40)) === 'P' ||
+        info(Math.floor((sx + 40) / 40)) === 'P') jump = false;
+    for (let d = 0; d <= 2; d++) {
+      if (info(Math.floor((sx + d * 40) / 40)) === 'o') jump = false;
+    }
+    let airJump = false;
+    if (!sOn && svy > 0 && sAir > 0 && sy < 30 &&
+        info(Math.floor((sx + 30) / 40)) === '.') airJump = true;
+
+    // ---- the game's exact physics, mirrored ----
+    let died = false;
+    sx += speed * dt;
+    const sup = Math.max(gTop(sx - CUBE * 0.35), gTop(sx + CUBE * 0.35));
+    if (sOn && jump) { svy = VJUMP; sOn = false; sAir = 1; }
+    else if (!sOn && airJump) { svy = VJUMP * 0.92; sAir--; }
+    if (!sOn) {
+      svy += GRAV * dt;
+      sy -= svy * dt;
+      if (sy <= sup && svy > 0) {
+        if (sup < -100) { if (sy < -60) died = true; }
+        else if (sup - sy > 26) died = true;
+        else { sy = sup; sOn = true; svy = 0; sAir = 1; }
+      }
+    } else {
+      if (sup < sy - 2) { sOn = false; svy = 0; }
+      else if (sup > sy + 2) died = true;
+    }
+    if (sy < -60) died = true;
+    if (!died) {
+      const c0 = Math.floor((sx - CUBE * 0.3) / COL);
+      const c1 = Math.floor((sx + CUBE * 0.3) / COL);
+      for (let c = c0; c <= c1 && !died; c++) {
+        if (info(c) === '^' && sy < COL * 0.62) died = true;
+        if (info(c) === 'P' && sy < COL * 0.5 && svy >= 0) {
+          svy = VPAD; sOn = false; sAir = 1;
+        }
+      }
+      const s0 = Math.floor((sx - 70) / COL);
+      const s1 = Math.floor((sx + 70) / COL);
+      for (let c = s0; c <= s1 && !died; c++) {
+        if (info(c) === 'O' &&
+            Math.hypot(sx - (c * COL + COL / 2), (sy + CUBE / 2) - 18) < SAW_R + CUBE * 0.42) died = true;
+        if (info(c) === 'o' &&
+            Math.hypot(sx - (c * COL + COL / 2), (sy + CUBE / 2) - AIRSAW_H) < AIRSAW_R + CUBE * 0.42) died = true;
+      }
+    }
+    maxPct = Math.max(maxPct, Math.round(sx / (lenPx - 240) * 100));
+    if (died) {
+      const col = Math.floor(sx / COL);
+      deaths[col] = (deaths[col] || 0) + 1;
+      sAttempts++;
+      if (deaths[col] >= 20) break;      // hopeless — report it
+      sx = 0; sy = 0; svy = 0; sOn = true; sAir = 1;
+    }
+    if (sx >= lenPx - COL * 6) sWon = true;
+    frames++;
+  }
+  let worstCol = -1, worstN = 0;
+  for (const [c, n] of Object.entries(deaths)) {
+    if (n > worstN) { worstN = n; worstCol = parseInt(c); }
+  }
+  return { won: sWon, attempts: sAttempts, maxPct: Math.min(100, maxPct), worstCol };
+}
 
 function respawn() {
   px = 0; py = 0; vy = 0;
@@ -231,15 +348,68 @@ function respawn() {
 // ---------------------------------------------------------------------
 // INPUT — one button. that's the entire deal.
 // ---------------------------------------------------------------------
+function uiAction(id) {
+  if (id === 'menu') { screen = 'menu'; return; }
+  if (id.startsWith('lv_')) { selectLevel(parseInt(id.slice(3))); return; }
+  if (id === 'build') { screen = 'build'; bCheck = null; return; }
+  if (id === 'playc') { playCustom(); return; }
+  if (id.startsWith('bt_')) { bTool = id.slice(3); return; }
+  if (id === 'btest') { saveBuild(); playCustom(); return; }
+  if (id === 'bcheck') {
+    saveBuild();
+    bCheck = simulate(bLevel, bSpeed);
+    if (bCheck.won) winJingle();
+    return;
+  }
+  if (id === 'bspeed') {
+    bSpeed = bSpeed === 340 ? 360 : bSpeed === 360 ? 385 : 340;
+    saveBuild();
+    return;
+  }
+  if (id === 'blenplus') { bLevel += '_'.repeat(20); saveBuild(); return; }
+  if (id === 'blenminus') {
+    if (bLevel.length > 60) bLevel = bLevel.slice(0, -20);
+    saveBuild();
+    return;
+  }
+  if (id === 'breset') {
+    if (performance.now() < bResetUntil) {
+      bLevel = '_'.repeat(80);
+      bCheck = null;
+      saveBuild();
+      bResetUntil = 0;
+    } else bResetUntil = performance.now() + 3000;
+    return;
+  }
+}
+
+const TOOLCHARS = { spike: '^', block: '#', stack2: '2', stack3: '3',
+                    pit: '.', pad: 'P', saw: 'O', airsaw: 'o', erase: '_' };
+function bSetCol(i) {
+  if (i < 0 || i >= bLevel.length) return;
+  const ch = TOOLCHARS[bTool];
+  if (ch === undefined) return;
+  bLevel = bLevel.slice(0, i) + ch + bLevel.slice(i + 1);
+  bCheck = null;                 // the old verdict died with the old level
+  saveBuild();
+}
+
 addEventListener('pointerdown', e => {
   ensureAudio();
   for (const r of uiRects) {
     if (e.clientX > r.x && e.clientX < r.x + r.w &&
-        e.clientY > r.y && e.clientY < r.y + r.h) {
-      if (r.id === 'menu') { screen = 'menu'; return; }
-      if (r.id.startsWith('lv_')) { selectLevel(parseInt(r.id.slice(3))); return; }
+        e.clientY > r.y && e.clientY < r.y + r.h) { uiAction(r.id); return; }
+  }
+  if (screen === 'build') {
+    bPointers.set(e.pointerId, e.clientX);
+    if (bPointers.size >= 2 || bTool === 'pan' || e.button === 2) {
+      bPaint = false;
+      bPanLast = e.clientX;
       return;
     }
+    bPaint = true;
+    bSetCol(Math.floor((e.clientX + bCam) / COL));
+    return;
   }
   if (screen === 'menu') return;
   if (won) { screen = 'menu'; return; }
@@ -247,7 +417,30 @@ addEventListener('pointerdown', e => {
   holdJump = true;
   justPressed = true;
 });
-addEventListener('pointerup', () => { holdJump = false; });
+addEventListener('pointermove', e => {
+  if (screen !== 'build') return;
+  if (bPointers.has(e.pointerId)) bPointers.set(e.pointerId, e.clientX);
+  if (bPanLast !== null) {
+    bCam -= e.clientX - bPanLast;
+    bCam = Math.max(0, Math.min(bLevel.length * COL - canvas.width + 100, bCam));
+    bPanLast = e.clientX;
+  } else if (bPaint) {
+    bSetCol(Math.floor((e.clientX + bCam) / COL));
+  }
+});
+addEventListener('pointerup', e => {
+  holdJump = false;
+  bPointers.delete(e.pointerId);
+  bPaint = false;
+  bPanLast = null;
+});
+addEventListener('wheel', e => {
+  if (screen !== 'build') return;
+  e.preventDefault();
+  bCam += e.deltaY * 0.9 + e.deltaX;
+  bCam = Math.max(0, Math.min(bLevel.length * COL - canvas.width + 100, bCam));
+}, { passive: false });
+addEventListener('contextmenu', e => { if (screen === 'build') e.preventDefault(); });
 addEventListener('keydown', e => {
   if (screen === 'menu') {
     const n = parseInt(e.key) - 1;
@@ -292,7 +485,7 @@ function die() {
 function update(dt) {
   elapsed += dt;
   tickMusic();
-  if (screen === 'menu' || won || !started) return;
+  if (screen !== 'play' || won || !started) return;
   if (dead > 0) {
     dead -= dt;
     if (dead <= 0) respawn();
@@ -494,7 +687,24 @@ function drawMenu(W, H) {
   ctx.font = '15px monospace';
   ctx.fillText('pick your level — sound ON, thumbs ready', W / 2, H * 0.33 + 28);
 
+  // the builder's two doors: play your creation, or go make one
+  {
+    const bw = Math.min(W - 60, 400);
+    const y0 = H * 0.44 + 3 * 90;
+    uiRects.push({ x: W / 2 - bw / 2, y: y0, w: bw / 2 - 6, h: 52, id: 'playc' });
+    uiRects.push({ x: W / 2 + 6, y: y0, w: bw / 2 - 6, h: 52, id: 'build' });
+    ctx.strokeStyle = '#ffd23f';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(W / 2 - bw / 2, y0, bw / 2 - 6, 52);
+    ctx.strokeRect(W / 2 + 6, y0, bw / 2 - 6, 52);
+    ctx.fillStyle = '#ffd23f';
+    ctx.font = 'bold 16px monospace';
+    ctx.fillText('▶ YOUR LEVEL', W / 2 - bw / 4 - 3, y0 + 32);
+    ctx.fillText('🔨 BUILDER', W / 2 + bw / 4 + 3, y0 + 32);
+  }
+
   LEVELS.forEach((L, i) => {
+    if (i > 2) return;                   // the custom slot has its own door
     const bw = Math.min(W - 60, 400), bh = 74;
     const x = W / 2 - bw / 2, y = H * 0.44 + i * (bh + 16);
     uiRects.push({ x, y, w: bw, h: bh, id: 'lv_' + i });
@@ -521,9 +731,145 @@ function drawMenu(W, H) {
   });
 }
 
+function drawBuild(W, H) {
+  uiRects = [];
+  ctx.fillStyle = '#161226';
+  ctx.fillRect(0, 0, W, H);
+  const groundY = H * 0.62;
+
+  ctx.save();
+  ctx.translate(-bCam, 0);
+  // column grid + contents
+  const c0 = Math.max(0, Math.floor(bCam / COL));
+  const c1 = Math.min(bLevel.length - 1, Math.floor((bCam + W) / COL) + 1);
+  for (let c = c0; c <= c1; c++) {
+    const x = c * COL;
+    const ch = bLevel[c];
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, 60);
+    ctx.lineTo(x, H);
+    ctx.stroke();
+    if (ch !== '.') {
+      ctx.fillStyle = '#242038';
+      ctx.fillRect(x, groundY, COL + 1, H - groundY);
+      ctx.fillStyle = 'rgba(125, 211, 255, 0.8)';
+      ctx.fillRect(x, groundY - 2, COL + 1, 3);
+    }
+    const blocks = ch === '#' ? 1 : ch === '2' ? 2 : ch === '3' ? 3 : 0;
+    for (let b = 0; b < blocks; b++) {
+      ctx.fillStyle = '#2c2846';
+      ctx.fillRect(x + 1, groundY - (b + 1) * COL, COL - 2, COL - 1);
+      ctx.strokeStyle = 'rgba(125, 211, 255, 0.7)';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x + 2, groundY - (b + 1) * COL + 1, COL - 4, COL - 3);
+    }
+    if (ch === '^') {
+      ctx.fillStyle = '#ff5a8f';
+      ctx.beginPath();
+      ctx.moveTo(x + 2, groundY);
+      ctx.lineTo(x + COL / 2, groundY - COL * 0.95);
+      ctx.lineTo(x + COL - 2, groundY);
+      ctx.fill();
+    }
+    if (ch === 'P') {
+      ctx.fillStyle = '#ffd23f';
+      ctx.beginPath();
+      ctx.ellipse(x + COL / 2, groundY - 4, COL * 0.42, 7, 0, Math.PI, 0);
+      ctx.fill();
+    }
+    if (ch === 'O') drawSaw(x + COL / 2, groundY - 18, SAW_R);
+    if (ch === 'o') drawSaw(x + COL / 2, groundY - AIRSAW_H, AIRSAW_R);
+    // the robot's accusing arrow
+    if (bCheck && !bCheck.won && bCheck.worstCol === c) {
+      ctx.fillStyle = '#ff5a4a';
+      ctx.font = 'bold 26px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('▼', x + COL / 2, groundY - 150 - Math.sin(elapsed * 5) * 8);
+      ctx.textAlign = 'left';
+    }
+  }
+  // the finish gate, right where TEST will put it
+  ctx.strokeStyle = '#7ddf8f';
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.moveTo((bLevel.length + 2) * COL, groundY);
+  ctx.lineTo((bLevel.length + 2) * COL, groundY - 160);
+  ctx.stroke();
+  ctx.restore();
+
+  // ---- toolbar (measured, grows to fit) ----
+  const TOOLS = [
+    ['bt_spike', '▲ SPIKE'], ['bt_block', '□ BLOCK'], ['bt_stack2', '□² x2'],
+    ['bt_stack3', '□³ x3'], ['bt_pit', '⬛ PIT'], ['bt_pad', '● PAD'],
+    ['bt_saw', '⚙ SAW'], ['bt_airsaw', '⚙ AIR SAW'], ['bt_erase', '✖ ERASE'],
+    ['bt_pan', '✋ PAN'],
+    ['btest', '▶ TEST'], ['bcheck', '🤖 CHECK'],
+    ['bspeed', '⚡ ' + bSpeed],
+    ['blenplus', '+20'], ['blenminus', '-20'],
+    ['menu', 'MENU'],
+    ['breset', performance.now() < bResetUntil ? 'REALLY?' : 'RESET'],
+  ];
+  const places = [];
+  let bx = 8, by = 8;
+  for (const [id, label] of TOOLS) {
+    const bw = Math.max(56, label.length * 9.5 + 18);
+    if (bx + bw > W - 8) { bx = 8; by += 40; }
+    places.push({ id, label, x: bx, y: by, w: bw });
+    bx += bw + 6;
+  }
+  const barH = by + 36 + 8;
+  ctx.fillStyle = 'rgba(8, 6, 18, 0.85)';
+  ctx.fillRect(0, 0, W, barH);
+  for (const p of places) {
+    uiRects.push({ x: p.x, y: p.y, w: p.w, h: 34, id: p.id });
+    const active = p.id === 'bt_' + bTool;
+    const danger = p.id === 'breset' && performance.now() < bResetUntil;
+    ctx.fillStyle = danger ? 'rgba(232, 69, 60, 0.35)'
+                  : p.id === 'btest' ? 'rgba(125, 223, 143, 0.18)'
+                  : p.id === 'bcheck' ? 'rgba(255, 210, 63, 0.15)'
+                  : active ? 'rgba(125, 211, 255, 0.25)' : 'rgba(255,255,255,0.06)';
+    ctx.fillRect(p.x, p.y, p.w, 34);
+    ctx.strokeStyle = danger ? '#e8453c' : p.id === 'btest' ? '#7ddf8f'
+                    : p.id === 'bcheck' ? '#ffd23f'
+                    : active ? '#7dd3ff' : '#4a4468';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(p.x, p.y, p.w, 34);
+    ctx.fillStyle = danger ? '#ff9f97' : p.id === 'btest' ? '#7ddf8f'
+                  : p.id === 'bcheck' ? '#ffd23f'
+                  : active ? '#7dd3ff' : '#b8b4c8';
+    ctx.font = 'bold 12px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(p.label, p.x + p.w / 2, p.y + 22);
+  }
+  ctx.textAlign = 'left';
+  ctx.fillStyle = 'rgba(255,255,255,0.45)';
+  ctx.font = '12px monospace';
+  ctx.fillText('tap/drag to place — scroll or two-finger swipe to move — length: ' +
+               bLevel.length + ' columns', 10, barH + 18);
+
+  // the inspector's report
+  if (bCheck) {
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 16px monospace';
+    if (bCheck.won) {
+      ctx.fillStyle = '#7ddf8f';
+      ctx.fillText('🤖 BEATABLE! the robot cleared it (' + bCheck.attempts +
+                   ' attempt' + (bCheck.attempts === 1 ? '' : 's') + ')', W / 2, H - 30);
+    } else {
+      ctx.fillStyle = '#ff5a4a';
+      ctx.fillText('🤖 the robot DIED every time at the red arrow (reached ' +
+                   bCheck.maxPct + '%) — fix that spot!', W / 2, H - 30);
+    }
+    ctx.textAlign = 'left';
+  }
+}
+
 function draw() {
   const W = canvas.width, H = canvas.height;
   if (screen === 'menu') { drawMenu(W, H); return; }
+  if (screen === 'build') { drawBuild(W, H); return; }
   uiRects = [];
   const groundY = H * GROUND_FRAC + camY;
   const beatPulse = audio ? Math.max(0, 1 - (audio.currentTime - lastBeatAt) / BEAT) : 0;
