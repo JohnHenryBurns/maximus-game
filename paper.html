@@ -649,9 +649,10 @@ function draw() {
       const c = idx(x, y);
       if (own[c]) {
         const p = PLAYERS[own[c] - 1];
-        // donut rule: land you've made SOLID is frosted pink too
+        // skin rules: the donut frosts her land pink; Bob flies the flag
         const donutLand = own[c] === 1 && psave.skin === 'donut';
-        ctx.fillStyle = donutLand ? '#ff9fd0' : p.color;
+        const bobLand = own[c] === 1 && psave.skin === 'bob';
+        ctx.fillStyle = donutLand ? '#ff9fd0' : bobLand ? '#26262e' : p.color;
         ctx.fillRect(x * CELL, y * CELL, CELL, CELL);
         if (donutLand && Math.sin(elapsed * 4 + c * 2.3) > 0.92) {
           // a sparse, tasteful twinkle across the whole empire
@@ -664,15 +665,20 @@ function draw() {
           ctx.moveTo(sx, sy - 3.5); ctx.lineTo(sx, sy + 3.5);
           ctx.stroke();
         }
+        if (bobLand && (x * 7 + y * 13) % 11 === 3) {
+          // a scattering of jolly rogers across the conquered dark
+          drawJollyRoger(x * CELL + CELL / 2, y * CELL + CELL / 2, 0.9, 0.55);
+        }
       }
       if (trail[c]) {
         const p = PLAYERS[trail[c] - 1];
         const donutInk = trail[c] === 1 && psave.skin === 'donut';
-        ctx.globalAlpha = donutInk ? 0.6 : 0.45;
-        ctx.fillStyle = donutInk ? '#ff8fc8' : p.color;   // icing-pink ink
+        const bobInk = trail[c] === 1 && psave.skin === 'bob';
+        ctx.globalAlpha = donutInk ? 0.6 : bobInk ? 0.8 : 0.45;
+        ctx.fillStyle = donutInk ? '#ff8fc8' : bobInk ? '#14141a' : p.color;
         ctx.fillRect(x * CELL + 2, y * CELL + 2, CELL - 4, CELL - 4);
         ctx.globalAlpha = 1;
-        // ...and it SPARKLES. every cell twinkles on its own schedule.
+        // ...donut ink SPARKLES. every cell twinkles on its own schedule.
         if (donutInk && Math.sin(elapsed * 6 + c * 1.7) > 0.55) {
           const sx = x * CELL + CELL / 2 + Math.sin(c * 7.3) * 6;
           const sy = y * CELL + CELL / 2 + Math.cos(c * 3.1) * 6;
@@ -682,6 +688,10 @@ function draw() {
           ctx.moveTo(sx - 4, sy); ctx.lineTo(sx + 4, sy);
           ctx.moveTo(sx, sy - 4); ctx.lineTo(sx, sy + 4);
           ctx.stroke();
+        }
+        // ...Bob's ink flies a skull on every other plank
+        if (bobInk && c % 2 === 0) {
+          drawJollyRoger(x * CELL + CELL / 2, y * CELL + CELL / 2, 1, 0.95);
         }
       }
     }
@@ -744,6 +754,32 @@ function draw() {
   ctx.restore();
 
   drawHud(W, H);
+}
+
+// a tiny skull and crossbones, stamped wherever Bob has been
+function drawJollyRoger(px, py, sc, alpha) {
+  ctx.save();
+  ctx.translate(px, py);
+  ctx.scale(sc, sc);
+  ctx.globalAlpha = alpha;
+  ctx.strokeStyle = '#e8e4d8';                     // the crossed bones
+  ctx.lineWidth = 1.8;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(-5, 5); ctx.lineTo(5, -1);
+  ctx.moveTo(5, 5); ctx.lineTo(-5, -1);
+  ctx.stroke();
+  ctx.fillStyle = '#e8e4d8';                       // the skull
+  ctx.beginPath();
+  ctx.arc(0, -3, 4.2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillRect(-2.5, -1, 5, 3);                    // the jaw
+  ctx.fillStyle = '#14141a';                       // eye sockets
+  ctx.beginPath();
+  ctx.arc(-1.7, -3.5, 1.1, 0, Math.PI * 2);
+  ctx.arc(1.7, -3.5, 1.1, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
 }
 
 // one head, any size, any outfit
