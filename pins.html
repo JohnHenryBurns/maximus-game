@@ -160,7 +160,6 @@ let totalDrops = 0;
 let anyPulled = false;
 let calmT = 0;
 let result = null;         // null | 'win' | 'fail'
-let winT = 0;              // the little victory pause before auto-advance
 let particles = [];
 let elapsed = 0;
 let uiRects = [];
@@ -222,11 +221,7 @@ addEventListener('pointerdown', e => {
     if (e.clientX > r.x && e.clientX < r.x + r.w &&
         e.clientY > r.y && e.clientY < r.y + r.h) { uiAction(r.id); return; }
   }
-  if (result === 'win') {
-    if (levelIx + 1 < LEVELS.length) loadLevel(levelIx + 1);
-    else loadLevel(0);
-    return;
-  }
+  if (result === 'win') return;          // the NEXT LEVEL button handles this
   if (result === 'fail') { loadLevel(levelIx); return; }
   const w = toWorld(e.clientX, e.clientY);
   for (const p of pins) {
@@ -243,6 +238,10 @@ addEventListener('pointerdown', e => {
 
 function uiAction(id) {
   if (id === 'reset') { loadLevel(levelIx); return; }
+  if (id === 'next') {
+    loadLevel(levelIx + 1 < LEVELS.length ? levelIx + 1 : 0);
+    return;
+  }
   if (id.startsWith('lv_')) {
     const ix = parseInt(id.slice(3));
     if (ix === 0 || save.done[ix - 1]) loadLevel(ix);
@@ -282,14 +281,8 @@ function segPush(drop, s, R) {
 function update(dt) {
   elapsed += dt;
   if (blipT > 0) blipT -= dt;
-  // victory earns you the next level automatically
-  if (result === 'win') {
-    winT -= dt;
-    if (winT <= 0) {
-      loadLevel(levelIx + 1 < LEVELS.length ? levelIx + 1 : 0);
-    }
-    return;
-  }
+  // victory holds the stage until YOU press the button
+  if (result === 'win') return;
   for (const p of pins) {
     if (p.pulled && p.anim < 1) p.anim = Math.min(1, p.anim + dt * 3);
   }
@@ -370,7 +363,6 @@ function update(dt) {
       const need = LEVELS[levelIx].need;
       if (frac >= need) {
         result = 'win';
-        winT = 2.2;                    // enjoy the glug, then onward
         save.done[levelIx] = Math.max(save.done[levelIx] || 0, Math.round(frac * 100));
         persist();
         winSound();
@@ -545,13 +537,24 @@ function draw() {
     if (result === 'win') {
       ctx.fillStyle = '#7ddf8f';
       ctx.font = `bold ${Math.min(42, W / 14)}px monospace`;
-      ctx.fillText('GLUG! ' + Math.round(frac * 100) + '% DELIVERED', W / 2, H / 2 - 20);
-      ctx.fillStyle = '#cfe4ff';
-      ctx.font = '16px monospace';
-      ctx.fillText(levelIx + 1 < LEVELS.length
-                     ? 'next level incoming... (tap to hurry)'
-                     : 'that was the last one! looping back around...',
-                   W / 2, H / 2 + 20);
+      ctx.fillText('GLUG! ' + Math.round(frac * 100) + '% DELIVERED', W / 2, H / 2 - 40);
+      // THE BUTTON — big, green, and impossible to miss
+      const bw = Math.min(W - 60, 280), bh = 60;
+      const bx = W / 2 - bw / 2, by = H / 2 + 4;
+      uiRects.push({ x: bx, y: by, w: bw, h: bh, id: 'next' });
+      const throb = 1 + Math.sin(elapsed * 3) * 0.03;
+      ctx.save();
+      ctx.translate(W / 2, by + bh / 2);
+      ctx.scale(throb, throb);
+      ctx.fillStyle = 'rgba(125, 223, 143, 0.2)';
+      ctx.fillRect(-bw / 2, -bh / 2, bw, bh);
+      ctx.strokeStyle = '#7ddf8f';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(-bw / 2, -bh / 2, bw, bh);
+      ctx.fillStyle = '#7ddf8f';
+      ctx.font = 'bold 24px monospace';
+      ctx.fillText(levelIx + 1 < LEVELS.length ? 'NEXT LEVEL ▶' : 'PLAY AGAIN ↻', 0, 9);
+      ctx.restore();
     } else {
       ctx.fillStyle = '#ff9f43';
       ctx.font = `bold ${Math.min(38, W / 15)}px monospace`;
