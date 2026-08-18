@@ -294,50 +294,67 @@ function update(dt) {
     if (p.pulled && p.anim < 1) p.anim = Math.min(1, p.anim + dt * 3);
   }
 
+  // physics runs in TWO half-steps: smaller moves can't tunnel
+  // through thin walls, and piles stay calm instead of exploding
   let maxSpeed = 0;
-  for (const drop of drops) {
-    drop.vy += GRAV * dt;
-    drop.x += drop.vx * dt;
-    drop.y += drop.vy * dt;
+  for (let step = 0; step < 2; step++) {
+    const sdt = dt / 2;
+    for (const drop of drops) {
+      drop.vy += GRAV * sdt;
+      // terminal velocity: real water doesn't fall like a meteor
+      drop.vy = Math.min(drop.vy, 520);
+      drop.vx = Math.max(-520, Math.min(520, drop.vx));
+      drop.x += drop.vx * sdt;
+      drop.y += drop.vy * sdt;
 
-    for (const s of walls) segPush(drop, s, DROP_R + 5);
-    for (const p of pins) {
-      if (!p.pulled) segPush(drop, p, DROP_R + 5);
-    }
-    // drop-vs-drop: water takes up space, politely
-    for (const o of drops) {
-      if (o === drop) continue;
-      const dx = o.x - drop.x, dy = o.y - drop.y;
-      const d = Math.hypot(dx, dy);
-      const min = DROP_R * 1.7;
-      if (d > 0 && d < min) {
-        const push = (min - d) / 2;
-        const nx = dx / d, ny = dy / d;
-        drop.x -= nx * push; drop.y -= ny * push;
-        o.x += nx * push; o.y += ny * push;
+      for (const s of walls) segPush(drop, s, DROP_R + 5);
+      for (const p of pins) {
+        if (!p.pulled) segPush(drop, p, DROP_R + 5);
       }
-    }
-    // lava: one touch and a drop is steam
-    for (const l of lava) {
-      if (Math.hypot(drop.x - l.x, drop.y - l.y) < l.r + DROP_R) {
-        drop.dead = true;
-        sizzle();
-        for (let i = 0; i < 3; i++) {
-          particles.push({ x: drop.x, y: drop.y,
-                           vx: (Math.random() - 0.5) * 40, vy: -40 - Math.random() * 50,
-                           life: 0.6, color: '245, 245, 245' });
+      // drop-vs-drop: water takes up space, politely — and crucially,
+      // bumping into a neighbor SLOWS YOU DOWN (this is what keeps a
+      // pile of water calm instead of secretly building up speed)
+      for (const o of drops) {
+        if (o === drop) continue;
+        const dx = o.x - drop.x, dy = o.y - drop.y;
+        const d = Math.hypot(dx, dy);
+        const min = DROP_R * 1.7;
+        if (d > 0 && d < min) {
+          const push = (min - d) / 2;
+          const nx = dx / d, ny = dy / d;
+          drop.x -= nx * push; drop.y -= ny * push;
+          o.x += nx * push; o.y += ny * push;
+          const rel = (o.vx - drop.vx) * nx + (o.vy - drop.vy) * ny;
+          if (rel < 0) {
+            drop.vx += nx * rel * 0.45; drop.vy += ny * rel * 0.45;
+            o.vx -= nx * rel * 0.45; o.vy -= ny * rel * 0.45;
+          }
         }
       }
+      // lava: one touch and a drop is steam
+      for (const l of lava) {
+        if (Math.hypot(drop.x - l.x, drop.y - l.y) < l.r + DROP_R) {
+          drop.dead = true;
+          sizzle();
+          for (let i = 0; i < 3; i++) {
+            particles.push({ x: drop.x, y: drop.y,
+                             vx: (Math.random() - 0.5) * 40, vy: -40 - Math.random() * 50,
+                             life: 0.6, color: '245, 245, 245' });
+          }
+        }
+      }
+      // off the bottom of the world: gone
+      if (drop.y > 760) drop.dead = true;
     }
-    // off the bottom of the world: gone
-    if (drop.y > 760) drop.dead = true;
+    drops = drops.filter(d => !d.dead);
+  }
+  for (const drop of drops) {
     drop.inBeaker = drop.x > BEAKER.x && drop.x < BEAKER.x + BEAKER.w &&
                     drop.y > BEAKER.y && drop.y < BEAKER.y + BEAKER.h;
     const sp = Math.hypot(drop.vx, drop.vy);
     maxSpeed = Math.max(maxSpeed, sp);
     if (sp > 250 && drop.vy > 0 && blipT <= 0) { blipT = 0.15; dropBlip(); }
   }
-  drops = drops.filter(d => !d.dead);
 
   for (const p of particles) {
     p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt;
