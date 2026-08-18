@@ -539,8 +539,21 @@ function draw() {
       const c = idx(x, y);
       if (own[c]) {
         const p = PLAYERS[own[c] - 1];
-        ctx.fillStyle = p.color;
+        // donut rule: land you've made SOLID is frosted pink too
+        const donutLand = own[c] === 1 && psave.skin === 'donut';
+        ctx.fillStyle = donutLand ? '#ff9fd0' : p.color;
         ctx.fillRect(x * CELL, y * CELL, CELL, CELL);
+        if (donutLand && Math.sin(elapsed * 4 + c * 2.3) > 0.92) {
+          // a sparse, tasteful twinkle across the whole empire
+          const sx = x * CELL + CELL / 2 + Math.sin(c * 5.1) * 7;
+          const sy = y * CELL + CELL / 2 + Math.cos(c * 8.7) * 7;
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.moveTo(sx - 3.5, sy); ctx.lineTo(sx + 3.5, sy);
+          ctx.moveTo(sx, sy - 3.5); ctx.lineTo(sx, sy + 3.5);
+          ctx.stroke();
+        }
       }
       if (trail[c]) {
         const p = PLAYERS[trail[c] - 1];
