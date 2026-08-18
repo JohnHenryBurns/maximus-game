@@ -120,6 +120,16 @@ function pillBox() {
   const r = el.getBoundingClientRect();
   return { right: Math.ceil(r.right), bottom: Math.ceil(r.bottom) };
 }
+
+// Phones keep a strip at the very bottom for the home bar. When you launch
+// this from your home screen there's no browser chrome to hide behind, so
+// anything painted down there gets swallowed. We can't read env() from
+// canvas, so we park an invisible box that IS that height and measure it.
+const safeProbe = document.createElement('div');
+safeProbe.style.cssText = 'position:fixed;bottom:0;left:0;width:1px;pointer-events:none;' +
+                          'height:env(safe-area-inset-bottom, 0px);';
+document.body.appendChild(safeProbe);
+function safeBottom() { return Math.ceil(safeProbe.getBoundingClientRect().height); }
 function pillBottom() { return pillBox().bottom; }
 
 window.onerror = (msg, src, line) => {
@@ -1000,7 +1010,11 @@ function drawHud(W, H) {
   // because pale blue writing on a sunny sandy shore is unreadable
   const infoY = Math.max(pill.bottom, 48) + 18;
   const coinLabel = '🪙 ' + save.coins;
-  const depthLabel = 'depth: ' + Math.floor(hook.d) + 'm / ' + maxLine() + 'm';
+  // in the submarine the line isn't what's down there — YOU are. Read the
+  // sub's depth, and drop the "/ 900m" because a sub has no line to run out.
+  const depthLabel = mode === 'sub'
+    ? 'depth: ' + Math.floor(sub.d) + 'm'
+    : 'depth: ' + Math.floor(hook.d) + 'm / ' + maxLine() + 'm';
   ctx.textAlign = 'left';
   ctx.font = 'bold 17px monospace';
   const plateW = Math.max(ctx.measureText(coinLabel).width,
@@ -1022,23 +1036,43 @@ function drawHud(W, H) {
     const font = `bold ${Math.min(16, W / 24)}px monospace`;
     const lines = wrapText(tip, W - 24, font);
     ctx.font = font;
-    lines.forEach((ln, i) => ctx.fillText(ln, W / 2, H - 40 - (lines.length - 1 - i) * 20));
+    lines.forEach((ln, i) =>
+      ctx.fillText(ln, W / 2, H - 40 - safeBottom() - (lines.length - 1 - i) * 20));
   }
 
-  // sub instruments: the air bar and the cargo bay
+  // ---- submarine instruments ----
+  // These used to be drawn across the TOP, straight through the DEX and SHOP
+  // buttons and the coin plate — three things stacked in the same corner. A
+  // submarine has a dashboard; put them along the bottom where the whole
+  // width is free, and tell the status line to sit above them.
+  let subPanelH = 0;
   if (mode === 'sub') {
+    const barW = Math.min(W - 24, 340);
+    const bx = W / 2 - barW / 2;
+    const by = H - 40 - safeBottom();
+    subPanelH = 78 + safeBottom();
+    // the cargo bay, on its own line above the air gauge
+    const bay = '🐟'.repeat(sub.cargo.length) + '·'.repeat(CARGO_MAX - sub.cargo.length);
+    const full = sub.cargo.length >= CARGO_MAX;
+    const cargoFont = `${Math.min(15, W / 26)}px monospace`;
+    ctx.font = cargoFont;
+    ctx.textAlign = 'center';
+    // the reminder only comes along if it fits — the bay itself matters more
+    let cargoLine = 'cargo: ' + bay + '  —  surface to sell';
+    if (ctx.measureText(cargoLine).width > W - 24) cargoLine = 'cargo: ' + bay;
+    ctx.fillStyle = 'rgba(5, 10, 18, 0.6)';
+    ctx.fillRect(8, by - 30, W - 16, 26);
+    ctx.fillStyle = full ? '#ffd23f' : '#cfe4ff';
+    ctx.fillText(cargoLine, W / 2, by - 12);
+    // the air gauge
     ctx.fillStyle = 'rgba(0,0,0,0.5)';
-    ctx.fillRect(W / 2 - 120, 14, 240, 20);
+    ctx.fillRect(bx, by, barW, 22);
     const frac = Math.max(0, sub.air / SUB_AIR);
     ctx.fillStyle = frac > 0.3 ? '#4ac6ff' : (Math.floor(elapsed * 4) % 2 ? '#ff5a4a' : '#ffd23f');
-    ctx.fillRect(W / 2 - 118, 16, 236 * frac, 16);
+    ctx.fillRect(bx + 2, by + 2, (barW - 4) * frac, 18);
     ctx.fillStyle = '#fff';
     ctx.font = 'bold 12px monospace';
-    ctx.fillText('AIR', W / 2, 28);
-    ctx.font = '14px monospace';
-    ctx.fillStyle = '#cfe4ff';
-    ctx.fillText('cargo: ' + '🐟'.repeat(sub.cargo.length) + '·'.repeat(CARGO_MAX - sub.cargo.length) +
-                 '   —   surface to sell', W / 2, 52);
+    ctx.fillText('AIR  ' + Math.max(0, Math.ceil(sub.air)) + 's', W / 2, by + 16);
   }
   // The status line carries long sentences ("caught: Fartfish! +12 coins —
   // you will hear it before you see it") that ran nearly 200px off the side
@@ -1049,7 +1083,7 @@ function drawHud(W, H) {
     const lines = wrapText(statusMsg, W - 32, font);
     const fade = Math.min(1, statusT);
     const boxH = lines.length * 20 + 14;
-    const boxY = H - 70 - boxH + 12;
+    const boxY = H - 70 - subPanelH - boxH + 12 - (mode === 'sub' ? 0 : safeBottom());
     ctx.fillStyle = 'rgba(5, 10, 18, ' + (0.7 * fade) + ')';
     ctx.fillRect(8, boxY, W - 16, boxH);
     ctx.fillStyle = 'rgba(255, 255, 255, ' + fade + ')';
