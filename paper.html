@@ -66,7 +66,7 @@ function miniPopSound() { beep(700, 0.06, 'sine', 0.08); }
 // THE PAPER — a big grid; every cell remembers who owns it,
 // and whose trail is drawn on it right now
 // ---------------------------------------------------------------------
-const GW = 90, GH = 60, CELL = 22;
+const GW = 120, GH = 84, CELL = 22;   // the paper grew. the war grew with it.
 const own = new Uint8Array(GW * GH);     // 0 = blank paper, else player id
 const trail = new Uint8Array(GW * GH);   // same, for wet ink trails
 const idx = (x, y) => y * GW + x;
@@ -80,6 +80,9 @@ const PLAYERS = [
   { id: 6, name: 'Chippy Jr', color: '#5a4a68', dark: '#382c48', skin: 'axe' },
   { id: 7, name: 'The Fart',  color: '#b4d45f', dark: '#84a03c', skin: 'fart' },
   { id: 8, name: 'The Salmon', color: '#e88a7a', dark: '#b05a4c', skin: 'salmon' },
+  { id: 9, name: 'Lava Golem', color: '#e86a2a', dark: '#a8481a', skin: 'golem' },
+  { id: 10, name: 'Ash Dragon', color: '#8a8492', dark: '#5a5662', skin: 'dragon' },
+  { id: 11, name: 'Flaming Skull', color: '#ffb03c', dark: '#c8802a', skin: 'fskull' },
 ];
 
 let ents = [];
@@ -118,6 +121,10 @@ const SKINS = [
   { id: 'explorer', name: 'THE EXPLORER', how: 'visit all 4 corners in ONE run — PERK: sharper turns',
     unlocked: () => (psave.corners || 0) >= 4,
     progress: () => 'corners in one trip: ' + (psave.corners || 0) + '/4' },
+  { id: 'gnome', name: 'THE GNOME', how: 'quench all 3 fire rivals — PERK: nimble (+15% speed AND turning)',
+    unlocked: () => psave.fq && psave.fq.golem && psave.fq.dragon && psave.fq.fskull,
+    progress: () => 'fire rivals quenched: ' +
+      (psave.fq ? ['golem', 'dragon', 'fskull'].filter(k => psave.fq[k]).length : 0) + '/3' },
 ];
 let camX = 0, camY = 0;
 let gameOver = false;
@@ -157,8 +164,9 @@ function resetGame() {
   own.fill(0);
   trail.fill(0);
   ents = [];
-  const spots = [[GW >> 1, GH >> 1], [10, 8], [GW - 11, 8], [10, GH - 9], [GW - 11, GH - 9],
-                 [GW >> 1, 7], [GW >> 1, GH - 8], [8, GH >> 1]];
+  const spots = [[GW >> 1, GH >> 1], [12, 10], [GW - 13, 10], [12, GH - 11], [GW - 13, GH - 11],
+                 [GW >> 1, 8], [GW >> 1, GH - 9], [9, GH >> 1], [GW - 10, GH >> 1],
+                 [35, GH - 24], [GW - 36, 23]];
   PLAYERS.forEach((p, i) => {
     const [cx, cy] = spots[i];
     stampSquare(p.id, cx, cy, 2);
@@ -173,7 +181,7 @@ function resetGame() {
   banner = 'steer with your MOUSE (or finger, or arrows)';
   bannerT = 5;
   minis = [];
-  towers = [[30, 15], [60, 15], [14, 30], [76, 30], [30, 45], [60, 45]]
+  towers = [[30, 21], [90, 21], [18, 42], [102, 42], [30, 63], [90, 63], [60, 12], [60, 72]]
     .map(([x, y]) => ({ x, y, claimedBy: 0 }));
 }
 resetGame();
@@ -254,8 +262,9 @@ function steerSmooth(you, dt) {
   } else if (you.keyAngle !== null) tgt = you.keyAngle;
   if (tgt !== null) {
     let da = ((tgt - you.angle + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
-    // explorers travel light: +30% turn rate, tighter loops
-    const maxTurn = TURN_RATE * (psave.skin === 'explorer' ? 1.3 : 1) * dt;
+    // explorers travel light: +30% turn rate. gnomes: a nimble +15%.
+    const maxTurn = TURN_RATE * (psave.skin === 'explorer' ? 1.3
+                               : psave.skin === 'gnome' ? 1.15 : 1) * dt;
     you.angle += Math.max(-maxTurn, Math.min(maxTurn, da));
   }
   you.dx = Math.cos(you.angle);
@@ -352,6 +361,19 @@ function kill(ent, byYou) {
   }
   if (byYou && !ent.p.isYou) {
     psave.kills++;
+    // the gnome's ledger: which fires have you put out?
+    const fireKey = { 9: 'golem', 10: 'dragon', 11: 'fskull' }[ent.p.id];
+    if (fireKey) {
+      psave.fq = psave.fq || {};
+      if (!psave.fq[fireKey]) {
+        psave.fq[fireKey] = true;
+        const n = ['golem', 'dragon', 'fskull'].filter(k => psave.fq[k]).length;
+        if (n >= 3) {
+          setBanner('🧙 THE GNOME SKIN IS UNLOCKED!!');
+          towerSound();
+        } else setBanner('🔥 fire rival quenched! (' + n + '/3)');
+      }
+    }
     persistP();
     if (psave.kills === 3) {
       setBanner('🚽 THE TOILET SKIN IS UNLOCKED!!');
@@ -455,7 +477,9 @@ function update(dt) {
     if (!ent.alive) continue;
     if (ent.p.isYou) steerSmooth(ent, dt);    // you: silky angle steering
     // the toilet skin is FLUSHED with speed. +30%. those are the rules.
-    const spd = SPEED * (ent.p.isYou && psave.skin === 'toilet' ? 1.3 : 1);
+    // (the gnome is merely nimble: +15%, but he turns better too.)
+    const spd = SPEED * (ent.p.isYou && psave.skin === 'toilet' ? 1.3
+                       : ent.p.isYou && psave.skin === 'gnome' ? 1.15 : 1);
     ent.x += ent.dx * spd * dt;
     ent.y += ent.dy * spd * dt;
     // the paper's edge gently turns you instead of squishing you flat
@@ -1076,6 +1100,114 @@ function drawHead(px, py, sc, skin, dx, dy, p) {
     ctx.arc(8, -2, 2.2, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
+  } else if (skin === 'gnome') {
+    // THE GNOME — conqueror of the sinking pole, unbothered by lava
+    ctx.fillStyle = '#f0cf9f';                     // the face
+    ctx.beginPath();
+    ctx.arc(0, -1, 9, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#f0f0ea';                     // the MAGNIFICENT beard
+    ctx.beginPath();
+    ctx.arc(0, 3, 9.5, 0, Math.PI);
+    ctx.quadraticCurveTo(-4, 14, 0, 16);
+    ctx.quadraticCurveTo(4, 14, 9.5, 3);
+    ctx.fill();
+    ctx.fillStyle = '#e8453c';                     // the hat. THE hat.
+    ctx.beginPath();
+    ctx.moveTo(-10, -5);
+    ctx.quadraticCurveTo(-2, -24, 3, -26);
+    ctx.quadraticCurveTo(2, -16, 10, -5);
+    ctx.fill();
+    ctx.fillStyle = '#f0a0a0';                     // the nose
+    ctx.beginPath();
+    ctx.arc(0, 1, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#101418';
+    ctx.fillRect(-6 + dx * 2, -5 + dy * 2, 3, 3);
+    ctx.fillRect(3 + dx * 2, -5 + dy * 2, 3, 3);
+  } else if (skin === 'golem') {
+    // LAVA GOLEM — rock outside, magma inside, grudges throughout
+    ctx.fillStyle = '#3a2f28';                     // the rocky bulk
+    ctx.beginPath();
+    ctx.roundRect(-13, -12, 26, 24, 4);
+    ctx.fill();
+    const glow = 0.6 + Math.sin(elapsed * 4) * 0.4;
+    ctx.strokeStyle = `rgba(255, 140, 40, ${glow})`;   // molten cracks
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(-10, -8); ctx.lineTo(-4, -2); ctx.lineTo(-8, 6);
+    ctx.moveTo(6, -10); ctx.lineTo(3, -3); ctx.lineTo(9, 3);
+    ctx.moveTo(-2, 4); ctx.lineTo(2, 10);
+    ctx.stroke();
+    ctx.fillStyle = `rgba(255, 170, 60, ${glow})`;     // furnace eyes
+    ctx.fillRect(-7 + dx * 2, -6 + dy * 2, 5, 4);
+    ctx.fillRect(3 + dx * 2, -6 + dy * 2, 5, 4);
+  } else if (skin === 'dragon') {
+    // ASH DRAGON — gray as cinders, smoking gently, unimpressed
+    ctx.save();
+    if (dx < 0) ctx.scale(-1, 1);
+    ctx.fillStyle = '#8a8492';                     // head and snout
+    ctx.beginPath();
+    ctx.moveTo(-10, -8);
+    ctx.quadraticCurveTo(4, -14, 10, -4);
+    ctx.lineTo(15, -1);
+    ctx.lineTo(9, 4);
+    ctx.quadraticCurveTo(-2, 10, -11, 4);
+    ctx.fill();
+    ctx.fillStyle = '#5a5662';                     // back-swept horns
+    ctx.beginPath();
+    ctx.moveTo(-7, -8); ctx.lineTo(-15, -15); ctx.lineTo(-4, -10);
+    ctx.moveTo(-1, -10); ctx.lineTo(-7, -18); ctx.lineTo(3, -11);
+    ctx.fill();
+    // nostril smoke, drifting off on its own schedule
+    ctx.fillStyle = 'rgba(180, 176, 188, 0.5)';
+    for (let i = 0; i < 3; i++) {
+      const t = (elapsed * 0.7 + i * 0.33) % 1;
+      ctx.beginPath();
+      ctx.arc(13 + t * 8, -2 - t * 12, 2 + t * 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.fillStyle = '#ff9f43';                     // one ember eye
+    ctx.beginPath();
+    ctx.ellipse(1, -4, 3.5, 2.2, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#101418';
+    ctx.fillRect(0.5, -5.5, 1.5, 3);
+    ctx.restore();
+  } else if (skin === 'fskull') {
+    // FLAMING SKULL — it's a skull. it is on fire. questions?
+    for (let i = 0; i < 4; i++) {                  // the flames first
+      const fx = -7 + i * 4.5;
+      const wave = Math.sin(elapsed * 9 + i * 2.1) * 3;
+      const hgt = 10 + Math.sin(elapsed * 7 + i * 1.3) * 4;
+      ctx.fillStyle = i % 2 ? '#ffd23f' : '#ff7a2a';
+      ctx.beginPath();
+      ctx.moveTo(fx - 2.5, -8);
+      ctx.quadraticCurveTo(fx + wave, -8 - hgt, fx + 1, -8 - hgt * 0.4);
+      ctx.quadraticCurveTo(fx + 2.5, -10, fx + 2.5, -8);
+      ctx.fill();
+    }
+    ctx.fillStyle = '#f0ead8';                     // the skull itself
+    ctx.beginPath();
+    ctx.arc(0, -2, 10, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillRect(-6, 4, 12, 6);                    // the jaw
+    ctx.fillStyle = '#2a1a10';                     // sockets, lit from within
+    ctx.beginPath();
+    ctx.arc(-4, -3, 3, 0, Math.PI * 2);
+    ctx.arc(4, -3, 3, 0, Math.PI * 2);
+    ctx.fill();
+    const g3 = 0.6 + Math.sin(elapsed * 6) * 0.4;
+    ctx.fillStyle = `rgba(255, 160, 60, ${g3})`;
+    ctx.beginPath();
+    ctx.arc(-4 + dx * 1.5, -3 + dy * 1.5, 1.4, 0, Math.PI * 2);
+    ctx.arc(4 + dx * 1.5, -3 + dy * 1.5, 1.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#c8c0a8';                   // teeth lines
+    ctx.lineWidth = 1;
+    for (let i = -3; i <= 3; i += 3) {
+      ctx.beginPath(); ctx.moveTo(i, 4); ctx.lineTo(i, 10); ctx.stroke();
+    }
   } else {
     ctx.fillStyle = p.dark;
     ctx.beginPath();
