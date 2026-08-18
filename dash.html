@@ -286,8 +286,18 @@ let airJumps = 1;
 let particles = [];
 let camY = 0;
 let elapsed = 0;
-let screen = 'menu';           // 'menu' | 'play' | 'build'
+let screen = 'menu';           // 'menu' | 'play' | 'build' | 'skins'
 let uiRects = [];
+let cubeSkin = localStorage.getItem('dash_skin') || 'classic';
+let unlockNote = '';           // "SKIN UNLOCKED" flash on the win screen
+const SKINS = [
+  { id: 'classic', name: 'THE CUBE', how: 'the original. undefeated by fashion.',
+    unlocked: () => true },
+  { id: 'shiny', name: 'SHINY', how: 'beat SPIKE FACTORY (100%)',
+    unlocked: () => parseInt(localStorage.getItem('dash_best_1') || '0') >= 100 },
+  { id: 'skull', name: 'SKULL', how: 'beat PRIMAL MADNESS (100%)',
+    unlocked: () => parseInt(localStorage.getItem('dash_best_2') || '0') >= 100 },
+];
 
 // ---- the LEVEL BUILDER's desk ----
 let bLevel = localStorage.getItem('dash_custom') || '_'.repeat(80);
@@ -423,6 +433,16 @@ function uiAction(id) {
   if (id.startsWith('lv_')) { selectLevel(parseInt(id.slice(3))); return; }
   if (id === 'build') { screen = 'build'; bCheck = null; return; }
   if (id === 'playc') { playCustom(); return; }
+  if (id === 'skins') { screen = 'skins'; return; }
+  if (id.startsWith('sk_')) {
+    const sk = SKINS.find(s => s.id === id.slice(3));
+    if (sk && sk.unlocked()) {
+      cubeSkin = sk.id;
+      localStorage.setItem('dash_skin', cubeSkin);
+      winJingle();
+    }
+    return;
+  }
   if (id.startsWith('bt_')) { bTool = id.slice(3); return; }
   if (id === 'btest') { saveBuild(); playCustom(); return; }
   if (id === 'bcheck') {
@@ -493,7 +513,7 @@ addEventListener('pointerdown', e => {
     bSetCol(Math.floor((e.clientX + bCam) / COL));
     return;
   }
-  if (screen === 'menu') return;
+  if (screen === 'menu' || screen === 'skins') return;
   if (won) { screen = 'menu'; return; }
   started = true;
   holdJump = true;
@@ -702,8 +722,12 @@ function update(dt) {
   // finish line
   if (px >= LEVEL_LEN - COL * 6) {
     won = true;
+    const wasDone = best >= 100;
     best = 100;
     localStorage.setItem('dash_best_' + levelIx, '100');
+    unlockNote = '';
+    if (!wasDone && levelIx === 1) unlockNote = '✨ SHINY SKIN UNLOCKED!!';
+    if (!wasDone && levelIx === 2) unlockNote = '💀 SKULL SKIN UNLOCKED!!';
     winJingle();
   }
   const pct = Math.min(100, Math.round(px / (LEVEL_LEN - COL * 6) * 100));
@@ -756,15 +780,11 @@ function drawMenu(W, H) {
   g.addColorStop(1, `hsl(${(hue + 60) % 360}, 60%, ${16 + beatPulse * 6}%)`);
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, W, H);
-  // a decorative cube, bouncing to the beat
+  // the mascot cube, bouncing to the beat, wearing YOUR equipped skin
   ctx.save();
   ctx.translate(W / 2, H * 0.17 - beatPulse * 12);
   ctx.rotate(elapsed * 1.2);
-  ctx.fillStyle = `hsl(${(hue + 180) % 360}, 90%, 60%)`;
-  ctx.fillRect(-22, -22, 44, 44);
-  ctx.strokeStyle = '#fff';
-  ctx.lineWidth = 3;
-  ctx.strokeRect(-19, -19, 38, 38);
+  drawCube(44, hue, false);
   ctx.restore();
   ctx.textAlign = 'center';
   ctx.fillStyle = '#ffffff';
@@ -774,20 +794,22 @@ function drawMenu(W, H) {
   ctx.font = '15px monospace';
   ctx.fillText('pick your level — sound ON, thumbs ready', W / 2, H * 0.33 + 28);
 
-  // the builder's two doors: play your creation, or go make one
+  // three doors: your creation, the workshop, and the wardrobe
   {
     const bw = Math.min(W - 60, 400);
     const y0 = H * 0.44 + 3 * 90;
-    uiRects.push({ x: W / 2 - bw / 2, y: y0, w: bw / 2 - 6, h: 52, id: 'playc' });
-    uiRects.push({ x: W / 2 + 6, y: y0, w: bw / 2 - 6, h: 52, id: 'build' });
-    ctx.strokeStyle = '#ffd23f';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(W / 2 - bw / 2, y0, bw / 2 - 6, 52);
-    ctx.strokeRect(W / 2 + 6, y0, bw / 2 - 6, 52);
-    ctx.fillStyle = '#ffd23f';
-    ctx.font = 'bold 16px monospace';
-    ctx.fillText('▶ YOUR LEVEL', W / 2 - bw / 4 - 3, y0 + 32);
-    ctx.fillText('🔨 BUILDER', W / 2 + bw / 4 + 3, y0 + 32);
+    const third = bw / 3 - 6;
+    const doors = [['playc', '▶ YOURS'], ['build', '🔨 BUILD'], ['skins', '👕 SKINS']];
+    doors.forEach(([id, label], i) => {
+      const x = W / 2 - bw / 2 + i * (third + 9);
+      uiRects.push({ x, y: y0, w: third, h: 52, id });
+      ctx.strokeStyle = '#ffd23f';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x, y0, third, 52);
+      ctx.fillStyle = '#ffd23f';
+      ctx.font = 'bold 15px monospace';
+      ctx.fillText(label, x + third / 2, y0 + 32);
+    });
   }
 
   LEVELS.forEach((L, i) => {
@@ -961,10 +983,158 @@ function drawBuild(W, H) {
   }
 }
 
+// draws the cube centered at (0,0), sized s, wearing whatever skin is equipped.
+// withGlow=false for menu previews (gradients are pricey to spam).
+function drawCube(s, hue, withGlow, skinId) {
+  const skin = skinId || cubeSkin;
+  if (withGlow) {
+    const glow = ctx.createRadialGradient(0, 0, 4, 0, 0, s * 1.4);
+    glow.addColorStop(0, skin === 'shiny' ? 'rgba(255, 210, 63, 0.55)' :
+                         skin === 'skull' ? 'rgba(255, 60, 30, 0.5)' :
+                         `hsla(${(hue + 180) % 360}, 95%, 65%, 0.5)`);
+    glow.addColorStop(1, 'hsla(0, 0%, 0%, 0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(-s * 1.4, -s * 1.4, s * 2.8, s * 2.8);
+  }
+  const u = s / 34;                       // everything scales off the real cube size
+  if (skin === 'shiny') {
+    // solid gold. blindingly rich. spike factory's trophy.
+    ctx.fillStyle = '#e8b820';
+    ctx.fillRect(-s / 2, -s / 2, s, s);
+    ctx.fillStyle = '#ffe066';
+    ctx.fillRect(-s / 2, -s / 2, s, s * 0.45);
+    ctx.strokeStyle = '#fff6d0';
+    ctx.lineWidth = 3 * u;
+    ctx.strokeRect(-s / 2 + 2 * u, -s / 2 + 2 * u, s - 4 * u, s - 4 * u);
+    // the glint: a bright diagonal streak that sweeps across forever
+    const gp = (elapsed * 1.4) % 2 - 0.5;    // -0.5 → 1.5, then wraps
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(-s / 2, -s / 2, s, s);
+    ctx.clip();
+    ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+    ctx.lineWidth = 5 * u;
+    ctx.beginPath();
+    ctx.moveTo(-s / 2 + gp * s * 1.6, s / 2 + 6 * u);
+    ctx.lineTo(-s / 2 + gp * s * 1.6 + s * 0.5, -s / 2 - 6 * u);
+    ctx.stroke();
+    ctx.restore();
+    // smug rich-cube face
+    ctx.fillStyle = '#5a4200';
+    ctx.fillRect(-9 * u, -8 * u, 6 * u, 9 * u);
+    ctx.fillRect(3 * u, -8 * u, 6 * u, 9 * u);
+    ctx.fillRect(-6 * u, 6 * u, 12 * u, 3 * u);
+  } else if (skin === 'skull') {
+    // bone-white and grinning. primal madness left its mark.
+    ctx.fillStyle = '#ede5d0';
+    ctx.fillRect(-s / 2, -s / 2, s, s);
+    ctx.strokeStyle = '#1a1420';
+    ctx.lineWidth = 3 * u;
+    ctx.strokeRect(-s / 2 + 2 * u, -s / 2 + 2 * u, s - 4 * u, s - 4 * u);
+    // hollow eye sockets with little burning coals inside
+    ctx.fillStyle = '#1a1420';
+    ctx.beginPath();
+    ctx.arc(-7 * u, -4 * u, 5.5 * u, 0, Math.PI * 2);
+    ctx.arc(7 * u, -4 * u, 5.5 * u, 0, Math.PI * 2);
+    ctx.fill();
+    const ember = 0.6 + Math.sin(elapsed * 8) * 0.4;
+    ctx.fillStyle = `rgba(255, 60, 30, ${ember})`;
+    ctx.beginPath();
+    ctx.arc(-7 * u, -4 * u, 2 * u, 0, Math.PI * 2);
+    ctx.arc(7 * u, -4 * u, 2 * u, 0, Math.PI * 2);
+    ctx.fill();
+    // nose hole + a proper row of teeth
+    ctx.fillStyle = '#1a1420';
+    ctx.beginPath();
+    ctx.moveTo(0, 1 * u);
+    ctx.lineTo(-2.5 * u, 5 * u);
+    ctx.lineTo(2.5 * u, 5 * u);
+    ctx.fill();
+    ctx.fillRect(-9 * u, 8 * u, 18 * u, 2 * u);
+    for (let t = -9; t <= 6; t += 3.75) {
+      ctx.fillRect(t * u, 8 * u, 1 * u, 6 * u);
+    }
+  } else {
+    // the classic: neon, determined, forever young
+    ctx.fillStyle = `hsl(${(hue + 180) % 360}, 90%, 60%)`;
+    ctx.fillRect(-s / 2, -s / 2, s, s);
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 3 * u;
+    ctx.strokeRect(-s / 2 + 2 * u, -s / 2 + 2 * u, s - 4 * u, s - 4 * u);
+    ctx.fillStyle = '#12102a';
+    ctx.fillRect(-9 * u, -8 * u, 6 * u, 9 * u);
+    ctx.fillRect(3 * u, -8 * u, 6 * u, 9 * u);
+    ctx.fillRect(-6 * u, 6 * u, 12 * u, 3 * u);
+  }
+}
+
+function drawSkins(W, H) {
+  uiRects = [];
+  ctx.fillStyle = '#12102a';
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffd23f';
+  ctx.font = `bold ${Math.min(42, W / 14)}px monospace`;
+  ctx.fillText('SKINS', W / 2, H * 0.14);
+  ctx.font = '14px monospace';
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.fillText('beat levels to earn them — tap to wear', W / 2, H * 0.14 + 26);
+
+  const cw = Math.min(W - 60, 460);
+  SKINS.forEach((sk, i) => {
+    const y0 = H * 0.26 + i * 100;
+    const x0 = W / 2 - cw / 2;
+    const open = sk.unlocked();
+    const worn = cubeSkin === sk.id;
+    if (open) uiRects.push({ x: x0, y: y0, w: cw, h: 84, id: 'sk_' + sk.id });
+    ctx.fillStyle = worn ? 'rgba(255, 210, 63, 0.12)' : 'rgba(255,255,255,0.04)';
+    ctx.fillRect(x0, y0, cw, 84);
+    ctx.strokeStyle = worn ? '#ffd23f' : open ? 'rgba(255,255,255,0.4)' : 'rgba(255,255,255,0.15)';
+    ctx.lineWidth = worn ? 3 : 2;
+    ctx.strokeRect(x0, y0, cw, 84);
+    // the model, spinning slowly on its podium
+    ctx.save();
+    ctx.translate(x0 + 52, y0 + 42);
+    ctx.rotate(Math.sin(elapsed * 1.2 + i) * 0.25);
+    if (open) {
+      drawCube(46, (elapsed * 12) % 360, false, sk.id);
+    } else {
+      ctx.fillStyle = 'rgba(255,255,255,0.08)';
+      ctx.fillRect(-23, -23, 46, 46);
+      ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(-23, -23, 46, 46);
+      ctx.font = '26px monospace';
+      ctx.fillStyle = 'rgba(255,255,255,0.5)';
+      ctx.fillText('🔒', 0, 9);
+    }
+    ctx.restore();
+    ctx.textAlign = 'left';
+    ctx.font = 'bold 19px monospace';
+    ctx.fillStyle = open ? '#fff' : 'rgba(255,255,255,0.35)';
+    ctx.fillText(sk.name + (worn ? '  ◀ wearing' : ''), x0 + 104, y0 + 36);
+    ctx.font = '13px monospace';
+    ctx.fillStyle = open ? 'rgba(125, 223, 143, 0.9)' : 'rgba(255,255,255,0.4)';
+    ctx.fillText(open ? (i === 0 ? sk.how : '✓ earned! ' + sk.how) : '🔒 ' + sk.how,
+                 x0 + 104, y0 + 60);
+    ctx.textAlign = 'center';
+  });
+
+  uiRects.push({ x: W / 2 - 70, y: H * 0.26 + SKINS.length * 100 + 6, w: 140, h: 40, id: 'menu' });
+  ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(W / 2 - 70, H * 0.26 + SKINS.length * 100 + 6, 140, 40);
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.font = 'bold 14px monospace';
+  ctx.fillText('◀ BACK', W / 2, H * 0.26 + SKINS.length * 100 + 31);
+  ctx.textAlign = 'left';
+}
+
 function draw() {
   const W = canvas.width, H = canvas.height;
   if (screen === 'menu') { drawMenu(W, H); return; }
   if (screen === 'build') { drawBuild(W, H); return; }
+  if (screen === 'skins') { drawSkins(W, H); return; }
   uiRects = [];
   const groundY = H * GROUND_FRAC + camY;
   const beatPulse = audio ? Math.max(0, 1 - (audio.currentTime - lastBeatAt) / BEAT) : 0;
@@ -1061,10 +1231,12 @@ function draw() {
     }
   }
 
-  // the trail
+  // the trail — each skin leaves its own kind of footprints
   for (const p of particles) {
     ctx.globalAlpha = Math.max(0, p.life * 2);
-    ctx.fillStyle = `hsl(${(hue + 180) % 360}, 90%, 70%)`;
+    ctx.fillStyle = cubeSkin === 'shiny' ? '#ffd23f' :
+                    cubeSkin === 'skull' ? `hsl(${10 + Math.random() * 25}, 95%, 55%)` :
+                    `hsl(${(hue + 180) % 360}, 90%, 70%)`;
     ctx.fillRect(p.x - 3, groundY - p.y - CUBE / 2 - 3, 6, 6);
   }
   ctx.globalAlpha = 1;
@@ -1075,21 +1247,7 @@ function draw() {
     ctx.save();
     ctx.translate(px, cy);
     ctx.rotate(angle);
-    const glow = ctx.createRadialGradient(0, 0, 4, 0, 0, CUBE * 1.4);
-    glow.addColorStop(0, `hsla(${(hue + 180) % 360}, 95%, 65%, 0.5)`);
-    glow.addColorStop(1, 'hsla(0, 0%, 0%, 0)');
-    ctx.fillStyle = glow;
-    ctx.fillRect(-CUBE * 1.4, -CUBE * 1.4, CUBE * 2.8, CUBE * 2.8);
-    ctx.fillStyle = `hsl(${(hue + 180) % 360}, 90%, 60%)`;
-    ctx.fillRect(-CUBE / 2, -CUBE / 2, CUBE, CUBE);
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 3;
-    ctx.strokeRect(-CUBE / 2 + 2, -CUBE / 2 + 2, CUBE - 4, CUBE - 4);
-    // the determined little face
-    ctx.fillStyle = '#12102a';
-    ctx.fillRect(-9, -8, 6, 9);
-    ctx.fillRect(3, -8, 6, 9);
-    ctx.fillRect(-6, 6, 12, 3);
+    drawCube(CUBE, hue, true);
     ctx.restore();
   }
   ctx.restore();
@@ -1142,9 +1300,20 @@ function draw() {
     ctx.font = '17px monospace';
     ctx.fillText('conquered in ' + attempts + ' attempt' + (attempts === 1 ? '' : 's'),
                  W / 2, H / 2 + 20);
+    if (unlockNote) {
+      const throb = 1 + Math.sin(elapsed * 6) * 0.08;
+      ctx.save();
+      ctx.translate(W / 2, H / 2 + 62);
+      ctx.scale(throb, throb);
+      ctx.fillStyle = '#ffd23f';
+      ctx.font = `bold ${Math.min(26, W / 22)}px monospace`;
+      ctx.fillText(unlockNote, 0, 0);
+      ctx.restore();
+    }
     ctx.fillStyle = 'rgba(255,255,255,0.6)';
     ctx.font = '14px monospace';
-    ctx.fillText('tap for the level menu', W / 2, H / 2 + 50);
+    ctx.fillText('tap for the level menu' + (unlockNote ? ' — check SKINS!' : ''),
+                 W / 2, H / 2 + (unlockNote ? 96 : 50));
   }
 }
 
