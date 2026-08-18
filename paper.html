@@ -107,12 +107,20 @@ const SKINS = [
   { id: 'multi', name: 'THE MULTI-TASKER', how: 'hold 3 towers at ONCE — PERK: towers deploy 5 minis',
     unlocked: () => (psave.towersMax || 0) >= 3,
     progress: () => 'most towers held at once: ' + (psave.towersMax || 0) + '/3' },
+  { id: 'bob', name: 'BOB THE ROBOT PIRATE', how: 'plunder 300 enemy squares — PERK: unsquishable minis',
+    unlocked: () => (psave.plunder || 0) >= 300,
+    progress: () => 'plundered: ' + (psave.plunder || 0) + '/300 squares' },
+  { id: 'unit13', name: 'UNIT-13', how: 'survive 3 minutes in one round — PERK: wakes up after your first cut',
+    unlocked: () => (psave.surv || 0) >= 180,
+    progress: () => 'longest survival: ' + Math.floor((psave.surv || 0) / 60) + ':' +
+                    String(Math.floor((psave.surv || 0) % 60)).padStart(2, '0') + ' / 3:00' },
 ];
 let camX = 0, camY = 0;
 let gameOver = false;
 let totalWin = false;    // every rival gone AND the whole page painted
 let lastStand = false;   // every rival gone — the mop-up begins
 let bestPct = 0;
+let roundT = 0;          // how long you've stayed alive this round
 let milestone = 0;          // the next % worth celebrating
 let banner = '', bannerT = 0;
 
@@ -154,6 +162,7 @@ function resetGame() {
   gameOver = false;
   totalWin = false;
   lastStand = false;
+  roundT = 0;
   milestone = 25;
   banner = 'steer with your MOUSE (or finger, or arrows)';
   bannerT = 5;
@@ -282,11 +291,24 @@ function capture(ent) {
       if (!reach[n] && own[n] !== id) { reach[n] = 1; q.push(n); }
     }
   }
-  let gained = 0;
+  let gained = 0, plundered = 0;
   for (let i = 0; i < own.length; i++) {
-    if (!reach[i] && own[i] !== id) { own[i] = id; gained++; }
+    if (!reach[i] && own[i] !== id) {
+      if (own[i] !== 0) plundered++;          // that was SOMEBODY'S. was.
+      own[i] = id;
+      gained++;
+    }
   }
   gained += ent.myTrail.length;
+  if (ent.p.isYou && plundered) {
+    const hadBob = (psave.plunder || 0) >= 300;
+    psave.plunder = (psave.plunder || 0) + plundered;
+    persistP();
+    if (!hadBob && psave.plunder >= 300) {
+      setBanner('🏴‍☠️ BOB THE ROBOT PIRATE IS UNLOCKED!!');
+      towerSound();
+    }
+  }
   for (const c of ent.myTrail) trail[c] = 0;
   ent.myTrail = [];
   ent.out = false;
@@ -295,6 +317,32 @@ function capture(ent) {
 }
 
 function kill(ent, byYou) {
+  // UNIT-13's whole story is waking up again. once per round, it does.
+  if (ent.p.isYou && psave.skin === 'unit13' && !ent.usedRevive) {
+    ent.usedRevive = true;
+    for (const c of ent.myTrail) trail[c] = 0;
+    ent.myTrail = [];
+    ent.out = false;
+    let spot = null;
+    for (let t = 0; t < 300 && !spot; t++) {
+      const x = 2 + Math.floor(Math.random() * (GW - 4));
+      const y = 2 + Math.floor(Math.random() * (GH - 4));
+      if (own[idx(x, y)] === 1) spot = [x, y];
+    }
+    if (!spot) {
+      const x = 6 + Math.floor(Math.random() * (GW - 12));
+      const y = 6 + Math.floor(Math.random() * (GH - 12));
+      stampSquare(1, x, y, 2);
+      spot = [x, y];
+    }
+    ent.x = spot[0] + 0.5;
+    ent.y = spot[1] + 0.5;
+    ent.angle = 0;
+    ent.lastCell = idx(spot[0], spot[1]);
+    setBanner('🤖 . . . UNIT-13 WAKES UP AGAIN . . .');
+    towerSound();
+    return;
+  }
   if (byYou && !ent.p.isYou) {
     psave.kills++;
     persistP();
@@ -312,6 +360,7 @@ function kill(ent, byYou) {
   if (ent.p.isYou) {
     gameOver = true;
     deathSound();
+    persistP();                 // the survival clock's final answer, saved
   } else if (byYou) killSound();
 }
 
@@ -475,12 +524,15 @@ function update(dt) {
         m.x = cx + 0.5; m.y = cy + 0.5;
       }
     }
-    // an enemy head squishes a mini on contact
-    for (const ent of ents) {
-      if (!ent.alive || ent.p.id === m.ownerId) continue;
-      if (Math.hypot(ent.x - m.x, ent.y - m.y) < 0.9) {
-        m.life = 0;
-        miniPopSound();
+    // an enemy head squishes a mini on contact — unless the mini is
+    // one of Bob's crew. you do not squish Bob's crew.
+    if (!(m.ownerId === 1 && psave.skin === 'bob')) {
+      for (const ent of ents) {
+        if (!ent.alive || ent.p.id === m.ownerId) continue;
+        if (Math.hypot(ent.x - m.x, ent.y - m.y) < 0.9) {
+          m.life = 0;
+          miniPopSound();
+        }
       }
     }
   }
@@ -502,6 +554,18 @@ function update(dt) {
     setBanner(milestone + '% OF THE PAPER IS YOURS!');
     claimSound(200);
     milestone += 25;
+  }
+
+  // survival clock: UNIT-13 respects those who endure
+  roundT += dt;
+  if (roundT > (psave.surv || 0)) {
+    const hadU13 = (psave.surv || 0) >= 180;
+    psave.surv = roundT;
+    if (!hadU13 && roundT >= 180) {
+      persistP();
+      setBanner('🤖 THE UNIT-13 SKIN IS UNLOCKED!!');
+      towerSound();
+    }
   }
 
   // multi-tasking check: how many towers are flying YOUR flag right now?
@@ -816,6 +880,90 @@ function drawHead(px, py, sc, skin, dx, dy, p) {
     ctx.beginPath();
     ctx.arc(dx * 2, 1, 4.5, 0.15 * Math.PI, 0.85 * Math.PI);
     ctx.stroke();
+  } else if (skin === 'bob') {
+    // BOB THE ROBOT PIRATE. new legend. instant classic.
+    ctx.fillStyle = '#9aa2b0';                     // steel head
+    ctx.beginPath();
+    ctx.roundRect(-12, -10, 24, 22, 5);
+    ctx.fill();
+    ctx.strokeStyle = '#6a7280';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(-12, 4, 24, 0.1);               // jaw seam
+    ctx.fillStyle = '#ffd23f';                     // the good eye, glowing
+    ctx.beginPath();
+    ctx.arc(6 + dx * 2, -3 + dy * 2, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#1a1a22';                     // the PATCH
+    ctx.beginPath();
+    ctx.arc(-5, -3, 4.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#1a1a22';                   // patch strap
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(-12, -7);
+    ctx.lineTo(12, -1);
+    ctx.stroke();
+    ctx.fillStyle = '#c8c8d0';                     // metal grin...
+    ctx.fillRect(-6, 6, 12, 4);
+    ctx.strokeStyle = '#6a7280';
+    for (let i = -3; i <= 3; i += 3) {
+      ctx.beginPath(); ctx.moveTo(i, 6); ctx.lineTo(i, 10); ctx.stroke();
+    }
+    ctx.fillStyle = '#ffd23f';                     // ...with one gold tooth
+    ctx.fillRect(0.5, 6, 2.5, 4);
+    ctx.fillStyle = '#2a2a34';                     // the tricorn hat
+    ctx.beginPath();
+    ctx.moveTo(-16, -10);
+    ctx.quadraticCurveTo(0, -22, 16, -10);
+    ctx.lineTo(13, -13);
+    ctx.quadraticCurveTo(0, -17, -13, -13);
+    ctx.fill();
+    ctx.fillStyle = '#ffd23f';                     // gold trim + antenna thru hat
+    ctx.fillRect(-2, -15.5, 4, 2);
+    ctx.strokeStyle = '#9aa2b0';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, -17);
+    ctx.lineTo(0, -24);
+    ctx.stroke();
+    ctx.fillStyle = '#e8453c';
+    ctx.beginPath();
+    ctx.arc(0, -25, 2, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (skin === 'unit13') {
+    // UNIT-13 — the only light in the world is the glow of your own eyes
+    const g2 = ctx.createRadialGradient(0, -2, 2, 0, -2, 20);
+    g2.addColorStop(0, 'rgba(125, 211, 255, 0.35)');
+    g2.addColorStop(1, 'rgba(125, 211, 255, 0)');
+    ctx.fillStyle = g2;
+    ctx.fillRect(-20, -22, 40, 40);
+    ctx.fillStyle = '#5a6474';                     // the boxy little body
+    ctx.beginPath();
+    ctx.roundRect(-11, -11, 22, 22, 4);
+    ctx.fill();
+    ctx.strokeStyle = '#3a4250';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.fillStyle = '#3a4250';                     // chest plate seams
+    ctx.fillRect(-11, 5, 22, 1.5);
+    ctx.fillRect(-4, 7.5, 8, 2.5);
+    // THE EYES. cyan. glowing. yours.
+    const pulse = 0.85 + Math.sin(elapsed * 3) * 0.15;
+    ctx.fillStyle = `rgba(125, 211, 255, ${pulse})`;
+    ctx.beginPath();
+    ctx.roundRect(-8 + dx * 2, -6 + dy * 2, 6, 7, 2);
+    ctx.roundRect(2 + dx * 2, -6 + dy * 2, 6, 7, 2);
+    ctx.fill();
+    ctx.strokeStyle = '#5a6474';                   // antenna
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, -11);
+    ctx.lineTo(0, -18);
+    ctx.stroke();
+    ctx.fillStyle = Math.floor(elapsed * 2) % 2 ? '#7dd3ff' : '#3a4250';
+    ctx.beginPath();
+    ctx.arc(0, -19, 2, 0, Math.PI * 2);
+    ctx.fill();
   } else {
     ctx.fillStyle = p.dark;
     ctx.beginPath();
@@ -879,31 +1027,36 @@ function drawSkins(W, H) {
   ctx.fillStyle = '#3a3428';
   ctx.font = `bold ${Math.min(40, W / 14)}px monospace`;
   ctx.fillText('👕 SKINS', W / 2, 56);
+  const cols = W >= 940 ? 2 : 1;
+  const cw = Math.min(450, (W - 40 - (cols - 1) * 12) / cols);
+  const chh = 84;
   SKINS.forEach((sk, i) => {
-    const cw = Math.min(W - 40, 460), x = W / 2 - cw / 2, y = 90 + i * 110;
+    const col = i % cols, row = Math.floor(i / cols);
+    const x = W / 2 - (cw * cols + 12 * (cols - 1)) / 2 + col * (cw + 12);
+    const y = 84 + row * (chh + 10);
     const un = sk.unlocked();
     const worn = psave.skin === sk.id;
-    uiRects.push({ x, y, w: cw, h: 96, id: 'skin_' + sk.id });
+    uiRects.push({ x, y, w: cw, h: chh, id: 'skin_' + sk.id });
     ctx.fillStyle = 'rgba(255,255,255,0.5)';
-    ctx.fillRect(x, y, cw, 96);
+    ctx.fillRect(x, y, cw, chh);
     ctx.strokeStyle = worn ? '#3a9ad9' : un ? '#7a9a5a' : '#b8b098';
     ctx.lineWidth = worn ? 4 : 2;
-    ctx.strokeRect(x, y, cw, 96);
+    ctx.strokeRect(x, y, cw, chh);
     ctx.save();
     if (!un) ctx.globalAlpha = 0.35;
-    drawHead(x + 52, y + 48, 1.5, sk.id, 1, 0, PLAYERS[0]);
+    drawHead(x + 44, y + chh / 2, 1.25, sk.id, 1, 0, PLAYERS[0]);
     ctx.restore();
     ctx.textAlign = 'left';
     ctx.fillStyle = un ? '#3a3428' : '#9a9280';
-    ctx.font = 'bold 19px monospace';
-    ctx.fillText(sk.name + (worn ? '  ✓ wearing it' : ''), x + 104, y + 38);
-    ctx.font = '13px monospace';
+    ctx.font = 'bold 16px monospace';
+    ctx.fillText(sk.name + (worn ? ' ✓' : ''), x + 88, y + 32);
+    ctx.font = '12px monospace';
     ctx.fillStyle = '#7a7260';
-    ctx.fillText(un ? sk.how : '🔒 ' + sk.how + (sk.progress ? '  (' + sk.progress() + ')' : ''),
-                 x + 104, y + 64);
+    ctx.fillText(un ? sk.how : '🔒 ' + sk.how, x + 88, y + 52);
+    if (!un && sk.progress) ctx.fillText('(' + sk.progress() + ')', x + 88, y + 68);
     ctx.textAlign = 'center';
   });
-  const y = 90 + SKINS.length * 110 + 8;
+  const y = 84 + Math.ceil(SKINS.length / cols) * (chh + 10) + 8;
   uiRects.push({ x: W / 2 - 100, y, w: 200, h: 50, id: 'back' });
   ctx.strokeStyle = '#3a9ad9';
   ctx.lineWidth = 3;
