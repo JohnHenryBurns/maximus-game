@@ -181,7 +181,8 @@ function colInfo(i) {
     pad: ch === 'P',
     saw: ch === 'O',        // a spinning blade, half-buried in the ground
     airsaw: ch === 'o',     // a blade floating at jump height. stay LOW.
-    blocks: ch === '#' ? 1 : ch === '2' ? 2 : ch === '3' ? 3 : 0,
+    // towers go from '#' (one block) up through '9' (a proper skyscraper)
+    blocks: ch === '#' ? 1 : (ch >= '2' && ch <= '9') ? +ch : 0,
   };
 }
 const SAW_R = 34, AIRSAW_R = 28, AIRSAW_H = 100;
@@ -254,7 +255,7 @@ function simulate(str, speed) {
   const gTop = x => {
     const ch = info(Math.floor(x / COL));
     if (ch === '.') return -999;
-    return (ch === '#' ? 1 : ch === '2' ? 2 : ch === '3' ? 3 : 0) * COL;
+    return (ch === '#' ? 1 : (ch >= '2' && ch <= '9') ? +ch : 0) * COL;
   };
   let sx = 0, sy = 0, svy = 0, sOn = true, sAir = 1;
   let sAttempts = 1;
@@ -270,7 +271,7 @@ function simulate(str, speed) {
       if (c1 === '^' || c1 === '.' || c1 === 'O') jump = true;
       for (let d = 1; d <= 2 && !jump; d++) {
         const ch = info(Math.floor((sx + d * 40) / 40));
-        const h = ch === '#' ? 1 : ch === '2' ? 2 : ch === '3' ? 3 : 0;
+        const h = ch === '#' ? 1 : (ch >= '2' && ch <= '9') ? +ch : 0;
         if (h * 40 > sy + 2) jump = true;
       }
     }
@@ -383,12 +384,23 @@ function uiAction(id) {
   }
 }
 
-const TOOLCHARS = { spike: '^', block: '#', stack2: '2', stack3: '3',
-                    pit: '.', pad: 'P', saw: 'O', airsaw: 'o', erase: '_' };
+const TOOLCHARS = { spike: '^', pit: '.', pad: 'P',
+                    saw: 'O', airsaw: 'o', erase: '_' };
+let bLastCol = -1;             // one action per column per stroke
 function bSetCol(i) {
-  if (i < 0 || i >= bLevel.length) return;
-  const ch = TOOLCHARS[bTool];
-  if (ch === undefined) return;
+  if (i < 0 || i >= bLevel.length || i === bLastCol) return;
+  bLastCol = i;
+  let ch;
+  if (bTool === 'block') {
+    // the stacker: every tap on a column raises its tower by one
+    const cur = bLevel[i];
+    const h = cur === '#' ? 1 : (cur >= '2' && cur <= '9') ? +cur : 0;
+    const next = Math.min(9, h + 1);
+    ch = next === 1 ? '#' : String(next);
+  } else {
+    ch = TOOLCHARS[bTool];
+    if (ch === undefined) return;
+  }
   bLevel = bLevel.slice(0, i) + ch + bLevel.slice(i + 1);
   bCheck = null;                 // the old verdict died with the old level
   saveBuild();
@@ -408,6 +420,7 @@ addEventListener('pointerdown', e => {
       return;
     }
     bPaint = true;
+    bLastCol = -1;
     bSetCol(Math.floor((e.clientX + bCam) / COL));
     return;
   }
@@ -757,7 +770,7 @@ function drawBuild(W, H) {
       ctx.fillStyle = 'rgba(125, 211, 255, 0.8)';
       ctx.fillRect(x, groundY - 2, COL + 1, 3);
     }
-    const blocks = ch === '#' ? 1 : ch === '2' ? 2 : ch === '3' ? 3 : 0;
+    const blocks = ch === '#' ? 1 : (ch >= '2' && ch <= '9') ? +ch : 0;
     for (let b = 0; b < blocks; b++) {
       ctx.fillStyle = '#2c2846';
       ctx.fillRect(x + 1, groundY - (b + 1) * COL, COL - 2, COL - 1);
@@ -801,8 +814,8 @@ function drawBuild(W, H) {
 
   // ---- toolbar (measured, grows to fit) ----
   const TOOLS = [
-    ['bt_spike', '▲ SPIKE'], ['bt_block', '□ BLOCK'], ['bt_stack2', '□² x2'],
-    ['bt_stack3', '□³ x3'], ['bt_pit', '⬛ PIT'], ['bt_pad', '● PAD'],
+    ['bt_spike', '▲ SPIKE'], ['bt_block', '□+ BLOCK (tap = +1)'],
+    ['bt_pit', '⬛ PIT'], ['bt_pad', '● PAD'],
     ['bt_saw', '⚙ SAW'], ['bt_airsaw', '⚙ AIR SAW'], ['bt_erase', '✖ ERASE'],
     ['bt_pan', '✋ PAN'],
     ['btest', '▶ TEST'], ['bcheck', '🤖 CHECK'],
