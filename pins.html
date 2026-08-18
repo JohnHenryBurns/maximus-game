@@ -182,8 +182,8 @@ function makeWaterSprite(inner, mid, edgeAlpha) {
   x.fillRect(0, 0, 64, 64);
   return c;
 }
-const softSprite = makeWaterSprite('rgba(74, 168, 232, 0.55)', 'rgba(74, 168, 232, 0.45)');
-const coreSprite = makeWaterSprite('rgba(120, 195, 240, 0.5)', 'rgba(84, 172, 232, 0.4)');
+const softSprite = makeWaterSprite('rgba(130, 200, 245, 0.30)', 'rgba(105, 185, 238, 0.22)');
+const coreSprite = makeWaterSprite('rgba(195, 232, 252, 0.30)', 'rgba(140, 205, 245, 0.18)');
 
 function loadLevel(ix) {
   levelIx = ix;
@@ -404,20 +404,32 @@ function draw() {
     }
   }
 
-  // the water — soft halos MERGE into one continuous liquid body,
-  // cores fill the middle, and nobody looks like a bead
+  // the water — CLEAR, glassy, and truly liquid: soft translucent
+  // halos merge into one body, and moving drops STRETCH along their
+  // direction of travel, so a pour becomes a sleek falling stream
   for (const d of drops) {
-    ctx.drawImage(softSprite, d.x - 19, d.y - 19, 38, 38);
+    const sp = Math.hypot(d.vx, d.vy);
+    if (sp > 90) {
+      const stretch = 1 + Math.min(1.1, sp / 380);
+      ctx.save();
+      ctx.translate(d.x, d.y);
+      ctx.rotate(Math.atan2(d.vy, d.vx));
+      ctx.drawImage(softSprite, -19 * stretch, -19 / stretch,
+                    38 * stretch, 38 / stretch);
+      ctx.restore();
+    } else {
+      ctx.drawImage(softSprite, d.x - 19, d.y - 19, 38, 38);
+    }
   }
   for (const d of drops) {
     ctx.drawImage(coreSprite, d.x - 12, d.y - 12, 24, 24);
   }
-  // a few sparse glints riding the surface — light on water, not per-bead
-  ctx.fillStyle = 'rgba(220, 245, 255, 0.35)';
-  for (let i = 0; i < drops.length; i += 6) {
+  // glints of light on the surface — clearer water catches MORE light
+  ctx.fillStyle = 'rgba(235, 250, 255, 0.5)';
+  for (let i = 0; i < drops.length; i += 4) {
     const d = drops[i];
     ctx.beginPath();
-    ctx.arc(d.x - 2, d.y - 3, 2, 0, Math.PI * 2);
+    ctx.arc(d.x - 2, d.y - 3, 1.8, 0, Math.PI * 2);
     ctx.fill();
   }
 
