@@ -781,10 +781,13 @@ function update(dt) {
   }
 
   const you = ents[0];
+  // YOU ARE ALWAYS IN THE MIDDLE. We used to clamp the camera to the edge of
+  // the paper, which meant that as soon as you reached the edge of the map you
+  // slid off to one side of the screen and had to hunt for yourself. Now the
+  // camera just follows you, full stop. Past the edge you see the bare desk —
+  // which is honest: it tells you there's no more paper that way.
   camX = you.x * CELL - canvas.width / 2;
   camY = you.y * CELL - canvas.height / 2;
-  camX = Math.max(-80, Math.min(GW * CELL - canvas.width + 80, camX));
-  camY = Math.max(-80, Math.min(GH * CELL - canvas.height + 80, camY));
 }
 
 // ---------------------------------------------------------------------
