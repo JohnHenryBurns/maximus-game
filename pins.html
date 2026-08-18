@@ -168,6 +168,23 @@ let blipT = 0;
 const DROP_R = 6;
 const GRAV = 900;
 
+// two little pre-drawn sprites, stamped once per drop per frame:
+// a fuzzy halo (the mergy part) and a denser core (the wet part)
+function makeWaterSprite(inner, mid, edgeAlpha) {
+  const c = document.createElement('canvas');
+  c.width = 64; c.height = 64;
+  const x = c.getContext('2d');
+  const g = x.createRadialGradient(32, 32, 2, 32, 32, 30);
+  g.addColorStop(0, inner);
+  g.addColorStop(0.55, mid);
+  g.addColorStop(1, 'rgba(74, 168, 232, 0)');
+  x.fillStyle = g;
+  x.fillRect(0, 0, 64, 64);
+  return c;
+}
+const softSprite = makeWaterSprite('rgba(74, 168, 232, 0.55)', 'rgba(74, 168, 232, 0.45)');
+const coreSprite = makeWaterSprite('rgba(120, 195, 240, 0.5)', 'rgba(84, 172, 232, 0.4)');
+
 function loadLevel(ix) {
   levelIx = ix;
   const L = LEVELS[ix];
@@ -179,7 +196,7 @@ function loadLevel(ix) {
   for (const [wx, wy, ww, wh] of L.water) {
     for (let y = wy; y < wy + wh; y += DROP_R * 1.9) {
       for (let x = wx; x < wx + ww; x += DROP_R * 1.9) {
-        drops.push({ x: x + Math.random() * 2, y: y + Math.random() * 2,
+        drops.push({ x: x + (Math.random() - 0.5) * 6, y: y + (Math.random() - 0.5) * 6,
                      vx: 0, vy: 0, inBeaker: false });
       }
     }
@@ -387,17 +404,20 @@ function draw() {
     }
   }
 
-  // the water — many round drops that read as one liquid
-  ctx.fillStyle = '#4aa8e8';
+  // the water — soft halos MERGE into one continuous liquid body,
+  // cores fill the middle, and nobody looks like a bead
   for (const d of drops) {
-    ctx.beginPath();
-    ctx.arc(d.x, d.y, DROP_R + 1.5, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.drawImage(softSprite, d.x - 19, d.y - 19, 38, 38);
   }
-  ctx.fillStyle = '#8fd0f8';
   for (const d of drops) {
+    ctx.drawImage(coreSprite, d.x - 12, d.y - 12, 24, 24);
+  }
+  // a few sparse glints riding the surface — light on water, not per-bead
+  ctx.fillStyle = 'rgba(220, 245, 255, 0.35)';
+  for (let i = 0; i < drops.length; i += 6) {
+    const d = drops[i];
     ctx.beginPath();
-    ctx.arc(d.x - 1.5, d.y - 1.5, DROP_R * 0.45, 0, Math.PI * 2);
+    ctx.arc(d.x - 2, d.y - 3, 2, 0, Math.PI * 2);
     ctx.fill();
   }
 
