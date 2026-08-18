@@ -82,7 +82,7 @@ const LEVELS = [
     lava: [],
     water: [[172, 60, 76, 80]] },
 
-  { name: 'mind the gaps', need: 0.5,
+  { name: 'mind the gaps', need: 0.45,
     walls: [[78, 50, 78, 160], [162, 50, 162, 160],
             [60, 300, 140, 309], [180, 313, 240, 320], [280, 324, 360, 333],
             [360, 260, 360, 333],
@@ -93,18 +93,16 @@ const LEVELS = [
     lava: [],
     water: [[82, 60, 76, 80]] },
 
-  { name: 'left is life', need: 0.55,
+  { name: 'left is life', need: 0.35,
     walls: [[168, 50, 168, 140], [252, 50, 252, 140],
-            [210, 200, 130, 280], [210, 200, 290, 280],
-            [130, 280, 60, 280], [290, 280, 360, 280],
-            [60, 280, 60, 340],
-            [64, 380, 170, 430],
-            [250, 380, 360, 430], [360, 380, 360, 480],
+            [210, 190, 120, 290], [210, 190, 300, 290],   // the splitter
+            [60, 310, 150, 370], [210, 305, 195, 370],    // left funnel
+            [360, 310, 270, 370], [210, 305, 225, 370],   // right funnel
             ...beakerWalls()],
     pins: [[158, 145, 262, 145],       // A: the water's floor
-           [130, 280, 130, 345],       // L: the good gate
-           [290, 280, 290, 345]],      // R: the gate to the lava. DON'T.
-    lava: [[305, 415, 34]],
+           [146, 374, 199, 374],       // L: the good drain
+           [221, 374, 274, 374]],      // R: the drain over the LAVA. DON'T.
+    lava: [[247, 480, 30]],
     water: [[172, 55, 76, 75]] },
 
   { name: 'middle first', need: 0.55,
@@ -132,14 +130,14 @@ const LEVELS = [
 
   { name: 'the long way down', need: 0.5,
     walls: [[48, 40, 48, 130], [140, 40, 140, 130],
-            [60, 230, 300, 290], [300, 230, 300, 290],
-            [360, 350, 120, 430], [120, 350, 120, 430],
-            [60, 480, 60, 560], [60, 560, 170, 560],
+            [60, 230, 260, 280], [300, 230, 300, 290],
+            [360, 350, 150, 425], [60, 370, 105, 425],
+            [60, 545, 170, 570],
             ...beakerWalls()],
     pins: [[40, 135, 148, 135],        // A: release the water
-           [296, 286, 306, 340],       // B: down from shelf one
-           [116, 426, 126, 480],       // C: down from shelf two
-           [166, 556, 176, 616]],      // D: the final drop
+           [256, 284, 304, 284],       // B: the slot off shelf one
+           [101, 429, 154, 429],       // C: the funnel neck below
+           [168, 566, 178, 622]],      // D: the final gate
     lava: [[350, 500, 30]],
     water: [[54, 48, 80, 76]] },
 ];
@@ -269,6 +267,7 @@ function segPush(drop, s, R) {
   nx /= d; ny /= d;
   drop.x = cx + nx * R;
   drop.y = cy + ny * R;
+  drop.contact = true;
   const vn = drop.vx * nx + drop.vy * ny;
   if (vn < 0) {
     drop.vx -= vn * nx * 1.25;          // a little bounce
@@ -293,6 +292,7 @@ function update(dt) {
   for (let step = 0; step < 2; step++) {
     const sdt = dt / 2;
     for (const drop of drops) {
+      drop.contact = false;            // are we touching anything this step?
       drop.vy += GRAV * sdt;
       // terminal velocity: real water doesn't fall like a meteor
       drop.vy = Math.min(drop.vy, 520);
@@ -322,7 +322,15 @@ function update(dt) {
             drop.vx += nx * rel * 0.45; drop.vy += ny * rel * 0.45;
             o.vx -= nx * rel * 0.45; o.vy -= ny * rel * 0.45;
           }
+          drop.contact = true;
+          o.contact = true;
         }
+      }
+      // water that's RESTING on something calms down; water in
+      // free-fall falls at full, honest speed
+      if (drop.contact && Math.abs(drop.vx) + Math.abs(drop.vy) < 110) {
+        drop.vx *= 0.9;
+        drop.vy *= 0.9;
       }
       // lava: one touch and a drop is steam
       for (const l of lava) {
@@ -354,20 +362,25 @@ function update(dt) {
   }
   particles = particles.filter(p => p.life > 0);
 
-  // once things settle after a pull, the level speaks its verdict
+  // the verdict rules:
+  //  WIN  — the beaker crosses the line (held a moment, not a splash)
+  //  FAIL — only when it's truly over: all pins pulled and settled,
+  //         or too much water is already lost to ever reach the goal.
+  //  otherwise the level WAITS — you might still have a plan.
   if (anyPulled && !result) {
-    if (maxSpeed < 30) calmT += dt;
+    if (maxSpeed < 60) calmT += dt;
     else calmT = 0;
-    if (calmT > 1.3) {
-      const frac = drops.filter(d => d.inBeaker).length / totalDrops;
-      const need = LEVELS[levelIx].need;
-      if (frac >= need) {
-        result = 'win';
-        save.done[levelIx] = Math.max(save.done[levelIx] || 0, Math.round(frac * 100));
-        persist();
-        winSound();
-      } else {
-        // settled and short of the mark — that's a miss, captain
+    const frac = drops.filter(d => d.inBeaker).length / totalDrops;
+    const need = LEVELS[levelIx].need;
+    if (frac >= need && calmT > 0.5) {
+      result = 'win';
+      save.done[levelIx] = Math.max(save.done[levelIx] || 0, Math.round(frac * 100));
+      persist();
+      winSound();
+    } else if (calmT > 1.6) {
+      const allPulled = pins.every(p => p.pulled);
+      const bestPossible = drops.length / totalDrops;   // if EVERY survivor got in
+      if (bestPossible < need || (allPulled && frac < need)) {
         result = 'fail';
         failSound();
       }
