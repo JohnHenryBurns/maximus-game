@@ -90,6 +90,35 @@ function fit() { canvas.width = innerWidth; canvas.height = innerHeight; }
 addEventListener('resize', fit);
 fit();
 
+// ---------------------------------------------------------------------
+// FITTING ON A PHONE — measure first, draw second.
+// ---------------------------------------------------------------------
+
+// Break a sentence into lines that FIT: add words one at a time, and start
+// a new line the moment the line gets too wide.
+function wrapText(text, maxW, font) {
+  ctx.font = font;
+  const lines = [];
+  let line = '';
+  for (const word of text.split(' ')) {
+    const test = line ? line + ' ' + word : word;
+    if (line && ctx.measureText(test).width > maxW) { lines.push(line); line = word; }
+    else line = test;
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+// The Arcade pill is a real HTML link floating over the top-left corner, so
+// the canvas can't see it. Ask the browser where it actually is, and put our
+// own buttons somewhere else — it used to sit right on top of PERSON.
+function pillBox() {
+  const el = document.getElementById('back');
+  if (!el) return { right: 109, bottom: 38 };
+  const r = el.getBoundingClientRect();
+  return { right: Math.ceil(r.right), bottom: Math.ceil(r.bottom) };
+}
+
 window.onerror = (msg, src, line) => {
   const d = document.createElement('div');
   d.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#c0392b;' +
@@ -116,15 +145,51 @@ function clampCam() {
 function screenToWorld(sx, sy) {
   return { x: cam.x + sx / cam.zoom, y: cam.y + sy / cam.zoom };
 }
+const ZOOM_MIN = 0.3, ZOOM_MAX = 2.4;
+
+// Zoom so that the point under your finger/cursor stays exactly where it is.
+// That's the whole trick to zoom feeling right instead of feeling drunk.
+function zoomAt(sx, sy, factor) {
+  const before = screenToWorld(sx, sy);
+  cam.zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, cam.zoom * factor));
+  cam.x = before.x - sx / cam.zoom;
+  cam.y = before.y - sy / cam.zoom;
+  clampCam();
+}
+
 addEventListener('wheel', e => {
   e.preventDefault();
-  // zoom toward the pointer: the spot under your cursor stays put
-  const before = screenToWorld(e.clientX, e.clientY);
-  cam.zoom = Math.max(0.3, Math.min(1.6, cam.zoom * (e.deltaY > 0 ? 0.88 : 1.14)));
-  cam.x = before.x - e.clientX / cam.zoom;
-  cam.y = before.y - e.clientY / cam.zoom;
-  clampCam();
+  zoomAt(e.clientX, e.clientY, e.deltaY > 0 ? 0.88 : 1.14);
 }, { passive: false });
+
+// ---- PINCH TO ZOOM, TWO FINGERS TO PAN --------------------------------
+// ONE finger is playing: place, grab, fling, erase.
+// TWO fingers is looking: pinch to zoom, slide to pan.
+// Keeping them separate means we never have to ask "did you mean to zoom
+// or did you mean to drop a bomb?" — the number of fingers already said.
+const pointers = new Map();          // every finger currently on the glass
+let gesture = null;                  // the two-finger zoom/pan in progress
+
+function pinchInfo() {
+  const pts = [...pointers.values()];
+  const dx = pts[0].x - pts[1].x, dy = pts[0].y - pts[1].y;
+  return { dist: Math.max(1, Math.hypot(dx, dy)),
+           mx: (pts[0].x + pts[1].x) / 2, my: (pts[0].y + pts[1].y) / 2 };
+}
+function startGesture() {
+  const p = pinchInfo();
+  gesture = { dist: p.dist, mx: p.mx, my: p.my };
+}
+function moveGesture() {
+  const p = pinchInfo();
+  // the pinch: how much wider or narrower did the two fingers get?
+  zoomAt(gesture.mx, gesture.my, p.dist / gesture.dist);
+  // the slide: drag the whole world along with the midpoint
+  cam.x -= (p.mx - gesture.mx) / cam.zoom;
+  cam.y -= (p.my - gesture.my) / cam.zoom;
+  clampCam();
+  gesture = { dist: p.dist, mx: p.mx, my: p.my };
+}
 
 // ---------------------------------------------------------------------
 // SOUND
@@ -714,6 +779,8 @@ function update(dt) {
 let tool = 'person';
 let uiRects = [];
 let erasing = false;
+let openMenu = null;        // 'build' | 'act' | null — which dropdown is down
+let pendingPlace = null;    // a tap waiting to see if it becomes a pinch
 
 // remove whatever's under the eraser, one thing per tap
 function eraseAt(x, y) {
@@ -768,11 +835,36 @@ function eraseAt(x, y) {
   return false;
 }
 
+// everything a single finger might have started, so a second finger can
+// cleanly cancel it and take over as a pinch
+function cancelTouchAction() {
+  grabbed = null; grabbedHole = null; grabbedLauncher = null; grabbedSun = null;
+  erasing = false;
+  pendingPlace = null;
+}
+
 addEventListener('pointerdown', e => {
   ensureAudio();
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pointers.size === 2) {
+    // a second finger landed — that's a pinch, not a bomb. Undo whatever
+    // the first finger was in the middle of doing.
+    cancelTouchAction();
+    startGesture();
+    return;
+  }
+  if (pointers.size > 2) return;
+
   for (const r of uiRects) {
     if (e.clientX > r.x && e.clientX < r.x + r.w &&
         e.clientY > r.y && e.clientY < r.y + r.h) {
+      if (r.id === 'menu_build' || r.id === 'menu_act') {
+        const which = r.id === 'menu_build' ? 'build' : 'act';
+        openMenu = openMenu === which ? null : which;   // tap again to close
+        beep(660, 0.04, 'sine', 0.05);
+        return;
+      }
+      if (r.id !== 'nothing') openMenu = null;          // a choice closes the menu
       if (r.id === 'gravity') {
         gravityOn = !gravityOn;
         whooshSound();
@@ -808,6 +900,9 @@ addEventListener('pointerdown', e => {
       return;
     }
   }
+  // tapping the world with a menu open just closes the menu
+  if (openMenu) { openMenu = null; return; }
+
   const w = screenToWorld(e.clientX, e.clientY);
   pointer = w;
   // the eraser takes priority over grabbing — tap or sweep to remove
@@ -844,28 +939,45 @@ addEventListener('pointerdown', e => {
     if (d < bestD + b.r) { best = b; bestD = d; }
   }
   if (best) { grabbed = best; return; }
-  // ...otherwise, place whatever the tool says
-  if (tool === 'person') addPerson(w.x, w.y);
-  else if (tool === 'crate') addCrate(w.x, w.y);
-  else if (tool === 'bomb') addBomb(w.x, w.y);
-  else if (tool === 'mutant') addMutant(w.x, w.y);
-  else if (tool === 'spike') addSpike(w.x - 23, w.y);
-  else if (tool === 'hole') addHole(w.x, w.y);
-  else if (tool === 'launcher') addLauncher(w.x, w.y);
-  else if (tool === 'sun') addSun(w.x, w.y);
+  // ...otherwise remember WHERE you tapped, and place it when you lift off.
+  // Waiting for the lift is what lets a second finger cancel it — otherwise
+  // the first finger of every pinch would drop something.
+  pendingPlace = { x: w.x, y: w.y, sx: e.clientX, sy: e.clientY, moved: false };
 });
+
+function placeAt(x, y) {
+  if (tool === 'person') addPerson(x, y);
+  else if (tool === 'crate') addCrate(x, y);
+  else if (tool === 'bomb') addBomb(x, y);
+  else if (tool === 'mutant') addMutant(x, y);
+  else if (tool === 'spike') addSpike(x - 23, y);
+  else if (tool === 'hole') addHole(x, y);
+  else if (tool === 'launcher') addLauncher(x, y);
+  else if (tool === 'sun') addSun(x, y);
+}
+
 addEventListener('pointermove', e => {
+  if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pointers.size >= 2) { if (gesture) moveGesture(); return; }
   pointer = screenToWorld(e.clientX, e.clientY);
   if (erasing) eraseAt(pointer.x, pointer.y);
+  // a real drag isn't a tap, so it shouldn't leave anything behind
+  if (pendingPlace && Math.hypot(e.clientX - pendingPlace.sx, e.clientY - pendingPlace.sy) > 12) {
+    pendingPlace.moved = true;
+  }
 });
-addEventListener('pointerup', () => {
+function endPointer(e, placeIfTapped) {
+  if (e) pointers.delete(e.pointerId);
+  if (pointers.size < 2) gesture = null;
+  if (placeIfTapped && pendingPlace && !pendingPlace.moved && pointers.size === 0) {
+    placeAt(pendingPlace.x, pendingPlace.y);
+  }
+  pendingPlace = null;
   grabbed = null; grabbedHole = null; grabbedLauncher = null; grabbedSun = null;
   erasing = false;
-});
-addEventListener('pointercancel', () => {
-  grabbed = null; grabbedHole = null; grabbedLauncher = null; grabbedSun = null;
-  erasing = false;
-});
+}
+addEventListener('pointerup', e => endPointer(e, true));
+addEventListener('pointercancel', e => endPointer(e, false));
 
 // ---------------------------------------------------------------------
 // DRAWING
@@ -1051,8 +1163,11 @@ function drawWarpedGrid() {
 function draw() {
   const W = canvas.width, H = canvas.height;
   if (!camReady) {
-    // start looking at the middle of the lab floor, slightly zoomed out
-    cam.zoom = Math.min(1, W / WORLD_W * 1.6);
+    // Start looking at the middle of the lab floor. The old sum came out at
+    // 0.24 zoom on a phone, which made every person about four pixels tall —
+    // technically the whole lab, practically a screen of dust. Never go below
+    // 0.5 now, and pinch out if you want the wide view.
+    cam.zoom = Math.max(0.5, Math.min(1, W / WORLD_W * 1.6));
     cam.x = (WORLD_W - W / cam.zoom) / 2;
     cam.y = WORLD_H - H / cam.zoom;
     clampCam();
@@ -1247,67 +1362,118 @@ function draw() {
     ctx.strokeStyle = `rgba(90, 200, 255, ${0.3 + Math.sin(elapsed * 3) * 0.15})`;
     ctx.lineWidth = 6;
     ctx.strokeRect(3, 3, W - 6, H - 6);
+    // this banner ran 151px off the side of a phone, so it wraps now
     ctx.textAlign = 'center';
     ctx.fillStyle = `rgba(180, 228, 255, ${0.5 + Math.sin(elapsed * 3) * 0.2})`;
-    ctx.font = 'bold 17px monospace';
-    ctx.fillText('❄ TIME IS FROZEN — arrange the moment, then let it go ❄',
-                 W / 2, H - 54);
+    const font = `bold ${Math.min(17, W / 32)}px monospace`;
+    const lines = wrapText('❄ TIME IS FROZEN — arrange the moment, then let it go ❄',
+                           W - 24, font);
+    ctx.font = font;
+    lines.forEach((ln, i) => ctx.fillText(ln, W / 2, H - 54 - (lines.length - 1 - i) * 22));
     ctx.textAlign = 'left';
   }
 
   // ---- toolbar ----
+  // Thirteen buttons in a row filled five rows and a quarter of a phone
+  // screen, and the Arcade pill sat right on top of the first one. So now
+  // there are two: what you're BUILDING, and what you're DOING. Each opens
+  // a dropdown. The build button wears the tool you've got picked, so you
+  // can always see what a tap is going to drop.
   uiRects = [];
-  const TOOLS = [
+  const BUILD = [
     ['person', '🧍 PERSON'], ['crate', '📦 CRATE'], ['bomb', '💣 BOMB'],
-    ['mutant', '🧪 MUTANT'],
-    ['spike', '⚠ SPIKE'], ['hole', '🕳 HOLE'], ['launcher', '💥 LAUNCHER'],
-    ['sun', '☀ SUN'],
+    ['mutant', '🧪 MUTANT'], ['spike', '⚠ SPIKE'], ['hole', '🕳 HOLE'],
+    ['launcher', '💥 LAUNCHER'], ['sun', '☀ SUN'], ['erase', '🧽 ERASE'],
+  ];
+  const ACTIONS = [
     ['gravity', gravityOn ? '🌍 GRAVITY: ON' : '🚀 GRAVITY: OFF'],
     ['time', timeOn ? '⏱ TIME: ON' : '❄ TIME: FROZEN'],
     ['tent', tentaclesOn ? '🐙 TENTACLES: ON' : '🐙 TENTACLES: OFF'],
-    ['erase', '🧽 ERASE'],
-    ['clear', '✖ CLEAR'],
+    ['clear', '✖ CLEAR EVERYTHING'],
   ];
-  let bx = 8, by = 8;
-  const places = [];
-  for (const [id, label] of TOOLS) {
-    const bw = Math.max(70, label.length * 10 + 22);
-    if (bx + bw > W - 8) { bx = 8; by += 44; }
-    places.push({ id, label, x: bx, y: by, w: bw });
-    bx += bw + 8;
-  }
-  const barH = by + 40 + 8;
-  ctx.fillStyle = 'rgba(8, 10, 14, 0.75)';
-  ctx.fillRect(0, 0, W, barH);
-  for (const p of places) {
-    uiRects.push({ x: p.x, y: p.y, w: p.w, h: 40, id: p.id });
-    const active = tool === p.id;
-    const isGrav = p.id === 'gravity';
-    const isTime = p.id === 'time';
-    const isTent = p.id === 'tent';
-    ctx.fillStyle = isGrav ? (gravityOn ? 'rgba(125, 223, 143, 0.15)' : 'rgba(122, 90, 255, 0.3)')
-                  : isTime ? (timeOn ? 'rgba(125, 223, 143, 0.15)' : 'rgba(90, 200, 255, 0.3)')
-                  : isTent ? (tentaclesOn ? 'rgba(180, 130, 255, 0.2)' : 'rgba(255,255,255,0.05)')
-                  : active ? 'rgba(255, 210, 63, 0.25)' : 'rgba(255,255,255,0.07)';
-    ctx.fillRect(p.x, p.y, p.w, 40);
-    ctx.strokeStyle = isGrav ? (gravityOn ? '#7ddf8f' : '#9a7aff')
-                    : isTime ? (timeOn ? '#7ddf8f' : '#5ac8ff')
-                    : isTent ? (tentaclesOn ? '#b482ff' : '#5a5450')
-                    : active ? '#ffd23f' : '#5a5450';
+
+  const pill = pillBox();
+  const barTop = 8;
+  const barBtnH = 40;
+  // the two buttons share whatever room is left beside the Arcade pill; if
+  // that's too cramped they drop onto their own line underneath it
+  let rowY = barTop;
+  let left = pill.right + 8;
+  if (W - left - 12 < 200) { rowY = pill.bottom + 8; left = 10; }
+  const gap = 8;
+  const btnW = Math.min(200, (W - left - 12 - gap) / 2);
+  const currentLabel = (BUILD.find(t => t[0] === tool) || BUILD[0])[1];
+
+  const drawBtn = (x, y, w, h, label, id, on, colors) => {
+    uiRects.push({ x, y, w, h, id });
+    ctx.fillStyle = colors ? colors.fill : (on ? 'rgba(255, 210, 63, 0.25)' : 'rgba(255,255,255,0.07)');
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = colors ? colors.line : (on ? '#ffd23f' : '#5a5450');
     ctx.lineWidth = 2;
-    ctx.strokeRect(p.x, p.y, p.w, 40);
-    ctx.fillStyle = isGrav ? (gravityOn ? '#7ddf8f' : '#c8b4ff')
-                  : isTime ? (timeOn ? '#7ddf8f' : '#b4e4ff')
-                  : isTent ? (tentaclesOn ? '#c8a4ff' : '#8a8478')
-                  : active ? '#ffd23f' : '#c8c0b8';
-    ctx.font = 'bold 14px monospace';
+    ctx.strokeRect(x, y, w, h);
+    ctx.fillStyle = colors ? colors.text : (on ? '#ffd23f' : '#c8c0b8');
+    // shrink the writing until it fits the button rather than spilling out
+    let fs = 14;
+    ctx.font = `bold ${fs}px monospace`;
+    while (ctx.measureText(label).width > w - 12 && fs > 9) {
+      fs -= 1;
+      ctx.font = `bold ${fs}px monospace`;
+    }
     ctx.textAlign = 'center';
-    ctx.fillText(p.label, p.x + p.w / 2, p.y + 26);
-  }
-  ctx.textAlign = 'left';
+    ctx.fillText(label, x + w / 2, y + h / 2 + fs * 0.36);
+    ctx.textAlign = 'left';
+  };
+
+  ctx.fillStyle = 'rgba(8, 10, 14, 0.75)';
+  ctx.fillRect(0, 0, W, rowY + barBtnH + 8);
+  drawBtn(left, rowY, btnW, barBtnH, currentLabel + '  ▾', 'menu_build', openMenu === 'build');
+  drawBtn(left + btnW + gap, rowY, btnW, barBtnH, '⚙ ACTIONS  ▾', 'menu_act', openMenu === 'act');
+
+  const barH = rowY + barBtnH + 8;
+
+  // ---- the hint line ----
+  // It ran 159px off the side of a phone, so it's shorter when there's less
+  // room and it wraps if it still doesn't fit.
+  const hint = W < 560
+    ? 'tap to place — drag to FLING — pinch to zoom, two fingers to pan'
+    : 'tap to place — drag to FLING — pinch or scroll to zoom, two fingers to pan — the grid IS spacetime';
   ctx.fillStyle = 'rgba(255,255,255,0.4)';
-  ctx.font = '13px monospace';
-  ctx.fillText('tap to place — drag to FLING — scroll wheel zooms — the grid IS spacetime', 10, barH + 20);
+  const hintLines = wrapText(hint, W - 20, '12px monospace');
+  ctx.font = '12px monospace';
+  ctx.textAlign = 'left';
+  hintLines.forEach((ln, i) => ctx.fillText(ln, 10, barH + 16 + i * 15));
+
+  // ---- the dropdown itself ----
+  if (openMenu) {
+    const items = openMenu === 'build' ? BUILD : ACTIONS;
+    const mx = openMenu === 'build' ? left : left + btnW + gap;
+    const mw = Math.max(btnW, 190);
+    const my = rowY + barBtnH + 4;
+    // the rows squeeze up if the screen is short — a phone held sideways
+    // couldn't fit all nine builds at full height
+    const itemH = Math.max(30, Math.min(42, (H - my - 14) / items.length));
+    // keep the panel on screen even when the button is near the right edge
+    const px2 = Math.max(8, Math.min(mx, W - mw - 8));
+    ctx.fillStyle = 'rgba(8, 10, 14, 0.94)';
+    ctx.fillRect(px2, my, mw, items.length * itemH + 8);
+    ctx.strokeStyle = '#5a5450';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(px2, my, mw, items.length * itemH + 8);
+    items.forEach(([id, label], i) => {
+      const iy = my + 4 + i * itemH;
+      const on = tool === id;
+      const colors =
+        id === 'gravity' ? (gravityOn ? { fill: 'rgba(125, 223, 143, 0.15)', line: '#7ddf8f', text: '#7ddf8f' }
+                                      : { fill: 'rgba(122, 90, 255, 0.3)', line: '#9a7aff', text: '#c8b4ff' })
+      : id === 'time'    ? (timeOn ? { fill: 'rgba(125, 223, 143, 0.15)', line: '#7ddf8f', text: '#7ddf8f' }
+                                   : { fill: 'rgba(90, 200, 255, 0.3)', line: '#5ac8ff', text: '#b4e4ff' })
+      : id === 'tent'    ? (tentaclesOn ? { fill: 'rgba(180, 130, 255, 0.2)', line: '#b482ff', text: '#c8a4ff' }
+                                        : { fill: 'rgba(255,255,255,0.05)', line: '#5a5450', text: '#8a8478' })
+      : id === 'clear'   ? { fill: 'rgba(232, 69, 60, 0.18)', line: '#e8453c', text: '#ff9f97' }
+      : null;
+      drawBtn(px2 + 4, iy, mw - 8, itemH - 4, label, id, on, colors);
+    });
+  }
 }
 
 // ---------------------------------------------------------------------
