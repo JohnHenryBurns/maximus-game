@@ -1,0 +1,18 @@
+{
+  "name": "The Sinking Ship",
+  "short_name": "Sinking Ship",
+  "start_url": "sink.html",
+  "scope": "./",
+  "display": "fullscreen",
+  "orientation": "any",
+  "background_color": "#05070c",
+  "theme_color": "#05070c",
+  "icons": [
+    {
+      "src": "icon-sink.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
