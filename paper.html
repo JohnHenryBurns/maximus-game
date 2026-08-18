@@ -102,6 +102,9 @@ const SKINS = [
   { id: 'donut', name: 'SHINY DONUT', how: 'cover 10.5% of the map — PERK: pink sparkly trail',
     unlocked: () => psave.best >= 10.5,
     progress: () => 'best so far: ' + psave.best.toFixed(1) + '% / 10.5%' },
+  { id: 'multi', name: 'THE MULTI-TASKER', how: 'hold 3 towers at ONCE — PERK: towers deploy 5 minis',
+    unlocked: () => (psave.towersMax || 0) >= 3,
+    progress: () => 'most towers held at once: ' + (psave.towersMax || 0) + '/3' },
 ];
 let camX = 0, camY = 0;
 let gameOver = false;
@@ -157,11 +160,15 @@ function resetGame() {
 }
 resetGame();
 
-// three tiny copies of the tower's new owner march out to help
+// tiny copies of the tower's new owner march out to help —
+// five of them, if the owner happens to be a legendary multi-tasker
 function spawnMinis(ownerId, tx, ty) {
-  const dirs = [[1, 0], [-1, 0], [0, 1]];
-  for (let i = 0; i < 3; i++) {
-    if (minis.filter(m => m.ownerId === ownerId).length >= 9) break;
+  const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 0]];
+  const multi = ownerId === 1 && psave.skin === 'multi';
+  const n = multi ? 5 : 3;
+  const cap = multi ? 12 : 9;
+  for (let i = 0; i < n; i++) {
+    if (minis.filter(m => m.ownerId === ownerId).length >= cap) break;
     minis.push({
       ownerId, x: tx + 0.5, y: ty + 0.5,
       dx: dirs[i][0], dy: dirs[i][1],
@@ -494,6 +501,18 @@ function update(dt) {
     milestone += 25;
   }
 
+  // multi-tasking check: how many towers are flying YOUR flag right now?
+  const held = towers.filter(t => t.claimedBy === 1 && own[idx(t.x, t.y)] === 1).length;
+  if (held > (psave.towersMax || 0)) {
+    const hadMulti = (psave.towersMax || 0) >= 3;
+    psave.towersMax = held;
+    persistP();
+    if (!hadMulti && held >= 3) {
+      setBanner('👁 THE MULTI-TASKER SKIN IS UNLOCKED!!');
+      towerSound();
+    }
+  }
+
   // the moment the last rival pops, the war becomes a coronation
   if (!lastStand && ents.slice(1).every(e => !e.alive)) {
     lastStand = true;
@@ -699,6 +718,47 @@ function drawHead(px, py, sc, skin, dx, dy, p) {
     ctx.beginPath();
     ctx.arc(-5 + ex, -7 + ey, 2, 0, Math.PI * 2);
     ctx.arc(4 + ex, -8 + ey, 2, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (skin === 'multi') {
+    // the legend itself: a wobbling black blob, many waving arms,
+    // one enormous unblinking eye. cartoon-spooky, exactly as invented.
+    ctx.strokeStyle = '#1a1420';                   // the arms first
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 7; i++) {
+      const a = i * (Math.PI * 2 / 7) + 0.4;
+      const wav = Math.sin(elapsed * 7 + i * 1.8) * 0.4;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(a) * 9, Math.sin(a) * 9);
+      ctx.quadraticCurveTo(Math.cos(a + wav) * 16, Math.sin(a + wav) * 16,
+                           Math.cos(a + wav * 1.6) * 21, Math.sin(a + wav * 1.6) * 21);
+      ctx.stroke();
+    }
+    ctx.fillStyle = '#1a1420';                     // the blob, breathing
+    ctx.beginPath();
+    for (let i = 0; i <= 10; i++) {
+      const a = (i / 10) * Math.PI * 2;
+      const r = 13 + Math.sin(a * 3 + elapsed * 4) * 1.6;
+      const bx = Math.cos(a) * r, by = Math.sin(a) * r;
+      if (i === 0) ctx.moveTo(bx, by); else ctx.lineTo(bx, by);
+    }
+    ctx.fill();
+    ctx.fillStyle = '#e8e0d8';                     // a rude little bone, poking out
+    ctx.fillRect(6, 7, 8, 2.5);
+    ctx.beginPath();
+    ctx.arc(14, 8, 2.2, 0, Math.PI * 2);
+    ctx.fill();
+    // THE EYE
+    ctx.fillStyle = '#f0ead8';
+    ctx.beginPath();
+    ctx.ellipse(0, -1, 8, 9, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#c03028';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.fillStyle = '#101014';
+    ctx.beginPath();
+    ctx.arc(dx * 3, -1 + dy * 3, 4, 0, Math.PI * 2);
     ctx.fill();
   } else {
     ctx.fillStyle = p.dark;
