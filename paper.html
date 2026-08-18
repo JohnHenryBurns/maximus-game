@@ -72,11 +72,13 @@ const trail = new Uint8Array(GW * GH);   // same, for wet ink trails
 const idx = (x, y) => y * GW + x;
 
 const PLAYERS = [
-  { id: 1, name: 'YOU',     color: '#3a9ad9', dark: '#2a6a9f', isYou: true },
-  { id: 2, name: 'Chippy',  color: '#e8453c', dark: '#a83028' },
-  { id: 3, name: 'Gerald',  color: '#ff9f43', dark: '#c8742a' },
-  { id: 4, name: 'Kevin',   color: '#5fbf6f', dark: '#3f8a4c' },
-  { id: 5, name: 'Barry',   color: '#a878e8', dark: '#7a52b0' },
+  { id: 1, name: 'YOU',       color: '#3a9ad9', dark: '#2a6a9f', isYou: true },
+  { id: 2, name: 'Chippy',    color: '#e8453c', dark: '#a83028' },
+  { id: 3, name: 'Gerald',    color: '#ff9f43', dark: '#c8742a' },
+  { id: 4, name: 'Kevin',     color: '#5fbf6f', dark: '#3f8a4c' },
+  { id: 5, name: 'Barry',     color: '#a878e8', dark: '#7a52b0' },
+  { id: 6, name: 'Chippy Jr', color: '#5a4a68', dark: '#382c48', skin: 'axe' },
+  { id: 7, name: 'The Fart',  color: '#b4d45f', dark: '#84a03c', skin: 'fart' },
 ];
 
 let ents = [];
@@ -142,7 +144,8 @@ function resetGame() {
   own.fill(0);
   trail.fill(0);
   ents = [];
-  const spots = [[GW >> 1, GH >> 1], [10, 8], [GW - 11, 8], [10, GH - 9], [GW - 11, GH - 9]];
+  const spots = [[GW >> 1, GH >> 1], [10, 8], [GW - 11, 8], [10, GH - 9], [GW - 11, GH - 9],
+                 [GW >> 1, 7], [GW >> 1, GH - 8]];
   PLAYERS.forEach((p, i) => {
     const [cx, cy] = spots[i];
     stampSquare(p.id, cx, cy, 2);
@@ -635,7 +638,7 @@ function draw() {
     const fade = Math.min(1, m.life / 2);            // they fade near the end
     ctx.globalAlpha = fade;
     drawHead(m.x * CELL, m.y * CELL, 0.55,
-             m.ownerId === 1 ? psave.skin : 'block', m.dx, m.dy, p);
+             m.ownerId === 1 ? psave.skin : (p.skin || 'block'), m.dx, m.dy, p);
     ctx.globalAlpha = 1;
   }
 
@@ -643,7 +646,8 @@ function draw() {
   for (const ent of ents) {
     if (!ent.alive) continue;
     const px = ent.x * CELL, py = ent.y * CELL;
-    drawHead(px, py, 1, ent.p.isYou ? psave.skin : 'block', ent.dx, ent.dy, ent.p);
+    drawHead(px, py, 1, ent.p.isYou ? psave.skin : (ent.p.skin || 'block'),
+             ent.dx, ent.dy, ent.p);
     ctx.textAlign = 'center';
     ctx.fillStyle = 'rgba(40, 36, 24, 0.75)';
     ctx.font = 'bold 12px monospace';
@@ -760,6 +764,58 @@ function drawHead(px, py, sc, skin, dx, dy, p) {
     ctx.beginPath();
     ctx.arc(dx * 3, -1 + dy * 3, 4, 0, Math.PI * 2);
     ctx.fill();
+  } else if (skin === 'axe') {
+    // CHIPPY JR — the giant black axe with red eyes, scaled for paper
+    ctx.strokeStyle = '#6a4a2a';                   // the haft
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(2, 14);
+    ctx.lineTo(2, -12);
+    ctx.stroke();
+    ctx.fillStyle = '#241c2e';                     // the blade
+    ctx.beginPath();
+    ctx.moveTo(2, -13);
+    ctx.quadraticCurveTo(-16, -13, -15, 2);
+    ctx.quadraticCurveTo(-9, -3, 2, -1);
+    ctx.fill();
+    ctx.strokeStyle = '#4a3a5c';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    // the family eyes: red, glowing, unimpressed
+    const glow = 0.7 + Math.sin(elapsed * 5) * 0.3;
+    ctx.fillStyle = `rgba(232, 60, 48, ${glow})`;
+    ctx.beginPath();
+    ctx.arc(-9 + dx * 1.5, -8 + dy * 1.5, 2.2, 0, Math.PI * 2);
+    ctx.arc(-4 + dx * 1.5, -7 + dy * 1.5, 2.2, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (skin === 'fart') {
+    // THE FART — free of the cave, hungry for territory
+    ctx.fillStyle = 'rgba(140, 220, 110, 0.95)';
+    ctx.beginPath();
+    for (const [ox, oy, r] of [[0, -3, 10], [8, 2, 8], [-8, 2, 8], [0, 5, 9]]) {
+      const wob = r * (1 + Math.sin(elapsed * 6 + ox + oy) * 0.12);
+      ctx.moveTo(ox + wob, oy);
+      ctx.arc(ox, oy, wob, 0, Math.PI * 2);
+    }
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(170, 230, 140, 0.6)';  // proud stink lines
+    ctx.lineWidth = 1.5;
+    for (let i = -1; i <= 1; i += 2) {
+      ctx.beginPath();
+      ctx.moveTo(i * 5, -12);
+      ctx.quadraticCurveTo(i * 5 + Math.sin(elapsed * 5 + i) * 3, -18, i * 5, -23);
+      ctx.stroke();
+    }
+    ctx.fillStyle = '#183a10';                     // the cheeky face
+    ctx.beginPath();
+    ctx.arc(-4 + dx * 2, -4 + dy * 2, 2, 0, Math.PI * 2);
+    ctx.arc(4 + dx * 2, -4 + dy * 2, 2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#183a10';
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    ctx.arc(dx * 2, 1, 4.5, 0.15 * Math.PI, 0.85 * Math.PI);
+    ctx.stroke();
   } else {
     ctx.fillStyle = p.dark;
     ctx.beginPath();
