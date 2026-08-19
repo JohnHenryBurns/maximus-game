@@ -262,6 +262,13 @@ a.arcade-pill.arcade-float {
 
   <div class="slab">
     <h2><span class="stepnum">6</span>FORGE IT</h2>
+    <div class="toolrow" style="margin-bottom:12px">
+      <button class="tool on" id="giveToggle">📦 PUT IT IN MY INVENTORY: ON</button>
+    </div>
+    <div class="hint" style="text-align:center; margin-bottom:12px">
+      when this is ON, your creation drops straight into your inventory the first
+      time you play — no hunting through menus
+    </div>
     <button id="forgeBtn">⚒ FORGE MY ADDON</button>
     <div id="forgedMsg"></div>
     <ol class="steps">
@@ -280,6 +287,25 @@ a.arcade-pill.arcade-float {
     <div class="warn">⚠️ This works with the Minecraft that phones, tablets, Xbox and the
       Microsoft Store use (called <b>Bedrock</b>). If your Minecraft is <b>Java Edition</b>
       it speaks a different language — ask Dad which one you have.</div>
+    <details>
+      <summary>😤 it's not showing up! — try these, in order</summary>
+      <ol class="steps">
+        <li><b>Both packs must be ON.</b> Every addon here is really TWO packs — the
+            <i>stuff</i> (what it does) and the <i>looks</i> (what it looks like). In your
+            world settings check <b>Behavior Packs</b> AND <b>Resource Packs</b>. If only one
+            is on, it won't work properly.</li>
+        <li><b>Leave the world and come back in.</b> Packs only switch on when a world loads.</li>
+        <li><b>Just ask for it.</b> Open chat and type
+            <code style="color:#4aedd9" id="giveCmd2">/give @s max:my_item</code> — if that
+            works, your addon is fine and it's only the menu being fussy.</li>
+        <li><b>If chat says "unknown item"</b>, the pack didn't load at all. Check your
+            Minecraft is up to date, and that it's <b>Bedrock</b>, not Java.</li>
+        <li><b>Search the creative menu.</b> There's a search box — type your item's name.
+            Custom things often sit right at the end of their section.</li>
+        <li><b>Still nothing?</b> Turn ON <b>📦 PUT IT IN MY INVENTORY</b> above and re-forge.
+            That hands it to you the moment you join, no menu needed.</li>
+      </ol>
+    </details>
     <details>
       <summary>🔍 peek at the robot language (JSON) inside your addon</summary>
       <pre id="jsonPeek"></pre>
@@ -319,6 +345,7 @@ let itemPower = parseInt(localStorage.getItem('forge_power') || '7');
 // the picture: 256 little squares, each one a color (or null = see-through)
 let itemAbilities = localStorage.getItem('forge_abilities') || '';
 let itemClicks = localStorage.getItem('forge_clicks') || '';
+let autoGive = localStorage.getItem('forge_autogive') !== '0';   // on unless turned off
 let pixels;
 try { pixels = JSON.parse(localStorage.getItem('forge_pixels')) || null; } catch (e) { pixels = null; }
 
@@ -653,28 +680,62 @@ function powerLabel(p) {
 // "is anybody HOLDING my item?" — and if so, tops up their power. That
 // is why it lasts exactly as long as you hold it, and stops when you
 // put it away.
-function makeTickFunction(slug, found) {
+// how many should the starter kit hand you? 64 blocks is a good pile,
+// but 64 swords would jam your whole inventory.
+function starterCount() {
+  return itemType === 'block' ? 64 : itemType === 'treasure' ? 16 : itemType === 'food' ? 8 : 1;
+}
+// what version are we on? (used so a re-forge hands you the new one)
+function currentVersion(slug) {
+  try {
+    const all = JSON.parse(localStorage.getItem('forge_uuids')) || {};
+    return (all[slug] && all[slug].v) || 0;
+  } catch (e) { return 0; }
+}
+
+function makeTickFunction(slug, found, version) {
   const effects = found.filter(p => p.kind === 'effect');
-  if (!effects.length) return null;
+  if (!effects.length && !autoGive) return null;
   const base = Math.max(0, Math.min(4, Math.floor(itemPower / 4)));
   // An ITEM checks who is holding it. A BLOCK checks who is standing on
   // it — "~ ~-1 ~" means "the spot one step BELOW your feet".
   const blocky = isBlock();
-  const lines = blocky ? [
-    '# ' + itemName + ' — forged by Max in the Addon Forge',
+  // Keep this file plain ASCII — fancy dashes and emoji can upset
+  // Minecraft's command reader, and a comment isn't worth the risk.
+  const lines = [
+    '# ' + itemName.replace(/[^\x20-\x7E]/g, '') + ' - forged by Max in the Addon Forge',
     '# This file runs 20 times a second.',
-    '# It looks at every player, checks the block under their feet,',
-    '# and if they are standing on YOUR block, gives them the power.',
-  ] : [
-    '# ' + itemName + ' — forged by Max in the Addon Forge',
-    '# This file runs 20 times a second.',
-    '# Every time, it checks who is holding the item and tops up their power.',
   ];
+  if (effects.length) {
+    lines.push(blocky
+      ? '# It checks the block under each player\'s feet, and if they are'
+      : '# It checks who is holding the item, and if they are,');
+    lines.push(blocky
+      ? '# standing on YOUR block, it tops up their power.'
+      : '# it tops up their power.');
+  }
   const grant = (effect, secs, amp) => blocky
     ? 'execute as @a at @s if block ~ ~-1 ~ max:' + slug +
       ' run effect @s ' + effect + ' ' + secs + ' ' + amp + ' true'
     : 'effect @a[hasitem={item=max:' + slug + ',location=slot.weapon.mainhand}] ' +
       effect + ' ' + secs + ' ' + amp + ' true';
+  // THE STARTER KIT — the surest way to get your creation into your
+  // hands. The first time you play, it drops straight into your
+  // inventory. The "tag" is how it remembers it already gave you one:
+  // line 1 gives it to anybody without the tag, line 2 tags them. So
+  // it happens exactly once, no matter how long you play.
+  if (autoGive) {
+    const tag = 'got_' + slug + '_v' + (version || 1);
+    lines.push('');
+    lines.push('# --- STARTER KIT: hand it over the first time you play ---');
+    lines.push('give @a[tag=!' + tag + '] max:' + slug + ' ' + starterCount());
+    lines.push('tag @a[tag=!' + tag + '] add ' + tag);
+  }
+
+  if (effects.length) {
+    lines.push('');
+    lines.push('# --- THE POWERS ---');
+  }
   const seen = new Set();
   for (const p of effects) {
     if (seen.has(p.effect)) continue;
@@ -683,7 +744,7 @@ function makeTickFunction(slug, found) {
     lines.push(grant(p.effect, 3, amp));
   }
   if (seen.has('levitation') && !seen.has('slow_falling')) {
-    lines.push('# what goes up must come down — so here is a soft landing');
+    lines.push('# what goes up must come down, so here is a soft landing');
     lines.push(grant('slow_falling', 6, 0));
   }
   return lines.join('\n') + '\n';
@@ -1010,7 +1071,21 @@ function saveDesign() {
   localStorage.setItem('forge_pixels', JSON.stringify(pixels));
   localStorage.setItem('forge_abilities', itemAbilities);
   localStorage.setItem('forge_clicks', itemClicks);
+  localStorage.setItem('forge_autogive', autoGive ? '1' : '0');
 }
+
+// ---- the "hand it to me" switch ----
+const giveToggle = document.getElementById('giveToggle');
+function refreshGive() {
+  giveToggle.textContent = '📦 PUT IT IN MY INVENTORY: ' + (autoGive ? 'ON' : 'OFF');
+  giveToggle.classList.toggle('on', autoGive);
+  updatePeek();
+}
+giveToggle.addEventListener('click', () => {
+  autoGive = !autoGive;
+  saveDesign();
+  refreshGive();
+});
 
 // ---------------------------------------------------------------------
 // THE INSTRUCTION CARDS (JSON) — this is what Minecraft actually reads
@@ -1208,9 +1283,16 @@ function buildAddonFiles(iconPng, packIconPng) {
     files.push({ name: RP + 'textures/item_texture.json', bytes: J(textureList) });
     files.push({ name: RP + 'textures/items/' + slug + '.png', bytes: iconPng });
   }
-  // if you typed any ✨ powers, the pack also carries a tiny program
-  // and a note telling Minecraft to run it every tick
-  const tick = makeTickFunction(slug, findPowers(itemAbilities));
+  // items get a name in the language file too, in case the name
+  // component isn't understood by this version of Minecraft
+  if (!isBlock()) {
+    files.push({ name: RP + 'texts/en_US.lang',
+                 bytes: enc.encode('item.max:' + slug + '.name=' + itemName + '\n') });
+    files.push({ name: RP + 'texts/languages.json', bytes: enc.encode('["en_US"]') });
+  }
+  // the pack carries a tiny program if you typed ✨ powers, or if you
+  // asked for it to be handed to you when you join
+  const tick = makeTickFunction(slug, findPowers(itemAbilities), ids.v);
   if (tick) {
     files.push({ name: BP + 'functions/' + slug + '_tick.mcfunction', bytes: enc.encode(tick) });
     files.push({ name: BP + 'functions/tick.json', bytes: J({ values: [slug + '_tick'] }) });
@@ -1273,6 +1355,8 @@ document.getElementById('forgeBtn').addEventListener('click', () => {
 function updatePeek() {
   const slug = slugOf(itemName);
   document.getElementById('giveCmd').textContent = '/give @s max:' + slug;
+  const g2 = document.getElementById('giveCmd2');
+  if (g2) g2.textContent = '/give @s max:' + slug;
   const blockNote = document.getElementById('blockNote');
   if (blockNote) {
     blockNote.style.display = isBlock() ? '' : 'none';
@@ -1282,7 +1366,7 @@ function updatePeek() {
   let txt = isBlock()
     ? '// THE BLOCK CARD:\n' + JSON.stringify(makeBlockJSON(), null, 2)
     : '// THE ITEM CARD:\n' + JSON.stringify(makeItemJSON(), null, 2);
-  const tick = makeTickFunction(slug, findPowers(itemAbilities));
+  const tick = makeTickFunction(slug, findPowers(itemAbilities), currentVersion(slug) + 1);
   if (tick) txt += '\n\n// THE POWER PROGRAM (runs 20 times a second):\n' + tick;
   peek.textContent = txt;
 }
@@ -1291,6 +1375,7 @@ setType(itemType);
 updatePower();
 refreshAbilities();
 refreshClicks();
+refreshGive();
 drawArt();
 </script>
 </body>
