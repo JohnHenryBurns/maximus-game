@@ -220,6 +220,20 @@ a.arcade-pill.arcade-float {
       <div class="hint">ideas — tap one to add it:</div>
       <div class="toolrow" id="ideaRow"></div>
     </div>
+
+    <!-- blocks get a SECOND question: what happens when you tap it? -->
+    <div id="clickWrap" style="display:none; margin-top:16px; border-top:2px solid #17171d; padding-top:14px">
+      <div style="font-family:monospace; color:#7fb238; font-weight:bold; margin-bottom:8px">
+        🖱️ AND EVERY TIME YOU RIGHT-CLICK IT...
+      </div>
+      <input type="text" id="clickBox" maxlength="120"
+             placeholder="it explodes and spawns a chicken" autocomplete="off">
+      <div id="clickReport"></div>
+      <div class="tmplrow">
+        <div class="hint">right-click ideas — tap one to add it:</div>
+        <div class="toolrow" id="clickIdeaRow"></div>
+      </div>
+    </div>
   </div>
 
   <div class="slab">
@@ -255,7 +269,9 @@ a.arcade-pill.arcade-float {
           <code style="color:#4aedd9" id="giveCmd">/give @s max:my_item</code></li>
       <li><b>HOLD it in your hand</b> to feel any ✨ powers you typed.</li>
       <li id="blockNote" style="display:none"><b>It's a BLOCK</b> — place it down, then
-          <b>stand on it</b> to trigger its ✨ powers.</li>
+          <b>stand on it</b> for its ✨ powers, or <b>right-click it</b> (tap it on a phone)
+          for its 🖱️ action. If right-clicking doesn't do anything on your version of
+          Minecraft, come and tell me — we'll try it a different way.</li>
     </ol>
     <div class="warn">⚠️ This works with the Minecraft that phones, tablets, Xbox and the
       Microsoft Store use (called <b>Bedrock</b>). If your Minecraft is <b>Java Edition</b>
@@ -298,6 +314,7 @@ let itemType = localStorage.getItem('forge_type') || 'weapon';
 let itemPower = parseInt(localStorage.getItem('forge_power') || '7');
 // the picture: 256 little squares, each one a color (or null = see-through)
 let itemAbilities = localStorage.getItem('forge_abilities') || '';
+let itemClicks = localStorage.getItem('forge_clicks') || '';
 let pixels;
 try { pixels = JSON.parse(localStorage.getItem('forge_pixels')) || null; } catch (e) { pixels = null; }
 
@@ -492,6 +509,7 @@ function setType(t) {
   saveDesign();
   updatePower();
   refreshAbilities();                    // some powers only work on blocks
+  refreshClicks();                       // and right-clicking is blocks-only
 }
 document.querySelectorAll('.typecard').forEach(c =>
   c.addEventListener('pointerdown', () => setType(c.dataset.type)));
@@ -679,16 +697,31 @@ function makeBlockJSON() {
   for (const p of findPowers(itemAbilities)) {
     if (p.kind === 'gear' && p.block) p.block(components, itemPower);
   }
-  return {
-    format_version: '1.21.0',
-    'minecraft:block': {
-      description: {
-        identifier: 'max:' + slug,
-        menu_category: { category: 'construction' },
-      },
-      components,
+
+  const block = {
+    description: {
+      identifier: 'max:' + slug,
+      menu_category: { category: 'construction' },
     },
+    components,
   };
+
+  // THE RIGHT-CLICK. Minecraft calls it "on_interact": a trigger that
+  // fires an event, and the event runs your commands. So the block is
+  // listening — poke it, and the commands go off. Every single time.
+  const clicks = findClicks(itemClicks);
+  for (const c of clicks) if (c.component) c.component(components, itemPower);
+  const cmds = clickCommands(clicks);
+  if (cmds.length) {
+    components['minecraft:on_interact'] = { event: 'max:right_click', target: 'self' };
+    block.events = {
+      'max:right_click': {
+        run_command: { command: cmds, target: 'self' },
+      },
+    };
+  }
+
+  return { format_version: '1.21.0', 'minecraft:block': block };
 }
 // blocks get their name from the language file, not from a component
 function makeBlockLang(slug) {
@@ -703,6 +736,119 @@ function makeTerrainTextureJSON(slug) {
     num_mip_levels: 4,
     texture_data: { [slug]: { textures: 'textures/blocks/' + slug } },
   };
+}
+
+// =====================================================================
+// THE RIGHT-CLICK LIST — for blocks only. Everything here is a real
+// Minecraft COMMAND, the same ones you can type into the chat with a
+// slash. Right-clicking your block runs them, standing right where the
+// block is. "@p" means "the nearest player" — which is you, because
+// you're the one poking it.
+// =====================================================================
+const CLICKS = [
+  { id: 'boom', label: 'EXPLODES (all bang, no damage)',
+    words: ['explode', 'explodes', 'explosion', 'boom', 'bang', 'blow up'],
+    cmds: ['particle minecraft:huge_explosion_emitter ~ ~1 ~', 'playsound random.explode @p'] },
+  { id: 'tnt', label: 'DROPS REAL TNT ⚠️ (it WILL wreck your stuff)',
+    words: ['tnt', 'real tnt', 'dynamite'],
+    cmds: ['summon minecraft:tnt ~ ~1 ~'] },
+  { id: 'launch', label: 'LAUNCHES YOU INTO THE SKY',
+    words: ['launch', 'fling', 'yeet', 'blast off', 'shoot me up', 'rocket'],
+    cmds: ['effect @p slow_falling 14 0 true', 'effect @p levitation 3 5 true'] },
+  { id: 'firework', label: 'SETS OFF FIREWORKS',
+    words: ['firework', 'fireworks', 'party', 'celebrate'],
+    cmds: ['summon minecraft:fireworks_rocket ~ ~1 ~'] },
+  { id: 'lightning', label: 'STRIKES LIGHTNING NEARBY',
+    words: ['lightning', 'zap', 'thunderbolt', 'thor'],
+    cmds: ['summon minecraft:lightning_bolt ~4 ~ ~4'] },
+  { id: 'day', label: 'TURNS IT TO DAY',
+    words: ['day', 'daytime', 'morning', 'sunrise', 'sun up'],
+    cmds: ['time set day'] },
+  { id: 'night', label: 'TURNS IT TO NIGHT',
+    words: ['night', 'nighttime', 'midnight', 'dark out'],
+    cmds: ['time set night'] },
+  { id: 'rain', label: 'MAKES IT RAIN',
+    words: ['rain', 'rains', 'storm', 'raining'],
+    cmds: ['weather rain'] },
+  { id: 'clear', label: 'CLEARS THE SKY',
+    words: ['sunny', 'clear', 'stop the rain', 'nice weather'],
+    cmds: ['weather clear'] },
+  { id: 'heal', label: 'HEALS YOU',
+    words: ['heal', 'heals', 'health', 'cure', 'fix me'],
+    cmds: ['effect @p instant_health 1 3'] },
+  { id: 'feed', label: 'FILLS YOUR HUNGER BAR',
+    words: ['feed', 'hunger', 'hungry', 'full', 'fed'],
+    cmds: ['effect @p saturation 1 4'] },
+  { id: 'diamond', label: 'GIVES YOU A DIAMOND',
+    words: ['diamond', 'diamonds', 'treasure', 'rich', 'loot'],
+    cmds: ['give @p diamond 1'] },
+  { id: 'cake', label: 'GIVES YOU CAKE',
+    words: ['cake', 'birthday'],
+    cmds: ['give @p cake 1'] },
+  { id: 'burp', label: 'BURPS LOUDLY 💨',
+    words: ['burp', 'fart', 'toot', 'parp', 'rude noise', 'stinky'],
+    cmds: ['playsound random.burp @p', 'particle minecraft:balloon_gas_particle ~ ~1 ~'] },
+  { id: 'ding', label: 'PLAYS A HAPPY DING',
+    words: ['sound', 'noise', 'ding', 'beep', 'music', 'chime', 'levelup'],
+    cmds: ['playsound random.levelup @p'] },
+  { id: 'hearts', label: 'PUFFS OUT LOVE HEARTS',
+    words: ['heart', 'hearts', 'love', 'cute'],
+    cmds: ['particle minecraft:heart_particle ~ ~1 ~'] },
+  { id: 'speed', label: 'GIVES YOU SPEED FOR 15 SECONDS',
+    words: ['fast', 'speed', 'zoom', 'quick', 'sprint'],
+    cmds: ['effect @p speed 15 2 true'] },
+  { id: 'jump', label: 'GIVES YOU JUMP BOOST FOR 15 SECONDS',
+    words: ['jump', 'bounce', 'hop', 'spring'],
+    cmds: ['effect @p jump_boost 15 2 true'] },
+  { id: 'strong', label: 'GIVES YOU STRENGTH FOR 15 SECONDS',
+    words: ['strong', 'strength', 'mighty', 'buff'],
+    cmds: ['effect @p strength 15 1 true'] },
+  { id: 'invis', label: 'TURNS YOU INVISIBLE FOR 15 SECONDS',
+    words: ['invisible', 'invisibility', 'vanish', 'disappear'],
+    cmds: ['effect @p invisibility 15 0 true'] },
+  { id: 'nightvision', label: 'GIVES YOU NIGHT VISION',
+    words: ['see in the dark', 'night vision', 'nightvision'],
+    cmds: ['effect @p night_vision 60 0 true'] },
+  { id: 'chicken', label: 'SPAWNS A CHICKEN 🐔',
+    words: ['chicken'], cmds: ['summon minecraft:chicken ~ ~1 ~'] },
+  { id: 'pig', label: 'SPAWNS A PIG 🐷',
+    words: ['pig'], cmds: ['summon minecraft:pig ~ ~1 ~'] },
+  { id: 'cow', label: 'SPAWNS A COW 🐮',
+    words: ['cow'], cmds: ['summon minecraft:cow ~ ~1 ~'] },
+  { id: 'cat', label: 'SPAWNS A CAT 🐱',
+    words: ['cat', 'kitten'], cmds: ['summon minecraft:cat ~ ~1 ~'] },
+  { id: 'wolf', label: 'SPAWNS A WOLF 🐺',
+    words: ['wolf', 'dog', 'puppy'], cmds: ['summon minecraft:wolf ~ ~1 ~'] },
+  { id: 'axolotl', label: 'SPAWNS AN AXOLOTL',
+    words: ['axolotl'], cmds: ['summon minecraft:axolotl ~ ~1 ~'] },
+  { id: 'allay', label: 'SPAWNS AN ALLAY',
+    words: ['allay'], cmds: ['summon minecraft:allay ~ ~1 ~'] },
+  { id: 'zombie', label: 'SPAWNS A ZOMBIE 🧟',
+    words: ['zombie'], cmds: ['summon minecraft:zombie ~ ~1 ~'] },
+  { id: 'creeper', label: 'SPAWNS A CREEPER ⚠️',
+    words: ['creeper'], cmds: ['summon minecraft:creeper ~ ~1 ~'] },
+  { id: 'crafting', label: 'OPENS A CRAFTING TABLE',
+    words: ['craft', 'crafting', 'workbench', 'bench'],
+    component(c) {
+      c['minecraft:crafting_table'] = {
+        table_name: itemName,
+        crafting_tags: ['crafting_table'],
+      };
+    } },
+];
+
+function findClicks(text) {
+  const t = ' ' + String(text || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ') + ' ';
+  return CLICKS.filter(p => p.words.some(w => t.includes(' ' + w)));
+}
+// the whole list of commands one right-click should run
+function clickCommands(found) {
+  const cmds = [];
+  for (const c of found) {
+    if (!c.cmds) continue;
+    for (const line of c.cmds) if (!cmds.includes(line)) cmds.push(line);
+  }
+  return cmds;
 }
 
 // ---- the typing box ----
@@ -778,12 +924,71 @@ function refreshAbilities() {
   updatePeek();
 }
 
+// ---- the right-click typing box (blocks only) ----
+const clickBox = document.getElementById('clickBox');
+clickBox.value = itemClicks;
+clickBox.addEventListener('input', () => {
+  itemClicks = clickBox.value;
+  saveDesign();
+  refreshClicks();
+});
+const CLICK_IDEAS = ['it explodes', 'launches you into the sky', 'spawns a chicken',
+                     'turns it to night', 'makes it rain', 'gives you a diamond',
+                     'heals you', 'sets off fireworks', 'burps', 'plays a ding',
+                     'puffs out love hearts', 'opens a crafting table', 'strikes lightning',
+                     'spawns a creeper'];
+CLICK_IDEAS.forEach(txt => {
+  const b = document.createElement('button');
+  b.className = 'tmpl';
+  b.textContent = txt;
+  b.addEventListener('click', () => {
+    const cur = clickBox.value.trim();
+    clickBox.value = cur ? cur + ' and ' + txt : txt;
+    itemClicks = clickBox.value;
+    saveDesign();
+    refreshClicks();
+  });
+  document.getElementById('clickIdeaRow').appendChild(b);
+});
+
+function refreshClicks() {
+  document.getElementById('clickWrap').style.display = isBlock() ? '' : 'none';
+  const box = document.getElementById('clickReport');
+  box.innerHTML = '';
+  if (!isBlock()) { updatePeek(); return; }
+  const found = findClicks(itemClicks);
+  if (!itemClicks.trim()) {
+    box.innerHTML = '<div class="plain">Leave this empty and right-clicking does nothing. ' +
+      'Fill it in and your block becomes a BUTTON.</div>';
+    updatePeek();
+    return;
+  }
+  if (!found.length) {
+    box.innerHTML = '<span class="pchip none">🤔 I don\'t know that one yet</span>' +
+      '<div class="plain">Try tapping an idea below — every one of those really works.</div>';
+    updatePeek();
+    return;
+  }
+  found.forEach(c => {
+    const s = document.createElement('span');
+    s.className = 'pchip';
+    s.textContent = '🖱️ ' + c.label;
+    box.appendChild(s);
+  });
+  const d = document.createElement('div');
+  d.className = 'plain';
+  d.textContent = 'Every single right-click runs all of that. Tap it again and it happens again.';
+  box.appendChild(d);
+  updatePeek();
+}
+
 function saveDesign() {
   localStorage.setItem('forge_name', itemName);
   localStorage.setItem('forge_type', itemType);
   localStorage.setItem('forge_power', String(itemPower));
   localStorage.setItem('forge_pixels', JSON.stringify(pixels));
   localStorage.setItem('forge_abilities', itemAbilities);
+  localStorage.setItem('forge_clicks', itemClicks);
 }
 
 // ---------------------------------------------------------------------
@@ -811,9 +1016,10 @@ function makeItemJSON() {
     components['minecraft:glint'] = true;          // enchanted sparkle, zero enchantments
     components['minecraft:max_stack_size'] = 64;
   }
-  // now add whatever you TYPED into the powers box
+  // now add whatever you TYPED into the powers box — skipping the ones
+  // that only make sense on a block (an item can't be slippery to walk on)
   for (const p of findPowers(itemAbilities)) {
-    if (p.kind === 'gear') p.apply(components, itemPower);
+    if (p.kind === 'gear' && p.apply) p.apply(components, itemPower);
   }
   return {
     format_version: '1.21.0',
@@ -1046,6 +1252,7 @@ function updatePeek() {
 setType(itemType);
 updatePower();
 refreshAbilities();
+refreshClicks();
 drawArt();
 </script>
 </body>
