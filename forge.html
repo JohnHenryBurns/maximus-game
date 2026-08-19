@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>THE ADDON FORGE</title>
+<style>
+  /* ==== Minecraft-y look: stone, dirt, and chunky pixels ==== */
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: #2b2b33;
+    color: #eee;
+    font-family: "Segoe UI", system-ui, sans-serif;
+  }
+  body {
+    background-image:
+      linear-gradient(rgba(0,0,0,0.25) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,0,0,0.25) 1px, transparent 1px);
+    background-size: 48px 48px;
+    padding-bottom: 80px;
+  }
+  main { max-width: 640px; margin: 0 auto; padding: 12px; }
+  h1 {
+    text-align: center;
+    font-family: monospace;
+    font-size: clamp(26px, 7vw, 44px);
+    letter-spacing: 2px;
+    color: #ffd83d;
+    text-shadow: 3px 3px 0 #5c3a1e;
+    margin: 54px 0 4px;
+  }
+  .tagline { text-align: center; color: #aaa; margin: 0 0 20px; font-size: 14px; }
+
+  /* each design step is a "slab" */
+  .slab {
+    background: #3a3a44;
+    border: 3px solid #17171d;
+    border-radius: 6px;
+    box-shadow: inset 0 3px 0 rgba(255,255,255,0.07), 0 4px 0 #17171d;
+    padding: 14px;
+    margin-bottom: 18px;
+  }
+  .slab h2 {
+    margin: 0 0 10px;
+    font-family: monospace;
+    font-size: 17px;
+    color: #7fb238;
+  }
+  .slab h2 .stepnum {
+    display: inline-block;
+    background: #7fb238; color: #17171d;
+    width: 24px; height: 24px; line-height: 24px;
+    text-align: center; border-radius: 4px; margin-right: 8px;
+  }
+
+  input[type=text] {
+    width: 100%;
+    font-family: monospace; font-size: 20px; font-weight: bold;
+    padding: 10px; border-radius: 4px;
+    border: 3px solid #17171d;
+    background: #23232a; color: #ffd83d;
+    outline: none;
+  }
+  input[type=range] { width: 100%; accent-color: #7fb238; height: 34px; }
+
+  /* the three "what is it" cards */
+  .typerow { display: flex; gap: 10px; }
+  .typecard {
+    flex: 1; text-align: center; cursor: pointer;
+    background: #23232a; border: 3px solid #17171d; border-radius: 6px;
+    padding: 12px 4px; user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .typecard .big { font-size: 34px; }
+  .typecard .lbl { font-family: monospace; font-size: 13px; font-weight: bold; margin-top: 4px; }
+  .typecard.on { border-color: #ffd83d; background: #46421f; }
+
+  /* the pixel painter */
+  #art {
+    display: block;
+    width: min(92vw, 480px);
+    margin: 0 auto;
+    image-rendering: pixelated;
+    border: 3px solid #17171d;
+    border-radius: 4px;
+    touch-action: none;      /* fingers paint, they don't scroll */
+    background: #23232a;
+    cursor: crosshair;
+  }
+  .palette { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-top: 12px; }
+  .swatch {
+    width: 34px; height: 34px; border-radius: 4px;
+    border: 3px solid #17171d; cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .swatch.on { border-color: #fff; transform: scale(1.15); }
+  .toolrow { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 12px; }
+  button.tool, button.tmpl {
+    font-family: monospace; font-weight: bold; font-size: 14px;
+    padding: 9px 14px; border-radius: 4px; cursor: pointer;
+    border: 3px solid #17171d;
+    background: #23232a; color: #eee;
+    box-shadow: 0 3px 0 #17171d;
+    -webkit-tap-highlight-color: transparent;
+  }
+  button.tool.on { background: #46421f; color: #ffd83d; border-color: #ffd83d; }
+  button.tool:active, button.tmpl:active { transform: translateY(3px); box-shadow: none; }
+  .tmplrow { margin-top: 10px; }
+  .tmplrow .hint { color: #888; font-size: 12px; text-align: center; margin: 8px 0 6px; }
+
+  /* THE BUTTON */
+  #forgeBtn {
+    display: block; width: 100%;
+    font-family: monospace; font-size: clamp(20px, 5vw, 28px); font-weight: bold;
+    padding: 18px; border-radius: 8px; cursor: pointer;
+    border: 4px solid #17171d;
+    background: linear-gradient(#ffd83d, #f28c18);
+    color: #3a2000;
+    box-shadow: 0 6px 0 #17171d;
+    letter-spacing: 1px;
+  }
+  #forgeBtn:active { transform: translateY(6px); box-shadow: none; }
+  #forgedMsg {
+    text-align: center; font-family: monospace; font-weight: bold;
+    color: #7fb238; margin-top: 12px; min-height: 22px;
+  }
+
+  ol.steps { line-height: 1.6; padding-left: 22px; }
+  ol.steps li { margin-bottom: 6px; }
+  .warn {
+    background: #46421f; border: 2px solid #ffd83d; border-radius: 6px;
+    padding: 10px 12px; font-size: 14px; margin-top: 10px;
+  }
+  details { margin-top: 14px; }
+  summary { cursor: pointer; font-family: monospace; color: #4aedd9; font-weight: bold; }
+  pre#jsonPeek {
+    background: #17171d; border-radius: 6px; padding: 12px;
+    font-size: 12px; overflow-x: auto; color: #9ef09e;
+  }
+</style>
+
+<style>
+/* ==== THE ARCADE PILL — every game in the arcade wears this ============ */
+a.arcade-pill {
+  display: inline-flex !important; align-items: center !important; gap: 6px !important;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif !important;
+  font-size: 13px !important; font-weight: 600 !important; letter-spacing: 0.3px !important;
+  line-height: 1 !important; text-decoration: none !important; text-transform: none !important;
+  color: #ffe0c4 !important;
+  background: rgba(24, 14, 28, 0.62) !important;
+  border: 1px solid rgba(255, 200, 150, 0.42) !important;
+  padding: 7px 13px !important; border-radius: 999px !important;
+  cursor: pointer !important; white-space: nowrap !important;
+  -webkit-backdrop-filter: blur(5px) !important; backdrop-filter: blur(5px) !important;
+  -webkit-tap-highlight-color: transparent !important;
+  transition: transform 0.12s, border-color 0.12s, background 0.12s !important;
+}
+a.arcade-pill:hover, a.arcade-pill:active, a.arcade-pill:focus-visible {
+  transform: scale(1.05) !important;
+  border-color: rgba(255, 200, 150, 0.9) !important;
+  background: rgba(40, 22, 44, 0.78) !important;
+  color: #fff5e8 !important;
+}
+a.arcade-pill .ah-arrow { font-size: 14px !important; opacity: 0.9 !important; }
+a.arcade-pill.arcade-float {
+  position: fixed !important;
+  top: calc(8px + env(safe-area-inset-top, 0px)) !important;
+  left: calc(10px + env(safe-area-inset-left, 0px)) !important;
+  z-index: 2147483000 !important;
+}
+</style>
+</head>
+<body>
+<a id="back" class="arcade-pill arcade-float" href="index.html"
+   aria-label="Back to Max's Arcade"><span class="ah-arrow">&larr;</span>Arcade</a>
+
+<main>
+  <h1>⛏ THE ADDON FORGE</h1>
+  <p class="tagline">design a REAL Minecraft item — then import it into YOUR game</p>
+
+  <div class="slab">
+    <h2><span class="stepnum">1</span>NAME YOUR ITEM</h2>
+    <input type="text" id="nameBox" maxlength="30" placeholder="Sword of the Mega Fart" autocomplete="off">
+  </div>
+
+  <div class="slab">
+    <h2><span class="stepnum">2</span>WHAT IS IT?</h2>
+    <div class="typerow">
+      <div class="typecard" data-type="weapon"><div class="big">🗡</div><div class="lbl">WEAPON</div></div>
+      <div class="typecard" data-type="food"><div class="big">🍗</div><div class="lbl">FOOD</div></div>
+      <div class="typecard" data-type="treasure"><div class="big">💎</div><div class="lbl">TREASURE</div></div>
+    </div>
+  </div>
+
+  <div class="slab" id="powerSlab">
+    <h2><span class="stepnum">3</span><span id="powerTitle">HOW STRONG?</span></h2>
+    <input type="range" id="powerBar" min="1" max="20" value="7">
+    <div id="powerLabel" style="text-align:center; font-family:monospace; font-weight:bold; color:#ffd83d;"></div>
+  </div>
+
+  <div class="slab">
+    <h2><span class="stepnum">4</span>PAINT IT (16×16 pixels, just like real Minecraft art)</h2>
+    <canvas id="art" width="480" height="480"></canvas>
+    <div class="palette" id="palette"></div>
+    <div class="toolrow">
+      <button class="tool on" id="toolPaint">✏️ PAINT</button>
+      <button class="tool" id="toolErase">🧽 ERASE</button>
+      <button class="tool" id="toolFill">🪣 FILL</button>
+    </div>
+    <div class="tmplrow">
+      <div class="hint">need a head start? stamp one of these, then repaint it your way:</div>
+      <div class="toolrow">
+        <button class="tmpl" data-tmpl="sword">🗡 SWORD</button>
+        <button class="tmpl" data-tmpl="apple">🍎 APPLE</button>
+        <button class="tmpl" data-tmpl="gem">💎 GEM</button>
+        <button class="tmpl" data-tmpl="blank">⬜ WIPE</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="slab">
+    <h2><span class="stepnum">5</span>FORGE IT</h2>
+    <button id="forgeBtn">⚒ FORGE MY ADDON</button>
+    <div id="forgedMsg"></div>
+    <ol class="steps">
+      <li>Tap the button — a file like <b>my_item.mcaddon</b> downloads.</li>
+      <li>Find it in your <b>Downloads</b> folder and open it (double-click).</li>
+      <li>Minecraft opens and says <i>"Successfully imported!"</i></li>
+      <li>Make a world (or edit one) → <b>Behavior Packs</b> → activate your pack.</li>
+      <li>In the game, open the creative menu — <b>your item is THERE</b>. Or type
+          <code style="color:#4aedd9" id="giveCmd">/give @s max:my_item</code></li>
+    </ol>
+    <div class="warn">⚠️ This works with the Minecraft that phones, tablets, Xbox and the
+      Microsoft Store use (called <b>Bedrock</b>). If your Minecraft is <b>Java Edition</b>
+      it speaks a different language — ask Dad which one you have.</div>
+    <details>
+      <summary>🔍 peek at the robot language (JSON) inside your addon</summary>
+      <pre id="jsonPeek"></pre>
+    </details>
+  </div>
+</main>
+
+<script>
+(function () {
+  var pill = document.getElementById('back');
+  if (!pill) return;
+  var go = function (e) { e.stopPropagation(); e.preventDefault(); location.href = 'index.html'; };
+  ['click', 'touchend'].forEach(function (t) { pill.addEventListener(t, go, { passive: false }); });
+  ['mousedown', 'touchstart', 'pointerdown'].forEach(function (t) {
+    pill.addEventListener(t, function (e) { e.stopPropagation(); }, { passive: false });
+  });
+})();
+</script>
+
+<script>
+// =====================================================================
+// THE ADDON FORGE — a Minecraft add-on is secretly just TEXT FILES.
+// Little instruction cards written in a language called JSON, plus a
+// tiny PNG picture, all zipped into one file. Minecraft reads the
+// cards and BELIEVES them. So this page writes the cards for you,
+// puts YOUR art inside, and zips it up. No servers, no downloads of
+// tools — the whole factory runs right here in the browser.
+// =====================================================================
+
+// ---------------------------------------------------------------------
+// THE DESIGN — everything you choose lives in these variables
+// ---------------------------------------------------------------------
+const GRID = 16;                                 // Minecraft item art is 16×16
+let itemName = localStorage.getItem('forge_name') || 'Sword of the Mega Fart';
+let itemType = localStorage.getItem('forge_type') || 'weapon';
+let itemPower = parseInt(localStorage.getItem('forge_power') || '7');
+// the picture: 256 little squares, each one a color (or null = see-through)
+let pixels;
+try { pixels = JSON.parse(localStorage.getItem('forge_pixels')) || null; } catch (e) { pixels = null; }
+
+// turn the item's name into a "computer name": lowercase, no spaces.
+// "Sword of the Mega Fart" -> "sword_of_the_mega_fart"
+function slugOf(name) {
+  const s = name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  return s || 'mystery_item';
+}
+
+// ---------------------------------------------------------------------
+// THE PAINT BOX
+// ---------------------------------------------------------------------
+const COLORS = [
+  '#0f0f0f', '#555555', '#9d9d97', '#d8d8d8', '#ffffff',
+  '#5c3a1e', '#8f5a2b', '#f9d29c', '#e02121', '#f28c18',
+  '#ffd83d', '#7fb238', '#2f7a1f', '#17dd62', '#4aedd9',
+  '#3c44aa', '#8632a8', '#f38baa',
+];
+let curColor = '#4aedd9';
+let curTool = 'paint';
+
+// starter pictures. '.' means see-through; letters are colors.
+const TMPL_INK = { b: '#4aedd9', w: '#ffffff', g: '#ffd83d', h: '#5c3a1e',
+                   r: '#e02121', l: '#7fb238', p: '#8632a8', d: '#555555' };
+const TEMPLATES = {
+  sword: [
+    '..............bb',
+    '.............bwb',
+    '............bwb.',
+    '...........bwb..',
+    '..........bwb...',
+    '.........bwb....',
+    '..g.....bwb.....',
+    '..gg...bwb......',
+    '...gg.bwb.......',
+    '....gbwb........',
+    '.....gb.........',
+    '....hgg.........',
+    '...hh.gg........',
+    '..hh............',
+    '.hh.............',
+    'h...............',
+  ],
+  apple: [
+    '................',
+    '.......hh.......',
+    '.......h........',
+    '.....llh........',
+    '...rrrrlrrrr....',
+    '..rrrrrrrrrrr...',
+    '..rwrrrrrrrrr...',
+    '.rrwrrrrrrrrrr..',
+    '.rrrrrrrrrrrrr..',
+    '.rrrrrrrrrrrrr..',
+    '..rrrrrrrrrrr...',
+    '..rrrrrrrrrrr...',
+    '...rrrr.rrrr....',
+    '................',
+    '................',
+    '................',
+  ],
+  gem: [
+    '................',
+    '................',
+    '....pppppppp....',
+    '...pwpppppppp...',
+    '..pwpppppppppp..',
+    '.pwpppppppppppp.',
+    '.pppppppppppppp.',
+    '..pppppppppppp..',
+    '...pppppppppp...',
+    '....pppppppp....',
+    '.....pppppp.....',
+    '......pppp......',
+    '.......pp.......',
+    '................',
+    '................',
+    '................',
+  ],
+};
+function stampTemplate(key) {
+  pixels = new Array(GRID * GRID).fill(null);
+  const art = TEMPLATES[key];
+  if (art) {
+    for (let y = 0; y < GRID; y++) {
+      for (let x = 0; x < GRID; x++) {
+        const ch = art[y][x];
+        if (ch !== '.') pixels[y * GRID + x] = TMPL_INK[ch] || '#ffffff';
+      }
+    }
+  }
+  saveDesign();
+  drawArt();
+}
+const art = document.getElementById('art');
+const actx = art.getContext('2d');
+const CELL = art.width / GRID;
+
+if (!pixels || pixels.length !== GRID * GRID) {
+  pixels = null;
+  stampTemplate('sword');                        // first visit: start with a sword
+}
+
+function drawArt() {
+  // gray checkerboard = "this part is see-through in the game"
+  for (let y = 0; y < GRID; y++) {
+    for (let x = 0; x < GRID; x++) {
+      actx.fillStyle = (x + y) % 2 ? '#2c2c33' : '#26262d';
+      actx.fillRect(x * CELL, y * CELL, CELL, CELL);
+      const c = pixels[y * GRID + x];
+      if (c) { actx.fillStyle = c; actx.fillRect(x * CELL, y * CELL, CELL, CELL); }
+    }
+  }
+  updatePeek();
+}
+
+// FILL: like the paint bucket in every art app — it spreads out from
+// where you tapped and recolors every connected square of the same color.
+function floodFill(sx, sy, to) {
+  const from = pixels[sy * GRID + sx];
+  if (from === to) return;
+  const queue = [[sx, sy]];
+  while (queue.length) {
+    const [x, y] = queue.pop();
+    if (x < 0 || y < 0 || x >= GRID || y >= GRID) continue;
+    if (pixels[y * GRID + x] !== from) continue;
+    pixels[y * GRID + x] = to;
+    queue.push([x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]);
+  }
+}
+
+let painting = false;
+function paintAt(e) {
+  const r = art.getBoundingClientRect();
+  const x = Math.floor((e.clientX - r.left) / r.width * GRID);
+  const y = Math.floor((e.clientY - r.top) / r.height * GRID);
+  if (x < 0 || y < 0 || x >= GRID || y >= GRID) return;
+  if (curTool === 'fill') floodFill(x, y, curColor);
+  else pixels[y * GRID + x] = (curTool === 'erase') ? null : curColor;
+  saveDesign();
+  drawArt();
+}
+art.addEventListener('pointerdown', e => { painting = true; art.setPointerCapture(e.pointerId); paintAt(e); });
+art.addEventListener('pointermove', e => { if (painting && curTool !== 'fill') paintAt(e); });
+art.addEventListener('pointerup', () => { painting = false; });
+
+// build the little color buttons
+const paletteDiv = document.getElementById('palette');
+COLORS.forEach(c => {
+  const b = document.createElement('div');
+  b.className = 'swatch' + (c === curColor ? ' on' : '');
+  b.style.background = c;
+  b.addEventListener('pointerdown', () => {
+    curColor = c;
+    document.querySelectorAll('.swatch').forEach(s => s.classList.remove('on'));
+    b.classList.add('on');
+    if (curTool === 'erase') setTool('paint');   // picking a color un-erases you
+  });
+  paletteDiv.appendChild(b);
+});
+
+function setTool(t) {
+  curTool = t;
+  document.getElementById('toolPaint').classList.toggle('on', t === 'paint');
+  document.getElementById('toolErase').classList.toggle('on', t === 'erase');
+  document.getElementById('toolFill').classList.toggle('on', t === 'fill');
+}
+document.getElementById('toolPaint').addEventListener('click', () => setTool('paint'));
+document.getElementById('toolErase').addEventListener('click', () => setTool('erase'));
+document.getElementById('toolFill').addEventListener('click', () => setTool('fill'));
+document.querySelectorAll('.tmpl').forEach(b =>
+  b.addEventListener('click', () => stampTemplate(b.dataset.tmpl)));
+
+// ---------------------------------------------------------------------
+// NAME / TYPE / POWER wiring
+// ---------------------------------------------------------------------
+const nameBox = document.getElementById('nameBox');
+nameBox.value = itemName;
+nameBox.addEventListener('input', () => { itemName = nameBox.value || 'Mystery Item'; saveDesign(); updatePeek(); });
+
+function setType(t) {
+  itemType = t;
+  document.querySelectorAll('.typecard').forEach(c => c.classList.toggle('on', c.dataset.type === t));
+  document.getElementById('powerSlab').style.display = (t === 'treasure') ? 'none' : '';
+  document.getElementById('powerTitle').textContent =
+    t === 'food' ? 'HOW FILLING?' : 'HOW STRONG?';
+  saveDesign();
+  updatePower();
+}
+document.querySelectorAll('.typecard').forEach(c =>
+  c.addEventListener('pointerdown', () => setType(c.dataset.type)));
+
+const powerBar = document.getElementById('powerBar');
+powerBar.value = itemPower;
+function updatePower() {
+  itemPower = parseInt(powerBar.value);
+  document.getElementById('powerLabel').textContent =
+    itemType === 'food'
+      ? itemPower + ' hunger points (a whole steak is 8!)'
+      : '+' + itemPower + ' attack damage (a diamond sword is 7!)';
+  saveDesign();
+  updatePeek();
+}
+powerBar.addEventListener('input', updatePower);
+
+function saveDesign() {
+  localStorage.setItem('forge_name', itemName);
+  localStorage.setItem('forge_type', itemType);
+  localStorage.setItem('forge_power', String(itemPower));
+  localStorage.setItem('forge_pixels', JSON.stringify(pixels));
+}
+
+// ---------------------------------------------------------------------
+// THE INSTRUCTION CARDS (JSON) — this is what Minecraft actually reads
+// ---------------------------------------------------------------------
+function makeItemJSON() {
+  const slug = slugOf(itemName);
+  const components = {
+    'minecraft:icon': { texture: slug },
+    'minecraft:display_name': { value: itemName },
+  };
+  if (itemType === 'weapon') {
+    components['minecraft:hand_equipped'] = true;  // held like a sword, not a potato
+    components['minecraft:max_stack_size'] = 1;
+    components['minecraft:damage'] = itemPower;    // extra hurt per whack
+  } else if (itemType === 'food') {
+    components['minecraft:use_animation'] = 'eat';
+    components['minecraft:use_modifiers'] = { use_duration: 1.6, movement_modifier: 0.35 };
+    components['minecraft:food'] = {
+      nutrition: itemPower,                        // hunger points it fills
+      saturation_modifier: 1.0,
+      can_always_eat: true,                        // snack even when full. living the dream.
+    };
+  } else {
+    components['minecraft:glint'] = true;          // enchanted sparkle, zero enchantments
+    components['minecraft:max_stack_size'] = 64;
+  }
+  return {
+    format_version: '1.21.0',
+    'minecraft:item': {
+      description: {
+        identifier: 'max:' + slug,
+        menu_category: {
+          category: itemType === 'weapon' ? 'equipment' : itemType === 'food' ? 'nature' : 'items',
+        },
+      },
+      components,
+    },
+  };
+}
+
+// every pack needs an ID badge (a "UUID"). We remember your item's badges
+// so re-forging an improved version UPDATES it instead of making a clone.
+function uuid() {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  const b = crypto.getRandomValues(new Uint8Array(16));
+  b[6] = (b[6] & 15) | 64; b[8] = (b[8] & 63) | 128;
+  const h = Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
+  return h.slice(0, 8) + '-' + h.slice(8, 12) + '-' + h.slice(12, 16) + '-' +
+         h.slice(16, 20) + '-' + h.slice(20);
+}
+function getIds(slug) {
+  let all;
+  try { all = JSON.parse(localStorage.getItem('forge_uuids')) || {}; } catch (e) { all = {}; }
+  if (!all[slug]) {
+    all[slug] = { bh: uuid(), bm: uuid(), rh: uuid(), rm: uuid(), v: 0 };
+  }
+  all[slug].v++;                                   // version goes up every forge
+  localStorage.setItem('forge_uuids', JSON.stringify(all));
+  return all[slug];
+}
+
+function makeManifests(slug, ids) {
+  const ver = [1, 0, ids.v];
+  const behavior = {
+    format_version: 2,
+    header: {
+      name: itemName + ' (stuff)',
+      description: 'Forged by Max in the Addon Forge',
+      uuid: ids.bh, version: ver, min_engine_version: [1, 21, 0],
+    },
+    modules: [{ type: 'data', uuid: ids.bm, version: ver }],
+    // this line says "my looks-pack comes with me" so turning ON one pack
+    // automatically turns on the other. One switch, not two.
+    dependencies: [{ uuid: ids.rh, version: ver }],
+  };
+  const resource = {
+    format_version: 2,
+    header: {
+      name: itemName + ' (looks)',
+      description: 'Forged by Max in the Addon Forge',
+      uuid: ids.rh, version: ver, min_engine_version: [1, 21, 0],
+    },
+    modules: [{ type: 'resources', uuid: ids.rm, version: ver }],
+  };
+  return { behavior, resource };
+}
+
+function makeTextureListJSON(slug) {
+  // the map that tells Minecraft which picture belongs to which item
+  return {
+    resource_pack_name: 'forge',
+    texture_name: 'atlas.items',
+    texture_data: {},
+  };
+}
+
+// ---------------------------------------------------------------------
+// THE ZIP MACHINE — a .mcaddon is just a zip file wearing a costume.
+// Zips have a strict shape: each file gets a header, then at the end
+// there's a table of contents. We build those bytes by hand. No
+// squishing (compression) needed — Minecraft doesn't mind chunky zips.
+// ---------------------------------------------------------------------
+const CRC_TABLE = (() => {
+  const t = [];
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+// a CRC is a "fingerprint" of the bytes so unzippers can spot damage
+function crc32(bytes) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+function buildZip(files) {          // files: [{ name: 'path/in/zip', bytes: Uint8Array }]
+  const enc = new TextEncoder();
+  const chunks = [];                // pieces of the final file, in order
+  const central = [];               // the table of contents entries
+  let offset = 0;
+  const DOSDATE = ((2026 - 1980) << 9) | (8 << 5) | 19;   // zip files must carry a date
+
+  function u16(v) { return new Uint8Array([v & 255, (v >> 8) & 255]); }
+  function u32(v) { return new Uint8Array([v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255]); }
+
+  for (const f of files) {
+    const nameBytes = enc.encode(f.name);
+    const crc = crc32(f.bytes);
+    const head = [
+      u32(0x04034b50), u16(20), u16(0), u16(0),   // "a file starts here!", version, flags, method 0 = stored
+      u16(0), u16(DOSDATE),
+      u32(crc), u32(f.bytes.length), u32(f.bytes.length),
+      u16(nameBytes.length), u16(0),
+    ];
+    central.push({ nameBytes, crc, size: f.bytes.length, offset });
+    for (const part of head) { chunks.push(part); offset += part.length; }
+    chunks.push(nameBytes); offset += nameBytes.length;
+    chunks.push(f.bytes); offset += f.bytes.length;
+  }
+  const cdStart = offset;
+  for (const c of central) {
+    const entry = [
+      u32(0x02014b50), u16(20), u16(20), u16(0), u16(0),
+      u16(0), u16(DOSDATE),
+      u32(c.crc), u32(c.size), u32(c.size),
+      u16(c.nameBytes.length), u16(0), u16(0), u16(0), u16(0),
+      u32(0), u32(c.offset),
+    ];
+    for (const part of entry) { chunks.push(part); offset += part.length; }
+    chunks.push(c.nameBytes); offset += c.nameBytes.length;
+  }
+  const cdSize = offset - cdStart;
+  const end = [
+    u32(0x06054b50), u16(0), u16(0),
+    u16(central.length), u16(central.length),
+    u32(cdSize), u32(cdStart), u16(0),
+  ];
+  for (const part of end) chunks.push(part);
+  return chunks;
+}
+
+// gather every instruction card + picture into the list of files to zip
+function buildAddonFiles(iconPng, packIconPng) {
+  const enc = new TextEncoder();
+  const slug = slugOf(itemName);
+  const ids = getIds(slug);
+  const { behavior, resource } = makeManifests(slug, ids);
+  const textureList = makeTextureListJSON(slug);
+  textureList.texture_data[slug] = { textures: 'textures/items/' + slug };
+  const J = obj => enc.encode(JSON.stringify(obj, null, 2));
+  const BP = slug + '_stuff/', RP = slug + '_looks/';
+  return [
+    { name: BP + 'manifest.json', bytes: J(behavior) },
+    { name: BP + 'items/' + slug + '.json', bytes: J(makeItemJSON()) },
+    { name: BP + 'pack_icon.png', bytes: packIconPng },
+    { name: RP + 'manifest.json', bytes: J(resource) },
+    { name: RP + 'textures/item_texture.json', bytes: J(textureList) },
+    { name: RP + 'textures/items/' + slug + '.png', bytes: iconPng },
+    { name: RP + 'pack_icon.png', bytes: packIconPng },
+  ];
+}
+
+// turn your painting into a real PNG picture file
+function paintingToPNG(size) {
+  const c = document.createElement('canvas');
+  c.width = size; c.height = size;
+  const x = c.getContext('2d');
+  x.imageSmoothingEnabled = false;                 // keep pixels CRUNCHY
+  const scale = size / GRID;
+  for (let py = 0; py < GRID; py++) {
+    for (let px = 0; px < GRID; px++) {
+      const col = pixels[py * GRID + px];
+      if (col) { x.fillStyle = col; x.fillRect(px * scale, py * scale, scale, scale); }
+    }
+  }
+  const dataURL = c.toDataURL('image/png');
+  const raw = atob(dataURL.split(',')[1]);
+  const bytes = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+  return bytes;
+}
+
+// THE BIG MOMENT
+document.getElementById('forgeBtn').addEventListener('click', () => {
+  const slug = slugOf(itemName);
+  const files = buildAddonFiles(paintingToPNG(16), paintingToPNG(256));
+  const blob = new Blob(buildZip(files), { type: 'application/octet-stream' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = slug + '.mcaddon';
+  a.click();
+  URL.revokeObjectURL(a.href);
+  document.getElementById('forgedMsg').textContent =
+    '⚒ FORGED! Check your Downloads folder for ' + slug + '.mcaddon';
+});
+
+// the see-inside window: the actual JSON your addon will carry
+function updatePeek() {
+  const slug = slugOf(itemName);
+  document.getElementById('giveCmd').textContent = '/give @s max:' + slug;
+  const peek = document.getElementById('jsonPeek');
+  if (peek) peek.textContent = JSON.stringify(makeItemJSON(), null, 2);
+}
+
+setType(itemType);
+updatePower();
+drawArt();
+</script>
+</body>
+</html>
