@@ -92,6 +92,46 @@ function fit() { canvas.width = innerWidth; canvas.height = innerHeight; }
 addEventListener('resize', fit);
 fit();
 
+// ---------------------------------------------------------------------
+// FITTING ON A PHONE — measure first, draw second.
+// ---------------------------------------------------------------------
+
+// Break a sentence into lines that FIT: add words one at a time, and start
+// a new line the moment the line gets too wide.
+function wrapText(text, maxW, font) {
+  ctx.font = font;
+  const lines = [];
+  let line = '';
+  for (const word of text.split(' ')) {
+    const test = line ? line + ' ' + word : word;
+    if (line && ctx.measureText(test).width > maxW) { lines.push(line); line = word; }
+    else line = test;
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+// The Arcade pill is a real HTML link floating over the top-left corner, so
+// the canvas can't see it. Ask the browser where its bottom edge is and start
+// our own HUD below that — otherwise the coin count hides underneath it.
+function pillBox() {
+  const el = document.getElementById('back');
+  if (!el) return { right: 109, bottom: 38 };
+  const r = el.getBoundingClientRect();
+  return { right: Math.ceil(r.right), bottom: Math.ceil(r.bottom) };
+}
+
+// Phones keep a strip at the very bottom for the home bar. When you launch
+// this from your home screen there's no browser chrome to hide behind, so
+// anything painted down there gets swallowed. We can't read env() from
+// canvas, so we park an invisible box that IS that height and measure it.
+const safeProbe = document.createElement('div');
+safeProbe.style.cssText = 'position:fixed;bottom:0;left:0;width:1px;pointer-events:none;' +
+                          'height:env(safe-area-inset-bottom, 0px);';
+document.body.appendChild(safeProbe);
+function safeBottom() { return Math.ceil(safeProbe.getBoundingClientRect().height); }
+function pillBottom() { return pillBox().bottom; }
+
 window.onerror = (msg, src, line) => {
   const d = document.createElement('div');
   d.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#c0392b;' +
@@ -238,6 +278,55 @@ let itCaughtEver = save.dex['it'] > 0;
 
 function setStatus(m, t) { statusMsg = m; statusT = t || 3; }
 
+// ---- THE COIN POPS ----------------------------------------------------
+// Every fish you land throws a little 🪙 into the air with its price on it,
+// so you can SEE what each one was worth instead of doing sums in the
+// status line. They drift up and fade out; `delay` staggers a netful so
+// they pop one after another instead of all in a heap.
+let coinPops = [];
+function popCoin(x, y, amount, delay) {
+  coinPops.push({ x, y, amount, life: 1.5, delay: delay || 0 });
+}
+function updateCoinPops(dt) {
+  for (const c of coinPops) {
+    if (c.delay > 0) { c.delay -= dt; continue; }
+    c.y -= 34 * dt;                 // float up, slowly
+    c.life -= dt;
+  }
+  coinPops = coinPops.filter(c => c.life > 0);
+}
+function drawCoinPops() {
+  for (const c of coinPops) {
+    if (c.delay > 0) continue;
+    const fade = Math.min(1, c.life);
+    const pop = Math.min(1, (1.5 - c.life) * 6);      // a quick grow on birth
+    ctx.save();
+    ctx.translate(c.x, c.y);
+    ctx.scale(0.6 + pop * 0.4, 0.6 + pop * 0.4);
+    ctx.textAlign = 'center';
+    // the coin itself: a gold disc with a darker rim
+    ctx.fillStyle = `rgba(255, 210, 63, ${fade})`;
+    ctx.beginPath();
+    ctx.arc(-16, -5, 9, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = `rgba(160, 120, 20, ${fade})`;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.fillStyle = `rgba(160, 120, 20, ${fade})`;
+    ctx.font = 'bold 11px monospace';
+    ctx.fillText('$', -16, -1);
+    // and the price, with a dark outline so it reads over any water
+    ctx.font = 'bold 19px monospace';
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = `rgba(10, 14, 22, ${fade * 0.85})`;
+    ctx.strokeText('+' + c.amount, 8, 2);
+    ctx.fillStyle = `rgba(255, 232, 150, ${fade})`;
+    ctx.fillText('+' + c.amount, 8, 2);
+    ctx.restore();
+  }
+  ctx.textAlign = 'left';
+}
+
 // keep the lake stocked: fish live in bands, drifting side to side
 function spawnFish(count) {
   for (let i = 0; i < count; i++) {
@@ -254,7 +343,9 @@ function spawnFish(count) {
     });
   }
 }
-spawnFish(46);
+// How busy the lake feels. It used to be 46 and you could barely see the
+// water for fish - now there's room to actually look for the one you want.
+spawnFish(30);
 // and exactly one of IT, at the very bottom, always
 fishes.push({ sp: SPECIES[SPECIES.length - 1], d: 1198, x: 0, dir: 1, phase: 0 });
 
@@ -355,6 +446,7 @@ function startDive() {
 // ---------------------------------------------------------------------
 function update(dt) {
   elapsed += dt;
+  updateCoinPops(dt);
   if (statusT > 0) statusT -= dt;
 
   // the fish get on with their lives whether you're fishing or not
@@ -414,6 +506,10 @@ function update(dt) {
         let total = 0;
         const names = [];
         let gotIT = false;
+        // where the catch breaks the surface — that's where the coins pop up
+        const popX = ((hook.x + boatX * 2 - 1) + 1) / 2 * canvas.width;
+        const popY = depthToY(0) - 10;
+        netted.forEach((f, i) => popCoin(popX, popY - i * 4, f.sp.coins, i * 0.18));
         for (const f of netted) {
           const sp = f.sp;
           total += sp.coins;
@@ -502,6 +598,9 @@ function update(dt) {
     if (sub.d <= 14) {
       if (sub.cargo.length) {
         let total = 0;
+        const popX = ((sub.x) + 1) / 2 * canvas.width;
+        const popY = depthToY(sub.d) - 20;
+        sub.cargo.forEach((sp, i) => popCoin(popX, popY - i * 4, sp.coins, i * 0.18));
         for (const sp of sub.cargo) {
           total += sp.coins;
           save.dex[sp.id] = (save.dex[sp.id] || 0) + 1;
@@ -862,61 +961,135 @@ function draw() {
     for (const f of netted) drawFish(f);
   }
 
+  drawCoinPops();
   drawHud(W, H);
 }
 
 function drawHud(W, H) {
   uiRects = [];
-  ctx.textAlign = 'left';
-  ctx.fillStyle = '#ffd23f';
-  ctx.font = 'bold 17px monospace';
-  ctx.fillText('🪙 ' + save.coins, 14, 30);
-  ctx.fillStyle = '#9ab8d8';
-  ctx.font = '14px monospace';
-  ctx.fillText('depth: ' + Math.floor(hook.d) + 'm / ' + maxLine() + 'm', 14, 52);
+  const narrow = W < 560;
 
-  const topButtons = [['dex', '📖 FISHDEX', W - 260], ['shop', '⚓ SHOP', W - 120]];
-  if (save.sub && mode === 'idle') topButtons.push(['dive', '🚤 DIVE', W - 400]);
-  for (const [id, label, x] of topButtons) {
-    uiRects.push({ x, y: 12, w: 118, h: 36, id });
-    ctx.fillStyle = 'rgba(255,255,255,0.08)';
-    ctx.fillRect(x, 12, 118, 36);
+  // The buttons used to be pinned at fixed distances from the right edge, so
+  // on a phone the DIVE button landed at x=12 — straight underneath the
+  // Arcade pill, completely unpressable. Now they're laid out right-to-left
+  // and shrink to fit whatever width we actually have.
+  const pill = pillBox();
+  const btnH = 36;
+  const labels = { dex: narrow ? '📖 DEX' : '📖 FISHDEX', shop: '⚓ SHOP', dive: '🚤 DIVE' };
+  const ids = ['dex', 'shop'];
+  if (save.sub && mode === 'idle') ids.unshift('dive');
+  // the row gets the space to the RIGHT of the pill. If the buttons would
+  // still be too cramped there, the whole row drops below the pill instead.
+  let rowY = 12;
+  let room = W - 12 - (pill.right + 8);
+  let btnW = Math.min(118, (room - 6 * (ids.length - 1)) / ids.length);
+  if (btnW < 74) {
+    rowY = pill.bottom + 8;
+    room = W - 24;
+    btnW = Math.min(118, (room - 6 * (ids.length - 1)) / ids.length);
+  }
+  // While the FISHDEX or the SHOP is open they'd only ghost through the
+  // overlay and eat taps meant to close it, so they step aside.
+  ids.forEach((id, i) => {
+    if (overlay) return;
+    // count from the right: the last one hugs the right edge
+    const x = W - 12 - (ids.length - i) * (btnW + 6) + 6;
+    uiRects.push({ x, y: rowY, w: btnW, h: btnH, id });
+    ctx.fillStyle = 'rgba(10, 16, 26, 0.55)';
+    ctx.fillRect(x, 12, btnW, btnH);
     ctx.strokeStyle = '#5a7a9a';
     ctx.lineWidth = 2;
-    ctx.strokeRect(x, 12, 118, 36);
+    ctx.strokeRect(x, 12, btnW, btnH);
     ctx.fillStyle = '#cfe4ff';
-    ctx.font = 'bold 14px monospace';
+    ctx.font = `bold ${Math.min(14, btnW / 7)}px monospace`;
     ctx.textAlign = 'center';
-    ctx.fillText(label, x + 59, 35);
-  }
+    ctx.fillText(labels[id], x + btnW / 2, 35);
+  });
+
+  // coins + depth go BELOW the pill, not behind it — on a small dark plate,
+  // because pale blue writing on a sunny sandy shore is unreadable
+  const infoY = Math.max(pill.bottom, 48) + 18;
+  const coinLabel = '🪙 ' + save.coins;
+  // in the submarine the line isn't what's down there — YOU are. Read the
+  // sub's depth, and drop the "/ 900m" because a sub has no line to run out.
+  const depthLabel = mode === 'sub'
+    ? 'depth: ' + Math.floor(sub.d) + 'm'
+    : 'depth: ' + Math.floor(hook.d) + 'm / ' + maxLine() + 'm';
+  ctx.textAlign = 'left';
+  ctx.font = 'bold 17px monospace';
+  const plateW = Math.max(ctx.measureText(coinLabel).width,
+                          (ctx.font = '14px monospace', ctx.measureText(depthLabel).width)) + 20;
+  ctx.fillStyle = 'rgba(5, 10, 18, 0.45)';
+  ctx.fillRect(8, infoY - 20, plateW, 48);
+  ctx.fillStyle = '#ffd23f';
+  ctx.font = 'bold 17px monospace';
+  ctx.fillText(coinLabel, 16, infoY);
+  ctx.fillStyle = '#cfe4ff';
+  ctx.font = '14px monospace';
+  ctx.fillText(depthLabel, 16, infoY + 21);
   ctx.textAlign = 'center';
 
   if (mode === 'idle' && !overlay) {
     ctx.fillStyle = `rgba(255, 240, 200, ${0.6 + Math.sin(elapsed * 2) * 0.25})`;
-    ctx.font = 'bold 16px monospace';
-    ctx.fillText(save.sub ? 'tap to fish — or hit 🚤 DIVE, captain'
-                          : 'tap (or space) to lower the hook', W / 2, H - 40);
+    const tip = save.sub ? 'tap to fish — or hit 🚤 DIVE, captain'
+                         : 'tap (or space) to lower the hook';
+    const font = `bold ${Math.min(16, W / 24)}px monospace`;
+    const lines = wrapText(tip, W - 24, font);
+    ctx.font = font;
+    lines.forEach((ln, i) =>
+      ctx.fillText(ln, W / 2, H - 40 - safeBottom() - (lines.length - 1 - i) * 20));
   }
 
-  // sub instruments: the air bar and the cargo bay
+  // ---- submarine instruments ----
+  // These used to be drawn across the TOP, straight through the DEX and SHOP
+  // buttons and the coin plate — three things stacked in the same corner. A
+  // submarine has a dashboard; put them along the bottom where the whole
+  // width is free, and tell the status line to sit above them.
+  let subPanelH = 0;
   if (mode === 'sub') {
+    const barW = Math.min(W - 24, 340);
+    const bx = W / 2 - barW / 2;
+    const by = H - 40 - safeBottom();
+    subPanelH = 78 + safeBottom();
+    // the cargo bay, on its own line above the air gauge
+    const bay = '🐟'.repeat(sub.cargo.length) + '·'.repeat(CARGO_MAX - sub.cargo.length);
+    const full = sub.cargo.length >= CARGO_MAX;
+    const cargoFont = `${Math.min(15, W / 26)}px monospace`;
+    ctx.font = cargoFont;
+    ctx.textAlign = 'center';
+    // the reminder only comes along if it fits — the bay itself matters more
+    let cargoLine = 'cargo: ' + bay + '  —  surface to sell';
+    if (ctx.measureText(cargoLine).width > W - 24) cargoLine = 'cargo: ' + bay;
+    ctx.fillStyle = 'rgba(5, 10, 18, 0.6)';
+    ctx.fillRect(8, by - 30, W - 16, 26);
+    ctx.fillStyle = full ? '#ffd23f' : '#cfe4ff';
+    ctx.fillText(cargoLine, W / 2, by - 12);
+    // the air gauge
     ctx.fillStyle = 'rgba(0,0,0,0.5)';
-    ctx.fillRect(W / 2 - 120, 14, 240, 20);
+    ctx.fillRect(bx, by, barW, 22);
     const frac = Math.max(0, sub.air / SUB_AIR);
     ctx.fillStyle = frac > 0.3 ? '#4ac6ff' : (Math.floor(elapsed * 4) % 2 ? '#ff5a4a' : '#ffd23f');
-    ctx.fillRect(W / 2 - 118, 16, 236 * frac, 16);
+    ctx.fillRect(bx + 2, by + 2, (barW - 4) * frac, 18);
     ctx.fillStyle = '#fff';
     ctx.font = 'bold 12px monospace';
-    ctx.fillText('AIR', W / 2, 28);
-    ctx.font = '14px monospace';
-    ctx.fillStyle = '#cfe4ff';
-    ctx.fillText('cargo: ' + '🐟'.repeat(sub.cargo.length) + '·'.repeat(CARGO_MAX - sub.cargo.length) +
-                 '   —   surface to sell', W / 2, 52);
+    ctx.fillText('AIR  ' + Math.max(0, Math.ceil(sub.air)) + 's', W / 2, by + 16);
   }
+  // The status line carries long sentences ("caught: Fartfish! +12 coins —
+  // you will hear it before you see it") that ran nearly 200px off the side
+  // of a phone. It wraps now, and sits in its own dark box so it stays
+  // readable over the water.
   if (statusT > 0) {
-    ctx.fillStyle = 'rgba(255, 255, 255, ' + Math.min(1, statusT) + ')';
-    ctx.font = '15px monospace';
-    ctx.fillText(statusMsg, W / 2, H - 70);
+    const font = `${Math.min(15, W / 26)}px monospace`;
+    const lines = wrapText(statusMsg, W - 32, font);
+    const fade = Math.min(1, statusT);
+    const boxH = lines.length * 20 + 14;
+    const boxY = H - 70 - subPanelH - boxH + 12 - (mode === 'sub' ? 0 : safeBottom());
+    ctx.fillStyle = 'rgba(5, 10, 18, ' + (0.7 * fade) + ')';
+    ctx.fillRect(8, boxY, W - 16, boxH);
+    ctx.fillStyle = 'rgba(255, 255, 255, ' + fade + ')';
+    ctx.font = font;
+    ctx.textAlign = 'center';
+    lines.forEach((ln, i) => ctx.fillText(ln, W / 2, boxY + 22 + i * 20));
   }
 
   if (overlay === 'dex') drawDex(W, H);
@@ -934,22 +1107,38 @@ function drawDex(W, H) {
   ctx.font = '14px monospace';
   ctx.fillStyle = '#9ab8d8';
   ctx.fillText(caughtCount + ' of ' + SPECIES.length + ' residents known', W / 2, 78);
-  const cols = W > 700 ? 2 : 1;
-  const cw = Math.min(430, (W - 40) / cols);
+  // Every resident must be visible. The old version quietly gave up on any
+  // species that didn't fit ("if (y > H - 30) return") — in landscape that
+  // silently hid 6 of the 13. Now the rows shrink, and go two-up if that's
+  // what it takes to get everybody on the page.
+  const top = 96;
+  const avail = H - top - 34;
+  let cols = W > 700 ? 2 : 1;
+  let rows = Math.ceil(SPECIES.length / cols);
+  if (avail / rows < 34 && W > 460) {            // too squashed? use two columns
+    cols = 2;
+    rows = Math.ceil(SPECIES.length / cols);
+  }
+  const rowH = Math.max(26, Math.min(44, avail / rows));
+  const cw = Math.min(430, (W - 30 - (cols - 1) * 10) / cols);
   SPECIES.forEach((sp, i) => {
     const col = i % cols, row = Math.floor(i / cols);
     const x = W / 2 - (cw * cols + 10 * (cols - 1)) / 2 + col * (cw + 10);
-    const y = 100 + row * 44;
-    if (y > H - 30) return;
+    const y = top + row * rowH + rowH * 0.42;
     const known = save.dex[sp.id];
     ctx.textAlign = 'left';
     ctx.fillStyle = known ? '#e8dcc0' : '#3a4a5f';
-    ctx.font = 'bold 15px monospace';
+    ctx.font = `bold ${Math.min(15, rowH * 0.36)}px monospace`;
     ctx.fillText(known ? sp.name : '???', x, y);
     ctx.fillStyle = known ? '#9ab8d8' : '#2a3a4f';
-    ctx.font = '12px monospace';
-    ctx.fillText(known ? ('×' + known + ' — ' + sp.lore) : ('lives near ' + sp.min + 'm...'),
-                 x, y + 17);
+    const small = `${Math.min(12, rowH * 0.29)}px monospace`;
+    ctx.font = small;
+    // one line only — chop the lore with a "..." rather than let it run over
+    let note = known ? ('×' + known + ' — ' + sp.lore) : ('lives near ' + sp.min + 'm...');
+    while (ctx.measureText(note).width > cw - 8 && note.length > 6) {
+      note = note.slice(0, -4) + '…';
+    }
+    ctx.fillText(note, x, y + rowH * 0.36);
   });
   ctx.textAlign = 'center';
   ctx.fillStyle = 'rgba(255,255,255,0.5)';
@@ -979,27 +1168,47 @@ function drawShop(W, H) {
     ['net', 'FISHING NET', save.net ? 'four fish per cast. the lake noticed.'
       : 'one cast, FOUR fish — the line keeps sinking as it scoops.'],
   ];
+  // Work the card size out from the room we've got. The old fixed 92px rows
+  // ran 144px off the bottom in landscape, and the longest description
+  // ("go down there YOURSELF...") ran 160px past the edge of the card.
+  const cw = Math.min(W - 24, 440), x = W / 2 - cw / 2;
+  const top = 104;
+  const avail = H - top - 34;
+  const gap = 8;
+  const priceW = 78;                              // the room the price needs
+  const descFont = `${Math.min(13, (cw - priceW - 40) / 26)}px monospace`;
+  // measure every description first, so every card is tall enough for its own
+  let tallest = 0;
+  const wrapped = items.map(([id, name, desc]) => {
+    const lines = wrapText(desc, cw - priceW - 34, descFont);
+    tallest = Math.max(tallest, lines.length);
+    return lines;
+  });
+  const cardH = Math.max(52, Math.min(30 + tallest * 17 + 12,
+                                      (avail - gap * (items.length - 1)) / items.length));
   items.forEach(([id, name, desc], i) => {
-    const cw = Math.min(W - 40, 440), x = W / 2 - cw / 2, y = 110 + i * 92;
+    const y = top + i * (cardH + gap);
     const cost = shopCost(id);
     const can = cost !== null && save.coins >= cost;
-    uiRects.push({ x, y, w: cw, h: 78, id: 'buy_' + id });
+    uiRects.push({ x, y, w: cw, h: cardH, id: 'buy_' + id });
     ctx.fillStyle = 'rgba(255,255,255,0.06)';
-    ctx.fillRect(x, y, cw, 78);
+    ctx.fillRect(x, y, cw, cardH);
     ctx.strokeStyle = cost === null ? '#7ddf8f' : can ? '#ffd23f' : '#3a4a5f';
     ctx.lineWidth = 2;
-    ctx.strokeRect(x, y, cw, 78);
+    ctx.strokeRect(x, y, cw, cardH);
     ctx.textAlign = 'left';
     ctx.fillStyle = '#e8dcc0';
-    ctx.font = 'bold 17px monospace';
-    ctx.fillText(name, x + 16, y + 30);
+    ctx.font = `bold ${Math.min(17, (cw - priceW) / 13)}px monospace`;
+    ctx.fillText(name, x + 14, y + 24);
     ctx.fillStyle = '#9ab8d8';
-    ctx.font = '13px monospace';
-    ctx.fillText(desc, x + 16, y + 54);
+    ctx.font = descFont;
+    wrapped[i].forEach((ln, k) => {
+      if (y + 42 + k * 16 < y + cardH - 4) ctx.fillText(ln, x + 14, y + 42 + k * 16);
+    });
     ctx.textAlign = 'right';
     ctx.fillStyle = cost === null ? '#7ddf8f' : can ? '#ffd23f' : '#5a6a7f';
     ctx.font = 'bold 16px monospace';
-    ctx.fillText(cost === null ? 'MAX!' : cost + ' 🪙', x + cw - 14, y + 44);
+    ctx.fillText(cost === null ? 'MAX!' : cost + ' 🪙', x + cw - 12, y + 24);
   });
   ctx.textAlign = 'center';
   ctx.fillStyle = 'rgba(255,255,255,0.5)';
