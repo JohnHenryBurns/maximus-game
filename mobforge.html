@@ -121,6 +121,7 @@
   }
   button.act:active { transform: translateY(3px); box-shadow: none; }
   button.act.danger { color: #ff8f8f; }
+  button.act.on { background: #3d3a1f; color: #ffd83d; border-color: #ffd83d; }
 
   #forgeBtn {
     display: block; width: 100%;
@@ -252,7 +253,19 @@ a.arcade-pill.arcade-float {
   <div class="slab">
     <h2><span class="stepnum">4</span>BUILD ITS BODY (drag to spin it!)</h2>
     <canvas id="view" width="640" height="480"></canvas>
-    <div class="spinhint">drag = spin around &nbsp;•&nbsp; tap a part (or a pill below) to select it</div>
+    <div class="btnrow" style="justify-content:center; margin-top:8px">
+      <button class="act on" id="modeSpin">🔄 SPIN IT</button>
+      <button class="act" id="modeDraw">✏️ DRAW ON IT</button>
+    </div>
+    <div class="spinhint" id="viewHint"></div>
+    <div id="drawTools" style="display:none">
+      <div class="btnrow" style="justify-content:center">
+        <button class="act on" id="penBtn">✏️ PEN</button>
+        <button class="act" id="eraseBtn">🧽 ERASER</button>
+        <button class="act" id="fillFaceBtn">🪣 FILL THIS SIDE</button>
+        <button class="act danger" id="wipeArtBtn">✖ WIPE DRAWING</button>
+      </div>
+    </div>
     <div class="chips" id="chips"></div>
 
     <div class="partctl" id="partctl">
@@ -262,6 +275,7 @@ a.arcade-pill.arcade-float {
       <div class="sliderrow"><label>LEFT-RIGHT</label><input type="range" id="px" min="-40" max="40"></div>
       <div class="sliderrow"><label>UP-DOWN</label><input type="range" id="py" min="0" max="60"></div>
       <div class="sliderrow"><label>BACK-FRONT</label><input type="range" id="pz" min="-40" max="40"></div>
+      <div class="spinhint" id="colorHint" style="margin-top:10px"></div>
       <div class="palette" id="palette"></div>
       <div class="btnrow">
         <button class="act" id="addPart">➕ ADD PART</button>
@@ -342,6 +356,7 @@ const COLORS = [
   '#ffd83d', '#7fb238', '#2f7a1f', '#17dd62', '#4aedd9',
   '#3c44aa', '#8632a8', '#f38baa',
 ];
+let curColor = '#ffd83d';              // the colour in your hand right now
 
 // the starter creatures — each is just a list of boxes. Study one and
 // you'll see how little it takes: a pig is a big box, a head box, a
@@ -390,6 +405,18 @@ function slugOf(name) {
   return s || 'mystery_mob';
 }
 
+// Sizes must be WHOLE pixels. You can't draw on half a pixel — and if a
+// box were 5.33 wide, its picture (5 pixels) would come out stretched.
+// So every part gets snapped to whole numbers before anyone draws on it.
+function tidyParts(list) {
+  for (const p of list) {
+    p.w = Math.max(1, Math.round(p.w));
+    p.h = Math.max(1, Math.round(p.h));
+    p.d = Math.max(1, Math.round(p.d));
+  }
+  return list;
+}
+
 // remember the design between visits
 function saveDesign() {
   localStorage.setItem('mobforge_design',
@@ -399,14 +426,14 @@ function loadDesign() {
   try {
     const d = JSON.parse(localStorage.getItem('mobforge_design'));
     if (d && d.parts && d.parts.length) {
-      mobName = d.name; mobScale = d.scale; parts = d.parts;
+      mobName = d.name; mobScale = d.scale; parts = tidyParts(d.parts);
       return true;
     }
   } catch (e) {}
   return false;
 }
 if (!loadDesign()) {
-  parts = JSON.parse(JSON.stringify(PRESETS.pig));    // first visit: a pig
+  parts = tidyParts(JSON.parse(JSON.stringify(PRESETS.pig)));   // first visit: a pig
 }
 
 // ---------------------------------------------------------------------
@@ -431,33 +458,13 @@ function rotPoint(p) {
   const z2 = p.y * sp + z1 * cp;
   return { x: x1, y: y2, z: z2 };
 }
-function project(p, W, H, dist, zoom) {
-  const z = p.z + dist;
-  const s = zoom / z;                   // farther away (bigger z) = smaller
-  return { x: W / 2 + p.x * s, y: H * 0.56 - p.y * s, s, z };
+// ORTHOGRAPHIC projection — no perspective at all. Real model editors
+// do this ON PURPOSE: with no perspective, a flat face on screen is an
+// exact stretched copy of its picture. That one fact is what lets us
+// draw pixels straight onto the 3D mob further down.
+function project(p, W, H, s) {
+  return { x: W / 2 + p.x * s, y: H * 0.56 - p.y * s, z: p.z };
 }
-
-// the 8 corners of a box, from its center position and size
-function boxCorners(pt) {
-  const c = [];
-  for (let i = 0; i < 8; i++) {
-    c.push({
-      x: pt.x + ((i & 1) ? pt.w / 2 : -pt.w / 2),
-      y: pt.y + ((i & 2) ? pt.h / 2 : -pt.h / 2),
-      z: pt.z + ((i & 4) ? pt.d / 2 : -pt.d / 2),
-    });
-  }
-  return c;
-}
-// each face = 4 corner numbers + how bright it is (tops catch the sun)
-const FACES = [
-  { ix: [2, 3, 7, 6], shade: 1.00 },    // top
-  { ix: [0, 1, 5, 4], shade: 0.45 },    // bottom
-  { ix: [0, 2, 6, 4], shade: 0.70 },    // left
-  { ix: [1, 3, 7, 5], shade: 0.70 },    // right
-  { ix: [0, 1, 3, 2], shade: 0.88 },    // front (-z)
-  { ix: [4, 5, 7, 6], shade: 0.58 },    // back
-];
 function shadeColor(hex, f) {
   const r = Math.round(parseInt(hex.slice(1, 3), 16) * f);
   const g = Math.round(parseInt(hex.slice(3, 5), 16) * f);
@@ -465,18 +472,136 @@ function shadeColor(hex, f) {
   return 'rgb(' + r + ',' + g + ',' + b + ')';
 }
 
-let lastCenters = [];                   // where each part landed on screen (for tapping)
+// ---------------------------------------------------------------------
+// THE SIX SIDES. Minecraft names them by compass direction: the mob
+// faces NORTH, so north is its front. Each side has its own little
+// picture, and its own brightness (tops catch the sun, undersides are
+// in shadow) — that shading is what makes flat boxes look solid.
+// ---------------------------------------------------------------------
+const FACE_DEFS = [
+  { id: 'up', label: 'TOP', shade: 1.00 },
+  { id: 'down', label: 'BOTTOM', shade: 0.45 },
+  { id: 'north', label: 'FRONT', shade: 0.88 },
+  { id: 'south', label: 'BACK', shade: 0.58 },
+  { id: 'west', label: 'LEFT', shade: 0.70 },
+  { id: 'east', label: 'RIGHT', shade: 0.70 },
+];
+// how many pixels wide and tall is one side's picture?
+function faceDims(p, id) {
+  const w = Math.max(1, Math.round(p.w));
+  const h = Math.max(1, Math.round(p.h));
+  const d = Math.max(1, Math.round(p.d));
+  if (id === 'up' || id === 'down') return [w, d];
+  if (id === 'east' || id === 'west') return [d, h];
+  return [w, h];
+}
+// where a side sits in 3D: its top-left corner O, plus how far to step
+// for one pixel across (U) and one pixel down (V)
+function faceFrame(p, id) {
+  const hw = p.w / 2, hh = p.h / 2, hd = p.d / 2;
+  const [fw, fh] = faceDims(p, id);
+  const stepX = p.w / fw, stepY = p.h / fh, stepZ = p.d / (id === 'up' || id === 'down' ? fh : fw);
+  let O, U, V;
+  if (id === 'north') {
+    O = { x: p.x - hw, y: p.y + hh, z: p.z - hd };
+    U = { x: stepX, y: 0, z: 0 }; V = { x: 0, y: -stepY, z: 0 };
+  } else if (id === 'south') {
+    O = { x: p.x + hw, y: p.y + hh, z: p.z + hd };
+    U = { x: -stepX, y: 0, z: 0 }; V = { x: 0, y: -stepY, z: 0 };
+  } else if (id === 'east') {
+    O = { x: p.x + hw, y: p.y + hh, z: p.z - hd };
+    U = { x: 0, y: 0, z: stepZ }; V = { x: 0, y: -stepY, z: 0 };
+  } else if (id === 'west') {
+    O = { x: p.x - hw, y: p.y + hh, z: p.z + hd };
+    U = { x: 0, y: 0, z: -stepZ }; V = { x: 0, y: -stepY, z: 0 };
+  } else if (id === 'up') {
+    O = { x: p.x - hw, y: p.y + hh, z: p.z - hd };
+    U = { x: stepX, y: 0, z: 0 }; V = { x: 0, y: 0, z: stepZ };
+  } else {
+    O = { x: p.x - hw, y: p.y - hh, z: p.z + hd };
+    U = { x: stepX, y: 0, z: 0 }; V = { x: 0, y: 0, z: -stepZ };
+  }
+  return { O, U, V, fw, fh };
+}
+// the same side, but worked out in screen coordinates
+function faceScreen(p, id, W, H, s) {
+  const f = faceFrame(p, id);
+  const step = (a, b, k) => ({ x: a.x + b.x * k, y: a.y + b.y * k, z: a.z + b.z * k });
+  const P0 = project(rotPoint(f.O), W, H, s);
+  const P1 = project(rotPoint(step(f.O, f.U, f.fw)), W, H, s);
+  const P2 = project(rotPoint(step(f.O, f.V, f.fh)), W, H, s);
+  const P3 = project(rotPoint(step(step(f.O, f.U, f.fw), f.V, f.fh)), W, H, s);
+  return { P0, P1, P2, P3, fw: f.fw, fh: f.fh, depth: (P0.z + P1.z + P2.z + P3.z) / 4 };
+}
+
+// ---------------------------------------------------------------------
+// THE DRAWINGS. Each side of each part can hold its own little picture:
+// a list of colors, one per pixel, where null means "leave the base
+// color showing". Stretch a part and we keep whatever still fits.
+// ---------------------------------------------------------------------
+let artCache = new Map();               // finished side-pictures, ready to paste
+function getArt(p, id, create) {
+  const [fw, fh] = faceDims(p, id);
+  if (!p.art) {
+    if (!create) return null;
+    p.art = {};
+  }
+  let a = p.art[id];
+  if (!a) {
+    if (!create) return null;
+    a = p.art[id] = { w: fw, h: fh, px: new Array(fw * fh).fill(null) };
+  }
+  if (a.w !== fw || a.h !== fh) {       // the part was resized — keep what fits
+    const px = new Array(fw * fh).fill(null);
+    for (let y = 0; y < Math.min(fh, a.h); y++) {
+      for (let x = 0; x < Math.min(fw, a.w); x++) px[y * fw + x] = a.px[y * a.w + x];
+    }
+    a = p.art[id] = { w: fw, h: fh, px };
+    artCache.clear();
+  }
+  return a;
+}
+function hasArt(p, id) {
+  const a = p.art && p.art[id];
+  return !!(a && a.px.some(c => c));
+}
+function anyArt(p) {
+  return !!(p.art && Object.keys(p.art).some(id => hasArt(p, id)));
+}
+// paint the base color, then stamp the drawn pixels on top
+function faceImage(pi, p, id) {
+  const key = pi + ':' + id;
+  const cached = artCache.get(key);
+  if (cached) return cached;
+  const a = getArt(p, id, false);
+  if (!a) return null;
+  const cv = document.createElement('canvas');
+  cv.width = a.w; cv.height = a.h;
+  const cx = cv.getContext('2d');
+  cx.fillStyle = p.color;
+  cx.fillRect(0, 0, a.w, a.h);
+  for (let y = 0; y < a.h; y++) {
+    for (let x = 0; x < a.w; x++) {
+      const col = a.px[y * a.w + x];
+      if (col) { cx.fillStyle = col; cx.fillRect(x, y, 1, 1); }
+    }
+  }
+  artCache.set(key, cv);
+  return cv;
+}
+
+let lastFaces = [];                     // every side drawn this frame (for tapping)
 function render() {
   const W = view.width, H = view.height;
+  vctx.setTransform(1, 0, 0, 1, 0, 0);
   vctx.clearRect(0, 0, W, H);
 
-  // how big is the whole mob? zoom out enough to fit it
+  // how big is the whole mob? pick a zoom that fits it
   let maxR = 20;
   for (const p of parts) {
     maxR = Math.max(maxR, Math.abs(p.x) + p.w / 2, p.y + p.h / 2, Math.abs(p.z) + p.d / 2);
   }
-  const dist = maxR * 3 + 40;
-  const zoom = Math.min(W, H) * 2.1;
+  const s = Math.min(W / (maxR * 2.6), H / (maxR * 2.9));
 
   // the floor grid, so "down" feels like down
   vctx.strokeStyle = 'rgba(127, 223, 143, 0.15)';
@@ -485,48 +610,119 @@ function render() {
   for (let i = -G; i <= G; i += 8) {
     for (const [a, b] of [[{ x: i, y: 0, z: -G }, { x: i, y: 0, z: G }],
                           [{ x: -G, y: 0, z: i }, { x: G, y: 0, z: i }]]) {
-      const p1 = project(rotPoint(a), W, H, dist, zoom);
-      const p2 = project(rotPoint(b), W, H, dist, zoom);
+      const p1 = project(rotPoint(a), W, H, s);
+      const p2 = project(rotPoint(b), W, H, s);
       vctx.beginPath(); vctx.moveTo(p1.x, p1.y); vctx.lineTo(p2.x, p2.y); vctx.stroke();
     }
   }
 
+  const quad = sc => {
+    vctx.beginPath();
+    vctx.moveTo(sc.P0.x, sc.P0.y);
+    vctx.lineTo(sc.P1.x, sc.P1.y);
+    vctx.lineTo(sc.P3.x, sc.P3.y);
+    vctx.lineTo(sc.P2.x, sc.P2.y);
+    vctx.closePath();
+  };
+
   // sort parts back-to-front so near boxes paint OVER far ones
   const order = parts.map((p, i) => ({ i, z: rotPoint(p).z })).sort((a, b) => b.z - a.z);
-  lastCenters = [];
+  lastFaces = [];
   for (const o of order) {
     const pt = parts[o.i];
-    const corners = boxCorners(pt).map(c => project(rotPoint(c), W, H, dist, zoom));
-    // draw this box's faces far-to-near too
-    const faces = FACES.map(f => ({
-      f, z: f.ix.reduce((s, ix) => s + corners[ix].z, 0) / 4,
-    })).sort((a, b) => b.z - a.z);
-    for (const { f } of faces) {
-      vctx.fillStyle = shadeColor(pt.color, f.shade);
-      vctx.beginPath();
-      vctx.moveTo(corners[f.ix[0]].x, corners[f.ix[0]].y);
-      for (let k = 1; k < 4; k++) vctx.lineTo(corners[f.ix[k]].x, corners[f.ix[k]].y);
-      vctx.closePath();
-      vctx.fill();
+    const faces = FACE_DEFS
+      .map(fd => ({ fd, sc: faceScreen(pt, fd.id, W, H, s) }))
+      .sort((a, b) => b.sc.depth - a.sc.depth);
+    for (const { fd, sc } of faces) {
+      const img = hasArt(pt, fd.id) ? faceImage(o.i, pt, fd.id) : null;
+      if (img) {
+        // THE MAGIC TRICK: squash the side's picture onto the screen
+        // shape of that side. Because the camera is orthographic, this
+        // stretch is exact — no wobble, no guessing.
+        vctx.save();
+        vctx.imageSmoothingEnabled = false;
+        vctx.setTransform((sc.P1.x - sc.P0.x) / sc.fw, (sc.P1.y - sc.P0.y) / sc.fw,
+                          (sc.P2.x - sc.P0.x) / sc.fh, (sc.P2.y - sc.P0.y) / sc.fh,
+                          sc.P0.x, sc.P0.y);
+        vctx.drawImage(img, 0, 0);
+        vctx.fillStyle = 'rgba(0,0,0,' + (1 - fd.shade).toFixed(2) + ')';
+        vctx.fillRect(0, 0, sc.fw, sc.fh);      // the same shadow the flat sides get
+        vctx.restore();
+      } else {
+        vctx.fillStyle = shadeColor(pt.color, fd.shade);
+        quad(sc);
+        vctx.fill();
+      }
       if (o.i === selected) {           // the chosen part wears a white outline
         vctx.strokeStyle = 'rgba(255,255,255,0.9)';
         vctx.lineWidth = 2;
+        quad(sc);
         vctx.stroke();
       }
+      lastFaces.push({ pi: o.i, id: fd.id, sc });
     }
-    const c = project(rotPoint(pt), W, H, dist, zoom);
-    lastCenters[o.i] = c;
   }
 }
 
-// spin it with your finger (or watch it slowly twirl on its own)
-let dragging = false, dragLast = null, dragMoved = 0;
+// Which pixel of which side is under your finger? Undo the stretch:
+// solve the little two-by-two puzzle that turns screen position back
+// into "how many pixels across, how many pixels down".
+function faceUVAt(sc, mx, my) {
+  const ax = (sc.P1.x - sc.P0.x) / sc.fw, ay = (sc.P1.y - sc.P0.y) / sc.fw;
+  const bx = (sc.P2.x - sc.P0.x) / sc.fh, by = (sc.P2.y - sc.P0.y) / sc.fh;
+  const det = ax * by - ay * bx;
+  if (Math.abs(det) < 0.000001) return null;    // side is edge-on: can't hit it
+  const dx = mx - sc.P0.x, dy = my - sc.P0.y;
+  const u = (dx * by - dy * bx) / det;
+  const v = (ax * dy - ay * dx) / det;
+  if (u < 0 || v < 0 || u >= sc.fw || v >= sc.fh) return null;
+  return { u: Math.floor(u), v: Math.floor(v) };
+}
+function pickFace(mx, my) {
+  let best = null;
+  for (const f of lastFaces) {
+    const uv = faceUVAt(f.sc, mx, my);
+    if (!uv) continue;
+    if (!best || f.sc.depth < best.f.sc.depth) best = { f, uv };  // nearest wins
+  }
+  return best;
+}
+function viewXY(e) {
+  const r = view.getBoundingClientRect();
+  return [(e.clientX - r.left) * (view.width / r.width),
+          (e.clientY - r.top) * (view.height / r.height)];
+}
+
+let lastFace = null;                    // the side you touched last
+function paintPixel(mx, my) {
+  const hit = pickFace(mx, my);
+  if (!hit) return false;
+  const p = parts[hit.f.pi];
+  if (hit.f.pi !== selected) selectPart(hit.f.pi);
+  const a = getArt(p, hit.f.id, true);
+  a.px[hit.uv.v * a.w + hit.uv.u] = eraser ? null : curColor;
+  lastFace = { pi: hit.f.pi, id: hit.f.id };
+  artCache.delete(hit.f.pi + ':' + hit.f.id);
+  return true;
+}
+
+// spin it, or draw on it — one mode at a time, so a drag never does both
+let mode = 'spin';
+let eraser = false;
+let dragging = false, dragLast = null, dragMoved = 0, painting3d = false;
 view.addEventListener('pointerdown', e => {
+  view.setPointerCapture(e.pointerId);
+  if (mode === 'draw' && e.button !== 2) {
+    painting3d = true;
+    spinning = false;
+    paintPixel(...viewXY(e));
+    return;
+  }
   dragging = true; dragMoved = 0;
   dragLast = { x: e.clientX, y: e.clientY };
-  view.setPointerCapture(e.pointerId);
 });
 view.addEventListener('pointermove', e => {
+  if (painting3d) { paintPixel(...viewXY(e)); return; }
   if (!dragging) return;
   const dx = e.clientX - dragLast.x, dy = e.clientY - dragLast.y;
   dragMoved += Math.abs(dx) + Math.abs(dy);
@@ -536,20 +732,22 @@ view.addEventListener('pointermove', e => {
   spinning = false;
 });
 view.addEventListener('pointerup', e => {
+  if (painting3d) {
+    painting3d = false;
+    saveDesign();                       // save once per stroke, not per pixel
+    updatePeek();
+    return;
+  }
   dragging = false;
-  if (dragMoved < 8) {                  // a tap, not a drag: select nearest part
-    const r = view.getBoundingClientRect();
-    const mx = (e.clientX - r.left) * (view.width / r.width);
-    const my = (e.clientY - r.top) * (view.height / r.height);
-    let bestI = -1, bestD = 45;
-    lastCenters.forEach((c, i) => {
-      if (!c) return;
-      const d = Math.hypot(c.x - mx, c.y - my);
-      if (d < bestD) { bestD = d; bestI = i; }
-    });
-    if (bestI >= 0) selectPart(bestI);
+  if (dragMoved < 8) {                  // a tap, not a drag: pick that part
+    const hit = pickFace(...viewXY(e));
+    if (hit) {
+      selectPart(hit.f.pi);
+      lastFace = { pi: hit.f.pi, id: hit.f.id };
+    }
   }
 });
+view.addEventListener('contextmenu', e => e.preventDefault());
 function tick() {
   if (spinning) yaw += 0.008;
   render();
@@ -578,10 +776,13 @@ function refreshSliders() {
   $('pw').value = p.w; $('ph').value = p.h; $('pd').value = p.d;
   $('px').value = p.x; $('py').value = p.y; $('pz').value = p.z;
   document.querySelectorAll('#palette .swatch').forEach(s =>
-    s.classList.toggle('on', s.dataset.c === p.color));
+    s.classList.toggle('on', s.dataset.c === curColor));
 }
 function selectPart(i) {
   selected = i;
+  // in SPIN mode the palette recolours the part, so show its colour;
+  // in DRAW mode the palette is your pen, so leave the pen alone
+  if (mode === 'spin' && parts[i]) curColor = parts[i].color;
   refreshChips();
   refreshSliders();
 }
@@ -589,6 +790,7 @@ function selectPart(i) {
   $(id).addEventListener('input', () => {
     if (!parts[selected]) return;
     parts[selected][key] = parseInt($(id).value);
+    artCache.clear();                  // resizing changes every side's shape
     saveDesign(); updatePeek();
   });
 });
@@ -600,11 +802,62 @@ COLORS.forEach(c => {
   b.dataset.c = c;
   b.style.background = c;
   b.addEventListener('pointerdown', () => {
-    if (!parts[selected]) return;
-    parts[selected].color = c;
-    saveDesign(); refreshChips(); refreshSliders(); updatePeek();
+    curColor = c;
+    // SPIN mode: the palette repaints the whole part.
+    // DRAW mode: the palette just loads your pen.
+    if (mode === 'spin' && parts[selected]) {
+      parts[selected].color = c;
+      artCache.clear();                // the base colour is baked into each side
+      saveDesign(); updatePeek();
+    }
+    refreshChips(); refreshSliders();
   });
   paletteDiv.appendChild(b);
+});
+
+// ---- SPIN or DRAW ----
+function setMode(m) {
+  mode = m;
+  $('modeSpin').classList.toggle('on', m === 'spin');
+  $('modeDraw').classList.toggle('on', m === 'draw');
+  $('drawTools').style.display = m === 'draw' ? '' : 'none';
+  $('viewHint').textContent = m === 'draw'
+    ? 'drag on the mob to PAINT its pixels — switch to SPIN to turn it around'
+    : 'drag = spin around  •  tap a part (or a pill below) to select it';
+  $('colorHint').textContent = m === 'draw'
+    ? 'COLOUR — this is your PEN'
+    : 'COLOUR — repaints the whole part';
+  if (m === 'spin' && parts[selected]) curColor = parts[selected].color;
+  refreshSliders();
+}
+$('modeSpin').addEventListener('click', () => setMode('spin'));
+$('modeDraw').addEventListener('click', () => setMode('draw'));
+function setEraser(on) {
+  eraser = on;
+  $('penBtn').classList.toggle('on', !on);
+  $('eraseBtn').classList.toggle('on', on);
+}
+$('penBtn').addEventListener('click', () => setEraser(false));
+$('eraseBtn').addEventListener('click', () => setEraser(true));
+
+// fill the last side you touched — quicker than colouring it pixel by pixel
+$('fillFaceBtn').addEventListener('click', () => {
+  if (!lastFace || !parts[lastFace.pi]) {
+    $('forgedMsg').textContent = 'tap a side of the mob first, then FILL it!';
+    return;
+  }
+  const p = parts[lastFace.pi];
+  const a = getArt(p, lastFace.id, true);
+  a.px.fill(eraser ? null : curColor);
+  artCache.delete(lastFace.pi + ':' + lastFace.id);
+  saveDesign(); updatePeek();
+});
+$('wipeArtBtn').addEventListener('click', () => {
+  const p = parts[selected];
+  if (!p) return;
+  delete p.art;                        // back to a plain coloured box
+  artCache.clear();
+  saveDesign(); updatePeek();
 });
 
 $('addPart').addEventListener('click', () => {
@@ -616,26 +869,54 @@ $('addPart').addEventListener('click', () => {
   let topY = 0;
   for (const p of parts) topY = Math.max(topY, p.y + p.h / 2);
   parts.push({ x: 0, y: Math.min(56, Math.round(topY + 4)), z: 0, w: 6, h: 6, d: 6, color: '#ffd83d' });
+  artCache.clear();
   selectPart(parts.length - 1);
   saveDesign(); updatePeek();
 });
+
+// a mirrored part needs a mirrored DRAWING too: its left and right
+// swap sides, and the front, back, top and bottom pictures flip over
+function flipH(a) {
+  const px = new Array(a.w * a.h).fill(null);
+  for (let y = 0; y < a.h; y++) {
+    for (let x = 0; x < a.w; x++) px[y * a.w + (a.w - 1 - x)] = a.px[y * a.w + x];
+  }
+  return { w: a.w, h: a.h, px };
+}
+function mirrorArt(art) {
+  if (!art) return undefined;
+  const out = {};
+  for (const id in art) {
+    const a = art[id];
+    if (id === 'east') out.west = { w: a.w, h: a.h, px: a.px.slice() };
+    else if (id === 'west') out.east = { w: a.w, h: a.h, px: a.px.slice() };
+    else out[id] = flipH(a);
+  }
+  return out;
+}
 $('mirrorPart').addEventListener('click', () => {
   const p = parts[selected];
   if (!p || parts.length >= MAX_PARTS) return;
-  parts.push({ ...p, x: -p.x });        // same part, flipped to the other side
+  const copy = { ...p, x: -p.x };       // same part, flipped to the other side
+  const art = mirrorArt(p.art);
+  if (art) copy.art = art; else delete copy.art;
+  parts.push(copy);
+  artCache.clear();
   selectPart(parts.length - 1);
   saveDesign(); updatePeek();
 });
 $('delPart').addEventListener('click', () => {
   if (parts.length <= 1) return;        // a mob needs at least one box
   parts.splice(selected, 1);
+  artCache.clear();                     // the parts after it just shuffled down
   selectPart(Math.max(0, selected - 1));
   saveDesign(); updatePeek();
 });
 
 document.querySelectorAll('#presetRow .typecard').forEach(c =>
   c.addEventListener('pointerdown', () => {
-    parts = JSON.parse(JSON.stringify(PRESETS[c.dataset.preset]));
+    parts = tidyParts(JSON.parse(JSON.stringify(PRESETS[c.dataset.preset])));
+    artCache.clear();
     document.querySelectorAll('#presetRow .typecard').forEach(t =>
       t.classList.toggle('on', t === c));
     selectPart(0);
@@ -711,10 +992,37 @@ function makeBehaviorJSON() {
 // card 2: the BODY (geometry). Every part becomes one cube on one bone.
 // Minecraft measures cube position from the corner, our editor uses the
 // center — so we shift by half the size when writing it out.
+// each part owns a 128×128 square of the skin. Inside its square we lay
+// the six sides out flat, like a cardboard box cut open — that shape is
+// called an "unwrap", and it's how every 3D model in every game works.
+function slotXY(i) { return [(i % 4) * 128, Math.floor(i / 4) * 128]; }
+function faceRects(p) {
+  const w = Math.max(1, Math.round(p.w));
+  const h = Math.max(1, Math.round(p.h));
+  const d = Math.max(1, Math.round(p.d));
+  return {
+    up:    [d, 0, w, d],
+    down:  [d + w, 0, w, d],
+    east:  [0, d, d, h],
+    north: [d, d, w, h],
+    west:  [d + w, d, d, h],
+    south: [d + w + d, d, w, h],
+  };
+}
+
 function makeGeometryJSON() {
   const slug = slugOf(mobName);
   const bones = [{ name: 'root', pivot: [0, 0, 0] }];
   parts.forEach((p, i) => {
+    const [sx, sy] = slotXY(i);
+    const rects = faceRects(p);
+    // per-face UV: we tell Minecraft EXACTLY which patch of the skin
+    // belongs to each side, so a drawing can never land on the wrong face
+    const uv = {};
+    for (const id in rects) {
+      const [rx, ry, rw, rh] = rects[id];
+      uv[id] = { uv: [sx + rx, sy + ry], uv_size: [rw, rh] };
+    }
     bones.push({
       name: 'part' + i,
       parent: 'root',
@@ -722,7 +1030,7 @@ function makeGeometryJSON() {
       cubes: [{
         origin: [p.x - p.w / 2, p.y - p.h / 2, p.z - p.d / 2],
         size: [p.w, p.h, p.d],
-        uv: [(i % 4) * 128, Math.floor(i / 4) * 128],   // this part's color square
+        uv,
       }],
     });
   });
@@ -781,8 +1089,21 @@ function makeTexturePNG() {
   c.width = 512; c.height = 512;
   const x = c.getContext('2d');
   parts.forEach((p, i) => {
-    x.fillStyle = p.color;
-    x.fillRect((i % 4) * 128, Math.floor(i / 4) * 128, 128, 128);
+    const [sx, sy] = slotXY(i);
+    const rects = faceRects(p);
+    for (const id in rects) {
+      const [rx, ry, rw, rh] = rects[id];
+      x.fillStyle = p.color;                     // base colour first...
+      x.fillRect(sx + rx, sy + ry, rw, rh);
+      const a = p.art && p.art[id];
+      if (!a) continue;
+      for (let yy = 0; yy < Math.min(rh, a.h); yy++) {   // ...then your drawing
+        for (let xx = 0; xx < Math.min(rw, a.w); xx++) {
+          const col = a.px[yy * a.w + xx];
+          if (col) { x.fillStyle = col; x.fillRect(sx + rx + xx, sy + ry + yy, 1, 1); }
+        }
+      }
+    }
   });
   const raw = atob(c.toDataURL('image/png').split(',')[1]);
   const bytes = new Uint8Array(raw.length);
@@ -1310,7 +1631,7 @@ const KIND_ICON = { passive: '😊', neutral: '😐', hostile: '😠', boss: '�
 // build one mob's boxes on demand (its plan function + its numbers)
 function buildMobParts(entry) {
   const [, , plan, opts] = entry;
-  return JSON.parse(JSON.stringify(plan(opts)));
+  return tidyParts(JSON.parse(JSON.stringify(plan(opts))));
 }
 
 // ---- the pop-up list ----
@@ -1345,6 +1666,7 @@ function renderMobList(filter) {
 }
 function loadMob(entry) {
   parts = buildMobParts(entry);
+  artCache.clear();
   mobName = entry[0];
   nameBox.value = mobName;
   document.querySelectorAll('#presetRow .typecard').forEach(t => t.classList.remove('on'));
@@ -1376,6 +1698,8 @@ addEventListener('keydown', e => { if (e.key === 'Escape') closeMobs(); });
 // a link ending in #mobs opens the zoo straight away
 if (location.hash === '#mobs') openMobs();
 
+setMode('spin');
+setEraser(false);
 selectPart(0);
 updateScale();
 updatePeek();
