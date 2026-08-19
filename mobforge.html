@@ -149,6 +149,41 @@
     background: #131a13; border-radius: 6px; padding: 12px;
     font-size: 12px; overflow-x: auto; color: #9ef09e;
   }
+
+  /* ==== the ZOO — the every-mob picker ==== */
+  #mobModal {
+    position: fixed; inset: 0; z-index: 100;
+    background: rgba(8, 14, 8, 0.94);
+    display: none; flex-direction: column; padding: 14px;
+    /* leave room up top so the Arcade pill isn't sitting on the search box */
+    padding-top: calc(56px + env(safe-area-inset-top, 0px));
+  }
+  #mobModal.open { display: flex; }
+  #mobModal .mhead {
+    display: flex; gap: 10px; align-items: center;
+    width: 100%; max-width: 680px; margin: 0 auto 6px;
+  }
+  #mobSearch { flex: 1; font-size: 17px !important; }
+  #mobCount {
+    text-align: center; font-family: monospace; font-size: 12px;
+    color: #7fdf8f; margin: 0 auto 8px;
+  }
+  #mobList {
+    flex: 1; overflow-y: auto;
+    width: 100%; max-width: 680px; margin: 0 auto;
+  }
+  .mobrow {
+    display: flex; align-items: center; gap: 10px;
+    font-family: monospace; font-weight: bold; font-size: 15px;
+    padding: 11px 12px; margin-bottom: 6px; cursor: pointer;
+    border: 2px solid #131a13; border-radius: 6px;
+    background: #1c231c; color: #ddd;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .mobrow:hover { border-color: #7fdf8f; }
+  .mobrow .dots { display: flex; gap: 3px; }
+  .mobrow .d { width: 14px; height: 14px; border-radius: 3px; display: inline-block; }
+  .mobrow .kind { margin-left: auto; }
 </style>
 
 <style>
@@ -197,6 +232,9 @@ a.arcade-pill.arcade-float {
       <div class="typecard" data-preset="chicken"><div class="big">🐔</div><div class="lbl">CHICKEN</div></div>
       <div class="typecard" data-preset="robot"><div class="big">🤖</div><div class="lbl">ROBOT</div></div>
       <div class="typecard" data-preset="blob"><div class="big">👾</div><div class="lbl">BLOB</div></div>
+    </div>
+    <div class="btnrow" style="justify-content:center">
+      <button class="act" id="mobsBtn" style="font-size:16px">🐾 MOBS — every creature in the game</button>
     </div>
   </div>
 
@@ -253,6 +291,16 @@ a.arcade-pill.arcade-float {
     </details>
   </div>
 </main>
+
+<!-- THE ZOO: every mob in Minecraft, ready to load into the editor -->
+<div id="mobModal">
+  <div class="mhead">
+    <input type="text" id="mobSearch" placeholder="type a mob... zombie? warden? axolotl?" autocomplete="off">
+    <button class="act" id="mobClose">✖ CLOSE</button>
+  </div>
+  <div id="mobCount"></div>
+  <div id="mobList"></div>
+</div>
 
 <script>
 (function () {
@@ -912,6 +960,421 @@ function updatePeek() {
       JSON.stringify(makeBehaviorJSON(), null, 2).slice(0, 1200) + '\n...';
   }
 }
+
+// =====================================================================
+// THE ZOO — every mob in Minecraft, in one list.
+//
+// We do NOT hand-build eighty creatures. Minecraft mobs share BODY
+// PLANS: nearly every animal is "four legs + a head", nearly every
+// monster is "two legs + two arms", slimes are "a cube with a face".
+// So we write each plan ONCE as a function, and then every single mob
+// is just a handful of numbers and colors poured into it.
+// (Remember the rule: if you'd copy-paste it three times, make it a
+// function instead. This is that rule at full power.)
+// =====================================================================
+
+// one box, named clearly so the plans below read like sentences
+function P(x, y, z, w, h, d, color) { return { x, y, z, w, h, d, color }; }
+
+// ---- PLAN: FOUR LEGS (pigs, cows, wolves, horses, pandas...) --------
+function quad(o) {
+  const c = o.c;
+  const bodyY = o.lh + o.bh / 2;
+  const headY = bodyY + (o.hUp === undefined ? 2 : o.hUp);
+  const headZ = -(o.bd / 2) - o.hd / 2 + 2;
+  const parts = [
+    P(0, bodyY, 1, o.bw, o.bh, o.bd, c[0]),
+    P(0, headY, headZ, o.hw, o.hh, o.hd, c[1] || c[0]),
+  ];
+  if (o.snout) {
+    parts.push(P(0, headY - o.hh / 4, headZ - o.hd / 2 - o.snout[2] / 2,
+                 o.snout[0], o.snout[1], o.snout[2], c[3] || c[1] || c[0]));
+  }
+  if (o.ears) {
+    const [ew, eh, ed] = o.ears;
+    parts.push(P(-(o.hw / 2 - ew / 2), headY + o.hh / 2 + eh / 2, headZ, ew, eh, ed, c[3] || c[1] || c[0]));
+    parts.push(P(o.hw / 2 - ew / 2, headY + o.hh / 2 + eh / 2, headZ, ew, eh, ed, c[3] || c[1] || c[0]));
+  }
+  const lx = o.bw / 2 - o.lw / 2, lz = o.bd / 2 - o.lw / 2;
+  const legC = c[2] || c[0];
+  [[-lx, 1 - lz], [lx, 1 - lz], [-lx, 1 + lz], [lx, 1 + lz]].forEach(([x, z]) =>
+    parts.push(P(x, o.lh / 2, z, o.lw, o.lh, o.lw, legC)));
+  if (o.tail) {
+    parts.push(P(0, bodyY + o.bh / 4, 1 + o.bd / 2 + o.tail[2] / 2,
+                 o.tail[0], o.tail[1], o.tail[2], c[3] || c[0]));
+  }
+  return parts;
+}
+
+// ---- PLAN: TWO LEGS (zombies, villagers, golems, the Warden...) -----
+function biped(o) {
+  const c = o.c;
+  const bodyY = o.lh + o.bh / 2;
+  const headY = bodyY + o.bh / 2 + o.hh / 2;
+  const headZ = o.hz || 0;
+  const parts = [
+    P(0, bodyY, 0, o.bw, o.bh, o.bd, c[0]),
+    P(0, headY, headZ, o.hw, o.hh, o.hd, c[1] || c[0]),
+  ];
+  if (o.eyes !== false) {
+    const ex = Math.max(2, o.hw / 4);
+    parts.push(P(-ex, headY + (o.eyeUp === undefined ? 1 : o.eyeUp), headZ - o.hd / 2 - 0.5,
+                 2, 2, 1, o.eyeC || '#0f0f0f'));
+    parts.push(P(ex, headY + (o.eyeUp === undefined ? 1 : o.eyeUp), headZ - o.hd / 2 - 0.5,
+                 2, 2, 1, o.eyeC || '#0f0f0f'));
+  }
+  if (o.nose) {
+    parts.push(P(0, headY - 1, headZ - o.hd / 2 - 1, 2, 3, 2, o.noseC || c[1] || c[0]));
+  }
+  if (o.hat) {
+    parts.push(P(0, headY + o.hh / 2 + o.hat[1] / 2, headZ, o.hat[0], o.hat[1], o.hat[2], o.hatC || '#3f3f5f'));
+  }
+  if (!o.noArms) {
+    const aw = o.aw || 4, ah = o.ah || o.bh;
+    const armY = bodyY + o.bh / 2 - ah / 2;
+    parts.push(P(-(o.bw / 2 + aw / 2), armY, 0, aw, ah, aw, c[2] || c[0]));
+    parts.push(P(o.bw / 2 + aw / 2, armY, 0, aw, ah, aw, c[2] || c[0]));
+  }
+  if (o.lh > 0) {
+    const lw = o.lw || 4;
+    parts.push(P(-lw / 2, o.lh / 2, 0, lw, o.lh, lw, c[3] || c[0]));
+    parts.push(P(lw / 2, o.lh / 2, 0, lw, o.lh, lw, c[3] || c[0]));
+  }
+  return parts;
+}
+
+// ---- PLAN: BIRD (chickens, parrots, bats, phantoms) -----------------
+function bird(o) {
+  const c = o.c;
+  const bodyY = o.lh + o.bh / 2;
+  const hz = -(o.bd / 2) + o.hd / 2;
+  const headY = bodyY + o.bh / 2 + o.hh / 2 - 1;
+  const parts = [
+    P(0, bodyY, 0, o.bw, o.bh, o.bd, c[0]),
+    P(0, headY, hz, o.hw, o.hh, o.hd, c[1] || c[0]),
+    P(0, headY, hz - o.hd / 2 - 1.5, 3, 2, 3, o.beakC || '#f28c18'),
+    P(-(o.bw / 2 + 1), bodyY, 0, 2, o.wing[1], o.wing[2], c[2] || c[0]),
+    P(o.bw / 2 + 1, bodyY, 0, 2, o.wing[1], o.wing[2], c[2] || c[0]),
+  ];
+  if (o.lh > 0) {
+    parts.push(P(-2, o.lh / 2, 1, 2, o.lh, 2, o.legC || '#f28c18'));
+    parts.push(P(2, o.lh / 2, 1, 2, o.lh, 2, o.legC || '#f28c18'));
+  }
+  return parts;
+}
+
+// ---- PLAN: FISH (cod, salmon, dolphins, guardians) ------------------
+function fish(o) {
+  const c = o.c;
+  const y = o.y || 9;
+  const parts = [
+    P(0, y, 0, o.bw, o.bh, o.bd, c[0]),
+    P(0, y, o.bd / 2 + o.tail[2] / 2, o.tail[0], o.tail[1], o.tail[2], c[1] || c[0]),
+    P(-Math.max(2, o.bw / 4), y + 1, -(o.bd / 2) - 0.5, 2, 2, 1, o.eyeC || '#0f0f0f'),
+    P(Math.max(2, o.bw / 4), y + 1, -(o.bd / 2) - 0.5, 2, 2, 1, o.eyeC || '#0f0f0f'),
+  ];
+  if (o.fins) {
+    parts.push(P(-(o.bw / 2 + o.fins[0] / 2), y, 0, o.fins[0], o.fins[1], o.fins[2], c[1] || c[0]));
+    parts.push(P(o.bw / 2 + o.fins[0] / 2, y, 0, o.fins[0], o.fins[1], o.fins[2], c[1] || c[0]));
+  }
+  if (o.top) parts.push(P(0, y + o.bh / 2 + o.top[1] / 2, 0, o.top[0], o.top[1], o.top[2], c[1] || c[0]));
+  return parts;
+}
+
+// ---- PLAN: SPIDER (eight legs, and the legs are the whole point) ----
+function spider(o) {
+  const c = o.c;
+  const y = o.lh + o.bh / 2;
+  const parts = [
+    P(0, y, 3, o.bw, o.bh, o.bd, c[0]),
+    P(0, y, -(o.bd / 2) - o.hd / 2 + 3, o.hw, o.hh, o.hd, c[1] || c[0]),
+    P(-2, y + 1, -(o.bd / 2) - o.hd + 2.5, 2, 2, 1, c[2] || '#e02121'),
+    P(2, y + 1, -(o.bd / 2) - o.hd + 2.5, 2, 2, 1, c[2] || '#e02121'),
+  ];
+  for (let i = 0; i < 4; i++) {
+    const z = -1 + i * 4;
+    parts.push(P(-(o.bw / 2 + o.legLen / 2), o.lh / 2 + 1, z, o.legLen, 2, 2, c[3] || c[0]));
+    parts.push(P(o.bw / 2 + o.legLen / 2, o.lh / 2 + 1, z, o.legLen, 2, 2, c[3] || c[0]));
+  }
+  return parts;
+}
+
+// ---- PLAN: FLOATER (ghasts, vexes, breezes — a face in the air) -----
+function ghost(o) {
+  const c = o.c;
+  const y = o.y;
+  const parts = [
+    P(0, y, 0, o.bw, o.bh, o.bd, c[0]),
+    P(-(o.bw / 5), y + o.bh / 6, -(o.bd / 2) - 0.5, 3, 3, 1, o.eyeC || '#e02121'),
+    P(o.bw / 5, y + o.bh / 6, -(o.bd / 2) - 0.5, 3, 3, 1, o.eyeC || '#e02121'),
+    P(0, y - o.bh / 5, -(o.bd / 2) - 0.5, Math.max(4, o.bw / 3), 3, 1, '#0f0f0f'),
+  ];
+  const n = o.tent || 0, tl = o.tentLen || 8;
+  for (let i = 0; i < n; i++) {
+    const a = i / n * Math.PI * 2;
+    parts.push(P(Math.round(Math.cos(a) * o.bw / 3), y - o.bh / 2 - tl / 2,
+                 Math.round(Math.sin(a) * o.bd / 3), 2, tl, 2, c[1] || c[0]));
+  }
+  return parts;
+}
+
+// ---- PLAN: CUBE WITH A FACE (slimes, magma cubes) -------------------
+function blob(o) {
+  const c = o.c, s = o.s, y = s / 2;
+  const e = Math.max(2, Math.round(s / 7));
+  return [
+    P(0, y, 0, s, s, s, c[0]),
+    P(-(s / 5), y + s / 8, -(s / 2) - 0.5, e, e, 1, c[1] || '#0f0f0f'),
+    P(s / 5, y + s / 8, -(s / 2) - 0.5, e, e, 1, c[1] || '#0f0f0f'),
+    P(0, y - s / 6, -(s / 2) - 0.5, Math.max(3, Math.round(s / 4)), 2, 1, c[1] || '#0f0f0f'),
+  ];
+}
+
+// ---- PLAN: CREEPER (the famous one: four stubby legs, no arms) ------
+function creeper(o) {
+  const c = o.c;
+  const lh = 6, bh = 12, bodyY = lh + bh / 2;
+  const headY = bodyY + bh / 2 + 4;
+  return [
+    P(0, bodyY, 0, 8, bh, 4, c[0]),
+    P(0, headY, 0, 8, 8, 8, c[1] || c[0]),
+    P(-2, headY + 1, -4.5, 2, 2, 1, '#0f0f0f'),
+    P(2, headY + 1, -4.5, 2, 2, 1, '#0f0f0f'),
+    P(0, headY - 2, -4.5, 4, 3, 1, '#0f0f0f'),
+    P(-2, lh / 2, -3, 4, lh, 4, c[0]),
+    P(2, lh / 2, -3, 4, lh, 4, c[0]),
+    P(-2, lh / 2, 3, 4, lh, 4, c[0]),
+    P(2, lh / 2, 3, 4, lh, 4, c[0]),
+  ];
+}
+
+// ---- PLAN: DRAGON (wings! an actual dragon!) ------------------------
+function dragon(o) {
+  const c = o.c, y = 24;
+  return [
+    P(0, y, 4, 12, 10, 22, c[0]),
+    P(0, y + 6, -16, 8, 8, 12, c[0]),
+    P(-3, y + 8, -21, 2, 2, 2, c[1] || '#c060ff'),
+    P(3, y + 8, -21, 2, 2, 2, c[1] || '#c060ff'),
+    P(-16, y + 6, 2, 20, 2, 16, c[2] || c[0]),
+    P(16, y + 6, 2, 20, 2, 16, c[2] || c[0]),
+    P(0, y - 2, 22, 6, 6, 16, c[0]),
+    P(-5, 5, -2, 4, 10, 4, c[0]),
+    P(5, 5, -2, 4, 10, 4, c[0]),
+    P(-5, 5, 10, 4, 10, 4, c[0]),
+    P(5, 5, 10, 4, 10, 4, c[0]),
+  ];
+}
+
+// ---- PLAN: THREE HEADS (there is only one of these) -----------------
+function wither(o) {
+  const c = o.c;
+  return [
+    P(0, 26, 0, 4, 14, 4, c[0]),
+    P(0, 32, 0, 20, 3, 3, c[0]),
+    P(0, 36, 0, 8, 8, 8, c[1] || c[0]),
+    P(-10, 33, 0, 6, 6, 6, c[1] || c[0]),
+    P(10, 33, 0, 6, 6, 6, c[1] || c[0]),
+    P(-2, 37, -4.5, 2, 2, 1, '#e02121'),
+    P(2, 37, -4.5, 2, 2, 1, '#e02121'),
+    P(0, 18, 0, 3, 4, 3, c[0]),
+    P(0, 13, 0, 3, 4, 3, c[0]),
+    P(0, 8, 0, 3, 4, 3, c[0]),
+  ];
+}
+
+// ---- PLAN: SNOWMAN (two snowballs, a pumpkin, and stick arms) ------
+function snowman(o) {
+  const c = o.c;
+  return [
+    P(0, 5, 0, 10, 10, 10, c[0]),
+    P(0, 14, 0, 8, 8, 8, c[0]),
+    P(0, 22, 0, 8, 8, 8, c[1] || '#e8863d'),
+    P(-2, 23, -4.5, 2, 2, 1, '#3a2000'),
+    P(2, 23, -4.5, 2, 2, 1, '#3a2000'),
+    P(-6, 16, 0, 2, 8, 2, c[2] || '#6b4f3a'),
+    P(6, 16, 0, 2, 8, 2, c[2] || '#6b4f3a'),
+  ];
+}
+
+// ---- PLAN: BOX MONSTER (shulkers hide in a shell) -------------------
+function boxmob(o) {
+  const c = o.c;
+  return [
+    P(0, 6, 0, 14, 12, 14, c[0]),
+    P(0, 14, 0, 16, 5, 16, c[1] || c[0]),
+    P(0, 12, 0, 8, 5, 8, c[2] || '#f9d29c'),
+    P(-2, 13, -4.5, 2, 2, 1, '#0f0f0f'),
+    P(2, 13, -4.5, 2, 2, 1, '#0f0f0f'),
+  ];
+}
+
+// =====================================================================
+// THE LIST ITSELF. Every mob: a name, whether it's friendly, which
+// body plan it uses, and its numbers. Read one line and you can see
+// exactly what that creature is made of.
+// =====================================================================
+const MOB_LIST = [
+  // ---- friendly ----
+  ['Allay', 'passive', biped, { bw: 4, bh: 5, bd: 3, hw: 5, hh: 5, hd: 5, lw: 2, lh: 4, aw: 2, ah: 4, eyeC: '#ffffff', c: ['#3ba0d0', '#4fc3e8', '#3ba0d0', '#3ba0d0'] }],
+  ['Armadillo', 'passive', quad, { bw: 9, bh: 7, bd: 12, hw: 6, hh: 5, hd: 6, lw: 3, lh: 3, snout: [3, 3, 2], tail: [3, 3, 8], c: ['#7a5c46', '#8f7355', '#5c4433', '#a08668'] }],
+  ['Axolotl', 'passive', fish, { bw: 6, bh: 5, bd: 12, tail: [2, 6, 8], fins: [3, 4, 4], top: [2, 3, 5], y: 6, c: ['#f2b3cd', '#e894b8'] }],
+  ['Bat', 'passive', bird, { bw: 4, bh: 5, bd: 4, hw: 5, hh: 4, hd: 4, lh: 2, wing: [2, 8, 10], beakC: '#3a2c20', legC: '#3a2c20', c: ['#4c3e30', '#5c4c3c', '#3a2c20'] }],
+  ['Bee', 'passive', bird, { bw: 8, bh: 7, bd: 9, hw: 6, hh: 6, hd: 5, lh: 2, wing: [2, 1, 7], beakC: '#3a2c20', legC: '#3a2c20', c: ['#efc244', '#3a2c20', '#e8e8f0'] }],
+  ['Camel', 'passive', quad, { bw: 12, bh: 12, bd: 22, hw: 7, hh: 8, hd: 8, lw: 4, lh: 18, hUp: 10, snout: [4, 3, 3], ears: [2, 2, 2], tail: [2, 6, 2], c: ['#d4a869', '#e0b87d', '#c49859', '#a87f48'] }],
+  ['Cat', 'passive', quad, { bw: 5, bh: 5, bd: 12, hw: 5, hh: 5, hd: 5, lw: 2, lh: 5, snout: [3, 2, 1], ears: [2, 2, 1], tail: [2, 2, 8], c: ['#d09b53', '#e0b070', '#c08a44', '#f9d29c'] }],
+  ['Chicken', 'passive', bird, { bw: 6, bh: 7, bd: 9, hw: 4, hh: 6, hd: 3, lh: 5, wing: [2, 5, 7], c: ['#ffffff', '#ffffff', '#e8e8e8'] }],
+  ['Cod', 'passive', fish, { bw: 4, bh: 6, bd: 12, tail: [1, 6, 6], fins: [3, 1, 4], y: 8, c: ['#b5946a', '#8a6f4d'] }],
+  ['Cow', 'passive', quad, { bw: 12, bh: 10, bd: 18, hw: 8, hh: 8, hd: 8, lw: 4, lh: 12, hUp: 4, snout: [5, 4, 2], ears: [2, 2, 2], tail: [2, 8, 2], c: ['#443626', '#3a2c20', '#443626', '#e8e0d8'] }],
+  ['Donkey', 'passive', quad, { bw: 9, bh: 10, bd: 20, hw: 6, hh: 8, hd: 10, lw: 4, lh: 14, hUp: 8, ears: [2, 5, 2], tail: [3, 8, 2], c: ['#8f7355', '#8f7355', '#7a6248', '#5c4433'] }],
+  ['Dolphin', 'passive', fish, { bw: 6, bh: 6, bd: 18, tail: [8, 2, 6], fins: [5, 2, 5], top: [2, 4, 5], y: 10, c: ['#22496b', '#e8e8e8'] }],
+  ['Fox', 'passive', quad, { bw: 6, bh: 6, bd: 14, hw: 6, hh: 5, hd: 6, lw: 2, lh: 5, snout: [3, 2, 3], ears: [2, 3, 1], tail: [4, 4, 10], c: ['#e8a33d', '#e8a33d', '#5c4433', '#f9e0c0'] }],
+  ['Frog', 'passive', quad, { bw: 8, bh: 6, bd: 8, hw: 8, hh: 5, hd: 6, lw: 3, lh: 3, hUp: 1, ears: [2, 2, 2], c: ['#cf7440', '#cf7440', '#a85c30', '#e8e8e8'] }],
+  ['Glow Squid', 'passive', ghost, { bw: 10, bh: 12, bd: 10, y: 20, tent: 6, tentLen: 10, eyeC: '#7fffe0', c: ['#1f5b5b', '#2b7a7a'] }],
+  ['Goat', 'passive', quad, { bw: 8, bh: 9, bd: 15, hw: 6, hh: 7, hd: 7, lw: 3, lh: 10, hUp: 5, snout: [4, 3, 2], ears: [3, 2, 2], tail: [2, 3, 2], c: ['#e8e0d8', '#d8cec0', '#c8bcae', '#8f7355'] }],
+  ['Horse', 'passive', quad, { bw: 9, bh: 10, bd: 20, hw: 6, hh: 8, hd: 12, lw: 4, lh: 14, hUp: 9, ears: [2, 3, 2], tail: [3, 10, 3], c: ['#c19a6b', '#c19a6b', '#a8815a', '#5c4433'] }],
+  ['Llama', 'passive', quad, { bw: 8, bh: 12, bd: 16, hw: 5, hh: 8, hd: 8, lw: 3, lh: 14, hUp: 10, ears: [2, 4, 2], tail: [2, 4, 2], c: ['#c09e7d', '#d0ae8d', '#a88a6a', '#e8dcc8'] }],
+  ['Mooshroom', 'passive', quad, { bw: 12, bh: 10, bd: 18, hw: 8, hh: 8, hd: 8, lw: 4, lh: 12, hUp: 4, snout: [5, 4, 2], ears: [2, 2, 2], tail: [2, 8, 2], c: ['#b02e26', '#a02622', '#b02e26', '#e8e0d8'] }],
+  ['Mule', 'passive', quad, { bw: 9, bh: 10, bd: 20, hw: 6, hh: 8, hd: 10, lw: 4, lh: 14, hUp: 8, ears: [2, 5, 2], tail: [3, 8, 2], c: ['#6b4f3a', '#6b4f3a', '#5c4433', '#3a2c20'] }],
+  ['Ocelot', 'passive', quad, { bw: 5, bh: 5, bd: 12, hw: 5, hh: 5, hd: 5, lw: 2, lh: 5, snout: [3, 2, 1], ears: [2, 2, 1], tail: [2, 2, 8], c: ['#efc88e', '#efc88e', '#d8a860', '#5c4433'] }],
+  ['Parrot', 'passive', bird, { bw: 4, bh: 6, bd: 4, hw: 4, hh: 4, hd: 3, lh: 3, wing: [2, 6, 3], beakC: '#f2d024', c: ['#d02e26', '#d02e26', '#3c44aa'] }],
+  ['Pig', 'passive', quad, { bw: 10, bh: 8, bd: 14, hw: 8, hh: 8, hd: 8, lw: 4, lh: 6, hUp: 1, snout: [4, 3, 2], ears: [2, 2, 1], tail: [2, 2, 2], c: ['#f38baa', '#f38baa', '#e8809f', '#e07a99'] }],
+  ['Polar Bear', 'passive', quad, { bw: 12, bh: 12, bd: 22, hw: 8, hh: 7, hd: 9, lw: 5, lh: 8, hUp: 2, snout: [4, 3, 3], ears: [2, 2, 2], c: ['#f0f0f0', '#f8f8f8', '#e0e0e0', '#d0d0d0'] }],
+  ['Pufferfish', 'passive', blob, { s: 10, c: ['#e8a520', '#0f0f0f'] }],
+  ['Rabbit', 'passive', quad, { bw: 5, bh: 5, bd: 8, hw: 5, hh: 5, hd: 5, lw: 2, lh: 4, snout: [3, 2, 1], ears: [2, 6, 1], tail: [3, 3, 2], c: ['#a28b7a', '#a28b7a', '#8f7a68', '#e8e0d8'] }],
+  ['Salmon', 'passive', fish, { bw: 4, bh: 6, bd: 14, tail: [1, 6, 6], fins: [3, 1, 4], top: [1, 3, 6], y: 8, c: ['#a3574a', '#7a3f35'] }],
+  ['Sheep', 'passive', quad, { bw: 12, bh: 10, bd: 18, hw: 6, hh: 6, hd: 8, lw: 4, lh: 10, hUp: 4, snout: [4, 3, 2], ears: [2, 2, 2], tail: [3, 3, 2], c: ['#e8e8e8', '#d8cbb8', '#d0c8bc', '#c0b4a4'] }],
+  ['Skeleton Horse', 'passive', quad, { bw: 9, bh: 10, bd: 20, hw: 6, hh: 8, hd: 12, lw: 4, lh: 14, hUp: 9, ears: [2, 3, 2], tail: [3, 8, 3], c: ['#d0cec6', '#d0cec6', '#b8b6ae', '#9a9890'] }],
+  ['Snow Golem', 'passive', snowman, { c: ['#f4f4f8', '#e8863d', '#6b4f3a'] }],
+  ['Sniffer', 'passive', quad, { bw: 14, bh: 14, bd: 26, hw: 10, hh: 10, hd: 12, lw: 5, lh: 12, hUp: 6, snout: [6, 4, 4], ears: [3, 5, 2], c: ['#3f7b6b', '#4a8f7d', '#356758', '#c8a05a'] }],
+  ['Squid', 'passive', ghost, { bw: 10, bh: 12, bd: 10, y: 20, tent: 6, tentLen: 10, eyeC: '#e8e8e8', c: ['#1c4b73', '#245a86'] }],
+  ['Strider', 'passive', biped, { bw: 14, bh: 14, bd: 12, hw: 10, hh: 8, hd: 8, lw: 4, lh: 12, noArms: true, eyeC: '#e8e8e8', c: ['#a2423e', '#8f3634', '#a2423e', '#6b6b7a'] }],
+  ['Tadpole', 'passive', fish, { bw: 3, bh: 4, bd: 5, tail: [1, 4, 5], y: 5, c: ['#5c4433', '#3a2c20'] }],
+  ['Tropical Fish', 'passive', fish, { bw: 3, bh: 6, bd: 8, tail: [1, 6, 4], fins: [3, 1, 3], top: [1, 4, 4], y: 7, c: ['#f0a217', '#e8e8e8'] }],
+  ['Turtle', 'passive', quad, { bw: 14, bh: 6, bd: 16, hw: 6, hh: 5, hd: 6, lw: 4, lh: 3, hUp: 0, snout: [4, 2, 2], c: ['#58a558', '#8fbf6f', '#3d8a3d', '#e8e0c8'] }],
+  ['Villager', 'passive', biped, { bw: 8, bh: 12, bd: 6, hw: 8, hh: 10, hd: 8, lw: 4, lh: 12, nose: true, noseC: '#a17b5b', c: ['#6b4f3a', '#a17b5b', '#8a6a4a', '#5a4030'] }],
+  ['Wandering Trader', 'passive', biped, { bw: 8, bh: 12, bd: 6, hw: 8, hh: 10, hd: 8, lw: 4, lh: 12, nose: true, noseC: '#a17b5b', c: ['#3a4a8a', '#a17b5b', '#2f3d73', '#3a3a4a'] }],
+
+  // ---- neutral: leave them alone and they'll leave you alone ----
+  ['Cave Spider', 'neutral', spider, { bw: 6, bh: 6, bd: 8, hw: 6, hh: 6, hd: 6, lh: 4, legLen: 8, c: ['#0c424e', '#0a3540', '#e02121', '#0a3540'] }],
+  ['Enderman', 'neutral', biped, { bw: 8, bh: 16, bd: 4, hw: 8, hh: 8, hd: 8, lw: 3, lh: 22, aw: 3, ah: 22, eyeC: '#c060ff', c: ['#161616', '#1a1a1a', '#161616', '#161616'] }],
+  ['Iron Golem', 'neutral', biped, { bw: 16, bh: 16, bd: 10, hw: 8, hh: 10, hd: 8, lw: 6, lh: 14, aw: 6, ah: 22, nose: true, noseC: '#c8c0b4', eyeC: '#3a3a3a', c: ['#d8d0c8', '#d8d0c8', '#c8c0b4', '#b8b0a4'] }],
+  ['Panda', 'neutral', quad, { bw: 12, bh: 12, bd: 18, hw: 9, hh: 8, hd: 9, lw: 5, lh: 6, hUp: 1, snout: [4, 3, 2], ears: [3, 3, 2], c: ['#e8e8e8', '#f0f0f0', '#1a1a1a', '#1a1a1a'] }],
+  ['Piglin', 'neutral', biped, { bw: 8, bh: 12, bd: 6, hw: 8, hh: 8, hd: 8, lw: 4, lh: 12, nose: true, noseC: '#f0b78e', c: ['#8f7355', '#f0b78e', '#ffd83d', '#5c4433'] }],
+  ['Spider', 'neutral', spider, { bw: 10, bh: 8, bd: 10, hw: 8, hh: 8, hd: 8, lh: 5, legLen: 10, c: ['#3c2a1e', '#2f2118', '#e02121', '#2f2118'] }],
+  ['Trader Llama', 'neutral', quad, { bw: 8, bh: 12, bd: 16, hw: 5, hh: 8, hd: 8, lw: 3, lh: 14, hUp: 10, ears: [2, 4, 2], tail: [2, 4, 2], c: ['#c09e7d', '#d0ae8d', '#a88a6a', '#3a4a8a'] }],
+  ['Wolf', 'neutral', quad, { bw: 6, bh: 6, bd: 12, hw: 6, hh: 6, hd: 6, lw: 2, lh: 6, snout: [3, 3, 2], ears: [2, 3, 1], tail: [3, 8, 3], c: ['#d7d3d2', '#d7d3d2', '#c0bcba', '#8f8a88'] }],
+  ['Zombified Piglin', 'neutral', biped, { bw: 8, bh: 12, bd: 6, hw: 8, hh: 8, hd: 8, lw: 4, lh: 12, nose: true, noseC: '#8fbf8f', eyeC: '#0f0f0f', c: ['#4f8f4f', '#7fbf7f', '#3f7a3f', '#3c44aa'] }],
+
+  // ---- hostile: these ones want a word with you ----
+  ['Blaze', 'hostile', biped, { bw: 8, bh: 10, bd: 8, hw: 8, hh: 8, hd: 8, lw: 3, lh: 8, noArms: true, eyeC: '#e02121', c: ['#f6b201', '#f6d21c', '#f6b201', '#e08a00'] }],
+  ['Bogged', 'hostile', biped, { bw: 8, bh: 12, bd: 4, hw: 8, hh: 8, hd: 8, lw: 3, lh: 12, aw: 3, ah: 12, eyeC: '#0f0f0f', c: ['#5f7a5a', '#7a9a70', '#5f7a5a', '#4f6a4a'] }],
+  ['Breeze', 'hostile', ghost, { bw: 10, bh: 14, bd: 10, y: 18, tent: 3, tentLen: 8, eyeC: '#e8f0ff', c: ['#a4a2f5', '#8f8fe0'] }],
+  ['Creaking', 'hostile', biped, { bw: 6, bh: 14, bd: 5, hw: 7, hh: 7, hd: 7, lw: 3, lh: 18, aw: 3, ah: 18, eyeC: '#f26b21', c: ['#5a5a4a', '#4a4a3c', '#5a5a4a', '#4a4a3c'] }],
+  ['Creeper', 'hostile', creeper, { c: ['#5cb35a', '#4f9e4d'] }],
+  ['Drowned', 'hostile', biped, { bw: 8, bh: 12, bd: 4, hw: 8, hh: 8, hd: 8, lw: 4, lh: 12, aw: 4, ah: 12, eyeC: '#f2a83c', c: ['#3f7a6b', '#7ba09b', '#3f7a6b', '#2f5a4f'] }],
+  ['Elder Guardian', 'hostile', fish, { bw: 14, bh: 14, bd: 14, tail: [2, 8, 10], fins: [4, 8, 6], y: 16, eyeC: '#e8e8e8', c: ['#ccc9b0', '#a8a590'] }],
+  ['Endermite', 'hostile', blob, { s: 6, c: ['#2a1e33', '#c060ff'] }],
+  ['Ender Dragon', 'boss', dragon, { c: ['#16161e', '#c060ff', '#25252f'] }],
+  ['Evoker', 'hostile', biped, { bw: 8, bh: 12, bd: 6, hw: 8, hh: 10, hd: 8, lw: 4, lh: 12, nose: true, noseC: '#c0b0a0', c: ['#b0b0b0', '#c0b0a0', '#9a9a9a', '#3a3a3a'] }],
+  ['Ghast', 'hostile', ghost, { bw: 16, bh: 16, bd: 16, y: 26, tent: 5, tentLen: 12, c: ['#dcdcdc', '#c8c8c8'] }],
+  ['Guardian', 'hostile', fish, { bw: 10, bh: 10, bd: 10, tail: [2, 6, 8], fins: [4, 6, 4], y: 12, eyeC: '#f26b21', c: ['#6a8180', '#4f6362'] }],
+  ['Happy Ghast', 'passive', ghost, { bw: 16, bh: 16, bd: 16, y: 26, tent: 5, tentLen: 12, eyeC: '#3ba0d0', c: ['#f4f4f8', '#e0e0e8'] }],
+  ['Hoglin', 'hostile', quad, { bw: 12, bh: 12, bd: 20, hw: 8, hh: 9, hd: 10, lw: 5, lh: 8, hUp: 2, snout: [5, 4, 3], ears: [3, 3, 2], tail: [2, 4, 2], c: ['#c4784f', '#b06a44', '#8f5636', '#e8d0b0'] }],
+  ['Husk', 'hostile', biped, { bw: 8, bh: 12, bd: 4, hw: 8, hh: 8, hd: 8, lw: 4, lh: 12, aw: 4, ah: 12, eyeC: '#3a3a3a', c: ['#977e5c', '#a89070', '#977e5c', '#7a6448'] }],
+  ['Magma Cube', 'hostile', blob, { s: 12, c: ['#a02f21', '#f28c18'] }],
+  ['Phantom', 'hostile', bird, { bw: 6, bh: 4, bd: 10, hw: 5, hh: 4, hd: 5, lh: 0, wing: [2, 2, 16], beakC: '#2f2c4a', c: ['#43406a', '#4f4a7a', '#3a3760'] }],
+  ['Piglin Brute', 'hostile', biped, { bw: 9, bh: 13, bd: 6, hw: 8, hh: 8, hd: 8, lw: 4, lh: 12, nose: true, noseC: '#f0b78e', c: ['#3a3a3a', '#f0b78e', '#5c4433', '#2f2f2f'] }],
+  ['Pillager', 'hostile', biped, { bw: 8, bh: 12, bd: 6, hw: 8, hh: 10, hd: 8, lw: 4, lh: 12, nose: true, noseC: '#a8a090', c: ['#6a6a5a', '#a8a090', '#5a5a4a', '#3a3a3a'] }],
+  ['Ravager', 'hostile', quad, { bw: 14, bh: 14, bd: 24, hw: 10, hh: 12, hd: 14, lw: 5, lh: 10, hUp: 4, snout: [6, 5, 4], ears: [3, 3, 2], c: ['#6f6c6a', '#5a5755', '#4a4745', '#c8c0b0'] }],
+  ['Shulker', 'hostile', boxmob, { c: ['#9a6f9a', '#7d5a7d', '#f9d29c'] }],
+  ['Silverfish', 'hostile', blob, { s: 6, c: ['#6f6f6f', '#3a3a3a'] }],
+  ['Skeleton', 'hostile', biped, { bw: 8, bh: 12, bd: 4, hw: 8, hh: 8, hd: 8, lw: 3, lh: 12, aw: 3, ah: 12, eyeC: '#0f0f0f', c: ['#d3d3d3', '#e0e0e0', '#d3d3d3', '#c0c0c0'] }],
+  ['Slime', 'hostile', blob, { s: 14, c: ['#6ec06e', '#4f9e4d'] }],
+  ['Stray', 'hostile', biped, { bw: 8, bh: 12, bd: 4, hw: 8, hh: 8, hd: 8, lw: 3, lh: 12, aw: 3, ah: 12, eyeC: '#4aedd9', c: ['#9ab0b0', '#d3e0e0', '#9ab0b0', '#7a9090'] }],
+  ['Vex', 'hostile', biped, { bw: 4, bh: 6, bd: 3, hw: 6, hh: 6, hd: 6, lw: 2, lh: 5, aw: 2, ah: 5, eyeC: '#e02121', c: ['#8c9aa8', '#c8d0d8', '#8c9aa8', '#7a8894'] }],
+  ['Vindicator', 'hostile', biped, { bw: 8, bh: 12, bd: 6, hw: 8, hh: 10, hd: 8, lw: 4, lh: 12, nose: true, noseC: '#a8a090', c: ['#4a4a4a', '#a8a090', '#2f7a6b', '#3a3a3a'] }],
+  ['Warden', 'hostile', biped, { bw: 16, bh: 18, bd: 10, hw: 10, hh: 8, hd: 10, lw: 6, lh: 16, aw: 6, ah: 24, eyeC: '#4aedd9', c: ['#0f4a4a', '#0c3d3d', '#0f4a4a', '#0a3333'] }],
+  ['Witch', 'hostile', biped, { bw: 8, bh: 12, bd: 6, hw: 8, hh: 10, hd: 8, lw: 4, lh: 12, nose: true, noseC: '#7fb238', hat: [12, 3, 12], hatC: '#3f3f5f', c: ['#3f3f5f', '#7fb238', '#35354f', '#2f2f45'] }],
+  ['Wither', 'boss', wither, { c: ['#2f2f2f', '#4a4a4a'] }],
+  ['Wither Skeleton', 'hostile', biped, { bw: 8, bh: 12, bd: 4, hw: 8, hh: 8, hd: 8, lw: 3, lh: 14, aw: 3, ah: 14, eyeC: '#e02121', c: ['#2f2f2f', '#3a3a3a', '#2f2f2f', '#232323'] }],
+  ['Zoglin', 'hostile', quad, { bw: 12, bh: 12, bd: 20, hw: 8, hh: 9, hd: 10, lw: 5, lh: 8, hUp: 2, snout: [5, 4, 3], ears: [3, 3, 2], tail: [2, 4, 2], c: ['#d8a8a0', '#c89890', '#a87f78', '#e8d0b0'] }],
+  ['Zombie', 'hostile', biped, { bw: 8, bh: 12, bd: 4, hw: 8, hh: 8, hd: 8, lw: 4, lh: 12, aw: 4, ah: 12, eyeC: '#0f0f0f', c: ['#00afaf', '#529a52', '#529a52', '#3c44aa'] }],
+  ['Zombie Villager', 'hostile', biped, { bw: 8, bh: 12, bd: 6, hw: 8, hh: 10, hd: 8, lw: 4, lh: 12, nose: true, noseC: '#529a52', eyeC: '#0f0f0f', c: ['#6b4f3a', '#529a52', '#5a4030', '#4a3628'] }],
+];
+
+// sort alphabetically so the list reads like a proper encyclopedia
+MOB_LIST.sort((a, b) => a[0].localeCompare(b[0]));
+const KIND_ICON = { passive: '😊', neutral: '😐', hostile: '😠', boss: '👑', blob: '😊' };
+
+// build one mob's boxes on demand (its plan function + its numbers)
+function buildMobParts(entry) {
+  const [, , plan, opts] = entry;
+  return JSON.parse(JSON.stringify(plan(opts)));
+}
+
+// ---- the pop-up list ----
+const mobModal = $('mobModal');
+function renderMobList(filter) {
+  const f = (filter || '').trim().toLowerCase();
+  const shown = MOB_LIST.filter(m => m[0].toLowerCase().includes(f));
+  const list = $('mobList');
+  list.innerHTML = '';
+  $('mobCount').textContent = f
+    ? shown.length + ' of ' + MOB_LIST.length + ' mobs match "' + f + '"'
+    : MOB_LIST.length + ' mobs — tap one to load it, then change it however you like';
+  if (!shown.length) {
+    const empty = document.createElement('div');
+    empty.className = 'mobrow';
+    empty.style.cursor = 'default';
+    empty.textContent = '🤷 no mob called that — so BUILD it! close this and start from a preset.';
+    list.appendChild(empty);
+    return;
+  }
+  shown.forEach(entry => {
+    const [name, kind, , opts] = entry;
+    const row = document.createElement('div');
+    row.className = 'mobrow';
+    const cols = (opts.c || ['#7fdf8f']).slice(0, 3)
+      .map(col => '<span class="d" style="background:' + col + '"></span>').join('');
+    row.innerHTML = '<span class="dots">' + cols + '</span>' + name +
+                    '<span class="kind">' + (KIND_ICON[kind] || '') + '</span>';
+    row.addEventListener('pointerdown', () => loadMob(entry));
+    list.appendChild(row);
+  });
+}
+function loadMob(entry) {
+  parts = buildMobParts(entry);
+  mobName = entry[0];
+  nameBox.value = mobName;
+  document.querySelectorAll('#presetRow .typecard').forEach(t => t.classList.remove('on'));
+  selectPart(0);
+  saveDesign();
+  updatePeek();
+  closeMobs();
+  spinning = true;                       // show off the new arrival
+  $('forgedMsg').textContent = 'loaded ' + mobName + ' — now make it YOURS!';
+}
+function openMobs() {
+  mobModal.classList.add('open');
+  $('mobSearch').value = '';
+  renderMobList('');
+  $('mobSearch').focus();
+}
+function closeMobs() { mobModal.classList.remove('open'); }
+$('mobsBtn').addEventListener('click', openMobs);
+$('mobClose').addEventListener('click', closeMobs);
+$('mobSearch').addEventListener('input', e => renderMobList(e.target.value));
+$('mobSearch').addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;         // Enter grabs the first match
+  const f = e.target.value.trim().toLowerCase();
+  const hit = MOB_LIST.find(m => m[0].toLowerCase().includes(f));
+  if (hit) loadMob(hit);
+});
+addEventListener('keydown', e => { if (e.key === 'Escape') closeMobs(); });
+
+// a link ending in #mobs opens the zoo straight away
+if (location.hash === '#mobs') openMobs();
 
 selectPart(0);
 updateScale();
