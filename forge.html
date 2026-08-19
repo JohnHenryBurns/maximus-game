@@ -239,6 +239,10 @@ a.arcade-pill.arcade-float {
   <div class="slab">
     <h2><span class="stepnum">5</span>PAINT IT (16×16 pixels, just like real Minecraft art)</h2>
     <canvas id="art" width="480" height="480"></canvas>
+    <div id="blockPaintNote" class="hint" style="display:none; text-align:center; margin-top:8px">
+      🧱 blocks can't be see-through — any pixels you leave empty get filled
+      with your main colour. This is exactly how it'll look in the world.
+    </div>
     <div class="palette" id="palette"></div>
     <div class="toolrow">
       <button class="tool on" id="toolPaint">✏️ PAINT</button>
@@ -424,10 +428,15 @@ if (!pixels || pixels.length !== GRID * GRID) {
 }
 
 function drawArt() {
-  // gray checkerboard = "this part is see-through in the game"
+  // For an ITEM, the grey checkerboard means "see-through in the game".
+  // A BLOCK can't have holes in it, so we show the empty pixels already
+  // filled with your main colour — what you see is what you'll place.
+  const bg = isBlock() ? mainColor() : null;
+  const note = document.getElementById('blockPaintNote');
+  if (note) note.style.display = isBlock() ? '' : 'none';
   for (let y = 0; y < GRID; y++) {
     for (let x = 0; x < GRID; x++) {
-      actx.fillStyle = (x + y) % 2 ? '#2c2c33' : '#26262d';
+      actx.fillStyle = bg || ((x + y) % 2 ? '#2c2c33' : '#26262d');
       actx.fillRect(x * CELL, y * CELL, CELL, CELL);
       const c = pixels[y * GRID + x];
       if (c) { actx.fillStyle = c; actx.fillRect(x * CELL, y * CELL, CELL, CELL); }
@@ -510,6 +519,7 @@ function setType(t) {
   updatePower();
   refreshAbilities();                    // some powers only work on blocks
   refreshClicks();                       // and right-clicking is blocks-only
+  drawArt();                             // blocks preview with no see-through pixels
 }
 document.querySelectorAll('.typecard').forEach(c =>
   c.addEventListener('pointerdown', () => setType(c.dataset.type)));
@@ -688,9 +698,20 @@ function makeTickFunction(slug, found) {
 function makeBlockJSON() {
   const slug = slugOf(itemName);
   const components = {
+    // THE SHAPE. Without this, Minecraft has no idea what to draw or
+    // what to bump into — you get an invisible block you walk through.
+    // "full_block" means a normal 16×16×16 cube, like stone or dirt.
+    'minecraft:geometry': 'minecraft:geometry.full_block',
+    // THE SKIN. "*" means every side, and "opaque" means solid — you
+    // cannot see through it (that is why we fill in any empty pixels).
     'minecraft:material_instances': {
       '*': { texture: slug, render_method: 'opaque' },
     },
+    // THE SOLID PART. The box you bump into, and the box that lights up
+    // when you point at it. Measured from the middle of the block, so
+    // it starts at -8 and runs the full 16 across.
+    'minecraft:collision_box': { origin: [-8, 0, -8], size: [16, 16, 16] },
+    'minecraft:selection_box': { origin: [-8, 0, -8], size: [16, 16, 16] },
     'minecraft:destructible_by_mining': { seconds_to_destroy: Math.max(0.2, itemPower / 4) },
     'minecraft:destructible_by_explosion': { explosion_resistance: 3 },
   };
@@ -713,9 +734,9 @@ function makeBlockJSON() {
   for (const c of clicks) if (c.component) c.component(components, itemPower);
   const cmds = clickCommands(clicks);
   if (cmds.length) {
-    components['minecraft:on_interact'] = { event: 'max:right_click', target: 'self' };
+    components['minecraft:on_interact'] = { event: 'on_right_click', target: 'self' };
     block.events = {
-      'max:right_click': {
+      on_right_click: {
         run_command: { command: cmds, target: 'self' },
       },
     };
@@ -1197,12 +1218,26 @@ function buildAddonFiles(iconPng, packIconPng) {
   return files;
 }
 
+// Which colour did you use most? A solid block can't have see-through
+// holes in it, so we fill the empty pixels with your main colour.
+function mainColor() {
+  const counts = {};
+  let best = null, bestN = 0;
+  for (const c of pixels) {
+    if (!c) continue;
+    counts[c] = (counts[c] || 0) + 1;
+    if (counts[c] > bestN) { bestN = counts[c]; best = c; }
+  }
+  return best || '#9d9d97';                        // nothing painted? plain stone grey
+}
+
 // turn your painting into a real PNG picture file
-function paintingToPNG(size) {
+function paintingToPNG(size, background) {
   const c = document.createElement('canvas');
   c.width = size; c.height = size;
   const x = c.getContext('2d');
   x.imageSmoothingEnabled = false;                 // keep pixels CRUNCHY
+  if (background) { x.fillStyle = background; x.fillRect(0, 0, size, size); }
   const scale = size / GRID;
   for (let py = 0; py < GRID; py++) {
     for (let px = 0; px < GRID; px++) {
@@ -1220,7 +1255,10 @@ function paintingToPNG(size) {
 // THE BIG MOMENT
 document.getElementById('forgeBtn').addEventListener('click', () => {
   const slug = slugOf(itemName);
-  const files = buildAddonFiles(paintingToPNG(16), paintingToPNG(256));
+  // a BLOCK gets a solid background (no see-through holes);
+  // an ITEM keeps its transparent edges so it isn't a coloured square
+  const bg = isBlock() ? mainColor() : null;
+  const files = buildAddonFiles(paintingToPNG(16, bg), paintingToPNG(256, bg));
   const blob = new Blob(buildZip(files), { type: 'application/octet-stream' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
