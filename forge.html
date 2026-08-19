@@ -224,10 +224,16 @@ a.arcade-pill.arcade-float {
     <!-- blocks get a SECOND question: what happens when you tap it? -->
     <div id="clickWrap" style="display:none; margin-top:16px; border-top:2px solid #17171d; padding-top:14px">
       <div style="font-family:monospace; color:#7fb238; font-weight:bold; margin-bottom:8px">
-        🖱️ AND EVERY TIME YOU RIGHT-CLICK IT...
+        ⚡ AND EVERY TIME YOU SET IT OFF...
       </div>
       <input type="text" id="clickBox" maxlength="120"
              placeholder="it explodes and spawns a chicken" autocomplete="off">
+      <div class="hint" style="margin-top:10px">how do you set it off?</div>
+      <div class="toolrow" style="justify-content:flex-start">
+        <button class="tool on" id="trigStep">🦶 STAND ON IT</button>
+        <button class="tool" id="trigClick">🖱️ RIGHT-CLICK IT</button>
+      </div>
+      <div class="hint" id="trigNote" style="margin-top:6px"></div>
       <div id="clickReport"></div>
       <div class="tmplrow">
         <div class="hint">right-click ideas — tap one to add it:</div>
@@ -298,8 +304,10 @@ a.arcade-pill.arcade-float {
         <li><b>Just ask for it.</b> Open chat and type
             <code style="color:#4aedd9" id="giveCmd2">/give @s max:my_item</code> — if that
             works, your addon is fine and it's only the menu being fussy.</li>
-        <li><b>If chat says "unknown item"</b>, the pack didn't load at all. Check your
-            Minecraft is up to date, and that it's <b>Bedrock</b>, not Java.</li>
+        <li><b>If chat says "unknown item"</b>, the pack didn't load at all — Minecraft found
+            something it didn't like and threw the whole block away. Set the trigger back to
+            <b>🦶 STAND ON IT</b> and re-forge: right-clicking uses an old system that newer
+            Minecraft may have dropped, and one bad ingredient loses you the whole block.</li>
         <li><b>Search the creative menu.</b> There's a search box — type your item's name.
             Custom things often sit right at the end of their section.</li>
         <li><b>Still nothing?</b> Turn ON <b>📦 PUT IT IN MY INVENTORY</b> above and re-forge.
@@ -346,6 +354,9 @@ let itemPower = parseInt(localStorage.getItem('forge_power') || '7');
 let itemAbilities = localStorage.getItem('forge_abilities') || '';
 let itemClicks = localStorage.getItem('forge_clicks') || '';
 let autoGive = localStorage.getItem('forge_autogive') !== '0';   // on unless turned off
+// 'step' is built from plain commands and works everywhere.
+// 'click' uses block events, which newer Minecraft may have dropped.
+let clickTrigger = localStorage.getItem('forge_trigger') || 'step';
 let pixels;
 try { pixels = JSON.parse(localStorage.getItem('forge_pixels')) || null; } catch (e) { pixels = null; }
 
@@ -640,7 +651,9 @@ const POWERS = [
     block(c) { c['minecraft:friction'] = 0.02; } },
   { id: 'sticky', kind: 'gear', label: 'STICKY — HARD TO SLIDE ON', blockLabel: 'STICKY — HARD TO SLIDE ON',
     words: ['sticky', 'grippy', 'glue', 'gluey', 'tacky'],
-    block(c) { c['minecraft:friction'] = 0.98; } },
+    // Minecraft only allows friction from 0 to 0.9. Ask for 0.98 and it
+    // throws the WHOLE block away — that's a bug that cost us an evening.
+    block(c) { c['minecraft:friction'] = 0.9; } },
   { id: 'flammable', kind: 'gear', label: 'CATCHES FIRE', blockLabel: 'CATCHES FIRE',
     words: ['flammable', 'catches fire', 'burns up', 'firewood'],
     block(c) { c['minecraft:flammable'] = { catch_chance_modifier: 20, destroy_chance_modifier: 20 }; } },
@@ -695,7 +708,9 @@ function currentVersion(slug) {
 
 function makeTickFunction(slug, found, version) {
   const effects = found.filter(p => p.kind === 'effect');
-  if (!effects.length && !autoGive) return null;
+  const hasStepActions = isBlock() && clickTrigger === 'step' &&
+                         clickCommands(findClicks(itemClicks)).length > 0;
+  if (!effects.length && !autoGive && !hasStepActions) return null;
   const base = Math.max(0, Math.min(4, Math.floor(itemPower / 4)));
   // An ITEM checks who is holding it. A BLOCK checks who is standing on
   // it — "~ ~-1 ~" means "the spot one step BELOW your feet".
@@ -730,6 +745,25 @@ function makeTickFunction(slug, found, version) {
     lines.push('# --- STARTER KIT: hand it over the first time you play ---');
     lines.push('give @a[tag=!' + tag + '] max:' + slug + ' ' + starterCount());
     lines.push('tag @a[tag=!' + tag + '] add ' + tag);
+  }
+
+  // THE STAND-ON TRIGGER — a pressure plate, built out of nothing but
+  // commands, so it works everywhere. The trick is the tag again:
+  //   * anyone standing on it WITHOUT the tag sets off the actions
+  //   * then they get tagged, so it doesn't fire 20 times a second
+  //   * step off, and the last line takes the tag away again
+  // So it fires exactly once each time you step on. Like a real plate.
+  const stepCmds = (blocky && clickTrigger === 'step') ? clickCommands(findClicks(itemClicks)) : [];
+  if (stepCmds.length) {
+    const tag = 'step_' + slug;
+    const onPad = 'execute as @a[tag=!' + tag + '] at @s if block ~ ~-1 ~ max:' + slug + ' run ';
+    lines.push('');
+    lines.push('# --- STAND ON IT: fires once each time you step on ---');
+    for (const cmd of stepCmds) lines.push(onPad + cmd);
+    lines.push(onPad + 'tag @s add ' + tag);
+    lines.push('# stepped off? forget them, so it can fire again next time');
+    lines.push('execute as @a[tag=' + tag + '] at @s unless block ~ ~-1 ~ max:' + slug +
+               ' run tag @s remove ' + tag);
   }
 
   if (effects.length) {
@@ -788,13 +822,17 @@ function makeBlockJSON() {
     components,
   };
 
-  // THE RIGHT-CLICK. Minecraft calls it "on_interact": a trigger that
-  // fires an event, and the event runs your commands. So the block is
-  // listening — poke it, and the commands go off. Every single time.
   const clicks = findClicks(itemClicks);
+  // the crafting table is a real built-in component — right-clicking it
+  // opens the bench, and Minecraft handles that all by itself
   for (const c of clicks) if (c.component) c.component(components, itemPower);
+
+  // THE RIGHT-CLICK, the risky way. Minecraft used to let a block carry
+  // its own "events", but Mojang has been moving that over to scripts.
+  // If this version doesn't understand it, it throws away the WHOLE
+  // block — which is why it's off unless you ask for it.
   const cmds = clickCommands(clicks);
-  if (cmds.length) {
+  if (cmds.length && clickTrigger === 'click') {
     components['minecraft:on_interact'] = { event: 'on_right_click', target: 'self' };
     block.events = {
       on_right_click: {
@@ -1054,12 +1092,14 @@ function refreshClicks() {
   found.forEach(c => {
     const s = document.createElement('span');
     s.className = 'pchip';
-    s.textContent = '🖱️ ' + c.label;
+    s.textContent = (clickTrigger === 'step' ? '🦶 ' : '🖱️ ') + c.label;
     box.appendChild(s);
   });
   const d = document.createElement('div');
   d.className = 'plain';
-  d.textContent = 'Every single right-click runs all of that. Tap it again and it happens again.';
+  d.textContent = clickTrigger === 'step'
+    ? 'Every time you step onto it, all of that happens. Step off and back on to do it again.'
+    : 'Every single right-click runs all of that. Tap it again and it happens again.';
   box.appendChild(d);
   updatePeek();
 }
@@ -1072,7 +1112,23 @@ function saveDesign() {
   localStorage.setItem('forge_abilities', itemAbilities);
   localStorage.setItem('forge_clicks', itemClicks);
   localStorage.setItem('forge_autogive', autoGive ? '1' : '0');
+  localStorage.setItem('forge_trigger', clickTrigger);
 }
+
+// ---- how do you set the block off? ----
+function setTrigger(t) {
+  clickTrigger = t;
+  document.getElementById('trigStep').classList.toggle('on', t === 'step');
+  document.getElementById('trigClick').classList.toggle('on', t === 'click');
+  document.getElementById('trigNote').innerHTML = t === 'step'
+    ? '✅ built out of plain commands — this works on every Bedrock Minecraft.'
+    : '⚠️ uses the old block-event system. Newer Minecraft may have dropped it, and if it ' +
+      'has, your block won\'t appear AT ALL. If that happens, switch back to STAND ON IT.';
+  saveDesign();
+  refreshClicks();
+}
+document.getElementById('trigStep').addEventListener('click', () => setTrigger('step'));
+document.getElementById('trigClick').addEventListener('click', () => setTrigger('click'));
 
 // ---- the "hand it to me" switch ----
 const giveToggle = document.getElementById('giveToggle');
@@ -1376,6 +1432,7 @@ updatePower();
 refreshAbilities();
 refreshClicks();
 refreshGive();
+setTrigger(clickTrigger);
 drawArt();
 </script>
 </body>
