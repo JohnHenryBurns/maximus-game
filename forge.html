@@ -202,6 +202,16 @@ a.arcade-pill.arcade-float {
       <div class="typecard" data-type="food"><div class="big">🍗</div><div class="lbl">FOOD</div></div>
       <div class="typecard" data-type="treasure"><div class="big">💎</div><div class="lbl">TREASURE</div></div>
       <div class="typecard" data-type="block"><div class="big">🧱</div><div class="lbl">BLOCK</div></div>
+      <div class="typecard" data-type="armor"><div class="big">🛡️</div><div class="lbl">ARMOUR</div></div>
+    </div>
+    <div id="pieceWrap" style="display:none; margin-top:12px">
+      <div class="hint">which piece do you wear?</div>
+      <div class="typerow" id="pieceRow">
+        <div class="typecard" data-piece="head"><div class="big">⛑️</div><div class="lbl">HELMET</div></div>
+        <div class="typecard" data-piece="chest"><div class="big">🦺</div><div class="lbl">CHESTPLATE</div></div>
+        <div class="typecard" data-piece="legs"><div class="big">👖</div><div class="lbl">LEGGINGS</div></div>
+        <div class="typecard" data-piece="feet"><div class="big">🥾</div><div class="lbl">BOOTS</div></div>
+      </div>
     </div>
   </div>
 
@@ -245,6 +255,10 @@ a.arcade-pill.arcade-float {
   <div class="slab">
     <h2><span class="stepnum">5</span>PAINT IT (16×16 pixels, just like real Minecraft art)</h2>
     <canvas id="art" width="480" height="480"></canvas>
+    <div id="armorPaintNote" class="hint" style="display:none; text-align:center; margin-top:8px">
+      🛡️ your painting is BOTH the icon you see in your inventory AND the pattern
+      that gets tiled across the armour on your body.
+    </div>
     <div id="blockPaintNote" class="hint" style="display:none; text-align:center; margin-top:8px">
       🧱 blocks can't be see-through — any pixels you leave empty get filled
       with your main colour. This is exactly how it'll look in the world.
@@ -357,6 +371,26 @@ let autoGive = localStorage.getItem('forge_autogive') !== '0';   // on unless tu
 // 'step' is built from plain commands and works everywhere.
 // 'click' uses block events, which newer Minecraft may have dropped.
 let clickTrigger = localStorage.getItem('forge_trigger') || 'step';
+let armorPiece = localStorage.getItem('forge_piece') || 'chest';
+
+// =====================================================================
+// THE FOUR PIECES OF ARMOUR. Each one knows: which slot it goes in,
+// which piece of the player's body Minecraft draws it on, which of the
+// two armour pictures it uses, and how strong the diamond version is
+// (so you can see whether yours is better).
+// =====================================================================
+const ARMOR_SLOTS = {
+  head:  { label: 'HELMET',     slot: 'slot.armor.head',  geo: 'helmet',
+           layer: 1, hide: 'helmet', diamond: 3 },
+  chest: { label: 'CHESTPLATE', slot: 'slot.armor.chest', geo: 'chestplate',
+           layer: 1, hide: 'chest',  diamond: 8 },
+  legs:  { label: 'LEGGINGS',   slot: 'slot.armor.legs',  geo: 'leggings',
+           layer: 2, hide: 'leg',    diamond: 6 },
+  feet:  { label: 'BOOTS',      slot: 'slot.armor.feet',  geo: 'boots',
+           layer: 1, hide: 'boot',   diamond: 3 },
+};
+function isArmor() { return itemType === 'armor'; }
+function piece() { return ARMOR_SLOTS[armorPiece] || ARMOR_SLOTS.chest; }
 let pixels;
 try { pixels = JSON.parse(localStorage.getItem('forge_pixels')) || null; } catch (e) { pixels = null; }
 
@@ -472,6 +506,8 @@ function drawArt() {
   const bg = isBlock() ? mainColor() : null;
   const note = document.getElementById('blockPaintNote');
   if (note) note.style.display = isBlock() ? '' : 'none';
+  const anote = document.getElementById('armorPaintNote');
+  if (anote) anote.style.display = isArmor() ? '' : 'none';
   for (let y = 0; y < GRID; y++) {
     for (let x = 0; x < GRID; x++) {
       actx.fillStyle = bg || ((x + y) % 2 ? '#2c2c33' : '#26262d');
@@ -552,15 +588,28 @@ function setType(t) {
   document.querySelectorAll('.typecard').forEach(c => c.classList.toggle('on', c.dataset.type === t));
   document.getElementById('powerSlab').style.display = (t === 'treasure') ? 'none' : '';
   document.getElementById('powerTitle').textContent =
-    t === 'food' ? 'HOW FILLING?' : t === 'block' ? 'HOW TOUGH TO BREAK?' : 'HOW STRONG?';
+    t === 'food' ? 'HOW FILLING?' : t === 'block' ? 'HOW TOUGH TO BREAK?'
+    : t === 'armor' ? 'HOW PROTECTIVE?' : 'HOW STRONG?';
+  document.getElementById('pieceWrap').style.display = (t === 'armor') ? '' : 'none';
   saveDesign();
   updatePower();
   refreshAbilities();                    // some powers only work on blocks
   refreshClicks();                       // and right-clicking is blocks-only
   drawArt();                             // blocks preview with no see-through pixels
 }
-document.querySelectorAll('.typecard').forEach(c =>
+document.querySelectorAll('.typecard[data-type]').forEach(c =>
   c.addEventListener('pointerdown', () => setType(c.dataset.type)));
+
+function setPiece(p) {
+  armorPiece = p;
+  document.querySelectorAll('#pieceRow .typecard').forEach(c =>
+    c.classList.toggle('on', c.dataset.piece === p));
+  saveDesign();
+  updatePower();
+  refreshAbilities();
+}
+document.querySelectorAll('#pieceRow .typecard').forEach(c =>
+  c.addEventListener('pointerdown', () => setPiece(c.dataset.piece)));
 
 const powerBar = document.getElementById('powerBar');
 powerBar.value = itemPower;
@@ -571,7 +620,10 @@ function updatePower() {
       ? itemPower + ' hunger points (a whole steak is 8!)'
       : itemType === 'block'
         ? (itemPower / 4).toFixed(2) + ' seconds to break it (stone takes 1.5)'
-        : '+' + itemPower + ' attack damage (a diamond sword is 7!)';
+        : itemType === 'armor'
+          ? itemPower + ' protection (diamond ' + piece().label.toLowerCase() +
+            ': ' + piece().diamond + ')'
+          : '+' + itemPower + ' attack damage (a diamond sword is 7!)';
   saveDesign();
   updatePeek();
 }
@@ -623,8 +675,7 @@ const POWERS = [
   { id: 'hat', kind: 'gear', label: 'WEAR IT AS A HAT',
     words: ['hat', 'helmet', 'wear', 'head', 'cap', 'crown'],
     apply(c, pw) {
-      c['minecraft:wearable'] = { slot: 'slot.armor.head' };
-      c['minecraft:armor'] = { protection: Math.max(1, Math.round(pw / 2)) };
+      c['minecraft:wearable'] = { slot: 'slot.armor.head', protection: Math.max(1, Math.round(pw / 2)) };
       c['minecraft:max_stack_size'] = 1;
     } },
   { id: 'glint', kind: 'gear', label: 'SPARKLES LIKE MAGIC', blockLabel: 'GLOWS IN THE DARK',
@@ -696,7 +747,8 @@ function powerLabel(p) {
 // how many should the starter kit hand you? 64 blocks is a good pile,
 // but 64 swords would jam your whole inventory.
 function starterCount() {
-  return itemType === 'block' ? 64 : itemType === 'treasure' ? 16 : itemType === 'food' ? 8 : 1;
+  return itemType === 'block' ? 64 : itemType === 'treasure' ? 16
+       : itemType === 'food' ? 8 : 1;
 }
 // what version are we on? (used so a re-forge hands you the new one)
 function currentVersion(slug) {
@@ -724,7 +776,9 @@ function makeTickFunction(slug, found, version) {
   if (effects.length) {
     lines.push(blocky
       ? '# It checks the block under each player\'s feet, and if they are'
-      : '# It checks who is holding the item, and if they are,');
+      : isArmor()
+        ? '# It checks who is WEARING the armour, and if they are,'
+        : '# It checks who is holding the item, and if they are,');
     lines.push(blocky
       ? '# standing on YOUR block, it tops up their power.'
       : '# it tops up their power.');
@@ -732,7 +786,8 @@ function makeTickFunction(slug, found, version) {
   const grant = (effect, secs, amp) => blocky
     ? 'execute as @a at @s if block ~ ~-1 ~ max:' + slug +
       ' run effect @s ' + effect + ' ' + secs + ' ' + amp + ' true'
-    : 'effect @a[hasitem={item=max:' + slug + ',location=slot.weapon.mainhand}] ' +
+    : 'effect @a[hasitem={item=max:' + slug + ',location=' +
+      (isArmor() ? piece().slot : 'slot.weapon.mainhand') + '}] ' +
       effect + ' ' + secs + ' ' + amp + ' true';
   // THE STARTER KIT — the surest way to get your creation into your
   // hands. The first time you play, it drops straight into your
@@ -843,6 +898,63 @@ function makeBlockJSON() {
 
   return { format_version: '1.21.0', 'minecraft:block': block };
 }
+// =====================================================================
+// THE ATTACHABLE. The item card gets you armour you can equip — but on
+// its own, nobody can SEE it. This second card tells Minecraft to draw
+// your pattern onto the player's body, using the same armour shapes the
+// diamond gear uses. It lives in the LOOKS pack, so even if a version
+// of Minecraft doesn't understand it, your armour still works — it just
+// goes invisible. The item can never be lost over it.
+// =====================================================================
+function makeAttachableJSON(slug) {
+  const pc = piece();
+  return {
+    format_version: '1.10.0',
+    'minecraft:attachable': {
+      description: {
+        identifier: 'max:' + slug,
+        materials: { default: 'armor', enchanted: 'armor_enchanted' },
+        textures: {
+          default: 'textures/models/armor/' + slug + '_layer_' + pc.layer,
+          enchanted: 'textures/misc/enchanted_actor_glint',
+        },
+        geometry: { default: 'geometry.humanoid.armor.' + pc.geo },
+        // this hides the ordinary armour layer so yours shows instead
+        scripts: { parent_setup: 'variable.' + pc.hide + '_layer_visible = 0.0;' },
+        render_controllers: ['controller.render.armor'],
+      },
+    },
+  };
+}
+
+// The armour picture is a different shape from an item icon: it's 64
+// wide and 32 tall, and Minecraft wraps it around the player. Rather
+// than make you paint that awkward shape, we TILE your 16x16 painting
+// across it — so your pattern covers the whole suit.
+function armorTexturePNG() {
+  const c = document.createElement('canvas');
+  c.width = 64; c.height = 32;
+  const x = c.getContext('2d');
+  x.fillStyle = mainColor();
+  x.fillRect(0, 0, 64, 32);
+  for (let ty = 0; ty < 2; ty++) {
+    for (let tx = 0; tx < 4; tx++) {
+      for (let py = 0; py < GRID; py++) {
+        for (let px = 0; px < GRID; px++) {
+          const col = pixels[py * GRID + px];
+          if (!col) continue;
+          x.fillStyle = col;
+          x.fillRect(tx * 16 + px, ty * 16 + py, 1, 1);
+        }
+      }
+    }
+  }
+  const raw = atob(c.toDataURL('image/png').split(',')[1]);
+  const bytes = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+  return bytes;
+}
+
 // blocks get their name from the language file, not from a component
 function makeBlockLang(slug) {
   return 'tile.max:' + slug + '.name=' + itemName + '\n';
@@ -1028,7 +1140,9 @@ function refreshAbilities() {
     d.className = 'plain';
     d.textContent = isBlock()
       ? '✨ powers happen while you STAND ON the block. Step off and they stop.'
-      : '✨ powers work while you HOLD it in your hand. Put it away and they stop.';
+      : isArmor()
+        ? '✨ powers work while you WEAR it. Take it off and they stop.'
+        : '✨ powers work while you HOLD it in your hand. Put it away and they stop.';
     box.appendChild(d);
   }
   if (wrongThing.length) {
@@ -1113,6 +1227,7 @@ function saveDesign() {
   localStorage.setItem('forge_clicks', itemClicks);
   localStorage.setItem('forge_autogive', autoGive ? '1' : '0');
   localStorage.setItem('forge_trigger', clickTrigger);
+  localStorage.setItem('forge_piece', armorPiece);
 }
 
 // ---- how do you set the block off? ----
@@ -1164,6 +1279,13 @@ function makeItemJSON() {
       saturation_modifier: 1.0,
       can_always_eat: true,                        // snack even when full. living the dream.
     };
+  } else if (itemType === 'armor') {
+    // ARMOUR. "wearable" is the whole trick: it says which slot this
+    // goes in and how much it protects you. A diamond chestplate is 8.
+    const pc = piece();
+    components['minecraft:wearable'] = { slot: pc.slot, protection: itemPower };
+    components['minecraft:max_stack_size'] = 1;
+    components['minecraft:durability'] = { max_durability: 100 + itemPower * 40 };
   } else {
     components['minecraft:glint'] = true;          // enchanted sparkle, zero enchantments
     components['minecraft:max_stack_size'] = 64;
@@ -1338,6 +1460,12 @@ function buildAddonFiles(iconPng, packIconPng) {
     files.push({ name: BP + 'items/' + slug + '.json', bytes: J(makeItemJSON()) });
     files.push({ name: RP + 'textures/item_texture.json', bytes: J(textureList) });
     files.push({ name: RP + 'textures/items/' + slug + '.png', bytes: iconPng });
+    if (isArmor()) {
+      // the extra card and picture that draw it on your body
+      files.push({ name: RP + 'attachables/' + slug + '.json', bytes: J(makeAttachableJSON(slug)) });
+      files.push({ name: RP + 'textures/models/armor/' + slug + '_layer_' + piece().layer + '.png',
+                   bytes: armorTexturePNG() });
+    }
   }
   // items get a name in the language file too, in case the name
   // component isn't understood by this version of Minecraft
@@ -1433,6 +1561,7 @@ refreshAbilities();
 refreshClicks();
 refreshGive();
 setTrigger(clickTrigger);
+setPiece(armorPiece);
 drawArt();
 </script>
 </body>
