@@ -260,15 +260,21 @@ a.arcade-pill.arcade-float {
 
   <div class="slab">
     <h2><span class="stepnum">8</span>FORGE IT</h2>
-    <button id="forgeBtn">🌌 FORGE MY DIMENSION</button>
+    <div class="hint">what do you stand on to travel?</div>
+    <div class="grid" id="travelRow"></div>
+    <div class="hint" id="travelNote"></div>
+    <button id="forgeBtn" style="margin-top:12px">🌌 FORGE MY DIMENSION</button>
     <div id="forgedMsg"></div>
     <ol class="steps">
       <li>Tap the button — a file like <b>the_fart_nebula.mcaddon</b> downloads.</li>
       <li>Open it from <b>Downloads</b> — Minecraft imports it.</li>
       <li>Make or edit a world, then switch ON <b>Behavior Packs</b> AND <b>Resource Packs</b>.</li>
-      <li>Join the world. <b>8 portal blocks land straight in your inventory.</b></li>
+      <li>Join the world. <b>8 <span id="stepBlockName">travel blocks</span> land straight
+          in your inventory</b>, and a message says your world is ready.</li>
       <li>Place one on the ground and <b>stand on top of it</b>. Off you go.</li>
-      <li>Your way home is the portal block sitting <b>right next to where you land</b>.</li>
+      <li>Your way home is the same kind of block, sitting <b>right where you land</b>.</li>
+      <li><b>Nothing happening?</b> Type this in chat and it will build your world right
+          where you stand: <code style="color:#4aedd9" id="goCmd">/function my_world_go</code></li>
     </ol>
     <details>
       <summary>🔍 peek at the program that runs your entire world</summary>
@@ -370,6 +376,37 @@ const MIN_R = 3;
 // =====================================================================
 const MAX_R = 64;
 let dimR = parseInt(localStorage.getItem('dim_r') || '0');
+// =====================================================================
+// WHAT DO YOU STAND ON TO TRAVEL?
+//
+// A custom glowing portal block looks better. But custom blocks are the
+// fussiest thing in the whole addon: get one ingredient wrong and
+// Minecraft throws the block away without a word, and then nothing works
+// at all. We have been bitten by that twice.
+//
+// So there is a second option that needs NO custom block: stand on an
+// ordinary Minecraft block instead. The behaviour pack then contains
+// nothing but commands, which is about as reliable as an addon gets.
+// =====================================================================
+const TRAVEL_BLOCKS = [
+  { id: 'minecraft:emerald_block', name: 'EMERALD BLOCK', c: '#3fd66b' },
+  { id: 'minecraft:gold_block', name: 'GOLD BLOCK', c: '#f2c236' },
+  { id: 'minecraft:diamond_block', name: 'DIAMOND BLOCK', c: '#5adfd7' },
+  { id: 'minecraft:lodestone', name: 'LODESTONE', c: '#8a8a8a' },
+  { id: 'minecraft:sea_lantern', name: 'SEA LANTERN', c: '#b8d8c8' },
+  { id: 'minecraft:crying_obsidian', name: 'CRYING OBSIDIAN', c: '#3a1a5a' },
+];
+// '' means "use my own custom portal block"
+let dimTravel = localStorage.getItem('dim_travel');
+if (dimTravel === null) dimTravel = 'minecraft:emerald_block';
+function usingCustomPortal() { return dimTravel === ''; }
+function travelBlock(slug) {
+  return usingCustomPortal() ? 'max:' + slug + '_portal' : dimTravel;
+}
+function travelName() {
+  const b = TRAVEL_BLOCKS.find(x => x.id === dimTravel);
+  return b ? b.name : 'PORTAL BLOCK';
+}
 function radius() { return Math.max(MIN_R, Math.min(MAX_R, dimR || 15)); }
 function acrossBlocks() { return radius() * 2 + 1; }
 function floorBlocks() { return acrossBlocks() * acrossBlocks(); }
@@ -523,6 +560,7 @@ function save() {
   localStorage.setItem('dim_ground', dimGround);
   localStorage.setItem('dim_sky', dimSky);
   localStorage.setItem('dim_r', String(radius()));
+  localStorage.setItem('dim_travel', dimTravel);
   localStorage.setItem('dim_mix', JSON.stringify(dimMix));
   localStorage.setItem('dim_amount', dimAmount);
   localStorage.setItem('dim_mobs', JSON.stringify(dimMobs));
@@ -664,14 +702,22 @@ function airCarveLines(slug, r, yFrom, yTo) {
 // =====================================================================
 function makeFunction(slug, version) {
   const w = WHERE[dimWhere];
-  const portal = 'max:' + slug + '_portal';
+  const portal = travelBlock(slug);
+  const title = dimName.replace(/[^ -~]/g, '');
+  // say something at every stage. If it ever stops working, whichever
+  // message you DID see tells us exactly which line gave up.
+  const say = (tag, msg) =>
+    'execute as @a[tag=' + tag + '] at @s run title @s actionbar ' + msg;
   const L = [];
   L.push('# ' + dimName.replace(/[^\x20-\x7E]/g, '') + ' - forged by Max in the Dimension Forge');
   L.push('# This runs 20 times a second, forever.');
   L.push('');
-  L.push('# --- STARTER KIT: portal blocks, the first time you play ---');
+  L.push('# --- STARTER KIT: travel blocks, the first time you play ---');
   const got = 'got_' + slug + '_v' + version;
   L.push('give @a[tag=!' + got + '] ' + portal + ' 8');
+  L.push('title @a[tag=!' + got + '] actionbar ' + title +
+         ' is ready - stand on the block you were just given');
+  L.push('playsound random.levelup @a[tag=!' + got + ']');
   L.push('tag @a[tag=!' + got + '] add ' + got);
   L.push('');
   L.push('# --- STEP 1: spot anyone stood on a portal in the normal world ---');
@@ -738,8 +784,12 @@ function makeFunction(slug, version) {
     });
   }
   L.push('');
+  L.push(say('going_' + slug, 'building ' + title + '...'));
+  L.push('');
   L.push('# --- STEP 3: NOW go. The world is already there ---');
   L.push('execute as @a[tag=going_' + slug + '] at @s run tp @s ~ ' + w.y + ' ~');
+  L.push(say('going_' + slug, 'welcome to ' + title));
+  L.push('execute as @a[tag=going_' + slug + '] at @s run playsound beacon.activate @s');
   L.push('# wrap the sky in your colour');
   L.push('execute as @a[tag=going_' + slug + '] at @s run fog @s push max:' + slug +
          '_fog ' + slug + '_fog');
@@ -756,6 +806,8 @@ function makeFunction(slug, version) {
   L.push('execute as @a[tag=leaving_' + slug + '] at @s run tp @s ~ ' + w.home + ' ~');
   L.push('# a soft landing back into your own world');
   L.push('execute as @a[tag=leaving_' + slug + '] at @s run effect @s slow_falling 20 0 true');
+  L.push(say('leaving_' + slug, 'back home'));
+  L.push('execute as @a[tag=leaving_' + slug + '] at @s run playsound beacon.deactivate @s');
   L.push('tag @a[tag=leaving_' + slug + '] remove in_' + slug);
   L.push('tag @a[tag=leaving_' + slug + '] add step_' + slug);
   L.push('tag @a[tag=leaving_' + slug + '] remove leaving_' + slug);
@@ -780,6 +832,38 @@ function makeFunction(slug, version) {
   L.push('execute as @a[tag=in_' + slug + '] at @s unless entity @s[y=' + lo + ',dy=80] ' +
          'run tag @s remove in_' + slug);
   return L.join('\n') + '\n';
+}
+
+function makeGoFunction(slug) {
+  const w = WHERE[dimWhere];
+  const r = radius();
+  const floorY = w.y - 1;
+  const feetY = w.y;
+  const title = dimName.replace(/[^\x20-\x7E]/g, '');
+  const L = [];
+  L.push('# ' + title + ' - the manual way in.');
+  L.push('# Type this in chat:   /function ' + slug + '_go');
+  L.push('# It builds the world right where you stand, then sends you up.');
+  L.push('fill ~-' + r + ' ' + floorY + ' ~-' + r + ' ~' + r + ' ' + floorY + ' ~' + r + ' ' + dimGround);
+  if (dimWhere === 'deep') {
+    airCarveLines(slug, r, feetY, feetY + 9).forEach(l =>
+      L.push(l.replace(/^execute as @a\[[^\]]*\] at @s run /, '')));
+  }
+  makePatches().forEach(p => {
+    const y = p.lump ? feetY : floorY;
+    L.push('fill ~' + p.x + ' ' + y + ' ~' + p.z + ' ~' + (p.x + p.w) + ' ' + y +
+           ' ~' + (p.z + p.d) + ' ' + p.block);
+  });
+  L.push('setblock ~2 ' + floorY + ' ~ ' + travelBlock(slug));
+  makeSpawns().forEach(sp => {
+    L.push('summon ' + sp.id + ' ~' + sp.dx + ' ' + (feetY + 1) + ' ~' + sp.dz);
+  });
+  L.push('tp @s ~ ' + w.y + ' ~');
+  L.push('fog @s push max:' + slug + '_fog ' + slug + '_fog');
+  L.push('tag @s add in_' + slug);
+  L.push('tag @s add step_' + slug);
+  L.push('title @s actionbar welcome to ' + title);
+  return L.join(String.fromCharCode(10)) + String.fromCharCode(10);
 }
 
 // ---- the portal block ----
@@ -922,22 +1006,33 @@ function buildAddonFiles(portalPng, iconPng) {
   const { behavior, resource } = makeManifests(slug, ids);
   const J = obj => enc.encode(JSON.stringify(obj, null, 2));
   const BP = slug + '_world/', RP = slug + '_looks/';
-  return [
+  const files = [
     { name: BP + 'manifest.json', bytes: J(behavior) },
     { name: BP + 'pack_icon.png', bytes: iconPng },
-    { name: BP + 'blocks/' + slug + '_portal.json', bytes: J(makeBlockJSON(slug)) },
     { name: BP + 'functions/' + slug + '_tick.mcfunction',
       bytes: enc.encode(makeFunction(slug, ids.v)) },
+    { name: BP + 'functions/' + slug + '_go.mcfunction',
+      bytes: enc.encode(makeGoFunction(slug)) },
     { name: BP + 'functions/tick.json', bytes: J({ values: [slug + '_tick'] }) },
     { name: RP + 'manifest.json', bytes: J(resource) },
     { name: RP + 'pack_icon.png', bytes: iconPng },
     { name: RP + 'fogs/' + slug + '_fog.json', bytes: J(makeFogJSON(slug)) },
-    { name: RP + 'textures/terrain_texture.json', bytes: J(makeTerrainTextureJSON(slug)) },
-    { name: RP + 'textures/blocks/' + slug + '_portal.png', bytes: portalPng },
-    { name: RP + 'texts/en_US.lang',
-      bytes: enc.encode('tile.max:' + slug + '_portal.name=' + dimName + ' Portal\n') },
-    { name: RP + 'texts/languages.json', bytes: enc.encode('["en_US"]') },
   ];
+  // The custom block and its picture only ride along if you asked for one.
+  // Choose an ordinary block to travel on and the pack carries no custom
+  // blocks at all - nothing but commands, which is about as reliable as
+  // an addon gets.
+  if (usingCustomPortal()) {
+    files.push({ name: BP + 'blocks/' + slug + '_portal.json', bytes: J(makeBlockJSON(slug)) });
+    files.push({ name: RP + 'textures/terrain_texture.json',
+                 bytes: J(makeTerrainTextureJSON(slug)) });
+    files.push({ name: RP + 'textures/blocks/' + slug + '_portal.png', bytes: portalPng });
+    files.push({ name: RP + 'texts/en_US.lang',
+                 bytes: enc.encode('tile.max:' + slug + '_portal.name=' + dimName +
+                                   ' Portal' + String.fromCharCode(10)) });
+    files.push({ name: RP + 'texts/languages.json', bytes: enc.encode('["en_US"]') });
+  }
+  return files;
 }
 
 // ---------------------------------------------------------------------
@@ -1022,6 +1117,21 @@ function buildPickers() {
       save(); refresh();
     });
     $('mixRow').appendChild(d);
+  });
+  // custom block first, then the ordinary ones
+  const custom = document.createElement('div');
+  custom.className = 'pick';
+  custom.dataset.travel = '';
+  custom.innerHTML = '<span class="em">🌀</span>MY OWN PORTAL BLOCK';
+  custom.addEventListener('pointerdown', () => { dimTravel = ''; save(); refresh(); });
+  $('travelRow').appendChild(custom);
+  TRAVEL_BLOCKS.forEach(b => {
+    const d = document.createElement('div');
+    d.className = 'pick';
+    d.dataset.travel = b.id;
+    d.innerHTML = '<span class="sw" style="background:' + b.c + '"></span>' + b.name;
+    d.addEventListener('pointerdown', () => { dimTravel = b.id; save(); refresh(); });
+    $('travelRow').appendChild(d);
   });
   document.querySelectorAll('#sizeRow .pick').forEach(d =>
     d.addEventListener('pointerdown', () => {
@@ -1260,6 +1370,17 @@ function refresh() {
     (radius() >= MAX_R
       ? '. That is the biggest we can build in one go: Minecraft only keeps chunks near you switched on, so a wider world would have edges that never get built.'
       : '');
+  document.querySelectorAll('#travelRow .pick').forEach(d =>
+    d.classList.toggle('on', d.dataset.travel === dimTravel));
+  $('travelNote').innerHTML = usingCustomPortal()
+    ? '🌀 a glowing portal block of your own - prettier, but custom blocks are the ' +
+      'fussiest part of any addon. If your world stops appearing, this is the first ' +
+      'thing to switch away from.'
+    : '✅ an ordinary Minecraft block. Your addon then contains <b>no custom blocks at ' +
+      'all</b> - just commands - which is about as reliable as it gets.';
+  const sbn = $('stepBlockName');
+  if (sbn) sbn.textContent = usingCustomPortal() ? 'portal blocks' : travelName().toLowerCase() + 's';
+  $('goCmd').textContent = '/function ' + slugOf(dimName) + '_go';
   $('whereNote').textContent = WHERE[dimWhere].note;
   const words = dimRules.map(r => (RULES.find(x => x.id === r) || {}).why).filter(Boolean);
   $('previewNote').textContent = words.length
