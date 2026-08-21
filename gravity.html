@@ -289,6 +289,7 @@ let grabbedHole = null;
 let launchers = [];     // bomb fountains: ten per second, forever
 let grabbedLauncher = null;
 let suns = [];          // dying stars. eight seconds to supernova.
+let remnants = [];      // a blown-up star's core, collapsing into a hole
 let grabbedSun = null;
 let flashT = 0;         // the supernova whiteout
 let gravityOn = true;
@@ -424,12 +425,12 @@ function addSpike(x, y) {
 }
 function addHole(x, y, size) {
   // spin: which way this one winds spacetime. Half go clockwise.
-  holes.push({ x, y, swirl: Math.random() * 7, size: size || 1, tents: [], tentT: 1.5,
-               spin: Math.random() < 0.5 ? -1 : 1 });
+  holes.push({ x, y, vx: 0, vy: 0, swirl: Math.random() * 7, size: size || 1,
+               tents: [], tentT: 1.5, spin: Math.random() < 0.5 ? -1 : 1 });
   if (holes.length > 3) holes.shift();     // three black holes is plenty. THREE.
 }
 function addSun(x, y) {
-  suns.push({ x, y, t: 0, rumbleT: 0 });
+  suns.push({ x, y, vx: 0, vy: 0, t: 0, rumbleT: 0 });
   if (suns.length > 2) supernova(suns.shift());   // crowding a sun ENDS it
 }
 function supernovaSound() {
@@ -463,9 +464,183 @@ function supernova(sun) {
     if (b.type === 'bomb' && b.fuse > 0.2) b.fuse = 0.2;
   }
   floatTexts.push({ x: sun.x, y: sun.y - 60, t: 1.4, text: 'SUPERNOVA!!' });
-  // and what remains of a great star... is a black hole. real physics.
-  addHole(sun.x, sun.y, 1.4);
+  // What's left of a great star is a black hole — but NOT in the same instant.
+  // The hole used to appear inside its own explosion, so you never actually
+  // saw the supernova. First the star blows itself apart. THEN the core that's
+  // left over falls in on itself. Then, and only then, the hole.
+  remnants.push({ x: sun.x, y: sun.y, vx: sun.vx * 0.3, vy: sun.vy * 0.3, t: 0, size: 1.4 });
 }
+
+// the collapsing core of a dead star: bright, shrinking, about to become
+// something you can't look at
+const COLLAPSE_TIME = 1.5;
+function updateRemnants(dt) {
+  for (const r of remnants) {
+    r.t += dt;
+    r.x += r.vx * dt;
+    r.y += r.vy * dt;
+    r.vx *= 1 - 0.9 * dt;
+    r.vy *= 1 - 0.9 * dt;
+    // the last half second, it rings like something under too much pressure
+    if (r.t > COLLAPSE_TIME - 0.5 && !r.warned) {
+      r.warned = true;
+      beep(1200, 0.35, 'sine', 0.06);
+      shake = Math.max(shake, 0.2);
+    }
+    if (r.t >= COLLAPSE_TIME) {
+      r.done = true;
+      addHole(r.x, r.y, r.size);
+      shake = Math.max(shake, 0.6);
+      flashT = Math.max(flashT, 0.18);
+      slurpSound();
+      setTimeout(() => beep(34, 0.8, 'sine', 0.3), 40);
+      floatTexts.push({ x: r.x, y: r.y - 70, t: 1.5, text: 'COLLAPSE!' });
+    }
+  }
+  remnants = remnants.filter(r => !r.done);
+}
+
+function drawRemnants() {
+  for (const r of remnants) {
+    const k = Math.min(1, r.t / COLLAPSE_TIME);
+    // the core shrinks from a big bright ball down to a hard white point
+    const rad = 62 * (1 - k) + 7;
+    const glow = ctx.createRadialGradient(r.x, r.y, 0, r.x, r.y, rad * 3.4);
+    glow.addColorStop(0, `rgba(255, 255, 255, ${0.95 - k * 0.1})`);
+    glow.addColorStop(0.28, `rgba(255, 226, 140, ${0.7 - k * 0.3})`);
+    glow.addColorStop(1, 'rgba(255, 140, 40, 0)');
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(r.x, r.y, rad * 3.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(r.x, r.y, rad, 0, Math.PI * 2);
+    ctx.fill();
+    // a ring of the star's own outer layers, falling back in
+    const ringR = 240 * (1 - k) + 12;
+    ctx.strokeStyle = `rgba(255, 190, 90, ${0.55 * (1 - k)})`;
+    ctx.lineWidth = 3 + 9 * (1 - k);
+    ctx.beginPath();
+    ctx.arc(r.x, r.y, ringR, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+}
+// ---------------------------------------------------------------------
+// THE HEAVY THINGS PULL ON EACH OTHER
+// ---------------------------------------------------------------------
+// Black holes and suns used to sit exactly where you put them, politely
+// ignoring one another, which is not what enormous masses do. Now every one
+// of them pulls on every other one — same inverse-square rule the bodies
+// follow — so two holes will find each other across the lab and fall
+// together, and a sun will drift into a hole's arms and be eaten.
+const BIG_G = 1.5e7;        // how hard the heavy things pull on each other
+const BIG_SOFT = 90;        // softening, so a near-miss doesn't fire them into space
+const BIG_MAX_V = 620;      // nothing gets flung faster than this
+
+function heavyList() {
+  const out = [];
+  for (const h of holes) out.push({ o: h, mass: 1.1 * h.size, kind: 'hole' });
+  for (const s of suns) out.push({ o: s, mass: 1.7, kind: 'sun' });
+  return out;
+}
+
+function updateHeavies(dt) {
+  const list = heavyList();
+  // ---- pull ----
+  for (let i = 0; i < list.length; i++) {
+    for (let j = i + 1; j < list.length; j++) {
+      const A = list[i], B = list[j];
+      const dx = B.o.x - A.o.x, dy = B.o.y - A.o.y;
+      const d2 = dx * dx + dy * dy + BIG_SOFT * BIG_SOFT;
+      const d = Math.sqrt(d2);
+      const nx = dx / d, ny = dy / d;
+      // each one feels the OTHER one's mass. Heavier partner, harder tug.
+      const aA = BIG_G * B.mass / d2, aB = BIG_G * A.mass / d2;
+      A.o.vx += nx * aA * dt; A.o.vy += ny * aA * dt;
+      B.o.vx -= nx * aB * dt; B.o.vy -= ny * aB * dt;
+    }
+  }
+  // ---- move ----
+  for (const it of list) {
+    const o = it.o;
+    const held = (o === grabbedHole || o === grabbedSun);
+    if (held) {
+      // dragging one gives it real speed, so letting go THROWS it
+      o.vx = (pointer.x - o.x) / Math.max(dt, 0.001) * 0.35;
+      o.vy = (pointer.y - o.y) / Math.max(dt, 0.001) * 0.35;
+      o.x = pointer.x; o.y = pointer.y;
+    } else {
+      const sp = Math.hypot(o.vx, o.vy);
+      if (sp > BIG_MAX_V) { o.vx *= BIG_MAX_V / sp; o.vy *= BIG_MAX_V / sp; }
+      o.vx *= 1 - 0.25 * dt;              // a whisper of drag so they settle
+      o.vy *= 1 - 0.25 * dt;
+      o.x += o.vx * dt;
+      o.y += o.vy * dt;
+    }
+    // keep them inside the lab — bounce, don't escape
+    const pad = 50;
+    if (o.x < pad) { o.x = pad; o.vx = Math.abs(o.vx) * 0.5; }
+    if (o.x > WORLD_W - pad) { o.x = WORLD_W - pad; o.vx = -Math.abs(o.vx) * 0.5; }
+    if (o.y < pad) { o.y = pad; o.vy = Math.abs(o.vy) * 0.5; }
+    if (o.y > WORLD_H - pad) { o.y = WORLD_H - pad; o.vy = -Math.abs(o.vy) * 0.5; }
+  }
+  // ---- and what happens when they actually meet ----
+  resolveHeavyCollisions();
+}
+
+function resolveHeavyCollisions() {
+  // TWO HOLES MEET: they merge into one bigger one. This really happens —
+  // it's what shakes the whole universe hard enough for us to hear it.
+  for (let i = 0; i < holes.length; i++) {
+    for (let j = i + 1; j < holes.length; j++) {
+      const a = holes[i], b = holes[j];
+      if (Math.hypot(a.x - b.x, a.y - b.y) > 26 * (a.size + b.size)) continue;
+      const big = a.size >= b.size ? a : b, small = big === a ? b : a;
+      const ma = big.size, mb = small.size;
+      big.x = (big.x * ma + small.x * mb) / (ma + mb);
+      big.y = (big.y * ma + small.y * mb) / (ma + mb);
+      big.vx = (big.vx * ma + small.vx * mb) / (ma + mb);   // momentum keeps
+      big.vy = (big.vy * ma + small.vy * mb) / (ma + mb);
+      big.size = ma + mb * 0.85;
+      big.tentMax = Math.max(big.tentMax || 2, small.tentMax || 2);
+      holes.splice(holes.indexOf(small), 1);
+      shake = Math.max(shake, 0.8);
+      flashT = Math.max(flashT, 0.25);
+      boomSound();
+      setTimeout(() => beep(38, 0.7, 'sine', 0.28), 60);
+      floatTexts.push({ x: big.x, y: big.y - 70 * big.size, t: 1.6, text: 'MERGED!' });
+      for (let k = 0; k < 40; k++) {
+        const ang = Math.random() * Math.PI * 2, sp = 200 + Math.random() * 500;
+        particles.push({ x: big.x, y: big.y, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp,
+                         life: 0.4 + Math.random() * 0.5, color: '#b48cff' });
+      }
+      return;                                   // one merger a frame is plenty
+    }
+  }
+  // A HOLE MEETS A SUN: the star gets torn apart and swallowed whole.
+  for (const h of holes) {
+    for (const s of suns) {
+      if (s.gone) continue;
+      if (Math.hypot(h.x - s.x, h.y - s.y) > 30 * h.size + 40) continue;
+      s.gone = true;
+      h.size += 0.7;
+      shake = Math.max(shake, 0.7);
+      flashT = Math.max(flashT, 0.3);
+      slurpSound();
+      supernovaSound();
+      floatTexts.push({ x: h.x, y: h.y - 70 * h.size, t: 1.7, text: 'STAR EATEN!' });
+      for (let k = 0; k < 60; k++) {
+        const ang = Math.random() * Math.PI * 2, sp = 120 + Math.random() * 420;
+        particles.push({ x: s.x, y: s.y, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp,
+                         life: 0.3 + Math.random() * 0.6,
+                         color: ['#ffd23f', '#ff9f43', '#ffffff'][k % 3] });
+      }
+    }
+  }
+  suns = suns.filter(s => !s.gone);
+}
+
 function slitherSound() {
   beep(280, 0.1, 'sawtooth', 0.06);
   setTimeout(() => beep(180, 0.15, 'sawtooth', 0.06), 80);
@@ -685,9 +860,11 @@ function update(dt) {
     }
   }
 
+  updateHeavies(dt);
+  updateRemnants(dt);
+
   // ---- DYING SUNS: burn gold, swell red, then... goodnight. ----
   for (const sun of suns) {
-    if (sun === grabbedSun) { sun.x = pointer.x; sun.y = pointer.y; }
     sun.t += dt;
     // a sun is heavy: a gentle pull on everything, warmer than a hole's
     for (const b of bodies) {
@@ -714,7 +891,6 @@ function update(dt) {
 
   // ---- BLACK HOLES: they pull. they swallow. sometimes they burp. ----
   for (const h of holes) {
-    if (h === grabbedHole) { h.x = pointer.x; h.y = pointer.y; }
     // Black holes grow by EATING, and only by eating. They used to also swell
     // just from existing, which meant a hole left alone in the corner quietly
     // got three times stronger while you weren't looking — and since size is
@@ -950,7 +1126,7 @@ addEventListener('pointerdown', e => {
         }
       } else if (r.id === 'clear') {
         bodies = []; spikes = []; particles = []; holes = []; burps = [];
-        launchers = []; suns = [];
+        launchers = []; suns = []; remnants = [];
       } else tool = r.id;
       return;
     }
@@ -1409,6 +1585,8 @@ function draw() {
       ctx.textAlign = 'left';
     }
   }
+
+  drawRemnants();      // the collapsing cores, on their way to being holes
 
   // bomb launchers: a stout little mortar with a wobbling aim
   for (const L of launchers) {
