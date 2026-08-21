@@ -458,7 +458,19 @@ function sunRadius(s) {
 
 function addSun(x, y) {
   suns.push({ x, y, vx: 0, vy: 0, t: 0, rumbleT: 0, mass: 1 });
-  if (suns.length > 2) supernova(suns.shift());   // crowding a sun ENDS it
+  // Four stars is plenty. Placing a fifth doesn't blow one up any more —
+  // that made no sense once stars started exploding from being FED. Crowding
+  // isn't feeding. The oldest one just quietly burns out instead.
+  if (suns.length > 4) {
+    const old = suns.shift();
+    beep(140, 0.3, 'sine', 0.08);
+    floatTexts.push({ x: old.x, y: old.y - 40, t: 1.2, text: 'burnt out' });
+    for (let i = 0; i < 18; i++) {
+      const a = Math.random() * Math.PI * 2, sp = 40 + Math.random() * 140;
+      particles.push({ x: old.x, y: old.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+                       life: 0.5 + Math.random() * 0.4, color: '#ff9f43' });
+    }
+  }
 }
 function supernovaSound() {
   boomSound();
@@ -1563,6 +1575,29 @@ function drawBomb(b) {
 // the way. m/d works out to A/(d² + c), and with A/c = 0.92 that fraction
 // can never reach 1, however close in you get. Nothing crosses the middle,
 // so nothing folds.
+// How hard spacetime is being worked at a point — 0 out in the quiet, 1 right
+// on top of a hole. This is what the grid's brightness follows.
+//
+// It has to be its OWN sum, not the size of the displacement. When the pull
+// became a fraction-of-the-way-in, distant points started being dragged a
+// long way too — the whole sheet slides toward the hole — so displacement
+// stopped saying anything about strain and every line came out equally bright.
+// This uses the same fraction the pull uses, which does fall away properly.
+function warpStrain(x, y) {
+  let s = 0;
+  for (const h of holes) {
+    const S = h.size || 1;
+    const dx = x - h.x, dy = y - h.y;
+    s += (55200 * S) / (dx * dx + dy * dy + 60000 * S);
+  }
+  for (const sn of suns) {
+    const m = 1 + (sn.mass === undefined ? 1 : sn.mass);
+    const dx = x - sn.x, dy = y - sn.y;
+    s += 0.6 * (9000 * m) / (dx * dx + dy * dy + 15000 * m);
+  }
+  return Math.min(1, s / 0.92);
+}
+
 function warpOffset(x, y) {
   let px = x, py = y;
   for (const h of holes) {
@@ -1615,10 +1650,25 @@ function drawWarpedGrid() {
   // you've pulled right back and the wiggles would be sub-pixel anyway.
   const seg = bend ? Math.max(5, Math.min(step, 9 / cam.zoom)) : step;
   const vw = canvas.width / cam.zoom, vh = canvas.height / cam.zoom;
-  const x0 = Math.max(0, Math.floor((cam.x - 60) / step) * step);
-  const x1 = Math.min(WORLD_W, cam.x + vw + 60);
-  const y0 = Math.max(0, Math.floor((cam.y - 60) / step) * step);
-  const y1 = Math.min(WORLD_H, cam.y + vh + 60);
+  // Every point gets dragged INWARD toward the holes, which means the line
+  // that started at the edge of the screen ends up somewhere short of it,
+  // leaving a bare margin all the way round. So start from further out than
+  // we can see — far enough that whatever gets dragged in still covers the
+  // edge. How much further? The most any hole can ever drag a point, which
+  // for A·d/(d²+c) peaks at A/(2√c). Add them up and you have the answer.
+  let margin = 80;
+  for (const h of holes) {
+    const S = h.size || 1;
+    margin += (55200 * S) / (2 * Math.sqrt(60000 * S));
+  }
+  for (const s of suns) {
+    const m = 1 + (s.mass === undefined ? 1 : s.mass);
+    margin += (9000 * m) / (2 * Math.sqrt(15000 * m));
+  }
+  const x0 = Math.max(0, Math.floor((cam.x - margin) / step) * step);
+  const x1 = Math.min(WORLD_W, cam.x + vw + margin);
+  const y0 = Math.max(0, Math.floor((cam.y - margin) / step) * step);
+  const y1 = Math.min(WORLD_H, cam.y + vh + margin);
 
   // A flat lab is one cheap path and we're done.
   if (!bend) {
@@ -1667,7 +1717,7 @@ function drawWarpedGrid() {
     if (dim <= 0.02) return;
     // smoothstep: eases in and out instead of ramping dead straight, which is
     // what stops you seeing where one level becomes the next
-    const raw = Math.min(1, Math.max(aw, bw) / 85) * dim;
+    const raw = Math.max(aw, bw) * dim;
     const eased = raw * raw * (3 - 2 * raw);
     const k = Math.min(LEVELS - 1, Math.floor(eased * LEVELS));
     paths[k].moveTo(ax, ay);
@@ -1680,7 +1730,7 @@ function drawWarpedGrid() {
       const gx = vertical ? fixed : t, gy = vertical ? t : fixed;
       const [ox, oy] = warpOffset(gx, gy);
       const x = gx + ox, y = gy + oy;
-      const w = Math.hypot(ox, oy);
+      const w = warpStrain(gx, gy);
       const d = escaping(x, y);
       if (!first) addSeg(px, py, pw, pd, x, y, w, d);
       px = x; py = y; pw = w; pd = d; first = false;
