@@ -234,6 +234,14 @@ a.arcade-pill.arcade-float {
       <span style="font-size:12px;color:#9a8fb0">(pick up to 6)</span></h2>
     <div class="chiprow" id="mobChips"></div>
     <button class="bigbtn" id="mobsBtn">🐾 MOBS - every creature in the game</button>
+    <div class="hint" style="margin-top:14px">how many of each?</div>
+    <div class="grid" id="countRow">
+      <div class="pick" data-count="1">1 EACH</div>
+      <div class="pick" data-count="3">3 EACH</div>
+      <div class="pick" data-count="6">6 EACH</div>
+      <div class="pick" data-count="12">12 EACH</div>
+    </div>
+    <div class="hint" id="countNote" style="color:#ffd83d"></div>
   </div>
 
   <div class="slab">
@@ -322,6 +330,7 @@ let dimSize = localStorage.getItem('dim_size') || 'medium';
 let dimMix = JSON.parse(localStorage.getItem('dim_mix') || '[]');
 let dimAmount = localStorage.getItem('dim_amount') || 'some';
 let dimMobs = JSON.parse(localStorage.getItem('dim_mobs') || '["minecraft:allay"]');
+let dimCount = parseInt(localStorage.getItem('dim_count') || '1');
 let dimRules = JSON.parse(localStorage.getItem('dim_rules') || '[]');
 
 // Minecraft's world runs from y=-64 at the very bottom to y=320 at the
@@ -491,6 +500,7 @@ function save() {
   localStorage.setItem('dim_mix', JSON.stringify(dimMix));
   localStorage.setItem('dim_amount', dimAmount);
   localStorage.setItem('dim_mobs', JSON.stringify(dimMobs));
+  localStorage.setItem('dim_count', String(dimCount));
   localStorage.setItem('dim_rules', JSON.stringify(dimRules));
 }
 function groundInfo() { return GROUNDS.find(g => g.id === dimGround) || GROUNDS[0]; }
@@ -551,6 +561,40 @@ function makePatches() {
     const lump = rand() < 0.34 && (Math.abs(x) > 3 || Math.abs(z) > 3);
     out.push({ block, x, z, w, d, lump });
   }
+  return out;
+}
+
+// =====================================================================
+// WHERE EVERYBODY STANDS.
+//
+// Summoning ten creatures all at the exact same spot gives you a
+// squashed pile of confused animals shoving each other apart. So we
+// scatter them - the same seeded dice we used for the ground, so the
+// picture in step 7 shows you exactly who is waiting where.
+//
+// Nobody gets placed right on the landing spot either. Arriving inside
+// a Warden would be a short visit.
+// =====================================================================
+function makeSpawns() {
+  if (!dimMobs.length) return [];
+  const r = radius();
+  const rand = seededRandom('mobs|' + dimName + '|' + dimMobs.join(',') +
+                            '|' + dimCount + '|' + dimSize);
+  const reach = Math.max(4, r - 3);            // stay well inside the floor
+  const out = [];
+  dimMobs.forEach(id => {
+    for (let i = 0; i < dimCount; i++) {
+      let dx = 0, dz = 0;
+      // keep rolling until they are at least 3 blocks away from you
+      for (let tries = 0; tries < 8; tries++) {
+        dx = Math.round((rand() * 2 - 1) * reach);
+        dz = Math.round((rand() * 2 - 1) * reach);
+        if (Math.abs(dx) >= 3 || Math.abs(dz) >= 3) break;
+      }
+      if (Math.abs(dx) < 3 && Math.abs(dz) < 3) dx = 4;   // last resort
+      out.push({ id, dx, dz });
+    }
+  });
   return out;
 }
 
@@ -631,13 +675,12 @@ function makeFunction(slug, version) {
   }
   L.push('# drop a way home right beside them');
   L.push('execute as @a[tag=going_' + slug + '] at @s run setblock ~2 ~-1 ~ ' + portal);
-  if (dimMobs.length) {
-    L.push('# the locals');
-    dimMobs.forEach((m, i) => {
-      const dx = [4, -4, 6, -6, 3, -3][i % 6];
-      const dz = [4, 4, -5, -5, 7, -7][i % 6];
-      L.push('execute as @a[tag=going_' + slug + '] at @s run summon ' + m +
-             ' ~' + dx + ' ~1 ~' + dz);
+  const spawns = makeSpawns();
+  if (spawns.length) {
+    L.push('# the locals - ' + dimCount + ' of each, scattered about');
+    spawns.forEach(sp => {
+      L.push('execute as @a[tag=going_' + slug + '] at @s run summon ' + sp.id +
+             ' ~' + sp.dx + ' ~1 ~' + sp.dz);
     });
   }
   L.push('# wrap the sky in your colour');
@@ -925,6 +968,10 @@ function buildPickers() {
   });
   document.querySelectorAll('#sizeRow .pick').forEach(d =>
     d.addEventListener('pointerdown', () => { dimSize = d.dataset.size; save(); refresh(); }));
+  document.querySelectorAll('#countRow .pick').forEach(d =>
+    d.addEventListener('pointerdown', () => {
+      dimCount = parseInt(d.dataset.count); save(); refresh();
+    }));
   document.querySelectorAll('#amountRow .pick').forEach(d =>
     d.addEventListener('pointerdown', () => { dimAmount = d.dataset.amount; save(); refresh(); }));
   SKIES.forEach(s => {
@@ -1079,12 +1126,25 @@ function drawPreview() {
   x.fillRect(W * 0.1 + 13, gy - 29, 14, 5);
   x.fillRect(W * 0.1 + 8, gy - 19, 24, 5);
   x.fillRect(W * 0.1 + 15, gy - 9, 10, 4);
-  x.font = '30px system-ui';
+  // everyone who is waiting for you, standing where they will really be
   x.textAlign = 'center';
-  dimMobs.slice(0, MAX_MOBS).forEach((id, i) => {
-    const m = mobInfo(id);
-    if (m) x.fillText(m.em, W * 0.33 + i * 76, gy - 6);
+  const spawns = makeSpawns();
+  const shown = spawns.slice(0, 40);
+  shown.forEach(sp => {
+    const m = mobInfo(sp.id);
+    if (!m) return;
+    const px = (sp.dx + radius()) * cell;
+    // creatures further back are drawn a bit smaller and higher up
+    const back = (sp.dz + radius()) / acrossBlocks();
+    const size = 16 + (1 - back) * 16;
+    x.font = size + 'px system-ui';
+    x.fillText(m.em, px, gy - 4 - back * (H * 0.13));
   });
+  if (spawns.length > shown.length) {
+    x.font = 'bold 13px monospace';
+    x.fillStyle = 'rgba(255,255,255,0.75)';
+    x.fillText('...and ' + (spawns.length - shown.length) + ' more', W / 2, H - 12);
+  }
   x.font = 'bold 26px monospace';
   x.fillStyle = 'rgba(255,255,255,0.92)';
   x.fillText(dimName.toUpperCase(), W / 2, 44);
@@ -1101,6 +1161,13 @@ function refresh() {
   document.querySelectorAll('#skyRow .pick').forEach(d =>
     d.classList.toggle('on', d.dataset.sky === dimSky));
   renderChips();
+  document.querySelectorAll('#countRow .pick').forEach(d =>
+    d.classList.toggle('on', parseInt(d.dataset.count) === dimCount));
+  const total = dimMobs.length * dimCount;
+  $('countNote').textContent = !dimMobs.length
+    ? 'pick some creatures first!'
+    : total + ' creatures in total' +
+      (total >= 48 ? ' - that is a LOT. Your world is going to be very busy.' : '');
   document.querySelectorAll('#ruleRow .pick').forEach(d =>
     d.classList.toggle('on', dimRules.includes(d.dataset.rule)));
   document.querySelectorAll('#whereRow .pick').forEach(d =>
