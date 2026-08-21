@@ -88,6 +88,52 @@
   ol.steps li { margin-bottom: 6px; }
   details { margin-top: 14px; }
   summary { cursor: pointer; font-family: monospace; color: #4aedd9; font-weight: bold; }
+  /* the MOBS pop-up */
+  button.bigbtn {
+    font-family: monospace; font-weight: bold; font-size: 15px;
+    padding: 12px 18px; border-radius: 6px; cursor: pointer;
+    border: 3px solid #120d1e; background: #3a2a5a; color: #e8d8ff;
+    box-shadow: 0 3px 0 #120d1e; -webkit-tap-highlight-color: transparent;
+  }
+  button.bigbtn:active { transform: translateY(3px); box-shadow: none; }
+  #mobModal {
+    position: fixed; inset: 0; z-index: 100;
+    background: rgba(10, 7, 18, 0.96);
+    display: none; flex-direction: column; padding: 14px;
+    padding-top: calc(56px + env(safe-area-inset-top, 0px));
+  }
+  #mobModal.open { display: flex; }
+  #mobModal .mhead {
+    display: flex; gap: 10px; align-items: center;
+    width: 100%; max-width: 680px; margin: 0 auto 6px;
+  }
+  #mobSearch { flex: 1; font-size: 17px !important; }
+  #mobCount {
+    text-align: center; font-family: monospace; font-size: 12px;
+    color: #c98bff; margin: 0 auto 8px;
+  }
+  #mobList { flex: 1; overflow-y: auto; width: 100%; max-width: 680px; margin: 0 auto; }
+  .mobrow {
+    display: flex; align-items: center; gap: 10px;
+    font-family: monospace; font-weight: bold; font-size: 15px;
+    padding: 11px 12px; margin-bottom: 6px; cursor: pointer;
+    border: 2px solid #120d1e; border-radius: 6px;
+    background: #1a1428; color: #ddd;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .mobrow .em { font-size: 22px; }
+  .mobrow .kind { margin-left: auto; }
+  .mobrow.chosen { border-color: #ffd83d; background: #3a3320; color: #ffd83d; }
+  .chiprow { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-family: monospace; font-size: 13px; font-weight: bold;
+    padding: 8px 12px; border-radius: 999px;
+    background: #3a3320; border: 2px solid #ffd83d; color: #ffd83d;
+    cursor: pointer; -webkit-tap-highlight-color: transparent;
+  }
+  .chip .x { opacity: 0.7; }
+  .chip.none { background: #1a1428; border-color: #120d1e; color: #9a8fb0; cursor: default; }
   pre.peek {
     background: #0d0916; border-radius: 6px; padding: 12px;
     font-size: 12px; overflow-x: auto; color: #9ef09e; line-height: 1.45;
@@ -186,7 +232,8 @@ a.arcade-pill.arcade-float {
   <div class="slab">
     <h2><span class="stepnum">5</span>WHO LIVES THERE?
       <span style="font-size:12px;color:#9a8fb0">(pick up to 6)</span></h2>
-    <div class="grid" id="mobRow"></div>
+    <div class="chiprow" id="mobChips"></div>
+    <button class="bigbtn" id="mobsBtn">🐾 MOBS - every creature in the game</button>
   </div>
 
   <div class="slab">
@@ -229,6 +276,16 @@ a.arcade-pill.arcade-float {
     </details>
   </div>
 </main>
+
+<!-- every mob in Minecraft, ready to move in -->
+<div id="mobModal">
+  <div class="mhead">
+    <input type="text" id="mobSearch" placeholder="type a mob... warden? axolotl? dragon?" autocomplete="off">
+    <button class="bigbtn" id="mobClose">✖ DONE</button>
+  </div>
+  <div id="mobCount"></div>
+  <div id="mobList"></div>
+</div>
 
 <script>
 (function () {
@@ -317,26 +374,98 @@ const SKIES = [
   { c: '#f0f6f6', name: 'WHITE OUT' },{ c: '#100a1a', name: 'PITCH BLACK' },
 ];
 
+// =====================================================================
+// EVERY MOB YOU CAN SUMMON.
+// The id is the real name Minecraft knows it by - and a few of them are
+// surprising! A villager is "villager_v2", an evoker is
+// "evocation_illager", and a zombified piglin is STILL called
+// "zombie_pigman" from years ago. Games carry their history around.
+// =====================================================================
 const MOBS = [
-  { id: 'minecraft:chicken', em: '🐔', name: 'CHICKEN' },
-  { id: 'minecraft:pig', em: '🐷', name: 'PIG' },
-  { id: 'minecraft:cow', em: '🐮', name: 'COW' },
-  { id: 'minecraft:sheep', em: '🐑', name: 'SHEEP' },
-  { id: 'minecraft:wolf', em: '🐺', name: 'WOLF' },
-  { id: 'minecraft:cat', em: '🐱', name: 'CAT' },
-  { id: 'minecraft:axolotl', em: '🩷', name: 'AXOLOTL' },
-  { id: 'minecraft:allay', em: '🧚', name: 'ALLAY' },
-  { id: 'minecraft:bee', em: '🐝', name: 'BEE' },
-  { id: 'minecraft:fox', em: '🦊', name: 'FOX' },
-  { id: 'minecraft:panda', em: '🐼', name: 'PANDA' },
-  { id: 'minecraft:llama', em: '🦙', name: 'LLAMA' },
-  { id: 'minecraft:zombie', em: '🧟', name: 'ZOMBIE' },
-  { id: 'minecraft:skeleton', em: '💀', name: 'SKELETON' },
-  { id: 'minecraft:creeper', em: '💥', name: 'CREEPER' },
-  { id: 'minecraft:enderman', em: '🟪', name: 'ENDERMAN' },
-  { id: 'minecraft:blaze', em: '🔥', name: 'BLAZE' },
-  { id: 'minecraft:iron_golem', em: '🗿', name: 'IRON GOLEM' },
+  { id: 'minecraft:allay', em: '🧚', name: 'ALLAY', k: 'p' },
+  { id: 'minecraft:armadillo', em: '🦔', name: 'ARMADILLO', k: 'p' },
+  { id: 'minecraft:axolotl', em: '🩷', name: 'AXOLOTL', k: 'p' },
+  { id: 'minecraft:bat', em: '🦇', name: 'BAT', k: 'p' },
+  { id: 'minecraft:bee', em: '🐝', name: 'BEE', k: 'n' },
+  { id: 'minecraft:blaze', em: '🔥', name: 'BLAZE', k: 'h' },
+  { id: 'minecraft:bogged', em: '🍄', name: 'BOGGED', k: 'h' },
+  { id: 'minecraft:breeze', em: '💨', name: 'BREEZE', k: 'h' },
+  { id: 'minecraft:camel', em: '🐪', name: 'CAMEL', k: 'p' },
+  { id: 'minecraft:cat', em: '🐱', name: 'CAT', k: 'p' },
+  { id: 'minecraft:cave_spider', em: '🕷️', name: 'CAVE SPIDER', k: 'n' },
+  { id: 'minecraft:chicken', em: '🐔', name: 'CHICKEN', k: 'p' },
+  { id: 'minecraft:cod', em: '🐟', name: 'COD', k: 'p' },
+  { id: 'minecraft:cow', em: '🐮', name: 'COW', k: 'p' },
+  { id: 'minecraft:creaking', em: '🌲', name: 'CREAKING', k: 'h' },
+  { id: 'minecraft:creeper', em: '💥', name: 'CREEPER', k: 'h' },
+  { id: 'minecraft:dolphin', em: '🐬', name: 'DOLPHIN', k: 'n' },
+  { id: 'minecraft:donkey', em: '🫏', name: 'DONKEY', k: 'p' },
+  { id: 'minecraft:drowned', em: '🌊', name: 'DROWNED', k: 'h' },
+  { id: 'minecraft:elder_guardian', em: '🐡', name: 'ELDER GUARDIAN', k: 'h' },
+  { id: 'minecraft:ender_dragon', em: '🐉', name: 'ENDER DRAGON', k: 'b' },
+  { id: 'minecraft:enderman', em: '🟪', name: 'ENDERMAN', k: 'n' },
+  { id: 'minecraft:endermite', em: '🐜', name: 'ENDERMITE', k: 'h' },
+  { id: 'minecraft:evocation_illager', em: '🧙', name: 'EVOKER', k: 'h' },
+  { id: 'minecraft:fox', em: '🦊', name: 'FOX', k: 'p' },
+  { id: 'minecraft:frog', em: '🐸', name: 'FROG', k: 'p' },
+  { id: 'minecraft:ghast', em: '👻', name: 'GHAST', k: 'h' },
+  { id: 'minecraft:glow_squid', em: '🦑', name: 'GLOW SQUID', k: 'p' },
+  { id: 'minecraft:goat', em: '🐐', name: 'GOAT', k: 'n' },
+  { id: 'minecraft:guardian', em: '👁️', name: 'GUARDIAN', k: 'h' },
+  { id: 'minecraft:hoglin', em: '🐗', name: 'HOGLIN', k: 'h' },
+  { id: 'minecraft:horse', em: '🐴', name: 'HORSE', k: 'p' },
+  { id: 'minecraft:husk', em: '🏜️', name: 'HUSK', k: 'h' },
+  { id: 'minecraft:iron_golem', em: '🗿', name: 'IRON GOLEM', k: 'n' },
+  { id: 'minecraft:llama', em: '🦙', name: 'LLAMA', k: 'n' },
+  { id: 'minecraft:magma_cube', em: '🟥', name: 'MAGMA CUBE', k: 'h' },
+  { id: 'minecraft:mooshroom', em: '🍄', name: 'MOOSHROOM', k: 'p' },
+  { id: 'minecraft:mule', em: '🐴', name: 'MULE', k: 'p' },
+  { id: 'minecraft:ocelot', em: '🐆', name: 'OCELOT', k: 'p' },
+  { id: 'minecraft:panda', em: '🐼', name: 'PANDA', k: 'n' },
+  { id: 'minecraft:parrot', em: '🦜', name: 'PARROT', k: 'p' },
+  { id: 'minecraft:phantom', em: '🦇', name: 'PHANTOM', k: 'h' },
+  { id: 'minecraft:pig', em: '🐷', name: 'PIG', k: 'p' },
+  { id: 'minecraft:piglin', em: '🐗', name: 'PIGLIN', k: 'n' },
+  { id: 'minecraft:piglin_brute', em: '🪓', name: 'PIGLIN BRUTE', k: 'h' },
+  { id: 'minecraft:pillager', em: '🏹', name: 'PILLAGER', k: 'h' },
+  { id: 'minecraft:polar_bear', em: '🐻', name: 'POLAR BEAR', k: 'n' },
+  { id: 'minecraft:pufferfish', em: '🐡', name: 'PUFFERFISH', k: 'p' },
+  { id: 'minecraft:rabbit', em: '🐰', name: 'RABBIT', k: 'p' },
+  { id: 'minecraft:ravager', em: '🐃', name: 'RAVAGER', k: 'h' },
+  { id: 'minecraft:salmon', em: '🐠', name: 'SALMON', k: 'p' },
+  { id: 'minecraft:sheep', em: '🐑', name: 'SHEEP', k: 'p' },
+  { id: 'minecraft:shulker', em: '📦', name: 'SHULKER', k: 'h' },
+  { id: 'minecraft:silverfish', em: '🐛', name: 'SILVERFISH', k: 'h' },
+  { id: 'minecraft:skeleton', em: '💀', name: 'SKELETON', k: 'h' },
+  { id: 'minecraft:skeleton_horse', em: '🐴', name: 'SKELETON HORSE', k: 'p' },
+  { id: 'minecraft:slime', em: '🟩', name: 'SLIME', k: 'h' },
+  { id: 'minecraft:sniffer', em: '👃', name: 'SNIFFER', k: 'p' },
+  { id: 'minecraft:snow_golem', em: '⛄', name: 'SNOW GOLEM', k: 'p' },
+  { id: 'minecraft:spider', em: '🕸️', name: 'SPIDER', k: 'n' },
+  { id: 'minecraft:squid', em: '🦑', name: 'SQUID', k: 'p' },
+  { id: 'minecraft:stray', em: '❄️', name: 'STRAY', k: 'h' },
+  { id: 'minecraft:strider', em: '🦶', name: 'STRIDER', k: 'p' },
+  { id: 'minecraft:tadpole', em: '🐛', name: 'TADPOLE', k: 'p' },
+  { id: 'minecraft:trader_llama', em: '🦙', name: 'TRADER LLAMA', k: 'n' },
+  { id: 'minecraft:tropicalfish', em: '🐠', name: 'TROPICAL FISH', k: 'p' },
+  { id: 'minecraft:turtle', em: '🐢', name: 'TURTLE', k: 'p' },
+  { id: 'minecraft:vex', em: '👤', name: 'VEX', k: 'h' },
+  { id: 'minecraft:villager_v2', em: '🧑', name: 'VILLAGER', k: 'p' },
+  { id: 'minecraft:vindicator', em: '🪓', name: 'VINDICATOR', k: 'h' },
+  { id: 'minecraft:wandering_trader', em: '🎒', name: 'WANDERING TRADER', k: 'p' },
+  { id: 'minecraft:warden', em: '🖤', name: 'WARDEN', k: 'h' },
+  { id: 'minecraft:witch', em: '🧪', name: 'WITCH', k: 'h' },
+  { id: 'minecraft:wither', em: '💀', name: 'WITHER', k: 'b' },
+  { id: 'minecraft:wither_skeleton', em: '🏴', name: 'WITHER SKELETON', k: 'h' },
+  { id: 'minecraft:wolf', em: '🐺', name: 'WOLF', k: 'n' },
+  { id: 'minecraft:zoglin', em: '🐗', name: 'ZOGLIN', k: 'h' },
+  { id: 'minecraft:zombie', em: '🧟', name: 'ZOMBIE', k: 'h' },
+  { id: 'minecraft:zombie_pigman', em: '🐽', name: 'ZOMBIFIED PIGLIN', k: 'n' },
+  { id: 'minecraft:zombie_villager_v2', em: '🧟', name: 'ZOMBIE VILLAGER', k: 'h' },
 ];
+MOBS.sort((a, b) => a.name.localeCompare(b.name));
+const KIND_ICON = { p: '😊', n: '😐', h: '😠', b: '👑' };
+function mobInfo(id) { return MOBS.find(m => m.id === id); }
 
 const RULES = [
   { id: 'night_vision',    em: '🌑', name: 'ALWAYS SEE', amp: 0, why: 'you can see in the dark' },
@@ -806,20 +935,7 @@ function buildPickers() {
     d.addEventListener('pointerdown', () => { dimSky = s.c; save(); refresh(); });
     $('skyRow').appendChild(d);
   });
-  MOBS.forEach(m => {
-    const d = document.createElement('div');
-    d.className = 'pick';
-    d.dataset.mob = m.id;
-    d.innerHTML = '<span class="em">' + m.em + '</span>' + m.name;
-    d.addEventListener('pointerdown', () => {
-      const i = dimMobs.indexOf(m.id);
-      if (i >= 0) dimMobs.splice(i, 1);
-      else if (dimMobs.length < 6) dimMobs.push(m.id);
-      else $('forgedMsg').textContent = 'six kinds of creature is plenty!';
-      save(); refresh();
-    });
-    $('mobRow').appendChild(d);
-  });
+  // (the mobs live in their own pop-up now - see openMobs below)
   RULES.forEach(r => {
     const d = document.createElement('div');
     d.className = 'pick';
@@ -834,6 +950,89 @@ function buildPickers() {
   });
   document.querySelectorAll('#whereRow .pick').forEach(d =>
     d.addEventListener('pointerdown', () => { dimWhere = d.dataset.where; save(); refresh(); }));
+}
+
+// ---------------------------------------------------------------------
+// THE MOB LIST. One button, every creature in the game, and a search box
+// so you do not have to scroll past eighty of them to find the one you
+// want. Tap to move a creature in, tap again to evict it.
+// ---------------------------------------------------------------------
+const MAX_MOBS = 6;
+function toggleMob(id) {
+  const i = dimMobs.indexOf(id);
+  if (i >= 0) {
+    dimMobs.splice(i, 1);
+  } else if (dimMobs.length < MAX_MOBS) {
+    dimMobs.push(id);
+  } else {
+    $('mobCount').textContent = 'that is ' + MAX_MOBS + ' already - tap one to evict it first!';
+    return;
+  }
+  save();
+  renderMobList($('mobSearch').value);
+  refresh();
+}
+function renderMobList(filter) {
+  const f = (filter || '').trim().toLowerCase();
+  const shown = MOBS.filter(m => m.name.toLowerCase().includes(f));
+  const list = $('mobList');
+  list.innerHTML = '';
+  $('mobCount').textContent = dimMobs.length + ' of ' + MAX_MOBS + ' chosen' +
+    (f ? '  -  ' + shown.length + ' match "' + f + '"' : '  -  ' + MOBS.length + ' creatures');
+  if (!shown.length) {
+    const empty = document.createElement('div');
+    empty.className = 'mobrow';
+    empty.style.cursor = 'default';
+    empty.textContent = '🤷 no creature called that';
+    list.appendChild(empty);
+    return;
+  }
+  shown.forEach(m => {
+    const row = document.createElement('div');
+    row.className = 'mobrow' + (dimMobs.includes(m.id) ? ' chosen' : '');
+    row.innerHTML = '<span class="em">' + m.em + '</span>' + m.name +
+                    '<span class="kind">' + (dimMobs.includes(m.id) ? '✓ ' : '') +
+                    (KIND_ICON[m.k] || '') + '</span>';
+    row.addEventListener('pointerdown', () => toggleMob(m.id));
+    list.appendChild(row);
+  });
+}
+function openMobs() {
+  $('mobModal').classList.add('open');
+  $('mobSearch').value = '';
+  renderMobList('');
+  $('mobSearch').focus();
+}
+function closeMobs() { $('mobModal').classList.remove('open'); }
+$('mobsBtn').addEventListener('click', openMobs);
+$('mobClose').addEventListener('click', closeMobs);
+$('mobSearch').addEventListener('input', e => renderMobList(e.target.value));
+addEventListener('keydown', e => { if (e.key === 'Escape') closeMobs(); });
+
+// the creatures you have chosen, shown as little chips you can tap to remove
+function renderChips() {
+  const box = $('mobChips');
+  box.innerHTML = '';
+  if (!dimMobs.length) {
+    const d = document.createElement('div');
+    d.className = 'chip none';
+    d.textContent = 'nobody lives here yet - tap MOBS below';
+    box.appendChild(d);
+    return;
+  }
+  dimMobs.forEach(id => {
+    const m = mobInfo(id);
+    if (!m) return;
+    const d = document.createElement('div');
+    d.className = 'chip';
+    d.innerHTML = '<span>' + m.em + '</span>' + m.name + '<span class="x">✖</span>';
+    d.title = 'tap to evict';
+    d.addEventListener('pointerdown', () => {
+      dimMobs.splice(dimMobs.indexOf(id), 1);
+      save(); refresh();
+    });
+    box.appendChild(d);
+  });
 }
 
 // a little window into your world, so you can see it before you build it
@@ -882,8 +1081,8 @@ function drawPreview() {
   x.fillRect(W * 0.1 + 15, gy - 9, 10, 4);
   x.font = '30px system-ui';
   x.textAlign = 'center';
-  dimMobs.slice(0, 6).forEach((id, i) => {
-    const m = MOBS.find(mm => mm.id === id);
+  dimMobs.slice(0, MAX_MOBS).forEach((id, i) => {
+    const m = mobInfo(id);
     if (m) x.fillText(m.em, W * 0.33 + i * 76, gy - 6);
   });
   x.font = 'bold 26px monospace';
@@ -901,8 +1100,7 @@ function refresh() {
     d.classList.toggle('on', d.dataset.ground === dimGround));
   document.querySelectorAll('#skyRow .pick').forEach(d =>
     d.classList.toggle('on', d.dataset.sky === dimSky));
-  document.querySelectorAll('#mobRow .pick').forEach(d =>
-    d.classList.toggle('on', dimMobs.includes(d.dataset.mob)));
+  renderChips();
   document.querySelectorAll('#ruleRow .pick').forEach(d =>
     d.classList.toggle('on', dimRules.includes(d.dataset.rule)));
   document.querySelectorAll('#whereRow .pick').forEach(d =>
