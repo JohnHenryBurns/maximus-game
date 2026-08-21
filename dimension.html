@@ -49,7 +49,7 @@
     text-align: center; border-radius: 4px; margin-right: 8px;
   }
   .hint { color: #9a8fb0; font-size: 12.5px; margin: 8px 0 6px; }
-  input[type=text] {
+  input[type=text], input[type=number] {
     width: 100%; font-family: monospace; font-size: 20px; font-weight: bold;
     padding: 10px; border-radius: 4px; border: 3px solid #120d1e;
     background: #1a1428; color: #ffd83d; outline: none;
@@ -88,6 +88,52 @@
   ol.steps li { margin-bottom: 6px; }
   details { margin-top: 14px; }
   summary { cursor: pointer; font-family: monospace; color: #4aedd9; font-weight: bold; }
+  /* the MOBS pop-up */
+  button.bigbtn {
+    font-family: monospace; font-weight: bold; font-size: 15px;
+    padding: 12px 18px; border-radius: 6px; cursor: pointer;
+    border: 3px solid #120d1e; background: #3a2a5a; color: #e8d8ff;
+    box-shadow: 0 3px 0 #120d1e; -webkit-tap-highlight-color: transparent;
+  }
+  button.bigbtn:active { transform: translateY(3px); box-shadow: none; }
+  #mobModal {
+    position: fixed; inset: 0; z-index: 100;
+    background: rgba(10, 7, 18, 0.96);
+    display: none; flex-direction: column; padding: 14px;
+    padding-top: calc(56px + env(safe-area-inset-top, 0px));
+  }
+  #mobModal.open { display: flex; }
+  #mobModal .mhead {
+    display: flex; gap: 10px; align-items: center;
+    width: 100%; max-width: 680px; margin: 0 auto 6px;
+  }
+  #mobSearch { flex: 1; font-size: 17px !important; }
+  #mobCount {
+    text-align: center; font-family: monospace; font-size: 12px;
+    color: #c98bff; margin: 0 auto 8px;
+  }
+  #mobList { flex: 1; overflow-y: auto; width: 100%; max-width: 680px; margin: 0 auto; }
+  .mobrow {
+    display: flex; align-items: center; gap: 10px;
+    font-family: monospace; font-weight: bold; font-size: 15px;
+    padding: 11px 12px; margin-bottom: 6px; cursor: pointer;
+    border: 2px solid #120d1e; border-radius: 6px;
+    background: #1a1428; color: #ddd;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .mobrow .em { font-size: 22px; }
+  .mobrow .kind { margin-left: auto; }
+  .mobrow.chosen { border-color: #ffd83d; background: #3a3320; color: #ffd83d; }
+  .chiprow { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-family: monospace; font-size: 13px; font-weight: bold;
+    padding: 8px 12px; border-radius: 999px;
+    background: #3a3320; border: 2px solid #ffd83d; color: #ffd83d;
+    cursor: pointer; -webkit-tap-highlight-color: transparent;
+  }
+  .chip .x { opacity: 0.7; }
+  .chip.none { background: #1a1428; border-color: #120d1e; color: #9a8fb0; cursor: default; }
   pre.peek {
     background: #0d0916; border-radius: 6px; padding: 12px;
     font-size: 12px; overflow-x: auto; color: #9ef09e; line-height: 1.45;
@@ -153,11 +199,31 @@ a.arcade-pill.arcade-float {
       <div class="pick big" data-where="deep"><span class="em">🕳️</span>DEEP UNDERGROUND</div>
     </div>
     <div class="hint" id="whereNote"></div>
+    <div class="hint" style="margin-top:14px">and how big is it?</div>
+    <div class="grid" id="sizeRow">
+      <div class="pick" data-size="small">🪨 SMALL</div>
+      <div class="pick" data-size="medium">🏝️ MEDIUM</div>
+      <div class="pick" data-size="big">🗺️ BIG</div>
+      <div class="pick" data-size="huge">🌍 HUGE</div>
+    </div>
+    <div class="hint" style="margin-top:12px">...or type exactly how many blocks across:</div>
+    <input type="number" id="acrossBox" min="7" max="129" step="2" inputmode="numeric">
+    <div class="hint" id="sizeNote" style="color:#ffd83d"></div>
   </div>
 
   <div class="slab">
     <h2><span class="stepnum">3</span>WHAT IS THE GROUND MADE OF?</h2>
+    <div class="hint">MOSTLY this:</div>
     <div class="grid" id="groundRow"></div>
+    <div class="hint" style="margin-top:14px">...with these MIXED IN (pick up to 3):</div>
+    <div class="grid" id="mixRow"></div>
+    <div class="hint" style="margin-top:14px">how much of it is mixed in?</div>
+    <div class="grid" id="amountRow">
+      <div class="pick" data-amount="little">A LITTLE</div>
+      <div class="pick" data-amount="some">SOME</div>
+      <div class="pick" data-amount="loads">LOADS</div>
+    </div>
+    <div class="hint" id="recipeNote" style="margin-top:12px; color:#ffd83d"></div>
   </div>
 
   <div class="slab">
@@ -168,7 +234,16 @@ a.arcade-pill.arcade-float {
   <div class="slab">
     <h2><span class="stepnum">5</span>WHO LIVES THERE?
       <span style="font-size:12px;color:#9a8fb0">(pick up to 6)</span></h2>
-    <div class="grid" id="mobRow"></div>
+    <div class="chiprow" id="mobChips"></div>
+    <button class="bigbtn" id="mobsBtn">🐾 MOBS - every creature in the game</button>
+    <div class="hint" style="margin-top:14px">how many of each?</div>
+    <div class="grid" id="countRow">
+      <div class="pick" data-count="1">1 EACH</div>
+      <div class="pick" data-count="3">3 EACH</div>
+      <div class="pick" data-count="6">6 EACH</div>
+      <div class="pick" data-count="12">12 EACH</div>
+    </div>
+    <div class="hint" id="countNote" style="color:#ffd83d"></div>
   </div>
 
   <div class="slab">
@@ -185,15 +260,21 @@ a.arcade-pill.arcade-float {
 
   <div class="slab">
     <h2><span class="stepnum">8</span>FORGE IT</h2>
-    <button id="forgeBtn">🌌 FORGE MY DIMENSION</button>
+    <div class="hint">what do you stand on to travel?</div>
+    <div class="grid" id="travelRow"></div>
+    <div class="hint" id="travelNote"></div>
+    <button id="forgeBtn" style="margin-top:12px">🌌 FORGE MY DIMENSION</button>
     <div id="forgedMsg"></div>
     <ol class="steps">
       <li>Tap the button — a file like <b>the_fart_nebula.mcaddon</b> downloads.</li>
       <li>Open it from <b>Downloads</b> — Minecraft imports it.</li>
       <li>Make or edit a world, then switch ON <b>Behavior Packs</b> AND <b>Resource Packs</b>.</li>
-      <li>Join the world. <b>8 portal blocks land straight in your inventory.</b></li>
+      <li>Join the world. <b>8 <span id="stepBlockName">travel blocks</span> land straight
+          in your inventory</b>, and a message says your world is ready.</li>
       <li>Place one on the ground and <b>stand on top of it</b>. Off you go.</li>
-      <li>Your way home is the portal block sitting <b>right next to where you land</b>.</li>
+      <li>Your way home is the same kind of block, sitting <b>right where you land</b>.</li>
+      <li><b>Nothing happening?</b> Type this in chat and it will build your world right
+          where you stand: <code style="color:#4aedd9" id="goCmd">/function my_world_go</code></li>
     </ol>
     <details>
       <summary>🔍 peek at the program that runs your entire world</summary>
@@ -211,6 +292,16 @@ a.arcade-pill.arcade-float {
     </details>
   </div>
 </main>
+
+<!-- every mob in Minecraft, ready to move in -->
+<div id="mobModal">
+  <div class="mhead">
+    <input type="text" id="mobSearch" placeholder="type a mob... warden? axolotl? dragon?" autocomplete="off">
+    <button class="bigbtn" id="mobClose">✖ DONE</button>
+  </div>
+  <div id="mobCount"></div>
+  <div id="mobList"></div>
+</div>
 
 <script>
 (function () {
@@ -243,7 +334,11 @@ let dimName = localStorage.getItem('dim_name') || 'The Fart Nebula';
 let dimWhere = localStorage.getItem('dim_where') || 'sky';
 let dimGround = localStorage.getItem('dim_ground') || 'minecraft:end_stone';
 let dimSky = localStorage.getItem('dim_sky') || '#a24bff';
+
+let dimMix = JSON.parse(localStorage.getItem('dim_mix') || '[]');
+let dimAmount = localStorage.getItem('dim_amount') || 'some';
 let dimMobs = JSON.parse(localStorage.getItem('dim_mobs') || '["minecraft:allay"]');
+let dimCount = parseInt(localStorage.getItem('dim_count') || '1');
 let dimRules = JSON.parse(localStorage.getItem('dim_rules') || '[]');
 
 // Minecraft's world runs from y=-64 at the very bottom to y=320 at the
@@ -254,6 +349,72 @@ const WHERE = {
   deep: { y: -45, home: 140, label: 'DEEP UNDERGROUND',
           note: 'your world is carved out at y=-45, below the deepest caves. Coming home lifts you back up over the very same spot.' },
 };
+
+// How far out the world stretches from the middle. A radius of 15 means
+// 15 blocks each way, so the world is 31 across (15 + you + 15).
+const SIZES = {
+  small:  { r: 10, label: 'SMALL',  note: 'a little island - you can see the whole thing at once' },
+  medium: { r: 15, label: 'MEDIUM', note: 'a proper clearing, big enough to build something on' },
+  big:    { r: 25, label: 'BIG',    note: 'you have to walk to get to the edge' },
+  huge:   { r: 40, label: 'HUGE',   note: 'you cannot see the far side. That is 6,561 blocks of floor' },
+};
+// How far the world reaches from the middle. THIS is the real setting -
+// the four buttons just type numbers into it for you.
+const MIN_R = 3;
+// =====================================================================
+// WHY THERE IS A LIMIT.
+//
+// Remember the chunk bug? We build your world from where you are
+// standing, because those chunks are loaded. But Minecraft only keeps
+// chunks loaded within a few of them of a player - usually about 64
+// blocks. Ask for a world wider than that and the far edges land in
+// sleeping chunks and simply never get built.
+//
+// So instead of letting you type 500 and handing you a broken floor,
+// the box stops at 129 across. A real limit, honestly explained, beats
+// a promise that quietly fails.
+// =====================================================================
+const MAX_R = 64;
+let dimR = parseInt(localStorage.getItem('dim_r') || '0');
+// =====================================================================
+// WHAT DO YOU STAND ON TO TRAVEL?
+//
+// A custom glowing portal block looks better. But custom blocks are the
+// fussiest thing in the whole addon: get one ingredient wrong and
+// Minecraft throws the block away without a word, and then nothing works
+// at all. We have been bitten by that twice.
+//
+// So there is a second option that needs NO custom block: stand on an
+// ordinary Minecraft block instead. The behaviour pack then contains
+// nothing but commands, which is about as reliable as an addon gets.
+// =====================================================================
+const TRAVEL_BLOCKS = [
+  { id: 'minecraft:emerald_block', name: 'EMERALD BLOCK', c: '#3fd66b' },
+  { id: 'minecraft:gold_block', name: 'GOLD BLOCK', c: '#f2c236' },
+  { id: 'minecraft:diamond_block', name: 'DIAMOND BLOCK', c: '#5adfd7' },
+  { id: 'minecraft:lodestone', name: 'LODESTONE', c: '#8a8a8a' },
+  { id: 'minecraft:sea_lantern', name: 'SEA LANTERN', c: '#b8d8c8' },
+  { id: 'minecraft:crying_obsidian', name: 'CRYING OBSIDIAN', c: '#3a1a5a' },
+];
+// '' means "use my own custom portal block"
+let dimTravel = localStorage.getItem('dim_travel');
+if (dimTravel === null) dimTravel = 'minecraft:emerald_block';
+function usingCustomPortal() { return dimTravel === ''; }
+function travelBlock(slug) {
+  return usingCustomPortal() ? 'max:' + slug + '_portal' : dimTravel;
+}
+function travelName() {
+  const b = TRAVEL_BLOCKS.find(x => x.id === dimTravel);
+  return b ? b.name : 'PORTAL BLOCK';
+}
+function radius() { return Math.max(MIN_R, Math.min(MAX_R, dimR || 15)); }
+function acrossBlocks() { return radius() * 2 + 1; }
+function floorBlocks() { return acrossBlocks() * acrossBlocks(); }
+// which preset button (if any) matches the number you are on
+function matchingPreset() {
+  const r = radius();
+  return Object.keys(SIZES).find(k => SIZES[k].r === r) || null;
+}
 
 const GROUNDS = [
   { id: 'minecraft:grass_block',    name: 'GRASS',      c: '#5fa63f' },
@@ -285,26 +446,98 @@ const SKIES = [
   { c: '#f0f6f6', name: 'WHITE OUT' },{ c: '#100a1a', name: 'PITCH BLACK' },
 ];
 
+// =====================================================================
+// EVERY MOB YOU CAN SUMMON.
+// The id is the real name Minecraft knows it by - and a few of them are
+// surprising! A villager is "villager_v2", an evoker is
+// "evocation_illager", and a zombified piglin is STILL called
+// "zombie_pigman" from years ago. Games carry their history around.
+// =====================================================================
 const MOBS = [
-  { id: 'minecraft:chicken', em: '🐔', name: 'CHICKEN' },
-  { id: 'minecraft:pig', em: '🐷', name: 'PIG' },
-  { id: 'minecraft:cow', em: '🐮', name: 'COW' },
-  { id: 'minecraft:sheep', em: '🐑', name: 'SHEEP' },
-  { id: 'minecraft:wolf', em: '🐺', name: 'WOLF' },
-  { id: 'minecraft:cat', em: '🐱', name: 'CAT' },
-  { id: 'minecraft:axolotl', em: '🩷', name: 'AXOLOTL' },
-  { id: 'minecraft:allay', em: '🧚', name: 'ALLAY' },
-  { id: 'minecraft:bee', em: '🐝', name: 'BEE' },
-  { id: 'minecraft:fox', em: '🦊', name: 'FOX' },
-  { id: 'minecraft:panda', em: '🐼', name: 'PANDA' },
-  { id: 'minecraft:llama', em: '🦙', name: 'LLAMA' },
-  { id: 'minecraft:zombie', em: '🧟', name: 'ZOMBIE' },
-  { id: 'minecraft:skeleton', em: '💀', name: 'SKELETON' },
-  { id: 'minecraft:creeper', em: '💥', name: 'CREEPER' },
-  { id: 'minecraft:enderman', em: '🟪', name: 'ENDERMAN' },
-  { id: 'minecraft:blaze', em: '🔥', name: 'BLAZE' },
-  { id: 'minecraft:iron_golem', em: '🗿', name: 'IRON GOLEM' },
+  { id: 'minecraft:allay', em: '🧚', name: 'ALLAY', k: 'p' },
+  { id: 'minecraft:armadillo', em: '🦔', name: 'ARMADILLO', k: 'p' },
+  { id: 'minecraft:axolotl', em: '🩷', name: 'AXOLOTL', k: 'p' },
+  { id: 'minecraft:bat', em: '🦇', name: 'BAT', k: 'p' },
+  { id: 'minecraft:bee', em: '🐝', name: 'BEE', k: 'n' },
+  { id: 'minecraft:blaze', em: '🔥', name: 'BLAZE', k: 'h' },
+  { id: 'minecraft:bogged', em: '🍄', name: 'BOGGED', k: 'h' },
+  { id: 'minecraft:breeze', em: '💨', name: 'BREEZE', k: 'h' },
+  { id: 'minecraft:camel', em: '🐪', name: 'CAMEL', k: 'p' },
+  { id: 'minecraft:cat', em: '🐱', name: 'CAT', k: 'p' },
+  { id: 'minecraft:cave_spider', em: '🕷️', name: 'CAVE SPIDER', k: 'n' },
+  { id: 'minecraft:chicken', em: '🐔', name: 'CHICKEN', k: 'p' },
+  { id: 'minecraft:cod', em: '🐟', name: 'COD', k: 'p' },
+  { id: 'minecraft:cow', em: '🐮', name: 'COW', k: 'p' },
+  { id: 'minecraft:creaking', em: '🌲', name: 'CREAKING', k: 'h' },
+  { id: 'minecraft:creeper', em: '💥', name: 'CREEPER', k: 'h' },
+  { id: 'minecraft:dolphin', em: '🐬', name: 'DOLPHIN', k: 'n' },
+  { id: 'minecraft:donkey', em: '🫏', name: 'DONKEY', k: 'p' },
+  { id: 'minecraft:drowned', em: '🌊', name: 'DROWNED', k: 'h' },
+  { id: 'minecraft:elder_guardian', em: '🐡', name: 'ELDER GUARDIAN', k: 'h' },
+  { id: 'minecraft:ender_dragon', em: '🐉', name: 'ENDER DRAGON', k: 'b' },
+  { id: 'minecraft:enderman', em: '🟪', name: 'ENDERMAN', k: 'n' },
+  { id: 'minecraft:endermite', em: '🐜', name: 'ENDERMITE', k: 'h' },
+  { id: 'minecraft:evocation_illager', em: '🧙', name: 'EVOKER', k: 'h' },
+  { id: 'minecraft:fox', em: '🦊', name: 'FOX', k: 'p' },
+  { id: 'minecraft:frog', em: '🐸', name: 'FROG', k: 'p' },
+  { id: 'minecraft:ghast', em: '👻', name: 'GHAST', k: 'h' },
+  { id: 'minecraft:glow_squid', em: '🦑', name: 'GLOW SQUID', k: 'p' },
+  { id: 'minecraft:goat', em: '🐐', name: 'GOAT', k: 'n' },
+  { id: 'minecraft:guardian', em: '👁️', name: 'GUARDIAN', k: 'h' },
+  { id: 'minecraft:hoglin', em: '🐗', name: 'HOGLIN', k: 'h' },
+  { id: 'minecraft:horse', em: '🐴', name: 'HORSE', k: 'p' },
+  { id: 'minecraft:husk', em: '🏜️', name: 'HUSK', k: 'h' },
+  { id: 'minecraft:iron_golem', em: '🗿', name: 'IRON GOLEM', k: 'n' },
+  { id: 'minecraft:llama', em: '🦙', name: 'LLAMA', k: 'n' },
+  { id: 'minecraft:magma_cube', em: '🟥', name: 'MAGMA CUBE', k: 'h' },
+  { id: 'minecraft:mooshroom', em: '🍄', name: 'MOOSHROOM', k: 'p' },
+  { id: 'minecraft:mule', em: '🐴', name: 'MULE', k: 'p' },
+  { id: 'minecraft:ocelot', em: '🐆', name: 'OCELOT', k: 'p' },
+  { id: 'minecraft:panda', em: '🐼', name: 'PANDA', k: 'n' },
+  { id: 'minecraft:parrot', em: '🦜', name: 'PARROT', k: 'p' },
+  { id: 'minecraft:phantom', em: '🦇', name: 'PHANTOM', k: 'h' },
+  { id: 'minecraft:pig', em: '🐷', name: 'PIG', k: 'p' },
+  { id: 'minecraft:piglin', em: '🐗', name: 'PIGLIN', k: 'n' },
+  { id: 'minecraft:piglin_brute', em: '🪓', name: 'PIGLIN BRUTE', k: 'h' },
+  { id: 'minecraft:pillager', em: '🏹', name: 'PILLAGER', k: 'h' },
+  { id: 'minecraft:polar_bear', em: '🐻', name: 'POLAR BEAR', k: 'n' },
+  { id: 'minecraft:pufferfish', em: '🐡', name: 'PUFFERFISH', k: 'p' },
+  { id: 'minecraft:rabbit', em: '🐰', name: 'RABBIT', k: 'p' },
+  { id: 'minecraft:ravager', em: '🐃', name: 'RAVAGER', k: 'h' },
+  { id: 'minecraft:salmon', em: '🐠', name: 'SALMON', k: 'p' },
+  { id: 'minecraft:sheep', em: '🐑', name: 'SHEEP', k: 'p' },
+  { id: 'minecraft:shulker', em: '📦', name: 'SHULKER', k: 'h' },
+  { id: 'minecraft:silverfish', em: '🐛', name: 'SILVERFISH', k: 'h' },
+  { id: 'minecraft:skeleton', em: '💀', name: 'SKELETON', k: 'h' },
+  { id: 'minecraft:skeleton_horse', em: '🐴', name: 'SKELETON HORSE', k: 'p' },
+  { id: 'minecraft:slime', em: '🟩', name: 'SLIME', k: 'h' },
+  { id: 'minecraft:sniffer', em: '👃', name: 'SNIFFER', k: 'p' },
+  { id: 'minecraft:snow_golem', em: '⛄', name: 'SNOW GOLEM', k: 'p' },
+  { id: 'minecraft:spider', em: '🕸️', name: 'SPIDER', k: 'n' },
+  { id: 'minecraft:squid', em: '🦑', name: 'SQUID', k: 'p' },
+  { id: 'minecraft:stray', em: '❄️', name: 'STRAY', k: 'h' },
+  { id: 'minecraft:strider', em: '🦶', name: 'STRIDER', k: 'p' },
+  { id: 'minecraft:tadpole', em: '🐛', name: 'TADPOLE', k: 'p' },
+  { id: 'minecraft:trader_llama', em: '🦙', name: 'TRADER LLAMA', k: 'n' },
+  { id: 'minecraft:tropicalfish', em: '🐠', name: 'TROPICAL FISH', k: 'p' },
+  { id: 'minecraft:turtle', em: '🐢', name: 'TURTLE', k: 'p' },
+  { id: 'minecraft:vex', em: '👤', name: 'VEX', k: 'h' },
+  { id: 'minecraft:villager_v2', em: '🧑', name: 'VILLAGER', k: 'p' },
+  { id: 'minecraft:vindicator', em: '🪓', name: 'VINDICATOR', k: 'h' },
+  { id: 'minecraft:wandering_trader', em: '🎒', name: 'WANDERING TRADER', k: 'p' },
+  { id: 'minecraft:warden', em: '🖤', name: 'WARDEN', k: 'h' },
+  { id: 'minecraft:witch', em: '🧪', name: 'WITCH', k: 'h' },
+  { id: 'minecraft:wither', em: '💀', name: 'WITHER', k: 'b' },
+  { id: 'minecraft:wither_skeleton', em: '🏴', name: 'WITHER SKELETON', k: 'h' },
+  { id: 'minecraft:wolf', em: '🐺', name: 'WOLF', k: 'n' },
+  { id: 'minecraft:zoglin', em: '🐗', name: 'ZOGLIN', k: 'h' },
+  { id: 'minecraft:zombie', em: '🧟', name: 'ZOMBIE', k: 'h' },
+  { id: 'minecraft:zombie_pigman', em: '🐽', name: 'ZOMBIFIED PIGLIN', k: 'n' },
+  { id: 'minecraft:zombie_villager_v2', em: '🧟', name: 'ZOMBIE VILLAGER', k: 'h' },
 ];
+MOBS.sort((a, b) => a.name.localeCompare(b.name));
+const KIND_ICON = { p: '😊', n: '😐', h: '😠', b: '👑' };
+function mobInfo(id) { return MOBS.find(m => m.id === id); }
 
 const RULES = [
   { id: 'night_vision',    em: '🌑', name: 'ALWAYS SEE', amp: 0, why: 'you can see in the dark' },
@@ -326,10 +559,136 @@ function save() {
   localStorage.setItem('dim_where', dimWhere);
   localStorage.setItem('dim_ground', dimGround);
   localStorage.setItem('dim_sky', dimSky);
+  localStorage.setItem('dim_r', String(radius()));
+  localStorage.setItem('dim_travel', dimTravel);
+  localStorage.setItem('dim_mix', JSON.stringify(dimMix));
+  localStorage.setItem('dim_amount', dimAmount);
   localStorage.setItem('dim_mobs', JSON.stringify(dimMobs));
+  localStorage.setItem('dim_count', String(dimCount));
   localStorage.setItem('dim_rules', JSON.stringify(dimRules));
 }
 function groundInfo() { return GROUNDS.find(g => g.id === dimGround) || GROUNDS[0]; }
+function mixInfo(id) { return GROUNDS.find(g => g.id === id); }
+
+// how many patches of the other blocks get scattered about
+const AMOUNTS = { little: 10, some: 22, loads: 40 };
+
+// =====================================================================
+// THE SCATTER.
+//
+// Minecraft commands cannot roll dice - there is no "pick a random spot"
+// command. So WE roll the dice, here, once, while you are designing. The
+// positions get baked into your world program as fixed numbers.
+//
+// It uses a SEEDED random: the same design always gives the same scatter,
+// which is why the picture in step 7 is exactly what you will land on.
+// Change the name or the blocks and you get a whole new landscape.
+// =====================================================================
+function seededRandom(seedStr) {
+  let h = 1779033703 ^ seedStr.length;
+  for (let i = 0; i < seedStr.length; i++) {
+    h = Math.imul(h ^ seedStr.charCodeAt(i), 3432918353);
+    h = (h << 13) | (h >>> 19);
+  }
+  return function () {
+    h = Math.imul(h ^ (h >>> 16), 2246822507);
+    h = Math.imul(h ^ (h >>> 13), 3266489909);
+    h ^= h >>> 16;
+    return (h >>> 0) / 4294967296;
+  };
+}
+function makePatches() {
+  if (!dimMix.length) return [];
+  const r = radius();
+  // the seed is your whole design, so changing anything reshuffles it
+  const rand = seededRandom(dimName + '|' + dimGround + '|' + dimMix.join(',') +
+                            '|' + dimAmount + '|' + radius());
+  // A bigger world needs more scattered about - but every patch is another
+  // command, and we do not want thousands of them. So bigger worlds get
+  // SOME more patches, and each patch is BIGGER. Covers the ground without
+  // drowning the program in commands.
+  const areaFactor = Math.min(3, (r * r) / (15 * 15));
+  const count = Math.min(90, Math.round((AMOUNTS[dimAmount] || 22) * areaFactor));
+  const maxSize = 2 + Math.floor(r / 12);
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    const block = dimMix[Math.floor(rand() * dimMix.length)];
+    const w = Math.floor(rand() * maxSize);
+    const d = Math.floor(rand() * maxSize);
+    const span = 2 * r - 3;
+    let x = Math.floor(rand() * span) - (r - 2);
+    let z = Math.floor(rand() * span) - (r - 2);
+    x = Math.min(x, r - 1 - w);                // never hang over the edge
+    z = Math.min(z, r - 1 - d);
+    // a third sit ON TOP as lumps and boulders, but never right where you
+    // land, or you would arrive inside a rock
+    const lump = rand() < 0.34 && (Math.abs(x) > 3 || Math.abs(z) > 3);
+    out.push({ block, x, z, w, d, lump });
+  }
+  return out;
+}
+
+// =====================================================================
+// WHERE EVERYBODY STANDS.
+//
+// Summoning ten creatures all at the exact same spot gives you a
+// squashed pile of confused animals shoving each other apart. So we
+// scatter them - the same seeded dice we used for the ground, so the
+// picture in step 7 shows you exactly who is waiting where.
+//
+// Nobody gets placed right on the landing spot either. Arriving inside
+// a Warden would be a short visit.
+// =====================================================================
+function makeSpawns() {
+  if (!dimMobs.length) return [];
+  const r = radius();
+  const rand = seededRandom('mobs|' + dimName + '|' + dimMobs.join(',') +
+                            '|' + dimCount + '|' + radius());
+  // Stay ON the floor - in a tiny world, 4 blocks out is off the edge.
+  const reach = Math.max(1, r - 2);
+  // ...and keep out of your way, unless the world is too small to have
+  // an 'out of the way'. Then anywhere that is not exactly on you.
+  const minAway = Math.min(3, reach);
+  const out = [];
+  dimMobs.forEach(id => {
+    for (let i = 0; i < dimCount; i++) {
+      let dx = 0, dz = 0;
+      // keep rolling until they are at least 3 blocks away from you
+      for (let tries = 0; tries < 8; tries++) {
+        dx = Math.round((rand() * 2 - 1) * reach);
+        dz = Math.round((rand() * 2 - 1) * reach);
+        if (Math.abs(dx) >= minAway || Math.abs(dz) >= minAway) break;
+      }
+      if (Math.abs(dx) < minAway && Math.abs(dz) < minAway) dx = reach;  // last resort
+      out.push({ id, dx, dz });
+    }
+  });
+  return out;
+}
+
+// =====================================================================
+// THE FILL LIMIT.
+//
+// Minecraft refuses any fill command bigger than 32768 blocks. A HUGE
+// world underground needs 81 x 81 x 10 = 65,610 blocks of air carved
+// out - more than twice the limit, so the command would just fail and
+// you would arrive buried in solid rock.
+//
+// So we work out how many layers fit in one command, and carve the
+// space out in slices instead. Same hole, several spoonfuls.
+// =====================================================================
+const FILL_LIMIT = 32000;                       // a little under the real 32768
+function airCarveLines(slug, r, yFrom, yTo) {
+  const lines = [];
+  const area = (2 * r + 1) * (2 * r + 1);
+  const layersPerFill = Math.max(1, Math.floor(FILL_LIMIT / area));
+  for (let y0 = yFrom; y0 <= yTo; y0 += layersPerFill) {
+    const y1 = Math.min(yTo, y0 + layersPerFill - 1);
+    lines.push('execute as @a[tag=going_' + slug + '] at @s run fill ' +
+               '~-' + r + ' ' + y0 + ' ~-' + r + ' ~' + r + ' ' + y1 + ' ~' + r + ' air');
+  }
+  return lines;
+}
 
 // =====================================================================
 // THE PROGRAM THAT RUNS YOUR WHOLE WORLD
@@ -343,39 +702,94 @@ function groundInfo() { return GROUNDS.find(g => g.id === dimGround) || GROUNDS[
 // =====================================================================
 function makeFunction(slug, version) {
   const w = WHERE[dimWhere];
-  const portal = 'max:' + slug + '_portal';
+  const portal = travelBlock(slug);
+  const title = dimName.replace(/[^ -~]/g, '');
+  // say something at every stage. If it ever stops working, whichever
+  // message you DID see tells us exactly which line gave up.
+  const say = (tag, msg) =>
+    'execute as @a[tag=' + tag + '] at @s run title @s actionbar ' + msg;
   const L = [];
   L.push('# ' + dimName.replace(/[^\x20-\x7E]/g, '') + ' - forged by Max in the Dimension Forge');
   L.push('# This runs 20 times a second, forever.');
   L.push('');
-  L.push('# --- STARTER KIT: portal blocks, the first time you play ---');
+  L.push('# --- STARTER KIT: travel blocks, the first time you play ---');
   const got = 'got_' + slug + '_v' + version;
   L.push('give @a[tag=!' + got + '] ' + portal + ' 8');
+  L.push('title @a[tag=!' + got + '] actionbar ' + title +
+         ' is ready - stand on the block you were just given');
+  L.push('playsound random.levelup @a[tag=!' + got + ']');
   L.push('tag @a[tag=!' + got + '] add ' + got);
   L.push('');
   L.push('# --- STEP 1: spot anyone stood on a portal in the normal world ---');
   L.push('execute as @a[tag=!step_' + slug + ',tag=!in_' + slug + '] at @s ' +
          'if block ~ ~-1 ~ ' + portal + ' run tag @s add going_' + slug);
   L.push('');
-  L.push('# --- STEP 2: send them. Everything after this happens where they LAND ---');
-  L.push('execute as @a[tag=going_' + slug + '] at @s run tp @s ~ ' + w.y + ' ~');
-  L.push('# build ground under their feet so they have somewhere to stand');
-  L.push('execute as @a[tag=going_' + slug + '] at @s run fill ~-15 ~-1 ~-15 ~15 ~-1 ~15 ' + dimGround);
+  // =====================================================================
+  // BUILD IT FIRST, THEN GO.
+  //
+  // Minecraft only builds blocks in chunks that are LOADED. A chunk is a
+  // tall column of the world, 16 by 16 blocks wide and going all the way
+  // from the bottom of the world to the top - and the game only keeps the
+  // ones near a player switched on.
+  //
+  // We used to teleport first and build afterwards, and that is why the
+  // floor came out in chunk-shaped pieces: the moment you arrived, the
+  // chunks up there were still waking up, so the fill only landed in the
+  // few that happened to be ready.
+  //
+  // The fix is the good kind - the sort that makes the problem impossible
+  // rather than less likely. Because a chunk is a whole COLUMN, the chunk
+  // you are standing in right now already contains y=250 and y=-45. So we
+  // build up there from down here, before we go anywhere, in chunks that
+  // are certainly loaded. Then we teleport into a world that is already
+  // finished and waiting.
+  //
+  // That is why the heights below are exact numbers (249) instead of
+  // relative ones (~-1): we are reaching up from somewhere else.
+  // =====================================================================
+  const r = radius();
+  const floorY = w.y - 1;               // the ground you land on
+  const feetY = w.y;                    // where your boots go
+  L.push('# --- STEP 2: build the world FIRST, from right here, while the');
+  L.push('# chunks are definitely loaded. Exact heights, because we are');
+  L.push('# reaching up (or down) from the normal world ---');
+  L.push('# ' + acrossBlocks() + ' by ' + acrossBlocks() + ' blocks of floor at y=' + floorY);
+  L.push('execute as @a[tag=going_' + slug + '] at @s run fill ' +
+         '~-' + r + ' ' + floorY + ' ~-' + r + ' ~' + r + ' ' + floorY + ' ~' + r + ' ' + dimGround);
   if (dimWhere === 'deep') {
-    L.push('# down here it is solid rock, so carve out some sky too');
-    L.push('execute as @a[tag=going_' + slug + '] at @s run fill ~-15 ~ ~-15 ~15 ~9 ~15 air');
+    L.push('# down here it is solid rock, so carve out some sky too.');
+    L.push('# Big worlds need slices - one fill can only do 32768 blocks.');
+    airCarveLines(slug, r, feetY, feetY + 9).forEach(l => L.push(l));
   }
-  L.push('# drop a way home right beside them');
-  L.push('execute as @a[tag=going_' + slug + '] at @s run setblock ~2 ~-1 ~ ' + portal);
-  if (dimMobs.length) {
-    L.push('# the locals');
-    dimMobs.forEach((m, i) => {
-      const dx = [4, -4, 6, -6, 3, -3][i % 6];
-      const dz = [4, 4, -5, -5, 7, -7][i % 6];
-      L.push('execute as @a[tag=going_' + slug + '] at @s run summon ' + m +
-             ' ~' + dx + ' ~1 ~' + dz);
+  const patches = makePatches();
+  if (patches.length) {
+    L.push('# scatter the other blocks through it. These numbers were rolled');
+    L.push('# once while the world was designed - commands cannot roll dice,');
+    L.push('# so we did it for them.');
+    patches.forEach(p => {
+      const y = p.lump ? feetY : floorY;   // lumps sit on top, patches sit in the floor
+      L.push('execute as @a[tag=going_' + slug + '] at @s run fill ' +
+             '~' + p.x + ' ' + y + ' ~' + p.z + ' ' +
+             '~' + (p.x + p.w) + ' ' + y + ' ~' + (p.z + p.d) + ' ' + p.block);
     });
   }
+  L.push('# a way home, waiting for you before you even arrive');
+  L.push('execute as @a[tag=going_' + slug + '] at @s run setblock ~2 ' + floorY + ' ~ ' + portal);
+  const spawns = makeSpawns();
+  if (spawns.length) {
+    L.push('# the locals - ' + dimCount + ' of each, scattered about');
+    spawns.forEach(sp => {
+      L.push('execute as @a[tag=going_' + slug + '] at @s run summon ' + sp.id +
+             ' ~' + sp.dx + ' ' + (feetY + 1) + ' ~' + sp.dz);
+    });
+  }
+  L.push('');
+  L.push(say('going_' + slug, 'building ' + title + '...'));
+  L.push('');
+  L.push('# --- STEP 3: NOW go. The world is already there ---');
+  L.push('execute as @a[tag=going_' + slug + '] at @s run tp @s ~ ' + w.y + ' ~');
+  L.push(say('going_' + slug, 'welcome to ' + title));
+  L.push('execute as @a[tag=going_' + slug + '] at @s run playsound beacon.activate @s');
   L.push('# wrap the sky in your colour');
   L.push('execute as @a[tag=going_' + slug + '] at @s run fog @s push max:' + slug +
          '_fog ' + slug + '_fog');
@@ -392,6 +806,8 @@ function makeFunction(slug, version) {
   L.push('execute as @a[tag=leaving_' + slug + '] at @s run tp @s ~ ' + w.home + ' ~');
   L.push('# a soft landing back into your own world');
   L.push('execute as @a[tag=leaving_' + slug + '] at @s run effect @s slow_falling 20 0 true');
+  L.push(say('leaving_' + slug, 'back home'));
+  L.push('execute as @a[tag=leaving_' + slug + '] at @s run playsound beacon.deactivate @s');
   L.push('tag @a[tag=leaving_' + slug + '] remove in_' + slug);
   L.push('tag @a[tag=leaving_' + slug + '] add step_' + slug);
   L.push('tag @a[tag=leaving_' + slug + '] remove leaving_' + slug);
@@ -416,6 +832,38 @@ function makeFunction(slug, version) {
   L.push('execute as @a[tag=in_' + slug + '] at @s unless entity @s[y=' + lo + ',dy=80] ' +
          'run tag @s remove in_' + slug);
   return L.join('\n') + '\n';
+}
+
+function makeGoFunction(slug) {
+  const w = WHERE[dimWhere];
+  const r = radius();
+  const floorY = w.y - 1;
+  const feetY = w.y;
+  const title = dimName.replace(/[^\x20-\x7E]/g, '');
+  const L = [];
+  L.push('# ' + title + ' - the manual way in.');
+  L.push('# Type this in chat:   /function ' + slug + '_go');
+  L.push('# It builds the world right where you stand, then sends you up.');
+  L.push('fill ~-' + r + ' ' + floorY + ' ~-' + r + ' ~' + r + ' ' + floorY + ' ~' + r + ' ' + dimGround);
+  if (dimWhere === 'deep') {
+    airCarveLines(slug, r, feetY, feetY + 9).forEach(l =>
+      L.push(l.replace(/^execute as @a\[[^\]]*\] at @s run /, '')));
+  }
+  makePatches().forEach(p => {
+    const y = p.lump ? feetY : floorY;
+    L.push('fill ~' + p.x + ' ' + y + ' ~' + p.z + ' ~' + (p.x + p.w) + ' ' + y +
+           ' ~' + (p.z + p.d) + ' ' + p.block);
+  });
+  L.push('setblock ~2 ' + floorY + ' ~ ' + travelBlock(slug));
+  makeSpawns().forEach(sp => {
+    L.push('summon ' + sp.id + ' ~' + sp.dx + ' ' + (feetY + 1) + ' ~' + sp.dz);
+  });
+  L.push('tp @s ~ ' + w.y + ' ~');
+  L.push('fog @s push max:' + slug + '_fog ' + slug + '_fog');
+  L.push('tag @s add in_' + slug);
+  L.push('tag @s add step_' + slug);
+  L.push('title @s actionbar welcome to ' + title);
+  return L.join(String.fromCharCode(10)) + String.fromCharCode(10);
 }
 
 // ---- the portal block ----
@@ -558,22 +1006,33 @@ function buildAddonFiles(portalPng, iconPng) {
   const { behavior, resource } = makeManifests(slug, ids);
   const J = obj => enc.encode(JSON.stringify(obj, null, 2));
   const BP = slug + '_world/', RP = slug + '_looks/';
-  return [
+  const files = [
     { name: BP + 'manifest.json', bytes: J(behavior) },
     { name: BP + 'pack_icon.png', bytes: iconPng },
-    { name: BP + 'blocks/' + slug + '_portal.json', bytes: J(makeBlockJSON(slug)) },
     { name: BP + 'functions/' + slug + '_tick.mcfunction',
       bytes: enc.encode(makeFunction(slug, ids.v)) },
+    { name: BP + 'functions/' + slug + '_go.mcfunction',
+      bytes: enc.encode(makeGoFunction(slug)) },
     { name: BP + 'functions/tick.json', bytes: J({ values: [slug + '_tick'] }) },
     { name: RP + 'manifest.json', bytes: J(resource) },
     { name: RP + 'pack_icon.png', bytes: iconPng },
     { name: RP + 'fogs/' + slug + '_fog.json', bytes: J(makeFogJSON(slug)) },
-    { name: RP + 'textures/terrain_texture.json', bytes: J(makeTerrainTextureJSON(slug)) },
-    { name: RP + 'textures/blocks/' + slug + '_portal.png', bytes: portalPng },
-    { name: RP + 'texts/en_US.lang',
-      bytes: enc.encode('tile.max:' + slug + '_portal.name=' + dimName + ' Portal\n') },
-    { name: RP + 'texts/languages.json', bytes: enc.encode('["en_US"]') },
   ];
+  // The custom block and its picture only ride along if you asked for one.
+  // Choose an ordinary block to travel on and the pack carries no custom
+  // blocks at all - nothing but commands, which is about as reliable as
+  // an addon gets.
+  if (usingCustomPortal()) {
+    files.push({ name: BP + 'blocks/' + slug + '_portal.json', bytes: J(makeBlockJSON(slug)) });
+    files.push({ name: RP + 'textures/terrain_texture.json',
+                 bytes: J(makeTerrainTextureJSON(slug)) });
+    files.push({ name: RP + 'textures/blocks/' + slug + '_portal.png', bytes: portalPng });
+    files.push({ name: RP + 'texts/en_US.lang',
+                 bytes: enc.encode('tile.max:' + slug + '_portal.name=' + dimName +
+                                   ' Portal' + String.fromCharCode(10)) });
+    files.push({ name: RP + 'texts/languages.json', bytes: enc.encode('["en_US"]') });
+  }
+  return files;
 }
 
 // ---------------------------------------------------------------------
@@ -635,9 +1094,63 @@ function buildPickers() {
     d.className = 'pick';
     d.dataset.ground = g.id;
     d.innerHTML = '<span class="sw" style="background:' + g.c + '"></span>' + g.name;
-    d.addEventListener('pointerdown', () => { dimGround = g.id; save(); refresh(); });
+    d.addEventListener('pointerdown', () => {
+      dimGround = g.id;
+      const i = dimMix.indexOf(g.id);          // it cannot be both
+      if (i >= 0) dimMix.splice(i, 1);
+      save(); refresh();
+    });
     $('groundRow').appendChild(d);
   });
+  GROUNDS.forEach(g => {
+    const d = document.createElement('div');
+    d.className = 'pick';
+    d.dataset.mix = g.id;
+    d.innerHTML = '<span class="sw" style="background:' + g.c + '"></span>' + g.name;
+    d.addEventListener('pointerdown', () => {
+      const i = dimMix.indexOf(g.id);
+      if (i >= 0) dimMix.splice(i, 1);
+      else if (g.id === dimGround) $('forgedMsg').textContent =
+        'that one is already your MAIN block - pick a different one to mix in!';
+      else if (dimMix.length < 3) dimMix.push(g.id);
+      else $('forgedMsg').textContent = 'three extra blocks is the limit!';
+      save(); refresh();
+    });
+    $('mixRow').appendChild(d);
+  });
+  // custom block first, then the ordinary ones
+  const custom = document.createElement('div');
+  custom.className = 'pick';
+  custom.dataset.travel = '';
+  custom.innerHTML = '<span class="em">🌀</span>MY OWN PORTAL BLOCK';
+  custom.addEventListener('pointerdown', () => { dimTravel = ''; save(); refresh(); });
+  $('travelRow').appendChild(custom);
+  TRAVEL_BLOCKS.forEach(b => {
+    const d = document.createElement('div');
+    d.className = 'pick';
+    d.dataset.travel = b.id;
+    d.innerHTML = '<span class="sw" style="background:' + b.c + '"></span>' + b.name;
+    d.addEventListener('pointerdown', () => { dimTravel = b.id; save(); refresh(); });
+    $('travelRow').appendChild(d);
+  });
+  document.querySelectorAll('#sizeRow .pick').forEach(d =>
+    d.addEventListener('pointerdown', () => {
+      dimR = SIZES[d.dataset.size].r;
+      save(); refresh();
+    }));
+  // and the box lets you type any number you like in between
+  $('acrossBox').addEventListener('input', e => {
+    const across = parseInt(e.target.value);
+    if (!across || across < 3) return;               // still typing
+    dimR = Math.max(MIN_R, Math.min(MAX_R, Math.floor((across - 1) / 2)));
+    save(); refresh();
+  });
+  document.querySelectorAll('#countRow .pick').forEach(d =>
+    d.addEventListener('pointerdown', () => {
+      dimCount = parseInt(d.dataset.count); save(); refresh();
+    }));
+  document.querySelectorAll('#amountRow .pick').forEach(d =>
+    d.addEventListener('pointerdown', () => { dimAmount = d.dataset.amount; save(); refresh(); }));
   SKIES.forEach(s => {
     const d = document.createElement('div');
     d.className = 'pick';
@@ -646,20 +1159,7 @@ function buildPickers() {
     d.addEventListener('pointerdown', () => { dimSky = s.c; save(); refresh(); });
     $('skyRow').appendChild(d);
   });
-  MOBS.forEach(m => {
-    const d = document.createElement('div');
-    d.className = 'pick';
-    d.dataset.mob = m.id;
-    d.innerHTML = '<span class="em">' + m.em + '</span>' + m.name;
-    d.addEventListener('pointerdown', () => {
-      const i = dimMobs.indexOf(m.id);
-      if (i >= 0) dimMobs.splice(i, 1);
-      else if (dimMobs.length < 6) dimMobs.push(m.id);
-      else $('forgedMsg').textContent = 'six kinds of creature is plenty!';
-      save(); refresh();
-    });
-    $('mobRow').appendChild(d);
-  });
+  // (the mobs live in their own pop-up now - see openMobs below)
   RULES.forEach(r => {
     const d = document.createElement('div');
     d.className = 'pick';
@@ -674,6 +1174,89 @@ function buildPickers() {
   });
   document.querySelectorAll('#whereRow .pick').forEach(d =>
     d.addEventListener('pointerdown', () => { dimWhere = d.dataset.where; save(); refresh(); }));
+}
+
+// ---------------------------------------------------------------------
+// THE MOB LIST. One button, every creature in the game, and a search box
+// so you do not have to scroll past eighty of them to find the one you
+// want. Tap to move a creature in, tap again to evict it.
+// ---------------------------------------------------------------------
+const MAX_MOBS = 6;
+function toggleMob(id) {
+  const i = dimMobs.indexOf(id);
+  if (i >= 0) {
+    dimMobs.splice(i, 1);
+  } else if (dimMobs.length < MAX_MOBS) {
+    dimMobs.push(id);
+  } else {
+    $('mobCount').textContent = 'that is ' + MAX_MOBS + ' already - tap one to evict it first!';
+    return;
+  }
+  save();
+  renderMobList($('mobSearch').value);
+  refresh();
+}
+function renderMobList(filter) {
+  const f = (filter || '').trim().toLowerCase();
+  const shown = MOBS.filter(m => m.name.toLowerCase().includes(f));
+  const list = $('mobList');
+  list.innerHTML = '';
+  $('mobCount').textContent = dimMobs.length + ' of ' + MAX_MOBS + ' chosen' +
+    (f ? '  -  ' + shown.length + ' match "' + f + '"' : '  -  ' + MOBS.length + ' creatures');
+  if (!shown.length) {
+    const empty = document.createElement('div');
+    empty.className = 'mobrow';
+    empty.style.cursor = 'default';
+    empty.textContent = '🤷 no creature called that';
+    list.appendChild(empty);
+    return;
+  }
+  shown.forEach(m => {
+    const row = document.createElement('div');
+    row.className = 'mobrow' + (dimMobs.includes(m.id) ? ' chosen' : '');
+    row.innerHTML = '<span class="em">' + m.em + '</span>' + m.name +
+                    '<span class="kind">' + (dimMobs.includes(m.id) ? '✓ ' : '') +
+                    (KIND_ICON[m.k] || '') + '</span>';
+    row.addEventListener('pointerdown', () => toggleMob(m.id));
+    list.appendChild(row);
+  });
+}
+function openMobs() {
+  $('mobModal').classList.add('open');
+  $('mobSearch').value = '';
+  renderMobList('');
+  $('mobSearch').focus();
+}
+function closeMobs() { $('mobModal').classList.remove('open'); }
+$('mobsBtn').addEventListener('click', openMobs);
+$('mobClose').addEventListener('click', closeMobs);
+$('mobSearch').addEventListener('input', e => renderMobList(e.target.value));
+addEventListener('keydown', e => { if (e.key === 'Escape') closeMobs(); });
+
+// the creatures you have chosen, shown as little chips you can tap to remove
+function renderChips() {
+  const box = $('mobChips');
+  box.innerHTML = '';
+  if (!dimMobs.length) {
+    const d = document.createElement('div');
+    d.className = 'chip none';
+    d.textContent = 'nobody lives here yet - tap MOBS below';
+    box.appendChild(d);
+    return;
+  }
+  dimMobs.forEach(id => {
+    const m = mobInfo(id);
+    if (!m) return;
+    const d = document.createElement('div');
+    d.className = 'chip';
+    d.innerHTML = '<span>' + m.em + '</span>' + m.name + '<span class="x">✖</span>';
+    d.title = 'tap to evict';
+    d.addEventListener('pointerdown', () => {
+      dimMobs.splice(dimMobs.indexOf(id), 1);
+      save(); refresh();
+    });
+    box.appendChild(d);
+  });
 }
 
 // a little window into your world, so you can see it before you build it
@@ -694,28 +1277,58 @@ function drawPreview() {
   const gy = H * 0.72;
   x.fillStyle = g.c;
   x.fillRect(0, gy, W, H - gy);
+  // the very same scatter that gets baked into your world
+  const cell = W / acrossBlocks();
+  makePatches().forEach(p => {
+    const m = mixInfo(p.block);
+    if (!m) return;
+    const px = (p.x + radius()) * cell;
+    const pw = (p.w + 1) * cell;
+    x.fillStyle = m.c;
+    if (p.lump) {
+      x.fillRect(px, gy - cell, pw, cell);          // a lump sitting on top
+      x.fillStyle = shade(m.c, 1.2);
+      x.fillRect(px, gy - cell, pw, 3);
+    } else {
+      x.fillRect(px, gy, pw, cell * 0.9);           // a patch in the floor
+    }
+  });
   x.fillStyle = shade(g.c, 0.75);
-  for (let bx = 0; bx < W; bx += 40) x.fillRect(bx, gy, 2, H - gy);
+  for (let bx = 0; bx < W; bx += 40) x.fillRect(bx, gy + cell, 2, H - gy - cell);
   x.fillStyle = shade(g.c, 1.15);
-  x.fillRect(0, gy, W, 4);
+  x.fillRect(0, gy, W, 3);
   x.fillStyle = dimSky;
   x.fillRect(W * 0.1, gy - 40, 40, 40);
   x.fillStyle = '#ffffff';
   x.fillRect(W * 0.1 + 13, gy - 29, 14, 5);
   x.fillRect(W * 0.1 + 8, gy - 19, 24, 5);
   x.fillRect(W * 0.1 + 15, gy - 9, 10, 4);
-  x.font = '30px system-ui';
+  // everyone who is waiting for you, standing where they will really be
   x.textAlign = 'center';
-  dimMobs.slice(0, 6).forEach((id, i) => {
-    const m = MOBS.find(mm => mm.id === id);
-    if (m) x.fillText(m.em, W * 0.33 + i * 76, gy - 6);
+  const spawns = makeSpawns();
+  const shown = spawns.slice(0, 40);
+  shown.forEach(sp => {
+    const m = mobInfo(sp.id);
+    if (!m) return;
+    const px = (sp.dx + radius()) * cell;
+    // creatures further back are drawn a bit smaller and higher up
+    const back = (sp.dz + radius()) / acrossBlocks();
+    const size = 16 + (1 - back) * 16;
+    x.font = size + 'px system-ui';
+    x.fillText(m.em, px, gy - 4 - back * (H * 0.13));
   });
+  if (spawns.length > shown.length) {
+    x.font = 'bold 13px monospace';
+    x.fillStyle = 'rgba(255,255,255,0.75)';
+    x.fillText('...and ' + (spawns.length - shown.length) + ' more', W / 2, H - 12);
+  }
   x.font = 'bold 26px monospace';
   x.fillStyle = 'rgba(255,255,255,0.92)';
   x.fillText(dimName.toUpperCase(), W / 2, 44);
   x.font = '15px monospace';
   x.fillStyle = 'rgba(255,255,255,0.62)';
-  x.fillText(WHERE[dimWhere].label + '   y = ' + WHERE[dimWhere].y, W / 2, 70);
+  x.fillText(WHERE[dimWhere].label + '   y = ' + WHERE[dimWhere].y +
+             '   ' + acrossBlocks() + ' x ' + acrossBlocks(), W / 2, 70);
   x.textAlign = 'left';
 }
 
@@ -724,12 +1337,50 @@ function refresh() {
     d.classList.toggle('on', d.dataset.ground === dimGround));
   document.querySelectorAll('#skyRow .pick').forEach(d =>
     d.classList.toggle('on', d.dataset.sky === dimSky));
-  document.querySelectorAll('#mobRow .pick').forEach(d =>
-    d.classList.toggle('on', dimMobs.includes(d.dataset.mob)));
+  renderChips();
+  document.querySelectorAll('#countRow .pick').forEach(d =>
+    d.classList.toggle('on', parseInt(d.dataset.count) === dimCount));
+  const total = dimMobs.length * dimCount;
+  $('countNote').textContent = !dimMobs.length
+    ? 'pick some creatures first!'
+    : total + ' creatures in total' +
+      (total >= 48 ? ' - that is a LOT. Your world is going to be very busy.' : '');
   document.querySelectorAll('#ruleRow .pick').forEach(d =>
     d.classList.toggle('on', dimRules.includes(d.dataset.rule)));
   document.querySelectorAll('#whereRow .pick').forEach(d =>
     d.classList.toggle('on', d.dataset.where === dimWhere));
+  document.querySelectorAll('#mixRow .pick').forEach(d =>
+    d.classList.toggle('on', dimMix.includes(d.dataset.mix)));
+  document.querySelectorAll('#amountRow .pick').forEach(d =>
+    d.classList.toggle('on', d.dataset.amount === dimAmount));
+  const mixNames = dimMix.map(id => (mixInfo(id) || {}).name).filter(Boolean);
+  $('recipeNote').textContent = mixNames.length
+    ? 'mostly ' + groundInfo().name + ', with ' + mixNames.join(' and ') +
+      ' mixed in (' + makePatches().length + ' patches and lumps)'
+    : 'just plain ' + groundInfo().name + ' everywhere - pick some blocks to mix in!';
+  const preset = matchingPreset();
+  document.querySelectorAll('#sizeRow .pick').forEach(d =>
+    d.classList.toggle('on', d.dataset.size === preset));
+  if (document.activeElement !== $('acrossBox')) $('acrossBox').value = acrossBlocks();
+  const maxAcross = MAX_R * 2 + 1;
+  $('sizeNote').textContent =
+    acrossBlocks() + ' x ' + acrossBlocks() + ' blocks - that is ' +
+    floorBlocks().toLocaleString() + ' blocks of floor' +
+    (preset ? ' - ' + SIZES[preset].note : '') +
+    (radius() >= MAX_R
+      ? '. That is the biggest we can build in one go: Minecraft only keeps chunks near you switched on, so a wider world would have edges that never get built.'
+      : '');
+  document.querySelectorAll('#travelRow .pick').forEach(d =>
+    d.classList.toggle('on', d.dataset.travel === dimTravel));
+  $('travelNote').innerHTML = usingCustomPortal()
+    ? '🌀 a glowing portal block of your own - prettier, but custom blocks are the ' +
+      'fussiest part of any addon. If your world stops appearing, this is the first ' +
+      'thing to switch away from.'
+    : '✅ an ordinary Minecraft block. Your addon then contains <b>no custom blocks at ' +
+      'all</b> - just commands - which is about as reliable as it gets.';
+  const sbn = $('stepBlockName');
+  if (sbn) sbn.textContent = usingCustomPortal() ? 'portal blocks' : travelName().toLowerCase() + 's';
+  $('goCmd').textContent = '/function ' + slugOf(dimName) + '_go';
   $('whereNote').textContent = WHERE[dimWhere].note;
   const words = dimRules.map(r => (RULES.find(x => x.id === r) || {}).why).filter(Boolean);
   $('previewNote').textContent = words.length
