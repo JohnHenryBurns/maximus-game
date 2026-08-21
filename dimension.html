@@ -1,0 +1,768 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>THE DIMENSION FORGE</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: #14101f;
+    color: #eee;
+    font-family: "Segoe UI", system-ui, sans-serif;
+  }
+  body {
+    background-image:
+      radial-gradient(circle at 20% 30%, rgba(150,80,255,0.10), transparent 55%),
+      radial-gradient(circle at 80% 70%, rgba(60,200,255,0.08), transparent 55%),
+      linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
+    background-size: auto, auto, 48px 48px, 48px 48px;
+    padding-bottom: 80px;
+  }
+  main { max-width: 680px; margin: 0 auto; padding: 12px; }
+  h1 {
+    text-align: center; font-family: monospace;
+    font-size: clamp(24px, 6.5vw, 42px); letter-spacing: 2px;
+    color: #c98bff; text-shadow: 3px 3px 0 #2a1a45;
+    margin: 54px 0 4px;
+  }
+  .tagline { text-align: center; color: #a99cc0; margin: 0 0 8px; font-size: 14px; }
+  .truthbox {
+    background: #221838; border: 2px solid #6a4a9a; border-radius: 8px;
+    padding: 12px 14px; font-size: 13.5px; line-height: 1.55; margin: 0 0 20px;
+    color: #d8ccf0;
+  }
+  .truthbox b { color: #ffd83d; }
+  .slab {
+    background: #241d38; border: 3px solid #120d1e; border-radius: 6px;
+    box-shadow: inset 0 3px 0 rgba(255,255,255,0.06), 0 4px 0 #120d1e;
+    padding: 14px; margin-bottom: 18px;
+  }
+  .slab h2 {
+    margin: 0 0 10px; font-family: monospace; font-size: 17px; color: #c98bff;
+  }
+  .slab h2 .stepnum {
+    display: inline-block; background: #c98bff; color: #14101f;
+    width: 24px; height: 24px; line-height: 24px;
+    text-align: center; border-radius: 4px; margin-right: 8px;
+  }
+  .hint { color: #9a8fb0; font-size: 12.5px; margin: 8px 0 6px; }
+  input[type=text] {
+    width: 100%; font-family: monospace; font-size: 20px; font-weight: bold;
+    padding: 10px; border-radius: 4px; border: 3px solid #120d1e;
+    background: #1a1428; color: #ffd83d; outline: none;
+  }
+  .grid { display: flex; flex-wrap: wrap; gap: 8px; }
+  .pick {
+    cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent;
+    background: #1a1428; border: 3px solid #120d1e; border-radius: 6px;
+    padding: 9px 10px; text-align: center; font-family: monospace;
+    font-size: 12px; font-weight: bold; color: #cfc4e0;
+    display: flex; align-items: center; gap: 7px;
+  }
+  .pick .sw { width: 18px; height: 18px; border-radius: 3px; border: 2px solid #0d0916; }
+  .pick .em { font-size: 20px; }
+  .pick.on { border-color: #ffd83d; background: #3a3320; color: #ffd83d; }
+  .pick.big { flex: 1; min-width: 130px; flex-direction: column; padding: 14px 8px; }
+  .pick.big .em { font-size: 30px; }
+  #preview {
+    display: block; width: 100%; aspect-ratio: 16/7;
+    border: 3px solid #120d1e; border-radius: 6px; margin-bottom: 8px;
+  }
+  #forgeBtn {
+    display: block; width: 100%;
+    font-family: monospace; font-size: clamp(19px, 4.6vw, 27px); font-weight: bold;
+    padding: 18px; border-radius: 8px; cursor: pointer;
+    border: 4px solid #120d1e;
+    background: linear-gradient(#c98bff, #7a3fd0);
+    color: #1a0a2e; box-shadow: 0 6px 0 #120d1e; letter-spacing: 1px;
+  }
+  #forgeBtn:active { transform: translateY(6px); box-shadow: none; }
+  #forgedMsg {
+    text-align: center; font-family: monospace; font-weight: bold;
+    color: #c98bff; margin-top: 12px; min-height: 22px;
+  }
+  ol.steps { line-height: 1.6; padding-left: 22px; }
+  ol.steps li { margin-bottom: 6px; }
+  details { margin-top: 14px; }
+  summary { cursor: pointer; font-family: monospace; color: #4aedd9; font-weight: bold; }
+  pre.peek {
+    background: #0d0916; border-radius: 6px; padding: 12px;
+    font-size: 12px; overflow-x: auto; color: #9ef09e; line-height: 1.45;
+  }
+</style>
+<style>
+a.arcade-pill {
+  display: inline-flex !important; align-items: center !important; gap: 6px !important;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif !important;
+  font-size: 13px !important; font-weight: 600 !important; letter-spacing: 0.3px !important;
+  line-height: 1 !important; text-decoration: none !important; text-transform: none !important;
+  color: #ffe0c4 !important;
+  background: rgba(24, 14, 28, 0.62) !important;
+  border: 1px solid rgba(255, 200, 150, 0.42) !important;
+  padding: 7px 13px !important; border-radius: 999px !important;
+  cursor: pointer !important; white-space: nowrap !important;
+  -webkit-backdrop-filter: blur(5px) !important; backdrop-filter: blur(5px) !important;
+  -webkit-tap-highlight-color: transparent !important;
+  transition: transform 0.12s, border-color 0.12s, background 0.12s !important;
+}
+a.arcade-pill:hover, a.arcade-pill:active, a.arcade-pill:focus-visible {
+  transform: scale(1.05) !important;
+  border-color: rgba(255, 200, 150, 0.9) !important;
+  background: rgba(40, 22, 44, 0.78) !important;
+  color: #fff5e8 !important;
+}
+a.arcade-pill .ah-arrow { font-size: 14px !important; opacity: 0.9 !important; }
+a.arcade-pill.arcade-float {
+  position: fixed !important;
+  top: calc(8px + env(safe-area-inset-top, 0px)) !important;
+  left: calc(10px + env(safe-area-inset-left, 0px)) !important;
+  z-index: 2147483000 !important;
+}
+</style>
+</head>
+<body>
+<a id="back" class="arcade-pill arcade-float" href="index.html"
+   aria-label="Back to Max's Arcade"><span class="ah-arrow">&larr;</span>Arcade</a>
+
+<main>
+  <h1>🌌 THE DIMENSION FORGE</h1>
+  <p class="tagline">design a whole world, and a portal that takes you there</p>
+
+  <div class="truthbox">
+    <b>Straight talk first.</b> Bedrock Minecraft has three dimensions built into it — the
+    Overworld, the Nether and the End — and nobody outside Mojang can add a fourth. So we do
+    something sneakier: we build your world in a place nobody ever goes.
+    <b>High in the sky above your own world, or far below the deepest cave.</b> Your ground,
+    your sky colour, your creatures, your rules, and a glowing portal block that takes you there
+    and brings you home. It <i>feels</i> like a new dimension — because it's a place that only
+    exists because you made it.
+  </div>
+
+  <div class="slab">
+    <h2><span class="stepnum">1</span>NAME YOUR WORLD</h2>
+    <input type="text" id="nameBox" maxlength="28" placeholder="The Fart Nebula" autocomplete="off">
+  </div>
+
+  <div class="slab">
+    <h2><span class="stepnum">2</span>WHERE IS IT?</h2>
+    <div class="grid" id="whereRow">
+      <div class="pick big" data-where="sky"><span class="em">☁️</span>HIGH IN THE SKY</div>
+      <div class="pick big" data-where="deep"><span class="em">🕳️</span>DEEP UNDERGROUND</div>
+    </div>
+    <div class="hint" id="whereNote"></div>
+  </div>
+
+  <div class="slab">
+    <h2><span class="stepnum">3</span>WHAT IS THE GROUND MADE OF?</h2>
+    <div class="grid" id="groundRow"></div>
+  </div>
+
+  <div class="slab">
+    <h2><span class="stepnum">4</span>WHAT COLOUR IS THE SKY?</h2>
+    <div class="grid" id="skyRow"></div>
+  </div>
+
+  <div class="slab">
+    <h2><span class="stepnum">5</span>WHO LIVES THERE?
+      <span style="font-size:12px;color:#9a8fb0">(pick up to 6)</span></h2>
+    <div class="grid" id="mobRow"></div>
+  </div>
+
+  <div class="slab">
+    <h2><span class="stepnum">6</span>WHAT ARE THE RULES THERE?
+      <span style="font-size:12px;color:#9a8fb0">(pick any)</span></h2>
+    <div class="grid" id="ruleRow"></div>
+  </div>
+
+  <div class="slab">
+    <h2><span class="stepnum">7</span>HAVE A LOOK</h2>
+    <canvas id="preview" width="800" height="350"></canvas>
+    <div class="hint" id="previewNote" style="text-align:center"></div>
+  </div>
+
+  <div class="slab">
+    <h2><span class="stepnum">8</span>FORGE IT</h2>
+    <button id="forgeBtn">🌌 FORGE MY DIMENSION</button>
+    <div id="forgedMsg"></div>
+    <ol class="steps">
+      <li>Tap the button — a file like <b>the_fart_nebula.mcaddon</b> downloads.</li>
+      <li>Open it from <b>Downloads</b> — Minecraft imports it.</li>
+      <li>Make or edit a world, then switch ON <b>Behavior Packs</b> AND <b>Resource Packs</b>.</li>
+      <li>Join the world. <b>8 portal blocks land straight in your inventory.</b></li>
+      <li>Place one on the ground and <b>stand on top of it</b>. Off you go.</li>
+      <li>Your way home is the portal block sitting <b>right next to where you land</b>.</li>
+    </ol>
+    <details>
+      <summary>🔍 peek at the program that runs your entire world</summary>
+      <pre class="peek" id="fnPeek"></pre>
+    </details>
+    <details>
+      <summary>😤 it's not working!</summary>
+      <ol class="steps">
+        <li><b>Both packs on?</b> The <i>world</i> pack and the <i>looks</i> pack. Both. Always.</li>
+        <li><b>Leave the world and come back.</b> Packs only switch on when a world loads.</li>
+        <li><b>No portal blocks?</b> Type <code style="color:#4aedd9" id="giveCmd">/give @s max:portal</code></li>
+        <li><b>Stood on it and nothing happened?</b> You have to stand ON TOP of it — put it
+            down in the ground and walk onto it, don't just stand next to it.</li>
+      </ol>
+    </details>
+  </div>
+</main>
+
+<script>
+(function () {
+  var pill = document.getElementById('back');
+  if (!pill) return;
+  var go = function (e) { e.stopPropagation(); e.preventDefault(); location.href = 'index.html'; };
+  ['click', 'touchend'].forEach(function (t) { pill.addEventListener(t, go, { passive: false }); });
+  ['mousedown', 'touchstart', 'pointerdown'].forEach(function (t) {
+    pill.addEventListener(t, function (e) { e.stopPropagation(); }, { passive: false });
+  });
+})();
+</script>
+<script>
+// =====================================================================
+// THE DIMENSION FORGE
+//
+// Minecraft won't let anyone add a fourth dimension. So instead we take
+// an empty slice of your own world - way up at the top of the sky, or
+// far below the bottom of the caves - and we BUILD there: a floor of
+// your block, a sky of your colour, your creatures, and rules that only
+// apply while you are standing in it.
+//
+// The whole thing is held together by TAGS. A tag is just a word stuck
+// onto a player, and it is the only memory these commands have. Watch
+// how much you can build out of "does this player have this word".
+// =====================================================================
+const $ = id => document.getElementById(id);
+
+let dimName = localStorage.getItem('dim_name') || 'The Fart Nebula';
+let dimWhere = localStorage.getItem('dim_where') || 'sky';
+let dimGround = localStorage.getItem('dim_ground') || 'minecraft:end_stone';
+let dimSky = localStorage.getItem('dim_sky') || '#a24bff';
+let dimMobs = JSON.parse(localStorage.getItem('dim_mobs') || '["minecraft:allay"]');
+let dimRules = JSON.parse(localStorage.getItem('dim_rules') || '[]');
+
+// Minecraft's world runs from y=-64 at the very bottom to y=320 at the
+// very top. These are real places that ordinary players never visit.
+const WHERE = {
+  sky:  { y: 250, home: 140, label: 'HIGH IN THE SKY',
+          note: 'your world floats at y=250, right at the top of the sky. Coming home drops you back down over the very same spot.' },
+  deep: { y: -45, home: 140, label: 'DEEP UNDERGROUND',
+          note: 'your world is carved out at y=-45, below the deepest caves. Coming home lifts you back up over the very same spot.' },
+};
+
+const GROUNDS = [
+  { id: 'minecraft:grass_block',    name: 'GRASS',      c: '#5fa63f' },
+  { id: 'minecraft:stone',          name: 'STONE',      c: '#7d7d7d' },
+  { id: 'minecraft:sand',           name: 'SAND',       c: '#dbcf9a' },
+  { id: 'minecraft:snow_block',     name: 'SNOW',       c: '#f0f6f6' },
+  { id: 'minecraft:end_stone',      name: 'END STONE',  c: '#dbdfa2' },
+  { id: 'minecraft:netherrack',     name: 'NETHERRACK', c: '#7a3636' },
+  { id: 'minecraft:obsidian',       name: 'OBSIDIAN',   c: '#1a1024' },
+  { id: 'minecraft:glowstone',      name: 'GLOWSTONE',  c: '#f2c96b' },
+  { id: 'minecraft:diamond_block',  name: 'DIAMOND',    c: '#5adfd7' },
+  { id: 'minecraft:gold_block',     name: 'GOLD',       c: '#f2c236' },
+  { id: 'minecraft:emerald_block',  name: 'EMERALD',    c: '#3fd66b' },
+  { id: 'minecraft:packed_ice',     name: 'ICE',        c: '#9dc6f0' },
+  { id: 'minecraft:magma',          name: 'MAGMA',      c: '#8f4a20' },
+  { id: 'minecraft:soul_sand',      name: 'SOUL SAND',  c: '#54413a' },
+  { id: 'minecraft:pink_wool',      name: 'PINK WOOL',  c: '#f0a3c2' },
+  { id: 'minecraft:slime',          name: 'SLIME',      c: '#7cc35a' },
+  { id: 'minecraft:sculk',          name: 'SCULK',      c: '#12303a' },
+  { id: 'minecraft:amethyst_block', name: 'AMETHYST',   c: '#9a68d4' },
+];
+
+// the sky colour is really FOG - a coloured mist wrapped around you
+const SKIES = [
+  { c: '#a24bff', name: 'PURPLE' },   { c: '#ff4bb8', name: 'PINK' },
+  { c: '#ff6a2b', name: 'SUNSET' },   { c: '#ffd83d', name: 'GOLD' },
+  { c: '#3fd66b', name: 'SLIME' },    { c: '#2bd4e8', name: 'CYAN' },
+  { c: '#2b6aff', name: 'DEEP BLUE' },{ c: '#e02121', name: 'BLOOD RED' },
+  { c: '#f0f6f6', name: 'WHITE OUT' },{ c: '#100a1a', name: 'PITCH BLACK' },
+];
+
+const MOBS = [
+  { id: 'minecraft:chicken', em: '🐔', name: 'CHICKEN' },
+  { id: 'minecraft:pig', em: '🐷', name: 'PIG' },
+  { id: 'minecraft:cow', em: '🐮', name: 'COW' },
+  { id: 'minecraft:sheep', em: '🐑', name: 'SHEEP' },
+  { id: 'minecraft:wolf', em: '🐺', name: 'WOLF' },
+  { id: 'minecraft:cat', em: '🐱', name: 'CAT' },
+  { id: 'minecraft:axolotl', em: '🩷', name: 'AXOLOTL' },
+  { id: 'minecraft:allay', em: '🧚', name: 'ALLAY' },
+  { id: 'minecraft:bee', em: '🐝', name: 'BEE' },
+  { id: 'minecraft:fox', em: '🦊', name: 'FOX' },
+  { id: 'minecraft:panda', em: '🐼', name: 'PANDA' },
+  { id: 'minecraft:llama', em: '🦙', name: 'LLAMA' },
+  { id: 'minecraft:zombie', em: '🧟', name: 'ZOMBIE' },
+  { id: 'minecraft:skeleton', em: '💀', name: 'SKELETON' },
+  { id: 'minecraft:creeper', em: '💥', name: 'CREEPER' },
+  { id: 'minecraft:enderman', em: '🟪', name: 'ENDERMAN' },
+  { id: 'minecraft:blaze', em: '🔥', name: 'BLAZE' },
+  { id: 'minecraft:iron_golem', em: '🗿', name: 'IRON GOLEM' },
+];
+
+const RULES = [
+  { id: 'night_vision',    em: '🌑', name: 'ALWAYS SEE', amp: 0, why: 'you can see in the dark' },
+  { id: 'slow_falling',    em: '🪶', name: 'FLOATY',     amp: 0, why: 'you drift down like a feather' },
+  { id: 'jump_boost',      em: '🦘', name: 'BOUNCY',     amp: 2, why: 'you jump much higher' },
+  { id: 'fire_resistance', em: '🔥', name: 'FIREPROOF',  amp: 0, why: 'fire and lava cannot hurt you' },
+  { id: 'speed',           em: '⚡', name: 'SPEEDY',     amp: 1, why: 'you run fast' },
+  { id: 'strength',        em: '💪', name: 'MIGHTY',     amp: 1, why: 'you hit much harder' },
+  { id: 'water_breathing', em: '🫧', name: 'NO AIR NEEDED', amp: 0, why: 'you never run out of breath' },
+  { id: 'resistance',      em: '🛡️', name: 'TOUGH',      amp: 1, why: 'everything hurts you less' },
+];
+
+function slugOf(name) {
+  const s = name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  return s || 'mystery_world';
+}
+function save() {
+  localStorage.setItem('dim_name', dimName);
+  localStorage.setItem('dim_where', dimWhere);
+  localStorage.setItem('dim_ground', dimGround);
+  localStorage.setItem('dim_sky', dimSky);
+  localStorage.setItem('dim_mobs', JSON.stringify(dimMobs));
+  localStorage.setItem('dim_rules', JSON.stringify(dimRules));
+}
+function groundInfo() { return GROUNDS.find(g => g.id === dimGround) || GROUNDS[0]; }
+
+// =====================================================================
+// THE PROGRAM THAT RUNS YOUR WHOLE WORLD
+//
+// Read this one out loud. It is a machine made of words stuck to people:
+//   going_x   = send this player RIGHT NOW
+//   in_x      = this player is in the world
+//   step_x    = this player is stood on a portal, do not fire again
+// Every trip through the portal is those three words being added and
+// taken away in the right order. That is the entire trick.
+// =====================================================================
+function makeFunction(slug, version) {
+  const w = WHERE[dimWhere];
+  const portal = 'max:' + slug + '_portal';
+  const L = [];
+  L.push('# ' + dimName.replace(/[^\x20-\x7E]/g, '') + ' - forged by Max in the Dimension Forge');
+  L.push('# This runs 20 times a second, forever.');
+  L.push('');
+  L.push('# --- STARTER KIT: portal blocks, the first time you play ---');
+  const got = 'got_' + slug + '_v' + version;
+  L.push('give @a[tag=!' + got + '] ' + portal + ' 8');
+  L.push('tag @a[tag=!' + got + '] add ' + got);
+  L.push('');
+  L.push('# --- STEP 1: spot anyone stood on a portal in the normal world ---');
+  L.push('execute as @a[tag=!step_' + slug + ',tag=!in_' + slug + '] at @s ' +
+         'if block ~ ~-1 ~ ' + portal + ' run tag @s add going_' + slug);
+  L.push('');
+  L.push('# --- STEP 2: send them. Everything after this happens where they LAND ---');
+  L.push('execute as @a[tag=going_' + slug + '] at @s run tp @s ~ ' + w.y + ' ~');
+  L.push('# build ground under their feet so they have somewhere to stand');
+  L.push('execute as @a[tag=going_' + slug + '] at @s run fill ~-15 ~-1 ~-15 ~15 ~-1 ~15 ' + dimGround);
+  if (dimWhere === 'deep') {
+    L.push('# down here it is solid rock, so carve out some sky too');
+    L.push('execute as @a[tag=going_' + slug + '] at @s run fill ~-15 ~ ~-15 ~15 ~9 ~15 air');
+  }
+  L.push('# drop a way home right beside them');
+  L.push('execute as @a[tag=going_' + slug + '] at @s run setblock ~2 ~-1 ~ ' + portal);
+  if (dimMobs.length) {
+    L.push('# the locals');
+    dimMobs.forEach((m, i) => {
+      const dx = [4, -4, 6, -6, 3, -3][i % 6];
+      const dz = [4, 4, -5, -5, 7, -7][i % 6];
+      L.push('execute as @a[tag=going_' + slug + '] at @s run summon ' + m +
+             ' ~' + dx + ' ~1 ~' + dz);
+    });
+  }
+  L.push('# wrap the sky in your colour');
+  L.push('execute as @a[tag=going_' + slug + '] at @s run fog @s push max:' + slug +
+         '_fog ' + slug + '_fog');
+  L.push('# now remember they are there, and that they are stood on a portal');
+  L.push('tag @a[tag=going_' + slug + '] add in_' + slug);
+  L.push('tag @a[tag=going_' + slug + '] add step_' + slug);
+  L.push('tag @a[tag=going_' + slug + '] remove going_' + slug);
+  L.push('');
+  L.push('# --- STEP 3: the way home. The SAME block, the opposite direction.');
+  L.push('# The only difference is whether they already have the in_ tag ---');
+  L.push('execute as @a[tag=in_' + slug + ',tag=!step_' + slug + '] at @s ' +
+         'if block ~ ~-1 ~ ' + portal + ' run tag @s add leaving_' + slug);
+  L.push('execute as @a[tag=leaving_' + slug + '] at @s run fog @s remove ' + slug + '_fog');
+  L.push('execute as @a[tag=leaving_' + slug + '] at @s run tp @s ~ ' + w.home + ' ~');
+  L.push('# a soft landing back into your own world');
+  L.push('execute as @a[tag=leaving_' + slug + '] at @s run effect @s slow_falling 20 0 true');
+  L.push('tag @a[tag=leaving_' + slug + '] remove in_' + slug);
+  L.push('tag @a[tag=leaving_' + slug + '] add step_' + slug);
+  L.push('tag @a[tag=leaving_' + slug + '] remove leaving_' + slug);
+  L.push('');
+  L.push('# --- STEP 4: stepped off a portal? forget it, so it can fire again ---');
+  L.push('execute as @a[tag=step_' + slug + '] at @s unless block ~ ~-1 ~ ' + portal +
+         ' run tag @s remove step_' + slug);
+  if (dimRules.length) {
+    L.push('');
+    L.push('# --- THE RULES OF YOUR WORLD (only while you are in it) ---');
+    dimRules.forEach(r => {
+      const rule = RULES.find(x => x.id === r);
+      if (rule) L.push('effect @a[tag=in_' + slug + '] ' + rule.id + ' 5 ' + rule.amp + ' true');
+    });
+  }
+  L.push('');
+  L.push('# --- SAFETY NET: if they left some other way (died, flew off, typed');
+  L.push('# a teleport), take the world back off them properly ---');
+  const lo = w.y - 40;
+  L.push('execute as @a[tag=in_' + slug + '] at @s unless entity @s[y=' + lo + ',dy=80] ' +
+         'run fog @s remove ' + slug + '_fog');
+  L.push('execute as @a[tag=in_' + slug + '] at @s unless entity @s[y=' + lo + ',dy=80] ' +
+         'run tag @s remove in_' + slug);
+  return L.join('\n') + '\n';
+}
+
+// ---- the portal block ----
+// The same careful recipe we learned the hard way on the item forge:
+// a plain full cube, plain components, no events. Boring is good.
+function makeBlockJSON(slug) {
+  return {
+    format_version: '1.21.0',
+    'minecraft:block': {
+      description: {
+        identifier: 'max:' + slug + '_portal',
+        menu_category: { category: 'construction' },
+      },
+      components: {
+        'minecraft:geometry': 'minecraft:geometry.full_block',
+        'minecraft:material_instances': {
+          '*': { texture: slug + '_portal', render_method: 'opaque' },
+        },
+        'minecraft:collision_box': { origin: [-8, 0, -8], size: [16, 16, 16] },
+        'minecraft:selection_box': { origin: [-8, 0, -8], size: [16, 16, 16] },
+        'minecraft:destructible_by_mining': { seconds_to_destroy: 1.5 },
+        'minecraft:destructible_by_explosion': { explosion_resistance: 30 },
+        'minecraft:light_emission': 12,
+      },
+    },
+  };
+}
+
+// ---- the fog: this is what paints your sky ----
+function makeFogJSON(slug) {
+  return {
+    format_version: '1.16.100',
+    'minecraft:fog_settings': {
+      description: { identifier: 'max:' + slug + '_fog' },
+      distance: {
+        air: { fog_start: 25, fog_end: 90, fog_color: dimSky, render_distance_type: 'fixed' },
+        weather: { fog_start: 25, fog_end: 90, fog_color: dimSky, render_distance_type: 'fixed' },
+      },
+    },
+  };
+}
+function makeTerrainTextureJSON(slug) {
+  const key = slug + '_portal';
+  return {
+    resource_pack_name: 'forge',
+    texture_name: 'atlas.terrain',
+    padding: 8,
+    num_mip_levels: 4,
+    texture_data: { [key]: { textures: 'textures/blocks/' + key } },
+  };
+}
+function shade(hex, f) {
+  const r = Math.round(parseInt(hex.slice(1, 3), 16) * f);
+  const g = Math.round(parseInt(hex.slice(3, 5), 16) * f);
+  const b = Math.round(parseInt(hex.slice(5, 7), 16) * f);
+  return 'rgb(' + Math.min(255, r) + ',' + Math.min(255, g) + ',' + Math.min(255, b) + ')';
+}
+
+// The portal texture is drawn with MATHS, not by hand: for every pixel we
+// work out its angle and its distance from the middle, and a wave of sine
+// turns those into a spiral. Change the 2 or the 1.4 and the swirl changes.
+function portalTexturePNG(size) {
+  const c = document.createElement('canvas');
+  c.width = size; c.height = size;
+  const x = c.getContext('2d');
+  const scale = size / 16;
+  const g = groundInfo();
+  for (let py = 0; py < 16; py++) {
+    for (let px = 0; px < 16; px++) {
+      const dx = px - 7.5, dy = py - 7.5;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const ang = Math.atan2(dy, dx);
+      const swirl = Math.sin(ang * 2 + dist * 1.4);
+      let col;
+      if (dist > 7) col = g.c;                  // rim made of your ground block
+      else if (swirl > 0.45) col = '#ffffff';   // bright star-streaks
+      else if (swirl > -0.2) col = dimSky;
+      else col = shade(dimSky, 0.55);
+      x.fillStyle = col;
+      x.fillRect(px * scale, py * scale, scale, scale);
+    }
+  }
+  const raw = atob(c.toDataURL('image/png').split(',')[1]);
+  const bytes = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+  return bytes;
+}
+
+// ---- ID badges, so re-forging UPDATES your world instead of cloning it ----
+function uuid() {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  const b = crypto.getRandomValues(new Uint8Array(16));
+  b[6] = (b[6] & 15) | 64; b[8] = (b[8] & 63) | 128;
+  const h = Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
+  return h.slice(0, 8) + '-' + h.slice(8, 12) + '-' + h.slice(12, 16) + '-' +
+         h.slice(16, 20) + '-' + h.slice(20);
+}
+function getIds(slug) {
+  let all;
+  try { all = JSON.parse(localStorage.getItem('dim_uuids')) || {}; } catch (e) { all = {}; }
+  if (!all[slug]) all[slug] = { bh: uuid(), bm: uuid(), rh: uuid(), rm: uuid(), v: 0 };
+  all[slug].v++;
+  localStorage.setItem('dim_uuids', JSON.stringify(all));
+  return all[slug];
+}
+function currentVersion(slug) {
+  try {
+    const all = JSON.parse(localStorage.getItem('dim_uuids')) || {};
+    return (all[slug] && all[slug].v) || 0;
+  } catch (e) { return 0; }
+}
+function makeManifests(slug, ids) {
+  const ver = [1, 0, ids.v];
+  return {
+    behavior: {
+      format_version: 2,
+      header: {
+        name: dimName + ' (world)',
+        description: 'A dimension forged by Max',
+        uuid: ids.bh, version: ver, min_engine_version: [1, 21, 0],
+      },
+      modules: [{ type: 'data', uuid: ids.bm, version: ver }],
+      dependencies: [{ uuid: ids.rh, version: ver }],
+    },
+    resource: {
+      format_version: 2,
+      header: {
+        name: dimName + ' (looks)',
+        description: 'A dimension forged by Max',
+        uuid: ids.rh, version: ver, min_engine_version: [1, 21, 0],
+      },
+      modules: [{ type: 'resources', uuid: ids.rm, version: ver }],
+    },
+  };
+}
+function buildAddonFiles(portalPng, iconPng) {
+  const enc = new TextEncoder();
+  const slug = slugOf(dimName);
+  const ids = getIds(slug);
+  const { behavior, resource } = makeManifests(slug, ids);
+  const J = obj => enc.encode(JSON.stringify(obj, null, 2));
+  const BP = slug + '_world/', RP = slug + '_looks/';
+  return [
+    { name: BP + 'manifest.json', bytes: J(behavior) },
+    { name: BP + 'pack_icon.png', bytes: iconPng },
+    { name: BP + 'blocks/' + slug + '_portal.json', bytes: J(makeBlockJSON(slug)) },
+    { name: BP + 'functions/' + slug + '_tick.mcfunction',
+      bytes: enc.encode(makeFunction(slug, ids.v)) },
+    { name: BP + 'functions/tick.json', bytes: J({ values: [slug + '_tick'] }) },
+    { name: RP + 'manifest.json', bytes: J(resource) },
+    { name: RP + 'pack_icon.png', bytes: iconPng },
+    { name: RP + 'fogs/' + slug + '_fog.json', bytes: J(makeFogJSON(slug)) },
+    { name: RP + 'textures/terrain_texture.json', bytes: J(makeTerrainTextureJSON(slug)) },
+    { name: RP + 'textures/blocks/' + slug + '_portal.png', bytes: portalPng },
+    { name: RP + 'texts/en_US.lang',
+      bytes: enc.encode('tile.max:' + slug + '_portal.name=' + dimName + ' Portal\n') },
+    { name: RP + 'texts/languages.json', bytes: enc.encode('["en_US"]') },
+  ];
+}
+
+// ---------------------------------------------------------------------
+// THE ZIP MACHINE - a .mcaddon is just a zip wearing a costume
+// ---------------------------------------------------------------------
+const CRC_TABLE = (() => {
+  const t = [];
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+function crc32(bytes) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+function buildZip(files) {
+  const enc = new TextEncoder();
+  const chunks = [], central = [];
+  let offset = 0;
+  const DOSDATE = ((2026 - 1980) << 9) | (8 << 5) | 20;
+  const u16 = v => new Uint8Array([v & 255, (v >> 8) & 255]);
+  const u32 = v => new Uint8Array([v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255]);
+  for (const f of files) {
+    const nameBytes = enc.encode(f.name);
+    const crc = crc32(f.bytes);
+    const head = [u32(0x04034b50), u16(20), u16(0), u16(0), u16(0), u16(DOSDATE),
+                  u32(crc), u32(f.bytes.length), u32(f.bytes.length),
+                  u16(nameBytes.length), u16(0)];
+    central.push({ nameBytes, crc, size: f.bytes.length, offset });
+    for (const part of head) { chunks.push(part); offset += part.length; }
+    chunks.push(nameBytes); offset += nameBytes.length;
+    chunks.push(f.bytes); offset += f.bytes.length;
+  }
+  const cdStart = offset;
+  for (const c of central) {
+    const entry = [u32(0x02014b50), u16(20), u16(20), u16(0), u16(0), u16(0), u16(DOSDATE),
+                   u32(c.crc), u32(c.size), u32(c.size), u16(c.nameBytes.length),
+                   u16(0), u16(0), u16(0), u16(0), u32(0), u32(c.offset)];
+    for (const part of entry) { chunks.push(part); offset += part.length; }
+    chunks.push(c.nameBytes); offset += c.nameBytes.length;
+  }
+  const cdSize = offset - cdStart;
+  const end = [u32(0x06054b50), u16(0), u16(0), u16(central.length), u16(central.length),
+               u32(cdSize), u32(cdStart), u16(0)];
+  for (const part of end) chunks.push(part);
+  return chunks;
+}
+
+// ---------------------------------------------------------------------
+// THE PAGE
+// ---------------------------------------------------------------------
+function buildPickers() {
+  GROUNDS.forEach(g => {
+    const d = document.createElement('div');
+    d.className = 'pick';
+    d.dataset.ground = g.id;
+    d.innerHTML = '<span class="sw" style="background:' + g.c + '"></span>' + g.name;
+    d.addEventListener('pointerdown', () => { dimGround = g.id; save(); refresh(); });
+    $('groundRow').appendChild(d);
+  });
+  SKIES.forEach(s => {
+    const d = document.createElement('div');
+    d.className = 'pick';
+    d.dataset.sky = s.c;
+    d.innerHTML = '<span class="sw" style="background:' + s.c + '"></span>' + s.name;
+    d.addEventListener('pointerdown', () => { dimSky = s.c; save(); refresh(); });
+    $('skyRow').appendChild(d);
+  });
+  MOBS.forEach(m => {
+    const d = document.createElement('div');
+    d.className = 'pick';
+    d.dataset.mob = m.id;
+    d.innerHTML = '<span class="em">' + m.em + '</span>' + m.name;
+    d.addEventListener('pointerdown', () => {
+      const i = dimMobs.indexOf(m.id);
+      if (i >= 0) dimMobs.splice(i, 1);
+      else if (dimMobs.length < 6) dimMobs.push(m.id);
+      else $('forgedMsg').textContent = 'six kinds of creature is plenty!';
+      save(); refresh();
+    });
+    $('mobRow').appendChild(d);
+  });
+  RULES.forEach(r => {
+    const d = document.createElement('div');
+    d.className = 'pick';
+    d.dataset.rule = r.id;
+    d.innerHTML = '<span class="em">' + r.em + '</span>' + r.name;
+    d.addEventListener('pointerdown', () => {
+      const i = dimRules.indexOf(r.id);
+      if (i >= 0) dimRules.splice(i, 1); else dimRules.push(r.id);
+      save(); refresh();
+    });
+    $('ruleRow').appendChild(d);
+  });
+  document.querySelectorAll('#whereRow .pick').forEach(d =>
+    d.addEventListener('pointerdown', () => { dimWhere = d.dataset.where; save(); refresh(); }));
+}
+
+// a little window into your world, so you can see it before you build it
+function drawPreview() {
+  const cv = $('preview');
+  const x = cv.getContext('2d');
+  const W = cv.width, H = cv.height;
+  const g = groundInfo();
+  const sky = x.createLinearGradient(0, 0, 0, H);
+  sky.addColorStop(0, shade(dimSky, 0.45));
+  sky.addColorStop(1, dimSky);
+  x.fillStyle = sky;
+  x.fillRect(0, 0, W, H);
+  x.fillStyle = 'rgba(255,255,255,0.5)';
+  for (let i = 0; i < 40; i++) {
+    x.fillRect((i * 137) % W, (i * 79) % (H * 0.6), 2, 2);
+  }
+  const gy = H * 0.72;
+  x.fillStyle = g.c;
+  x.fillRect(0, gy, W, H - gy);
+  x.fillStyle = shade(g.c, 0.75);
+  for (let bx = 0; bx < W; bx += 40) x.fillRect(bx, gy, 2, H - gy);
+  x.fillStyle = shade(g.c, 1.15);
+  x.fillRect(0, gy, W, 4);
+  x.fillStyle = dimSky;
+  x.fillRect(W * 0.1, gy - 40, 40, 40);
+  x.fillStyle = '#ffffff';
+  x.fillRect(W * 0.1 + 13, gy - 29, 14, 5);
+  x.fillRect(W * 0.1 + 8, gy - 19, 24, 5);
+  x.fillRect(W * 0.1 + 15, gy - 9, 10, 4);
+  x.font = '30px system-ui';
+  x.textAlign = 'center';
+  dimMobs.slice(0, 6).forEach((id, i) => {
+    const m = MOBS.find(mm => mm.id === id);
+    if (m) x.fillText(m.em, W * 0.33 + i * 76, gy - 6);
+  });
+  x.font = 'bold 26px monospace';
+  x.fillStyle = 'rgba(255,255,255,0.92)';
+  x.fillText(dimName.toUpperCase(), W / 2, 44);
+  x.font = '15px monospace';
+  x.fillStyle = 'rgba(255,255,255,0.62)';
+  x.fillText(WHERE[dimWhere].label + '   y = ' + WHERE[dimWhere].y, W / 2, 70);
+  x.textAlign = 'left';
+}
+
+function refresh() {
+  document.querySelectorAll('#groundRow .pick').forEach(d =>
+    d.classList.toggle('on', d.dataset.ground === dimGround));
+  document.querySelectorAll('#skyRow .pick').forEach(d =>
+    d.classList.toggle('on', d.dataset.sky === dimSky));
+  document.querySelectorAll('#mobRow .pick').forEach(d =>
+    d.classList.toggle('on', dimMobs.includes(d.dataset.mob)));
+  document.querySelectorAll('#ruleRow .pick').forEach(d =>
+    d.classList.toggle('on', dimRules.includes(d.dataset.rule)));
+  document.querySelectorAll('#whereRow .pick').forEach(d =>
+    d.classList.toggle('on', d.dataset.where === dimWhere));
+  $('whereNote').textContent = WHERE[dimWhere].note;
+  const words = dimRules.map(r => (RULES.find(x => x.id === r) || {}).why).filter(Boolean);
+  $('previewNote').textContent = words.length
+    ? 'while you are there: ' + words.join(', ') + '.'
+    : 'no special rules yet - pick some in step 6!';
+  const slug = slugOf(dimName);
+  $('giveCmd').textContent = '/give @s max:' + slug + '_portal';
+  $('fnPeek').textContent = makeFunction(slug, currentVersion(slug) + 1);
+  drawPreview();
+}
+
+const nameBox = $('nameBox');
+nameBox.value = dimName;
+nameBox.addEventListener('input', () => {
+  dimName = nameBox.value || 'Mystery World';
+  save(); refresh();
+});
+
+$('forgeBtn').addEventListener('click', () => {
+  const slug = slugOf(dimName);
+  const files = buildAddonFiles(portalTexturePNG(16), portalTexturePNG(256));
+  const blob = new Blob(buildZip(files), { type: 'application/octet-stream' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = slug + '.mcaddon';
+  a.click();
+  URL.revokeObjectURL(a.href);
+  $('forgedMsg').textContent = 'FORGED! Look in Downloads for ' + slug + '.mcaddon';
+  refresh();
+});
+
+buildPickers();
+refresh();
+</script>
+</body>
+</html>
