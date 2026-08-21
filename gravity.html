@@ -149,13 +149,23 @@ function clampCam() {
 function screenToWorld(sx, sy) {
   return { x: cam.x + sx / cam.zoom, y: cam.y + sy / cam.zoom };
 }
-const ZOOM_MIN = 0.3, ZOOM_MAX = 2.4;
+const ZOOM_MAX = 2.4;
+
+// How far back you're allowed to pull. It used to be a flat 0.3, which on a
+// 4200-wide lab only ever showed you a corner. Instead of picking another
+// magic number, work it out: you can zoom out until the WHOLE lab is on
+// screen with a little margin, and no further — because past that you'd just
+// be shrinking the lab into the middle of an empty screen.
+function minZoom() {
+  return Math.min(0.3, Math.max(0.05,
+    Math.min(canvas.width / (WORLD_W * 1.06), canvas.height / (WORLD_H * 1.06))));
+}
 
 // Zoom so that the point under your finger/cursor stays exactly where it is.
 // That's the whole trick to zoom feeling right instead of feeling drunk.
 function zoomAt(sx, sy, factor) {
   const before = screenToWorld(sx, sy);
-  cam.zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, cam.zoom * factor));
+  cam.zoom = Math.max(minZoom(), Math.min(ZOOM_MAX, cam.zoom * factor));
   cam.x = before.x - sx / cam.zoom;
   cam.y = before.y - sy / cam.zoom;
   clampCam();
@@ -674,6 +684,7 @@ function resolveHeavyCollisions() {
       big.vx = (big.vx * ma + small.vx * mb) / (ma + mb);   // momentum keeps
       big.vy = (big.vy * ma + small.vy * mb) / (ma + mb);
       big.size = ma + mb * 0.85;
+      big.fed = 2.2; big.fedColor = '#c8a4ff';
       big.tentMax = Math.max(big.tentMax || 2, small.tentMax || 2);
       holes.splice(holes.indexOf(small), 1);
       shake = Math.max(shake, 0.8);
@@ -696,6 +707,7 @@ function resolveHeavyCollisions() {
       if (Math.hypot(h.x - s.x, h.y - s.y) > 30 * h.size + 40) continue;
       s.gone = true;
       h.size += 0.7;
+      h.fed = 2.6; h.fedColor = '#ffb64a';    // a whole star's worth of debris
       shake = Math.max(shake, 0.7);
       flashT = Math.max(flashT, 0.3);
       slurpSound();
@@ -986,6 +998,8 @@ function update(dt) {
         // down the hatch — and the hole gets a little bigger for it
         b.gone = true;
         h.size += 0.08;
+        h.fed = 1.3;                       // debris to fling about for a moment
+        h.fedColor = b.shirt || (b.type === 'crate' ? '#c98a4a' : '#ffd23f');
         slurpSound();
         floatTexts.push({ x: h.x, y: h.y - 34 * h.size, t: 1, text: 'SLURP!' });
         if (b.type === 'bomb') burps.push({ hole: h, t: 0.6 });
@@ -1045,14 +1059,23 @@ function update(dt) {
       p.vy += (dy / d) * pull * dt + (dx / d) * pull * 0.5 * dt;
       if (d < 16) p.life = 0;
     }
-    // a steady snack of glowing dust, so the hole always looks hungry
-    if (Math.random() < 0.3) {
-      const a = Math.random() * Math.PI * 2;
-      particles.push({
-        x: h.x + Math.cos(a) * 90, y: h.y + Math.sin(a) * 90,
-        vx: -Math.sin(a) * 120, vy: Math.cos(a) * 120,
-        life: 1.2, color: ['#b482ff', '#7dd3ff', '#ffffff'][Math.floor(Math.random() * 3)],
-      });
+    // Debris from whatever it just ate, whirling round before it goes down.
+    // This used to spray out non-stop whether the hole had eaten anything or
+    // not — a permanent shower of confetti with nothing feeding it. Now it
+    // only appears when there's actually something to be debris FROM, and it
+    // comes out the colour of the meal.
+    if (h.fed > 0) {
+      h.fed -= dt;
+      if (Math.random() < 0.55) {
+        const a = Math.random() * Math.PI * 2;
+        const r = (70 + Math.random() * 50) * (h.size || 1);
+        particles.push({
+          x: h.x + Math.cos(a) * r, y: h.y + Math.sin(a) * r,
+          vx: -Math.sin(a) * 140 * (h.spin || 1), vy: Math.cos(a) * 140 * (h.spin || 1),
+          life: 0.9, color: Math.random() < 0.5 ? (h.fedColor || '#ffd23f')
+                                                : ['#ffd23f', '#ffffff'][Math.random() < 0.5 ? 0 : 1],
+        });
+      }
     }
   }
   // swallowed bombs come back up as a BURP
@@ -1450,11 +1473,17 @@ function warpOffset(x, y) {
 }
 
 function drawWarpedGrid() {
-  const step = 60;
   const bend = holes.length || suns.length;
-  // finer sampling where it's bending, so the curve is a CURVE and not a
-  // row of little straight bits
-  const seg = bend ? 14 : 40;
+  // Everything here is measured in SCREEN pixels and converted back, so the
+  // grid looks the same however far in or out you are — and, just as
+  // importantly, we never do work that lands on a fraction of a pixel.
+  //
+  // The squares get bigger (in world terms) as you pull back, so they stay
+  // about 22 screen pixels apart instead of collapsing into a grey mush.
+  const step = 60 * Math.max(1, Math.ceil(22 / (60 * cam.zoom)));
+  // How finely each curve is sampled: fine up close to a hole, coarse when
+  // you've pulled right back and the wiggles would be sub-pixel anyway.
+  const seg = bend ? Math.max(5, Math.min(step, 9 / cam.zoom)) : step;
   const vw = canvas.width / cam.zoom, vh = canvas.height / cam.zoom;
   const x0 = Math.max(0, Math.floor((cam.x - 60) / step) * step);
   const x1 = Math.min(WORLD_W, cam.x + vw + 60);
@@ -1476,7 +1505,10 @@ function drawWarpedGrid() {
   // buckets by how hard IT is being pulled, so the strain glows exactly where
   // spacetime is actually stretched instead of lighting the whole line.
   // Sorting first means four stroke calls instead of a thousand.
-  const LEVELS = 4;
+  // Twelve brightness levels instead of four. The gradient was stepping in
+  // visible bands where the hole bends the grid hardest; three times as many
+  // levels smooths that out, and it still costs only one stroke call each.
+  const LEVELS = 12;
   const paths = [];
   for (let i = 0; i < LEVELS; i++) paths.push(new Path2D());
 
@@ -1497,35 +1529,35 @@ function drawWarpedGrid() {
     return dim;
   };
 
-  const addSeg = (ax, ay, bx, by, warp) => {
-    // check BOTH ends and the middle — a segment can straddle the horizon
-    // with its midpoint safely outside and one end already swallowed
-    const dim = Math.min(escaping(ax, ay), escaping(bx, by),
-                         escaping((ax + bx) / 2, (ay + by) / 2));
+  // Each point is shared by the two segments either side of it, so its warp
+  // and its dimming are worked out ONCE and carried forward — it used to
+  // measure the same point three times over.
+  const addSeg = (ax, ay, aw, ad, bx, by, bw, bd) => {
+    const dim = Math.min(ad, bd);
     if (dim <= 0.02) return;
-    const k = Math.min(LEVELS - 1, Math.floor(Math.min(1, warp / 85) * dim * LEVELS));
+    // smoothstep: eases in and out instead of ramping dead straight, which is
+    // what stops you seeing where one level becomes the next
+    const raw = Math.min(1, Math.max(aw, bw) / 85) * dim;
+    const eased = raw * raw * (3 - 2 * raw);
+    const k = Math.min(LEVELS - 1, Math.floor(eased * LEVELS));
     paths[k].moveTo(ax, ay);
     paths[k].lineTo(bx, by);
   };
 
-  for (let x = x0; x <= x1; x += step) {
-    let px = null, py = null, pw = 0;
-    for (let y = y0; y <= y1; y += seg) {
-      const [ox, oy] = warpOffset(x, y);
+  const walk = (fixed, from, to, vertical) => {
+    let px = 0, py = 0, pw = 0, pd = 0, first = true;
+    for (let t = from; t <= to; t += seg) {
+      const gx = vertical ? fixed : t, gy = vertical ? t : fixed;
+      const [ox, oy] = warpOffset(gx, gy);
+      const x = gx + ox, y = gy + oy;
       const w = Math.hypot(ox, oy);
-      if (px !== null) addSeg(px, py, x + ox, y + oy, Math.max(pw, w));
-      px = x + ox; py = y + oy; pw = w;
+      const d = escaping(x, y);
+      if (!first) addSeg(px, py, pw, pd, x, y, w, d);
+      px = x; py = y; pw = w; pd = d; first = false;
     }
-  }
-  for (let y = y0; y <= y1; y += step) {
-    let px = null, py = null, pw = 0;
-    for (let x = x0; x <= x1; x += seg) {
-      const [ox, oy] = warpOffset(x, y);
-      const w = Math.hypot(ox, oy);
-      if (px !== null) addSeg(px, py, x + ox, y + oy, Math.max(pw, w));
-      px = x + ox; py = y + oy; pw = w;
-    }
-  }
+  };
+  for (let x = x0; x <= x1; x += step) walk(x, y0, y1, true);
+  for (let y = y0; y <= y1; y += step) walk(y, x0, x1, false);
   for (let i = 0; i < LEVELS; i++) {
     const t = i / (LEVELS - 1);
     // a cool blue-white, not neon purple — the stressed lines get paler and
@@ -1534,6 +1566,7 @@ function drawWarpedGrid() {
     ctx.lineWidth = (0.9 + t * 1.7) / cam.zoom;
     ctx.stroke(paths[i]);
   }
+  ctx.lineWidth = 1;
 }
 
 function draw() {
