@@ -133,7 +133,7 @@ window.onerror = (msg, src, line) => {
 // ---------------------------------------------------------------------
 // The lab got a lot bigger — over twice the room to build in. Pinch out to
 // see it all, or two fingers to walk around it.
-const WORLD_W = 4200, WORLD_H = 2600;
+const WORLD_W = 4200, WORLD_H = 3800;
 // A solid wall all the way round, thick enough to see, that things BOUNCE off.
 const WALL = 30;
 const cam = { x: 0, y: 0, zoom: 1 };
@@ -444,7 +444,7 @@ function addHole(x, y, size) {
   if (holes.length > 3) holes.shift();     // three black holes is plenty. THREE.
 }
 function addSun(x, y) {
-  suns.push({ x, y, vx: 0, vy: 0, t: 0, rumbleT: 0 });
+  suns.push({ x, y, vx: 0, vy: 0, t: 0, rumbleT: 0, mass: 1 });
   if (suns.length > 2) supernova(suns.shift());   // crowding a sun ENDS it
 }
 function supernovaSound() {
@@ -700,28 +700,98 @@ function resolveHeavyCollisions() {
       return;                                   // one merger a frame is plenty
     }
   }
-  // A HOLE MEETS A SUN: the star gets torn apart and swallowed whole.
+  suns = suns.filter(s => !s.gone);
+}
+
+// ---------------------------------------------------------------------
+// A HOLE DRINKING A STAR
+// ---------------------------------------------------------------------
+// A black hole doesn't gulp a star down in one bite — it can't. What really
+// happens is that it peels the star apart from the outside, a layer at a
+// time, and the stolen gas spirals in along a bright stream. The star sits
+// there shrinking for ages while the hole gets fatter. It's the slowest,
+// meanest robbery in the universe, and it's much better to watch than a
+// SLURP and a puff of smoke.
+let siphons = [];              // the live streams, rebuilt every frame
+
+function updateSiphons(dt) {
+  siphons = [];
+  for (const s of suns) s.grip = 0;        // nobody's stealing from you yet
   for (const h of holes) {
     for (const s of suns) {
       if (s.gone) continue;
-      if (Math.hypot(h.x - s.x, h.y - s.y) > 30 * h.size + 40) continue;
-      s.gone = true;
-      h.size += 0.7;
-      h.fed = 2.6; h.fedColor = '#ffb64a';    // a whole star's worth of debris
-      shake = Math.max(shake, 0.7);
-      flashT = Math.max(flashT, 0.3);
-      slurpSound();
-      supernovaSound();
-      floatTexts.push({ x: h.x, y: h.y - 70 * h.size, t: 1.7, text: 'STAR EATEN!' });
-      for (let k = 0; k < 60; k++) {
-        const ang = Math.random() * Math.PI * 2, sp = 120 + Math.random() * 420;
-        particles.push({ x: s.x, y: s.y, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp,
-                         life: 0.3 + Math.random() * 0.6,
-                         color: ['#ffd23f', '#ff9f43', '#ffffff'][k % 3] });
+      const dx = h.x - s.x, dy = h.y - s.y;
+      const d = Math.hypot(dx, dy) || 1;
+      const reach = 300 + 120 * h.size;     // a bigger hole reaches further
+      if (d > reach) continue;
+      // closer = faster. It's a gentle trickle at the edge of its reach and
+      // a torrent when they're nearly touching.
+      const grip = Math.min(1, (1 - d / reach) * 1.6);
+      // Slow on purpose. A full star takes the best part of ten seconds to
+      // drink, because the point is to WATCH it happen.
+      const stolen = 0.12 * grip * dt;
+      s.mass = (s.mass === undefined ? 1 : s.mass) - stolen;
+      h.size += stolen * 0.8;               // not all of it makes it in
+      h.fed = Math.max(h.fed || 0, 0.25);
+      h.fedColor = '#ffb64a';
+      s.grip = Math.max(s.grip, grip);
+      siphons.push({ h, s, grip });
+      if (s.mass <= 0.12) {
+        // the last of the star goes down. no supernova — there's nothing
+        // left to explode; it's already inside.
+        s.gone = true;
+        h.size += 0.25;
+        h.fed = 2.4;
+        shake = Math.max(shake, 0.6);
+        flashT = Math.max(flashT, 0.25);
+        slurpSound();
+        floatTexts.push({ x: h.x, y: h.y - 70 * h.size, t: 1.8, text: 'STAR DRAINED!' });
+        for (let k = 0; k < 50; k++) {
+          const ang = Math.random() * Math.PI * 2, sp = 120 + Math.random() * 380;
+          particles.push({ x: s.x, y: s.y, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp,
+                           life: 0.3 + Math.random() * 0.6,
+                           color: ['#ffd23f', '#ff9f43', '#ffffff'][k % 3] });
+        }
       }
     }
   }
   suns = suns.filter(s => !s.gone);
+}
+
+// the stolen gas, drawn as a bright ribbon curving from star to hole
+function drawSiphons() {
+  for (const { h, s, grip } of siphons) {
+    const dx = h.x - s.x, dy = h.y - s.y;
+    const d = Math.hypot(dx, dy) || 1;
+    const nx = dx / d, ny = dy / d;
+    // the stream doesn't go straight in — it swings round the way the hole
+    // spins, which is why real ones look like a ribbon and not a pipe
+    const bowX = -ny * d * 0.28 * (h.spin || 1);
+    const bowY = nx * d * 0.28 * (h.spin || 1);
+    const mid = { x: s.x + dx * 0.5 + bowX, y: s.y + dy * 0.5 + bowY };
+    for (const pass of [[13 * grip, 'rgba(255, 150, 50, 0.20)'],
+                        [6 * grip, 'rgba(255, 205, 110, 0.45)'],
+                        [2.2 * grip, 'rgba(255, 250, 225, 0.85)']]) {
+      ctx.strokeStyle = pass[1];
+      ctx.lineWidth = pass[0];
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(s.x + nx * 20, s.y + ny * 20);
+      ctx.quadraticCurveTo(mid.x, mid.y, h.x, h.y);
+      ctx.stroke();
+    }
+    // blobs of gas travelling along it, so you can see which way it's flowing
+    for (let i = 0; i < 5; i++) {
+      const t = ((elapsed * 0.75 + i * 0.2) % 1);
+      const u = 1 - t;
+      const bx = u * u * (s.x + nx * 20) + 2 * u * t * mid.x + t * t * h.x;
+      const by = u * u * (s.y + ny * 20) + 2 * u * t * mid.y + t * t * h.y;
+      ctx.fillStyle = `rgba(255, 245, 210, ${0.9 * grip * (1 - t * 0.5)})`;
+      ctx.beginPath();
+      ctx.arc(bx, by, (4.5 - t * 2) * grip + 1, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
 }
 
 function slitherSound() {
@@ -953,11 +1023,15 @@ function update(dt) {
   }
 
   updateHeavies(dt);
+  updateSiphons(dt);
   updateRemnants(dt);
 
   // ---- DYING SUNS: burn gold, swell red, then... goodnight. ----
   for (const sun of suns) {
-    sun.t += dt;
+    // A star being robbed isn't running down its own clock — it's being
+    // taken apart from the outside. Its countdown all but stops while a
+    // hole has hold of it, so it gets drained rather than racing to explode.
+    sun.t += dt * (1 - (sun.grip || 0) * 0.85);
     // a sun is heavy: a gentle pull on everything, warmer than a hole's
     for (const b of bodies) {
       if (b === grabbed) continue;
@@ -1229,7 +1303,7 @@ addEventListener('pointerdown', e => {
         }
       } else if (r.id === 'clear') {
         bodies = []; spikes = []; particles = []; holes = []; burps = [];
-        launchers = []; suns = []; remnants = [];
+        launchers = []; suns = []; remnants = []; siphons = [];
       } else tool = r.id;
       return;
     }
@@ -1621,6 +1695,11 @@ function draw() {
     ctx.fillRect(WORLD_W - WALL / 2 - 3, y, 6, 6);
   }
 
+  // Gas being stolen from a star, drawn BEFORE the holes so the black
+  // disc covers where the stream ends — it should vanish into the hole,
+  // not paint a bright line across it.
+  drawSiphons();
+
   // black holes: a dark heart, a glowing swirl, tentacles, appetite —
   // and they've been GROWING while you weren't watching
   for (const h of holes) {
@@ -1686,7 +1765,10 @@ function draw() {
   for (const s of suns) {
     const p = Math.min(1, s.t / 8);              // 0 = newborn, 1 = goodbye
     const swell = p < 0.6 ? 1 : 1 + (p - 0.6) * 2.2;   // the red giant phase
-    const R = 34 * swell + Math.sin(elapsed * (4 + p * 14)) * 3 * p;
+    // a star being robbed visibly shrinks — that's the mass leaving
+    const mass = s.mass === undefined ? 1 : s.mass;
+    const R = (34 * swell + Math.sin(elapsed * (4 + p * 14)) * 3 * p) *
+              (0.34 + 0.66 * Math.max(0, mass));
     const cr = 255;
     const cg = Math.floor(210 - p * 150);
     const cb = Math.floor(80 - p * 60);
