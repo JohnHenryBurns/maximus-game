@@ -153,6 +153,14 @@ a.arcade-pill.arcade-float {
       <div class="pick big" data-where="deep"><span class="em">🕳️</span>DEEP UNDERGROUND</div>
     </div>
     <div class="hint" id="whereNote"></div>
+    <div class="hint" style="margin-top:14px">and how big is it?</div>
+    <div class="grid" id="sizeRow">
+      <div class="pick" data-size="small">🪨 SMALL</div>
+      <div class="pick" data-size="medium">🏝️ MEDIUM</div>
+      <div class="pick" data-size="big">🗺️ BIG</div>
+      <div class="pick" data-size="huge">🌍 HUGE</div>
+    </div>
+    <div class="hint" id="sizeNote" style="color:#ffd83d"></div>
   </div>
 
   <div class="slab">
@@ -253,6 +261,7 @@ let dimName = localStorage.getItem('dim_name') || 'The Fart Nebula';
 let dimWhere = localStorage.getItem('dim_where') || 'sky';
 let dimGround = localStorage.getItem('dim_ground') || 'minecraft:end_stone';
 let dimSky = localStorage.getItem('dim_sky') || '#a24bff';
+let dimSize = localStorage.getItem('dim_size') || 'medium';
 let dimMix = JSON.parse(localStorage.getItem('dim_mix') || '[]');
 let dimAmount = localStorage.getItem('dim_amount') || 'some';
 let dimMobs = JSON.parse(localStorage.getItem('dim_mobs') || '["minecraft:allay"]');
@@ -266,6 +275,17 @@ const WHERE = {
   deep: { y: -45, home: 140, label: 'DEEP UNDERGROUND',
           note: 'your world is carved out at y=-45, below the deepest caves. Coming home lifts you back up over the very same spot.' },
 };
+
+// How far out the world stretches from the middle. A radius of 15 means
+// 15 blocks each way, so the world is 31 across (15 + you + 15).
+const SIZES = {
+  small:  { r: 10, label: 'SMALL',  note: 'a little island - you can see the whole thing at once' },
+  medium: { r: 15, label: 'MEDIUM', note: 'a proper clearing, big enough to build something on' },
+  big:    { r: 25, label: 'BIG',    note: 'you have to walk to get to the edge' },
+  huge:   { r: 40, label: 'HUGE',   note: 'you cannot see the far side. That is 6,561 blocks of floor' },
+};
+function radius() { return (SIZES[dimSize] || SIZES.medium).r; }
+function acrossBlocks() { return radius() * 2 + 1; }
 
 const GROUNDS = [
   { id: 'minecraft:grass_block',    name: 'GRASS',      c: '#5fa63f' },
@@ -338,6 +358,7 @@ function save() {
   localStorage.setItem('dim_where', dimWhere);
   localStorage.setItem('dim_ground', dimGround);
   localStorage.setItem('dim_sky', dimSky);
+  localStorage.setItem('dim_size', dimSize);
   localStorage.setItem('dim_mix', JSON.stringify(dimMix));
   localStorage.setItem('dim_amount', dimAmount);
   localStorage.setItem('dim_mobs', JSON.stringify(dimMobs));
@@ -375,22 +396,58 @@ function seededRandom(seedStr) {
 }
 function makePatches() {
   if (!dimMix.length) return [];
+  const r = radius();
   // the seed is your whole design, so changing anything reshuffles it
-  const rand = seededRandom(dimName + '|' + dimGround + '|' + dimMix.join(',') + '|' + dimAmount);
-  const count = AMOUNTS[dimAmount] || 22;
+  const rand = seededRandom(dimName + '|' + dimGround + '|' + dimMix.join(',') +
+                            '|' + dimAmount + '|' + dimSize);
+  // A bigger world needs more scattered about - but every patch is another
+  // command, and we do not want thousands of them. So bigger worlds get
+  // SOME more patches, and each patch is BIGGER. Covers the ground without
+  // drowning the program in commands.
+  const areaFactor = Math.min(3, (r * r) / (15 * 15));
+  const count = Math.min(90, Math.round((AMOUNTS[dimAmount] || 22) * areaFactor));
+  const maxSize = 2 + Math.floor(r / 12);
   const out = [];
   for (let i = 0; i < count; i++) {
     const block = dimMix[Math.floor(rand() * dimMix.length)];
-    const x = Math.floor(rand() * 27) - 13;
-    const z = Math.floor(rand() * 27) - 13;
-    const w = Math.floor(rand() * 3);          // 0..2 extra, so patches are 1-3 wide
-    const d = Math.floor(rand() * 3);
-    // a third of them sit ON TOP as little lumps and boulders, but never
-    // right where you land, or you would arrive inside a rock
+    const w = Math.floor(rand() * maxSize);
+    const d = Math.floor(rand() * maxSize);
+    const span = 2 * r - 3;
+    let x = Math.floor(rand() * span) - (r - 2);
+    let z = Math.floor(rand() * span) - (r - 2);
+    x = Math.min(x, r - 1 - w);                // never hang over the edge
+    z = Math.min(z, r - 1 - d);
+    // a third sit ON TOP as lumps and boulders, but never right where you
+    // land, or you would arrive inside a rock
     const lump = rand() < 0.34 && (Math.abs(x) > 3 || Math.abs(z) > 3);
     out.push({ block, x, z, w, d, lump });
   }
   return out;
+}
+
+// =====================================================================
+// THE FILL LIMIT.
+//
+// Minecraft refuses any fill command bigger than 32768 blocks. A HUGE
+// world underground needs 81 x 81 x 10 = 65,610 blocks of air carved
+// out - more than twice the limit, so the command would just fail and
+// you would arrive buried in solid rock.
+//
+// So we work out how many layers fit in one command, and carve the
+// space out in slices instead. Same hole, several spoonfuls.
+// =====================================================================
+const FILL_LIMIT = 32000;                       // a little under the real 32768
+function airCarveLines(slug, r) {
+  const lines = [];
+  const area = (2 * r + 1) * (2 * r + 1);
+  const layersPerFill = Math.max(1, Math.floor(FILL_LIMIT / area));
+  const HEIGHT = 10;
+  for (let y0 = 0; y0 < HEIGHT; y0 += layersPerFill) {
+    const y1 = Math.min(HEIGHT - 1, y0 + layersPerFill - 1);
+    lines.push('execute as @a[tag=going_' + slug + '] at @s run fill ' +
+               '~-' + r + ' ~' + y0 + ' ~-' + r + ' ~' + r + ' ~' + y1 + ' ~' + r + ' air');
+  }
+  return lines;
 }
 
 // =====================================================================
@@ -421,11 +478,15 @@ function makeFunction(slug, version) {
   L.push('');
   L.push('# --- STEP 2: send them. Everything after this happens where they LAND ---');
   L.push('execute as @a[tag=going_' + slug + '] at @s run tp @s ~ ' + w.y + ' ~');
+  const r = radius();
   L.push('# build ground under their feet so they have somewhere to stand');
-  L.push('execute as @a[tag=going_' + slug + '] at @s run fill ~-15 ~-1 ~-15 ~15 ~-1 ~15 ' + dimGround);
+  L.push('# (' + acrossBlocks() + ' by ' + acrossBlocks() + ' blocks of floor)');
+  L.push('execute as @a[tag=going_' + slug + '] at @s run fill ' +
+         '~-' + r + ' ~-1 ~-' + r + ' ~' + r + ' ~-1 ~' + r + ' ' + dimGround);
   if (dimWhere === 'deep') {
-    L.push('# down here it is solid rock, so carve out some sky too');
-    L.push('execute as @a[tag=going_' + slug + '] at @s run fill ~-15 ~ ~-15 ~15 ~9 ~15 air');
+    L.push('# down here it is solid rock, so carve out some sky too.');
+    L.push('# Big worlds need slices - one fill can only do 32768 blocks.');
+    airCarveLines(slug, r).forEach(l => L.push(l));
   }
   const patches = makePatches();
   if (patches.length) {
@@ -733,6 +794,8 @@ function buildPickers() {
     });
     $('mixRow').appendChild(d);
   });
+  document.querySelectorAll('#sizeRow .pick').forEach(d =>
+    d.addEventListener('pointerdown', () => { dimSize = d.dataset.size; save(); refresh(); }));
   document.querySelectorAll('#amountRow .pick').forEach(d =>
     d.addEventListener('pointerdown', () => { dimAmount = d.dataset.amount; save(); refresh(); }));
   SKIES.forEach(s => {
@@ -792,11 +855,11 @@ function drawPreview() {
   x.fillStyle = g.c;
   x.fillRect(0, gy, W, H - gy);
   // the very same scatter that gets baked into your world
-  const cell = W / 30;
+  const cell = W / acrossBlocks();
   makePatches().forEach(p => {
     const m = mixInfo(p.block);
     if (!m) return;
-    const px = (p.x + 15) * cell;
+    const px = (p.x + radius()) * cell;
     const pw = (p.w + 1) * cell;
     x.fillStyle = m.c;
     if (p.lump) {
@@ -828,7 +891,8 @@ function drawPreview() {
   x.fillText(dimName.toUpperCase(), W / 2, 44);
   x.font = '15px monospace';
   x.fillStyle = 'rgba(255,255,255,0.62)';
-  x.fillText(WHERE[dimWhere].label + '   y = ' + WHERE[dimWhere].y, W / 2, 70);
+  x.fillText(WHERE[dimWhere].label + '   y = ' + WHERE[dimWhere].y +
+             '   ' + acrossBlocks() + ' x ' + acrossBlocks(), W / 2, 70);
   x.textAlign = 'left';
 }
 
@@ -852,6 +916,10 @@ function refresh() {
     ? 'mostly ' + groundInfo().name + ', with ' + mixNames.join(' and ') +
       ' mixed in (' + makePatches().length + ' patches and lumps)'
     : 'just plain ' + groundInfo().name + ' everywhere - pick some blocks to mix in!';
+  document.querySelectorAll('#sizeRow .pick').forEach(d =>
+    d.classList.toggle('on', d.dataset.size === dimSize));
+  $('sizeNote').textContent = acrossBlocks() + ' x ' + acrossBlocks() + ' blocks - ' +
+    (SIZES[dimSize] || SIZES.medium).note;
   $('whereNote').textContent = WHERE[dimWhere].note;
   const words = dimRules.map(r => (RULES.find(x => x.id === r) || {}).why).filter(Boolean);
   $('previewNote').textContent = words.length
