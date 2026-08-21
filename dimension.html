@@ -49,7 +49,7 @@
     text-align: center; border-radius: 4px; margin-right: 8px;
   }
   .hint { color: #9a8fb0; font-size: 12.5px; margin: 8px 0 6px; }
-  input[type=text] {
+  input[type=text], input[type=number] {
     width: 100%; font-family: monospace; font-size: 20px; font-weight: bold;
     padding: 10px; border-radius: 4px; border: 3px solid #120d1e;
     background: #1a1428; color: #ffd83d; outline: none;
@@ -206,6 +206,8 @@ a.arcade-pill.arcade-float {
       <div class="pick" data-size="big">🗺️ BIG</div>
       <div class="pick" data-size="huge">🌍 HUGE</div>
     </div>
+    <div class="hint" style="margin-top:12px">...or type exactly how many blocks across:</div>
+    <input type="number" id="acrossBox" min="7" max="129" step="2" inputmode="numeric">
     <div class="hint" id="sizeNote" style="color:#ffd83d"></div>
   </div>
 
@@ -326,7 +328,7 @@ let dimName = localStorage.getItem('dim_name') || 'The Fart Nebula';
 let dimWhere = localStorage.getItem('dim_where') || 'sky';
 let dimGround = localStorage.getItem('dim_ground') || 'minecraft:end_stone';
 let dimSky = localStorage.getItem('dim_sky') || '#a24bff';
-let dimSize = localStorage.getItem('dim_size') || 'medium';
+
 let dimMix = JSON.parse(localStorage.getItem('dim_mix') || '[]');
 let dimAmount = localStorage.getItem('dim_amount') || 'some';
 let dimMobs = JSON.parse(localStorage.getItem('dim_mobs') || '["minecraft:allay"]');
@@ -350,8 +352,32 @@ const SIZES = {
   big:    { r: 25, label: 'BIG',    note: 'you have to walk to get to the edge' },
   huge:   { r: 40, label: 'HUGE',   note: 'you cannot see the far side. That is 6,561 blocks of floor' },
 };
-function radius() { return (SIZES[dimSize] || SIZES.medium).r; }
+// How far the world reaches from the middle. THIS is the real setting -
+// the four buttons just type numbers into it for you.
+const MIN_R = 3;
+// =====================================================================
+// WHY THERE IS A LIMIT.
+//
+// Remember the chunk bug? We build your world from where you are
+// standing, because those chunks are loaded. But Minecraft only keeps
+// chunks loaded within a few of them of a player - usually about 64
+// blocks. Ask for a world wider than that and the far edges land in
+// sleeping chunks and simply never get built.
+//
+// So instead of letting you type 500 and handing you a broken floor,
+// the box stops at 129 across. A real limit, honestly explained, beats
+// a promise that quietly fails.
+// =====================================================================
+const MAX_R = 64;
+let dimR = parseInt(localStorage.getItem('dim_r') || '0');
+function radius() { return Math.max(MIN_R, Math.min(MAX_R, dimR || 15)); }
 function acrossBlocks() { return radius() * 2 + 1; }
+function floorBlocks() { return acrossBlocks() * acrossBlocks(); }
+// which preset button (if any) matches the number you are on
+function matchingPreset() {
+  const r = radius();
+  return Object.keys(SIZES).find(k => SIZES[k].r === r) || null;
+}
 
 const GROUNDS = [
   { id: 'minecraft:grass_block',    name: 'GRASS',      c: '#5fa63f' },
@@ -496,7 +522,7 @@ function save() {
   localStorage.setItem('dim_where', dimWhere);
   localStorage.setItem('dim_ground', dimGround);
   localStorage.setItem('dim_sky', dimSky);
-  localStorage.setItem('dim_size', dimSize);
+  localStorage.setItem('dim_r', String(radius()));
   localStorage.setItem('dim_mix', JSON.stringify(dimMix));
   localStorage.setItem('dim_amount', dimAmount);
   localStorage.setItem('dim_mobs', JSON.stringify(dimMobs));
@@ -538,7 +564,7 @@ function makePatches() {
   const r = radius();
   // the seed is your whole design, so changing anything reshuffles it
   const rand = seededRandom(dimName + '|' + dimGround + '|' + dimMix.join(',') +
-                            '|' + dimAmount + '|' + dimSize);
+                            '|' + dimAmount + '|' + radius());
   // A bigger world needs more scattered about - but every patch is another
   // command, and we do not want thousands of them. So bigger worlds get
   // SOME more patches, and each patch is BIGGER. Covers the ground without
@@ -579,8 +605,12 @@ function makeSpawns() {
   if (!dimMobs.length) return [];
   const r = radius();
   const rand = seededRandom('mobs|' + dimName + '|' + dimMobs.join(',') +
-                            '|' + dimCount + '|' + dimSize);
-  const reach = Math.max(4, r - 3);            // stay well inside the floor
+                            '|' + dimCount + '|' + radius());
+  // Stay ON the floor - in a tiny world, 4 blocks out is off the edge.
+  const reach = Math.max(1, r - 2);
+  // ...and keep out of your way, unless the world is too small to have
+  // an 'out of the way'. Then anywhere that is not exactly on you.
+  const minAway = Math.min(3, reach);
   const out = [];
   dimMobs.forEach(id => {
     for (let i = 0; i < dimCount; i++) {
@@ -589,9 +619,9 @@ function makeSpawns() {
       for (let tries = 0; tries < 8; tries++) {
         dx = Math.round((rand() * 2 - 1) * reach);
         dz = Math.round((rand() * 2 - 1) * reach);
-        if (Math.abs(dx) >= 3 || Math.abs(dz) >= 3) break;
+        if (Math.abs(dx) >= minAway || Math.abs(dz) >= minAway) break;
       }
-      if (Math.abs(dx) < 3 && Math.abs(dz) < 3) dx = 4;   // last resort
+      if (Math.abs(dx) < minAway && Math.abs(dz) < minAway) dx = reach;  // last resort
       out.push({ id, dx, dz });
     }
   });
@@ -994,7 +1024,17 @@ function buildPickers() {
     $('mixRow').appendChild(d);
   });
   document.querySelectorAll('#sizeRow .pick').forEach(d =>
-    d.addEventListener('pointerdown', () => { dimSize = d.dataset.size; save(); refresh(); }));
+    d.addEventListener('pointerdown', () => {
+      dimR = SIZES[d.dataset.size].r;
+      save(); refresh();
+    }));
+  // and the box lets you type any number you like in between
+  $('acrossBox').addEventListener('input', e => {
+    const across = parseInt(e.target.value);
+    if (!across || across < 3) return;               // still typing
+    dimR = Math.max(MIN_R, Math.min(MAX_R, Math.floor((across - 1) / 2)));
+    save(); refresh();
+  });
   document.querySelectorAll('#countRow .pick').forEach(d =>
     d.addEventListener('pointerdown', () => {
       dimCount = parseInt(d.dataset.count); save(); refresh();
@@ -1208,10 +1248,18 @@ function refresh() {
     ? 'mostly ' + groundInfo().name + ', with ' + mixNames.join(' and ') +
       ' mixed in (' + makePatches().length + ' patches and lumps)'
     : 'just plain ' + groundInfo().name + ' everywhere - pick some blocks to mix in!';
+  const preset = matchingPreset();
   document.querySelectorAll('#sizeRow .pick').forEach(d =>
-    d.classList.toggle('on', d.dataset.size === dimSize));
-  $('sizeNote').textContent = acrossBlocks() + ' x ' + acrossBlocks() + ' blocks - ' +
-    (SIZES[dimSize] || SIZES.medium).note;
+    d.classList.toggle('on', d.dataset.size === preset));
+  if (document.activeElement !== $('acrossBox')) $('acrossBox').value = acrossBlocks();
+  const maxAcross = MAX_R * 2 + 1;
+  $('sizeNote').textContent =
+    acrossBlocks() + ' x ' + acrossBlocks() + ' blocks - that is ' +
+    floorBlocks().toLocaleString() + ' blocks of floor' +
+    (preset ? ' - ' + SIZES[preset].note : '') +
+    (radius() >= MAX_R
+      ? '. That is the biggest we can build in one go: Minecraft only keeps chunks near you switched on, so a wider world would have edges that never get built.'
+      : '');
   $('whereNote').textContent = WHERE[dimWhere].note;
   const words = dimRules.map(r => (RULES.find(x => x.id === r) || {}).why).filter(Boolean);
   $('previewNote').textContent = words.length
