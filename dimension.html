@@ -610,15 +610,14 @@ function makeSpawns() {
 // space out in slices instead. Same hole, several spoonfuls.
 // =====================================================================
 const FILL_LIMIT = 32000;                       // a little under the real 32768
-function airCarveLines(slug, r) {
+function airCarveLines(slug, r, yFrom, yTo) {
   const lines = [];
   const area = (2 * r + 1) * (2 * r + 1);
   const layersPerFill = Math.max(1, Math.floor(FILL_LIMIT / area));
-  const HEIGHT = 10;
-  for (let y0 = 0; y0 < HEIGHT; y0 += layersPerFill) {
-    const y1 = Math.min(HEIGHT - 1, y0 + layersPerFill - 1);
+  for (let y0 = yFrom; y0 <= yTo; y0 += layersPerFill) {
+    const y1 = Math.min(yTo, y0 + layersPerFill - 1);
     lines.push('execute as @a[tag=going_' + slug + '] at @s run fill ' +
-               '~-' + r + ' ~' + y0 + ' ~-' + r + ' ~' + r + ' ~' + y1 + ' ~' + r + ' air');
+               '~-' + r + ' ' + y0 + ' ~-' + r + ' ~' + r + ' ' + y1 + ' ~' + r + ' air');
   }
   return lines;
 }
@@ -649,40 +648,68 @@ function makeFunction(slug, version) {
   L.push('execute as @a[tag=!step_' + slug + ',tag=!in_' + slug + '] at @s ' +
          'if block ~ ~-1 ~ ' + portal + ' run tag @s add going_' + slug);
   L.push('');
-  L.push('# --- STEP 2: send them. Everything after this happens where they LAND ---');
-  L.push('execute as @a[tag=going_' + slug + '] at @s run tp @s ~ ' + w.y + ' ~');
+  // =====================================================================
+  // BUILD IT FIRST, THEN GO.
+  //
+  // Minecraft only builds blocks in chunks that are LOADED. A chunk is a
+  // tall column of the world, 16 by 16 blocks wide and going all the way
+  // from the bottom of the world to the top - and the game only keeps the
+  // ones near a player switched on.
+  //
+  // We used to teleport first and build afterwards, and that is why the
+  // floor came out in chunk-shaped pieces: the moment you arrived, the
+  // chunks up there were still waking up, so the fill only landed in the
+  // few that happened to be ready.
+  //
+  // The fix is the good kind - the sort that makes the problem impossible
+  // rather than less likely. Because a chunk is a whole COLUMN, the chunk
+  // you are standing in right now already contains y=250 and y=-45. So we
+  // build up there from down here, before we go anywhere, in chunks that
+  // are certainly loaded. Then we teleport into a world that is already
+  // finished and waiting.
+  //
+  // That is why the heights below are exact numbers (249) instead of
+  // relative ones (~-1): we are reaching up from somewhere else.
+  // =====================================================================
   const r = radius();
-  L.push('# build ground under their feet so they have somewhere to stand');
-  L.push('# (' + acrossBlocks() + ' by ' + acrossBlocks() + ' blocks of floor)');
+  const floorY = w.y - 1;               // the ground you land on
+  const feetY = w.y;                    // where your boots go
+  L.push('# --- STEP 2: build the world FIRST, from right here, while the');
+  L.push('# chunks are definitely loaded. Exact heights, because we are');
+  L.push('# reaching up (or down) from the normal world ---');
+  L.push('# ' + acrossBlocks() + ' by ' + acrossBlocks() + ' blocks of floor at y=' + floorY);
   L.push('execute as @a[tag=going_' + slug + '] at @s run fill ' +
-         '~-' + r + ' ~-1 ~-' + r + ' ~' + r + ' ~-1 ~' + r + ' ' + dimGround);
+         '~-' + r + ' ' + floorY + ' ~-' + r + ' ~' + r + ' ' + floorY + ' ~' + r + ' ' + dimGround);
   if (dimWhere === 'deep') {
     L.push('# down here it is solid rock, so carve out some sky too.');
     L.push('# Big worlds need slices - one fill can only do 32768 blocks.');
-    airCarveLines(slug, r).forEach(l => L.push(l));
+    airCarveLines(slug, r, feetY, feetY + 9).forEach(l => L.push(l));
   }
   const patches = makePatches();
   if (patches.length) {
-    L.push('# now scatter the other blocks through it. These numbers were');
-    L.push('# rolled once while the world was designed - commands cannot');
-    L.push('# roll dice, so we did it for them.');
+    L.push('# scatter the other blocks through it. These numbers were rolled');
+    L.push('# once while the world was designed - commands cannot roll dice,');
+    L.push('# so we did it for them.');
     patches.forEach(p => {
-      const y = p.lump ? '~' : '~-1';       // lumps sit on top, patches sit in the floor
+      const y = p.lump ? feetY : floorY;   // lumps sit on top, patches sit in the floor
       L.push('execute as @a[tag=going_' + slug + '] at @s run fill ' +
              '~' + p.x + ' ' + y + ' ~' + p.z + ' ' +
              '~' + (p.x + p.w) + ' ' + y + ' ~' + (p.z + p.d) + ' ' + p.block);
     });
   }
-  L.push('# drop a way home right beside them');
-  L.push('execute as @a[tag=going_' + slug + '] at @s run setblock ~2 ~-1 ~ ' + portal);
+  L.push('# a way home, waiting for you before you even arrive');
+  L.push('execute as @a[tag=going_' + slug + '] at @s run setblock ~2 ' + floorY + ' ~ ' + portal);
   const spawns = makeSpawns();
   if (spawns.length) {
     L.push('# the locals - ' + dimCount + ' of each, scattered about');
     spawns.forEach(sp => {
       L.push('execute as @a[tag=going_' + slug + '] at @s run summon ' + sp.id +
-             ' ~' + sp.dx + ' ~1 ~' + sp.dz);
+             ' ~' + sp.dx + ' ' + (feetY + 1) + ' ~' + sp.dz);
     });
   }
+  L.push('');
+  L.push('# --- STEP 3: NOW go. The world is already there ---');
+  L.push('execute as @a[tag=going_' + slug + '] at @s run tp @s ~ ' + w.y + ' ~');
   L.push('# wrap the sky in your colour');
   L.push('execute as @a[tag=going_' + slug + '] at @s run fog @s push max:' + slug +
          '_fog ' + slug + '_fog');
