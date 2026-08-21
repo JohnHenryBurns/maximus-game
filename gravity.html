@@ -682,8 +682,12 @@ function updateHeavies(dt) {
     } else {
       const sp = Math.hypot(o.vx, o.vy);
       if (sp > BIG_MAX_V) { o.vx *= BIG_MAX_V / sp; o.vy *= BIG_MAX_V / sp; }
-      o.vx *= 1 - 0.25 * dt;              // a whisper of drag so they settle
-      o.vy *= 1 - 0.25 * dt;
+      // NO DRAG. An object in motion stays in motion — there's nothing out
+      // here to rub against. I'd put a "whisper of drag so they settle" in,
+      // which meant a hole you flicked across the lab quietly slowed to a
+      // stop for no reason at all. It coasts now, for ever, until it hits
+      // something. Losing speed off the walls is the only thing that slows
+      // it down, and that's a real collision, not empty space being sticky.
       o.x += o.vx * dt;
       o.y += o.vy * dt;
     }
@@ -969,7 +973,10 @@ function update(dt) {
     b.y += b.vy * dt;
     b.angle += b.angVel * dt;
     b.angVel *= 0.99;
-    if (!gravityOn) { b.vx *= 0.999; b.vy *= 0.999; }
+    // Crates and people used to lose 6% of their speed every second in
+    // zero-g, which is the same mistake as the black holes: there is nothing
+    // out there to slow them down. Fling something with gravity off and it
+    // keeps going until it hits a wall.
 
     // the walls and floor and ceiling of the lab
     const R = b.r;
