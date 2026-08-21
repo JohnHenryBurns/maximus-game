@@ -157,7 +157,17 @@ a.arcade-pill.arcade-float {
 
   <div class="slab">
     <h2><span class="stepnum">3</span>WHAT IS THE GROUND MADE OF?</h2>
+    <div class="hint">MOSTLY this:</div>
     <div class="grid" id="groundRow"></div>
+    <div class="hint" style="margin-top:14px">...with these MIXED IN (pick up to 3):</div>
+    <div class="grid" id="mixRow"></div>
+    <div class="hint" style="margin-top:14px">how much of it is mixed in?</div>
+    <div class="grid" id="amountRow">
+      <div class="pick" data-amount="little">A LITTLE</div>
+      <div class="pick" data-amount="some">SOME</div>
+      <div class="pick" data-amount="loads">LOADS</div>
+    </div>
+    <div class="hint" id="recipeNote" style="margin-top:12px; color:#ffd83d"></div>
   </div>
 
   <div class="slab">
@@ -243,6 +253,8 @@ let dimName = localStorage.getItem('dim_name') || 'The Fart Nebula';
 let dimWhere = localStorage.getItem('dim_where') || 'sky';
 let dimGround = localStorage.getItem('dim_ground') || 'minecraft:end_stone';
 let dimSky = localStorage.getItem('dim_sky') || '#a24bff';
+let dimMix = JSON.parse(localStorage.getItem('dim_mix') || '[]');
+let dimAmount = localStorage.getItem('dim_amount') || 'some';
 let dimMobs = JSON.parse(localStorage.getItem('dim_mobs') || '["minecraft:allay"]');
 let dimRules = JSON.parse(localStorage.getItem('dim_rules') || '[]');
 
@@ -326,10 +338,60 @@ function save() {
   localStorage.setItem('dim_where', dimWhere);
   localStorage.setItem('dim_ground', dimGround);
   localStorage.setItem('dim_sky', dimSky);
+  localStorage.setItem('dim_mix', JSON.stringify(dimMix));
+  localStorage.setItem('dim_amount', dimAmount);
   localStorage.setItem('dim_mobs', JSON.stringify(dimMobs));
   localStorage.setItem('dim_rules', JSON.stringify(dimRules));
 }
 function groundInfo() { return GROUNDS.find(g => g.id === dimGround) || GROUNDS[0]; }
+function mixInfo(id) { return GROUNDS.find(g => g.id === id); }
+
+// how many patches of the other blocks get scattered about
+const AMOUNTS = { little: 10, some: 22, loads: 40 };
+
+// =====================================================================
+// THE SCATTER.
+//
+// Minecraft commands cannot roll dice - there is no "pick a random spot"
+// command. So WE roll the dice, here, once, while you are designing. The
+// positions get baked into your world program as fixed numbers.
+//
+// It uses a SEEDED random: the same design always gives the same scatter,
+// which is why the picture in step 7 is exactly what you will land on.
+// Change the name or the blocks and you get a whole new landscape.
+// =====================================================================
+function seededRandom(seedStr) {
+  let h = 1779033703 ^ seedStr.length;
+  for (let i = 0; i < seedStr.length; i++) {
+    h = Math.imul(h ^ seedStr.charCodeAt(i), 3432918353);
+    h = (h << 13) | (h >>> 19);
+  }
+  return function () {
+    h = Math.imul(h ^ (h >>> 16), 2246822507);
+    h = Math.imul(h ^ (h >>> 13), 3266489909);
+    h ^= h >>> 16;
+    return (h >>> 0) / 4294967296;
+  };
+}
+function makePatches() {
+  if (!dimMix.length) return [];
+  // the seed is your whole design, so changing anything reshuffles it
+  const rand = seededRandom(dimName + '|' + dimGround + '|' + dimMix.join(',') + '|' + dimAmount);
+  const count = AMOUNTS[dimAmount] || 22;
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    const block = dimMix[Math.floor(rand() * dimMix.length)];
+    const x = Math.floor(rand() * 27) - 13;
+    const z = Math.floor(rand() * 27) - 13;
+    const w = Math.floor(rand() * 3);          // 0..2 extra, so patches are 1-3 wide
+    const d = Math.floor(rand() * 3);
+    // a third of them sit ON TOP as little lumps and boulders, but never
+    // right where you land, or you would arrive inside a rock
+    const lump = rand() < 0.34 && (Math.abs(x) > 3 || Math.abs(z) > 3);
+    out.push({ block, x, z, w, d, lump });
+  }
+  return out;
+}
 
 // =====================================================================
 // THE PROGRAM THAT RUNS YOUR WHOLE WORLD
@@ -364,6 +426,18 @@ function makeFunction(slug, version) {
   if (dimWhere === 'deep') {
     L.push('# down here it is solid rock, so carve out some sky too');
     L.push('execute as @a[tag=going_' + slug + '] at @s run fill ~-15 ~ ~-15 ~15 ~9 ~15 air');
+  }
+  const patches = makePatches();
+  if (patches.length) {
+    L.push('# now scatter the other blocks through it. These numbers were');
+    L.push('# rolled once while the world was designed - commands cannot');
+    L.push('# roll dice, so we did it for them.');
+    patches.forEach(p => {
+      const y = p.lump ? '~' : '~-1';       // lumps sit on top, patches sit in the floor
+      L.push('execute as @a[tag=going_' + slug + '] at @s run fill ' +
+             '~' + p.x + ' ' + y + ' ~' + p.z + ' ' +
+             '~' + (p.x + p.w) + ' ' + y + ' ~' + (p.z + p.d) + ' ' + p.block);
+    });
   }
   L.push('# drop a way home right beside them');
   L.push('execute as @a[tag=going_' + slug + '] at @s run setblock ~2 ~-1 ~ ' + portal);
@@ -635,9 +709,32 @@ function buildPickers() {
     d.className = 'pick';
     d.dataset.ground = g.id;
     d.innerHTML = '<span class="sw" style="background:' + g.c + '"></span>' + g.name;
-    d.addEventListener('pointerdown', () => { dimGround = g.id; save(); refresh(); });
+    d.addEventListener('pointerdown', () => {
+      dimGround = g.id;
+      const i = dimMix.indexOf(g.id);          // it cannot be both
+      if (i >= 0) dimMix.splice(i, 1);
+      save(); refresh();
+    });
     $('groundRow').appendChild(d);
   });
+  GROUNDS.forEach(g => {
+    const d = document.createElement('div');
+    d.className = 'pick';
+    d.dataset.mix = g.id;
+    d.innerHTML = '<span class="sw" style="background:' + g.c + '"></span>' + g.name;
+    d.addEventListener('pointerdown', () => {
+      const i = dimMix.indexOf(g.id);
+      if (i >= 0) dimMix.splice(i, 1);
+      else if (g.id === dimGround) $('forgedMsg').textContent =
+        'that one is already your MAIN block - pick a different one to mix in!';
+      else if (dimMix.length < 3) dimMix.push(g.id);
+      else $('forgedMsg').textContent = 'three extra blocks is the limit!';
+      save(); refresh();
+    });
+    $('mixRow').appendChild(d);
+  });
+  document.querySelectorAll('#amountRow .pick').forEach(d =>
+    d.addEventListener('pointerdown', () => { dimAmount = d.dataset.amount; save(); refresh(); }));
   SKIES.forEach(s => {
     const d = document.createElement('div');
     d.className = 'pick';
@@ -694,10 +791,26 @@ function drawPreview() {
   const gy = H * 0.72;
   x.fillStyle = g.c;
   x.fillRect(0, gy, W, H - gy);
+  // the very same scatter that gets baked into your world
+  const cell = W / 30;
+  makePatches().forEach(p => {
+    const m = mixInfo(p.block);
+    if (!m) return;
+    const px = (p.x + 15) * cell;
+    const pw = (p.w + 1) * cell;
+    x.fillStyle = m.c;
+    if (p.lump) {
+      x.fillRect(px, gy - cell, pw, cell);          // a lump sitting on top
+      x.fillStyle = shade(m.c, 1.2);
+      x.fillRect(px, gy - cell, pw, 3);
+    } else {
+      x.fillRect(px, gy, pw, cell * 0.9);           // a patch in the floor
+    }
+  });
   x.fillStyle = shade(g.c, 0.75);
-  for (let bx = 0; bx < W; bx += 40) x.fillRect(bx, gy, 2, H - gy);
+  for (let bx = 0; bx < W; bx += 40) x.fillRect(bx, gy + cell, 2, H - gy - cell);
   x.fillStyle = shade(g.c, 1.15);
-  x.fillRect(0, gy, W, 4);
+  x.fillRect(0, gy, W, 3);
   x.fillStyle = dimSky;
   x.fillRect(W * 0.1, gy - 40, 40, 40);
   x.fillStyle = '#ffffff';
@@ -730,6 +843,15 @@ function refresh() {
     d.classList.toggle('on', dimRules.includes(d.dataset.rule)));
   document.querySelectorAll('#whereRow .pick').forEach(d =>
     d.classList.toggle('on', d.dataset.where === dimWhere));
+  document.querySelectorAll('#mixRow .pick').forEach(d =>
+    d.classList.toggle('on', dimMix.includes(d.dataset.mix)));
+  document.querySelectorAll('#amountRow .pick').forEach(d =>
+    d.classList.toggle('on', d.dataset.amount === dimAmount));
+  const mixNames = dimMix.map(id => (mixInfo(id) || {}).name).filter(Boolean);
+  $('recipeNote').textContent = mixNames.length
+    ? 'mostly ' + groundInfo().name + ', with ' + mixNames.join(' and ') +
+      ' mixed in (' + makePatches().length + ' patches and lumps)'
+    : 'just plain ' + groundInfo().name + ' everywhere - pick some blocks to mix in!';
   $('whereNote').textContent = WHERE[dimWhere].note;
   const words = dimRules.map(r => (RULES.find(x => x.id === r) || {}).why).filter(Boolean);
   $('previewNote').textContent = words.length
