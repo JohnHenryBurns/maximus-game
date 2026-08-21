@@ -1,0 +1,1568 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>THE ADDON FORGE</title>
+<style>
+  /* ==== Minecraft-y look: stone, dirt, and chunky pixels ==== */
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: #2b2b33;
+    color: #eee;
+    font-family: "Segoe UI", system-ui, sans-serif;
+  }
+  body {
+    background-image:
+      linear-gradient(rgba(0,0,0,0.25) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,0,0,0.25) 1px, transparent 1px);
+    background-size: 48px 48px;
+    padding-bottom: 80px;
+  }
+  main { max-width: 640px; margin: 0 auto; padding: 12px; }
+  h1 {
+    text-align: center;
+    font-family: monospace;
+    font-size: clamp(26px, 7vw, 44px);
+    letter-spacing: 2px;
+    color: #ffd83d;
+    text-shadow: 3px 3px 0 #5c3a1e;
+    margin: 54px 0 4px;
+  }
+  .tagline { text-align: center; color: #aaa; margin: 0 0 20px; font-size: 14px; }
+
+  /* each design step is a "slab" */
+  .slab {
+    background: #3a3a44;
+    border: 3px solid #17171d;
+    border-radius: 6px;
+    box-shadow: inset 0 3px 0 rgba(255,255,255,0.07), 0 4px 0 #17171d;
+    padding: 14px;
+    margin-bottom: 18px;
+  }
+  .slab h2 {
+    margin: 0 0 10px;
+    font-family: monospace;
+    font-size: 17px;
+    color: #7fb238;
+  }
+  .slab h2 .stepnum {
+    display: inline-block;
+    background: #7fb238; color: #17171d;
+    width: 24px; height: 24px; line-height: 24px;
+    text-align: center; border-radius: 4px; margin-right: 8px;
+  }
+
+  input[type=text] {
+    width: 100%;
+    font-family: monospace; font-size: 20px; font-weight: bold;
+    padding: 10px; border-radius: 4px;
+    border: 3px solid #17171d;
+    background: #23232a; color: #ffd83d;
+    outline: none;
+  }
+  input[type=range] { width: 100%; accent-color: #7fb238; height: 34px; }
+
+  /* the three "what is it" cards */
+  .typerow { display: flex; gap: 10px; flex-wrap: wrap; }
+  .typecard {
+    flex: 1; min-width: 92px; text-align: center; cursor: pointer;
+    background: #23232a; border: 3px solid #17171d; border-radius: 6px;
+    padding: 12px 4px; user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .typecard .big { font-size: 34px; }
+  .typecard .lbl { font-family: monospace; font-size: 13px; font-weight: bold; margin-top: 4px; }
+  .typecard.on { border-color: #ffd83d; background: #46421f; }
+
+  /* the pixel painter */
+  #art {
+    display: block;
+    width: min(92vw, 480px);
+    margin: 0 auto;
+    image-rendering: pixelated;
+    border: 3px solid #17171d;
+    border-radius: 4px;
+    touch-action: none;      /* fingers paint, they don't scroll */
+    background: #23232a;
+    cursor: crosshair;
+  }
+  .palette { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-top: 12px; }
+  .swatch {
+    width: 34px; height: 34px; border-radius: 4px;
+    border: 3px solid #17171d; cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .swatch.on { border-color: #fff; transform: scale(1.15); }
+  .toolrow { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 12px; }
+  button.tool, button.tmpl {
+    font-family: monospace; font-weight: bold; font-size: 14px;
+    padding: 9px 14px; border-radius: 4px; cursor: pointer;
+    border: 3px solid #17171d;
+    background: #23232a; color: #eee;
+    box-shadow: 0 3px 0 #17171d;
+    -webkit-tap-highlight-color: transparent;
+  }
+  button.tool.on { background: #46421f; color: #ffd83d; border-color: #ffd83d; }
+  button.tool:active, button.tmpl:active { transform: translateY(3px); box-shadow: none; }
+  .tmplrow { margin-top: 10px; }
+  .tmplrow .hint { color: #888; font-size: 12px; text-align: center; margin: 8px 0 6px; }
+
+  /* THE BUTTON */
+  #forgeBtn {
+    display: block; width: 100%;
+    font-family: monospace; font-size: clamp(20px, 5vw, 28px); font-weight: bold;
+    padding: 18px; border-radius: 8px; cursor: pointer;
+    border: 4px solid #17171d;
+    background: linear-gradient(#ffd83d, #f28c18);
+    color: #3a2000;
+    box-shadow: 0 6px 0 #17171d;
+    letter-spacing: 1px;
+  }
+  #forgeBtn:active { transform: translateY(6px); box-shadow: none; }
+  #forgedMsg {
+    text-align: center; font-family: monospace; font-weight: bold;
+    color: #7fb238; margin-top: 12px; min-height: 22px;
+  }
+
+  /* the powers the typing box worked out */
+  .pchip {
+    display: inline-block; margin: 5px 5px 0 0; padding: 7px 11px;
+    border-radius: 999px; font-family: monospace; font-size: 13px; font-weight: bold;
+    background: #1f3a1f; border: 2px solid #7fb238; color: #b9f0a0;
+  }
+  .pchip.gear { background: #1f2f4a; border-color: #4a90d9; color: #a9d4f5; }
+  .pchip.none { background: #46421f; border-color: #ffd83d; color: #ffe98a; }
+  #abilityReport { margin-top: 8px; min-height: 8px; }
+  #abilityReport .plain { color: #aaa; font-size: 13px; margin-top: 8px; line-height: 1.5; }
+
+  ol.steps { line-height: 1.6; padding-left: 22px; }
+  ol.steps li { margin-bottom: 6px; }
+  .warn {
+    background: #46421f; border: 2px solid #ffd83d; border-radius: 6px;
+    padding: 10px 12px; font-size: 14px; margin-top: 10px;
+  }
+  details { margin-top: 14px; }
+  summary { cursor: pointer; font-family: monospace; color: #4aedd9; font-weight: bold; }
+  pre#jsonPeek {
+    background: #17171d; border-radius: 6px; padding: 12px;
+    font-size: 12px; overflow-x: auto; color: #9ef09e;
+  }
+</style>
+
+<style>
+/* ==== THE ARCADE PILL — every game in the arcade wears this ============ */
+a.arcade-pill {
+  display: inline-flex !important; align-items: center !important; gap: 6px !important;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif !important;
+  font-size: 13px !important; font-weight: 600 !important; letter-spacing: 0.3px !important;
+  line-height: 1 !important; text-decoration: none !important; text-transform: none !important;
+  color: #ffe0c4 !important;
+  background: rgba(24, 14, 28, 0.62) !important;
+  border: 1px solid rgba(255, 200, 150, 0.42) !important;
+  padding: 7px 13px !important; border-radius: 999px !important;
+  cursor: pointer !important; white-space: nowrap !important;
+  -webkit-backdrop-filter: blur(5px) !important; backdrop-filter: blur(5px) !important;
+  -webkit-tap-highlight-color: transparent !important;
+  transition: transform 0.12s, border-color 0.12s, background 0.12s !important;
+}
+a.arcade-pill:hover, a.arcade-pill:active, a.arcade-pill:focus-visible {
+  transform: scale(1.05) !important;
+  border-color: rgba(255, 200, 150, 0.9) !important;
+  background: rgba(40, 22, 44, 0.78) !important;
+  color: #fff5e8 !important;
+}
+a.arcade-pill .ah-arrow { font-size: 14px !important; opacity: 0.9 !important; }
+a.arcade-pill.arcade-float {
+  position: fixed !important;
+  top: calc(8px + env(safe-area-inset-top, 0px)) !important;
+  left: calc(10px + env(safe-area-inset-left, 0px)) !important;
+  z-index: 2147483000 !important;
+}
+</style>
+</head>
+<body>
+<a id="back" class="arcade-pill arcade-float" href="index.html"
+   aria-label="Back to Max's Arcade"><span class="ah-arrow">&larr;</span>Arcade</a>
+
+<main>
+  <h1>⛏ THE ADDON FORGE</h1>
+  <p class="tagline">design a REAL Minecraft item — then import it into YOUR game</p>
+
+  <div class="slab">
+    <h2><span class="stepnum">1</span>NAME YOUR ITEM</h2>
+    <input type="text" id="nameBox" maxlength="30" placeholder="Sword of the Mega Fart" autocomplete="off">
+  </div>
+
+  <div class="slab">
+    <h2><span class="stepnum">2</span>WHAT IS IT?</h2>
+    <div class="typerow">
+      <div class="typecard" data-type="weapon"><div class="big">🗡</div><div class="lbl">WEAPON</div></div>
+      <div class="typecard" data-type="food"><div class="big">🍗</div><div class="lbl">FOOD</div></div>
+      <div class="typecard" data-type="treasure"><div class="big">💎</div><div class="lbl">TREASURE</div></div>
+      <div class="typecard" data-type="block"><div class="big">🧱</div><div class="lbl">BLOCK</div></div>
+      <div class="typecard" data-type="armor"><div class="big">🛡️</div><div class="lbl">ARMOUR</div></div>
+    </div>
+    <div id="pieceWrap" style="display:none; margin-top:12px">
+      <div class="hint">which piece do you wear?</div>
+      <div class="typerow" id="pieceRow">
+        <div class="typecard" data-piece="head"><div class="big">⛑️</div><div class="lbl">HELMET</div></div>
+        <div class="typecard" data-piece="chest"><div class="big">🦺</div><div class="lbl">CHESTPLATE</div></div>
+        <div class="typecard" data-piece="legs"><div class="big">👖</div><div class="lbl">LEGGINGS</div></div>
+        <div class="typecard" data-piece="feet"><div class="big">🥾</div><div class="lbl">BOOTS</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="slab" id="powerSlab">
+    <h2><span class="stepnum">3</span><span id="powerTitle">HOW STRONG?</span></h2>
+    <input type="range" id="powerBar" min="1" max="20" value="7">
+    <div id="powerLabel" style="text-align:center; font-family:monospace; font-weight:bold; color:#ffd83d;"></div>
+  </div>
+
+  <div class="slab">
+    <h2><span class="stepnum">4</span>WHAT DOES IT DO? (just type it!)</h2>
+    <input type="text" id="abilityBox" maxlength="120"
+           placeholder="makes you jump super high and run fast" autocomplete="off">
+    <div id="abilityReport"></div>
+    <div class="tmplrow">
+      <div class="hint">ideas — tap one to add it:</div>
+      <div class="toolrow" id="ideaRow"></div>
+    </div>
+
+    <!-- blocks get a SECOND question: what happens when you tap it? -->
+    <div id="clickWrap" style="display:none; margin-top:16px; border-top:2px solid #17171d; padding-top:14px">
+      <div style="font-family:monospace; color:#7fb238; font-weight:bold; margin-bottom:8px">
+        ⚡ AND EVERY TIME YOU SET IT OFF...
+      </div>
+      <input type="text" id="clickBox" maxlength="120"
+             placeholder="it explodes and spawns a chicken" autocomplete="off">
+      <div class="hint" style="margin-top:10px">how do you set it off?</div>
+      <div class="toolrow" style="justify-content:flex-start">
+        <button class="tool on" id="trigStep">🦶 STAND ON IT</button>
+        <button class="tool" id="trigClick">🖱️ RIGHT-CLICK IT</button>
+      </div>
+      <div class="hint" id="trigNote" style="margin-top:6px"></div>
+      <div id="clickReport"></div>
+      <div class="tmplrow">
+        <div class="hint">right-click ideas — tap one to add it:</div>
+        <div class="toolrow" id="clickIdeaRow"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="slab">
+    <h2><span class="stepnum">5</span>PAINT IT (16×16 pixels, just like real Minecraft art)</h2>
+    <canvas id="art" width="480" height="480"></canvas>
+    <div id="armorPaintNote" class="hint" style="display:none; text-align:center; margin-top:8px">
+      🛡️ your painting is BOTH the icon you see in your inventory AND the pattern
+      that gets tiled across the armour on your body.
+    </div>
+    <div id="blockPaintNote" class="hint" style="display:none; text-align:center; margin-top:8px">
+      🧱 blocks can't be see-through — any pixels you leave empty get filled
+      with your main colour. This is exactly how it'll look in the world.
+    </div>
+    <div class="palette" id="palette"></div>
+    <div class="toolrow">
+      <button class="tool on" id="toolPaint">✏️ PAINT</button>
+      <button class="tool" id="toolErase">🧽 ERASE</button>
+      <button class="tool" id="toolFill">🪣 FILL</button>
+    </div>
+    <div class="tmplrow">
+      <div class="hint">need a head start? stamp one of these, then repaint it your way:</div>
+      <div class="toolrow">
+        <button class="tmpl" data-tmpl="sword">🗡 SWORD</button>
+        <button class="tmpl" data-tmpl="apple">🍎 APPLE</button>
+        <button class="tmpl" data-tmpl="gem">💎 GEM</button>
+        <button class="tmpl" data-tmpl="blank">⬜ WIPE</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="slab">
+    <h2><span class="stepnum">6</span>FORGE IT</h2>
+    <div class="toolrow" style="margin-bottom:12px">
+      <button class="tool on" id="giveToggle">📦 PUT IT IN MY INVENTORY: ON</button>
+    </div>
+    <div class="hint" style="text-align:center; margin-bottom:12px">
+      when this is ON, your creation drops straight into your inventory the first
+      time you play — no hunting through menus
+    </div>
+    <button id="forgeBtn">⚒ FORGE MY ADDON</button>
+    <div id="forgedMsg"></div>
+    <ol class="steps">
+      <li>Tap the button — a file like <b>my_item.mcaddon</b> downloads.</li>
+      <li>Find it in your <b>Downloads</b> folder and open it (double-click).</li>
+      <li>Minecraft opens and says <i>"Successfully imported!"</i></li>
+      <li>Make a world (or edit one) → <b>Behavior Packs</b> → activate your pack.</li>
+      <li>In the game, open the creative menu — <b>your item is THERE</b>. Or type
+          <code style="color:#4aedd9" id="giveCmd">/give @s max:my_item</code></li>
+      <li><b>HOLD it in your hand</b> to feel any ✨ powers you typed.</li>
+      <li id="blockNote" style="display:none"><b>It's a BLOCK</b> — place it down, then
+          <b>stand on it</b> for its ✨ powers, or <b>right-click it</b> (tap it on a phone)
+          for its 🖱️ action. If right-clicking doesn't do anything on your version of
+          Minecraft, come and tell me — we'll try it a different way.</li>
+    </ol>
+    <div class="warn">⚠️ This works with the Minecraft that phones, tablets, Xbox and the
+      Microsoft Store use (called <b>Bedrock</b>). If your Minecraft is <b>Java Edition</b>
+      it speaks a different language — ask Dad which one you have.</div>
+    <details>
+      <summary>😤 it's not showing up! — try these, in order</summary>
+      <ol class="steps">
+        <li><b>Both packs must be ON.</b> Every addon here is really TWO packs — the
+            <i>stuff</i> (what it does) and the <i>looks</i> (what it looks like). In your
+            world settings check <b>Behavior Packs</b> AND <b>Resource Packs</b>. If only one
+            is on, it won't work properly.</li>
+        <li><b>Leave the world and come back in.</b> Packs only switch on when a world loads.</li>
+        <li><b>Just ask for it.</b> Open chat and type
+            <code style="color:#4aedd9" id="giveCmd2">/give @s max:my_item</code> — if that
+            works, your addon is fine and it's only the menu being fussy.</li>
+        <li><b>If chat says "unknown item"</b>, the pack didn't load at all — Minecraft found
+            something it didn't like and threw the whole block away. Set the trigger back to
+            <b>🦶 STAND ON IT</b> and re-forge: right-clicking uses an old system that newer
+            Minecraft may have dropped, and one bad ingredient loses you the whole block.</li>
+        <li><b>Search the creative menu.</b> There's a search box — type your item's name.
+            Custom things often sit right at the end of their section.</li>
+        <li><b>Still nothing?</b> Turn ON <b>📦 PUT IT IN MY INVENTORY</b> above and re-forge.
+            That hands it to you the moment you join, no menu needed.</li>
+      </ol>
+    </details>
+    <details>
+      <summary>🔍 peek at the robot language (JSON) inside your addon</summary>
+      <pre id="jsonPeek"></pre>
+    </details>
+  </div>
+</main>
+
+<script>
+(function () {
+  var pill = document.getElementById('back');
+  if (!pill) return;
+  var go = function (e) { e.stopPropagation(); e.preventDefault(); location.href = 'index.html'; };
+  ['click', 'touchend'].forEach(function (t) { pill.addEventListener(t, go, { passive: false }); });
+  ['mousedown', 'touchstart', 'pointerdown'].forEach(function (t) {
+    pill.addEventListener(t, function (e) { e.stopPropagation(); }, { passive: false });
+  });
+})();
+</script>
+
+<script>
+// =====================================================================
+// THE ADDON FORGE — a Minecraft add-on is secretly just TEXT FILES.
+// Little instruction cards written in a language called JSON, plus a
+// tiny PNG picture, all zipped into one file. Minecraft reads the
+// cards and BELIEVES them. So this page writes the cards for you,
+// puts YOUR art inside, and zips it up. No servers, no downloads of
+// tools — the whole factory runs right here in the browser.
+// =====================================================================
+
+// ---------------------------------------------------------------------
+// THE DESIGN — everything you choose lives in these variables
+// ---------------------------------------------------------------------
+const GRID = 16;                                 // Minecraft item art is 16×16
+let itemName = localStorage.getItem('forge_name') || 'Sword of the Mega Fart';
+let itemType = localStorage.getItem('forge_type') || 'weapon';
+let itemPower = parseInt(localStorage.getItem('forge_power') || '7');
+// the picture: 256 little squares, each one a color (or null = see-through)
+let itemAbilities = localStorage.getItem('forge_abilities') || '';
+let itemClicks = localStorage.getItem('forge_clicks') || '';
+let autoGive = localStorage.getItem('forge_autogive') !== '0';   // on unless turned off
+// 'step' is built from plain commands and works everywhere.
+// 'click' uses block events, which newer Minecraft may have dropped.
+let clickTrigger = localStorage.getItem('forge_trigger') || 'step';
+let armorPiece = localStorage.getItem('forge_piece') || 'chest';
+
+// =====================================================================
+// THE FOUR PIECES OF ARMOUR. Each one knows: which slot it goes in,
+// which piece of the player's body Minecraft draws it on, which of the
+// two armour pictures it uses, and how strong the diamond version is
+// (so you can see whether yours is better).
+// =====================================================================
+const ARMOR_SLOTS = {
+  head:  { label: 'HELMET',     slot: 'slot.armor.head',  geo: 'helmet',
+           layer: 1, hide: 'helmet', diamond: 3 },
+  chest: { label: 'CHESTPLATE', slot: 'slot.armor.chest', geo: 'chestplate',
+           layer: 1, hide: 'chest',  diamond: 8 },
+  legs:  { label: 'LEGGINGS',   slot: 'slot.armor.legs',  geo: 'leggings',
+           layer: 2, hide: 'leg',    diamond: 6 },
+  feet:  { label: 'BOOTS',      slot: 'slot.armor.feet',  geo: 'boots',
+           layer: 1, hide: 'boot',   diamond: 3 },
+};
+function isArmor() { return itemType === 'armor'; }
+function piece() { return ARMOR_SLOTS[armorPiece] || ARMOR_SLOTS.chest; }
+let pixels;
+try { pixels = JSON.parse(localStorage.getItem('forge_pixels')) || null; } catch (e) { pixels = null; }
+
+// turn the item's name into a "computer name": lowercase, no spaces.
+// "Sword of the Mega Fart" -> "sword_of_the_mega_fart"
+function slugOf(name) {
+  const s = name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  return s || 'mystery_item';
+}
+
+// ---------------------------------------------------------------------
+// THE PAINT BOX
+// ---------------------------------------------------------------------
+const COLORS = [
+  '#0f0f0f', '#555555', '#9d9d97', '#d8d8d8', '#ffffff',
+  '#5c3a1e', '#8f5a2b', '#f9d29c', '#e02121', '#f28c18',
+  '#ffd83d', '#7fb238', '#2f7a1f', '#17dd62', '#4aedd9',
+  '#3c44aa', '#8632a8', '#f38baa',
+];
+let curColor = '#4aedd9';
+let curTool = 'paint';
+
+// starter pictures. '.' means see-through; letters are colors.
+const TMPL_INK = { b: '#4aedd9', w: '#ffffff', g: '#ffd83d', h: '#5c3a1e',
+                   r: '#e02121', l: '#7fb238', p: '#8632a8', d: '#555555' };
+const TEMPLATES = {
+  sword: [
+    '..............bb',
+    '.............bwb',
+    '............bwb.',
+    '...........bwb..',
+    '..........bwb...',
+    '.........bwb....',
+    '..g.....bwb.....',
+    '..gg...bwb......',
+    '...gg.bwb.......',
+    '....gbwb........',
+    '.....gb.........',
+    '....hgg.........',
+    '...hh.gg........',
+    '..hh............',
+    '.hh.............',
+    'h...............',
+  ],
+  apple: [
+    '................',
+    '.......hh.......',
+    '.......h........',
+    '.....llh........',
+    '...rrrrlrrrr....',
+    '..rrrrrrrrrrr...',
+    '..rwrrrrrrrrr...',
+    '.rrwrrrrrrrrrr..',
+    '.rrrrrrrrrrrrr..',
+    '.rrrrrrrrrrrrr..',
+    '..rrrrrrrrrrr...',
+    '..rrrrrrrrrrr...',
+    '...rrrr.rrrr....',
+    '................',
+    '................',
+    '................',
+  ],
+  gem: [
+    '................',
+    '................',
+    '....pppppppp....',
+    '...pwpppppppp...',
+    '..pwpppppppppp..',
+    '.pwpppppppppppp.',
+    '.pppppppppppppp.',
+    '..pppppppppppp..',
+    '...pppppppppp...',
+    '....pppppppp....',
+    '.....pppppp.....',
+    '......pppp......',
+    '.......pp.......',
+    '................',
+    '................',
+    '................',
+  ],
+};
+// build a starter picture (just the colours — no drawing yet)
+function templatePixels(key) {
+  const px = new Array(GRID * GRID).fill(null);
+  const art = TEMPLATES[key];
+  if (art) {
+    for (let y = 0; y < GRID; y++) {
+      for (let x = 0; x < GRID; x++) {
+        const ch = art[y][x];
+        if (ch !== '.') px[y * GRID + x] = TMPL_INK[ch] || '#ffffff';
+      }
+    }
+  }
+  return px;
+}
+function stampTemplate(key) {
+  pixels = templatePixels(key);
+  saveDesign();
+  drawArt();
+}
+const art = document.getElementById('art');
+const actx = art.getContext('2d');
+const CELL = art.width / GRID;
+
+if (!pixels || pixels.length !== GRID * GRID) {
+  pixels = templatePixels('sword');              // first visit: start with a sword
+}
+
+function drawArt() {
+  // For an ITEM, the grey checkerboard means "see-through in the game".
+  // A BLOCK can't have holes in it, so we show the empty pixels already
+  // filled with your main colour — what you see is what you'll place.
+  const bg = isBlock() ? mainColor() : null;
+  const note = document.getElementById('blockPaintNote');
+  if (note) note.style.display = isBlock() ? '' : 'none';
+  const anote = document.getElementById('armorPaintNote');
+  if (anote) anote.style.display = isArmor() ? '' : 'none';
+  for (let y = 0; y < GRID; y++) {
+    for (let x = 0; x < GRID; x++) {
+      actx.fillStyle = bg || ((x + y) % 2 ? '#2c2c33' : '#26262d');
+      actx.fillRect(x * CELL, y * CELL, CELL, CELL);
+      const c = pixels[y * GRID + x];
+      if (c) { actx.fillStyle = c; actx.fillRect(x * CELL, y * CELL, CELL, CELL); }
+    }
+  }
+  updatePeek();
+}
+
+// FILL: like the paint bucket in every art app — it spreads out from
+// where you tapped and recolors every connected square of the same color.
+function floodFill(sx, sy, to) {
+  const from = pixels[sy * GRID + sx];
+  if (from === to) return;
+  const queue = [[sx, sy]];
+  while (queue.length) {
+    const [x, y] = queue.pop();
+    if (x < 0 || y < 0 || x >= GRID || y >= GRID) continue;
+    if (pixels[y * GRID + x] !== from) continue;
+    pixels[y * GRID + x] = to;
+    queue.push([x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]);
+  }
+}
+
+let painting = false;
+function paintAt(e) {
+  const r = art.getBoundingClientRect();
+  const x = Math.floor((e.clientX - r.left) / r.width * GRID);
+  const y = Math.floor((e.clientY - r.top) / r.height * GRID);
+  if (x < 0 || y < 0 || x >= GRID || y >= GRID) return;
+  if (curTool === 'fill') floodFill(x, y, curColor);
+  else pixels[y * GRID + x] = (curTool === 'erase') ? null : curColor;
+  saveDesign();
+  drawArt();
+}
+art.addEventListener('pointerdown', e => { painting = true; art.setPointerCapture(e.pointerId); paintAt(e); });
+art.addEventListener('pointermove', e => { if (painting && curTool !== 'fill') paintAt(e); });
+art.addEventListener('pointerup', () => { painting = false; });
+
+// build the little color buttons
+const paletteDiv = document.getElementById('palette');
+COLORS.forEach(c => {
+  const b = document.createElement('div');
+  b.className = 'swatch' + (c === curColor ? ' on' : '');
+  b.style.background = c;
+  b.addEventListener('pointerdown', () => {
+    curColor = c;
+    document.querySelectorAll('.swatch').forEach(s => s.classList.remove('on'));
+    b.classList.add('on');
+    if (curTool === 'erase') setTool('paint');   // picking a color un-erases you
+  });
+  paletteDiv.appendChild(b);
+});
+
+function setTool(t) {
+  curTool = t;
+  document.getElementById('toolPaint').classList.toggle('on', t === 'paint');
+  document.getElementById('toolErase').classList.toggle('on', t === 'erase');
+  document.getElementById('toolFill').classList.toggle('on', t === 'fill');
+}
+document.getElementById('toolPaint').addEventListener('click', () => setTool('paint'));
+document.getElementById('toolErase').addEventListener('click', () => setTool('erase'));
+document.getElementById('toolFill').addEventListener('click', () => setTool('fill'));
+document.querySelectorAll('.tmpl').forEach(b =>
+  b.addEventListener('click', () => stampTemplate(b.dataset.tmpl)));
+
+// ---------------------------------------------------------------------
+// NAME / TYPE / POWER wiring
+// ---------------------------------------------------------------------
+const nameBox = document.getElementById('nameBox');
+nameBox.value = itemName;
+nameBox.addEventListener('input', () => { itemName = nameBox.value || 'Mystery Item'; saveDesign(); updatePeek(); });
+
+function setType(t) {
+  itemType = t;
+  document.querySelectorAll('.typecard').forEach(c => c.classList.toggle('on', c.dataset.type === t));
+  document.getElementById('powerSlab').style.display = (t === 'treasure') ? 'none' : '';
+  document.getElementById('powerTitle').textContent =
+    t === 'food' ? 'HOW FILLING?' : t === 'block' ? 'HOW TOUGH TO BREAK?'
+    : t === 'armor' ? 'HOW PROTECTIVE?' : 'HOW STRONG?';
+  document.getElementById('pieceWrap').style.display = (t === 'armor') ? '' : 'none';
+  saveDesign();
+  updatePower();
+  refreshAbilities();                    // some powers only work on blocks
+  refreshClicks();                       // and right-clicking is blocks-only
+  drawArt();                             // blocks preview with no see-through pixels
+}
+document.querySelectorAll('.typecard[data-type]').forEach(c =>
+  c.addEventListener('pointerdown', () => setType(c.dataset.type)));
+
+function setPiece(p) {
+  armorPiece = p;
+  document.querySelectorAll('#pieceRow .typecard').forEach(c =>
+    c.classList.toggle('on', c.dataset.piece === p));
+  saveDesign();
+  updatePower();
+  refreshAbilities();
+}
+document.querySelectorAll('#pieceRow .typecard').forEach(c =>
+  c.addEventListener('pointerdown', () => setPiece(c.dataset.piece)));
+
+const powerBar = document.getElementById('powerBar');
+powerBar.value = itemPower;
+function updatePower() {
+  itemPower = parseInt(powerBar.value);
+  document.getElementById('powerLabel').textContent =
+    itemType === 'food'
+      ? itemPower + ' hunger points (a whole steak is 8!)'
+      : itemType === 'block'
+        ? (itemPower / 4).toFixed(2) + ' seconds to break it (stone takes 1.5)'
+        : itemType === 'armor'
+          ? itemPower + ' protection (diamond ' + piece().label.toLowerCase() +
+            ': ' + piece().diamond + ')'
+          : '+' + itemPower + ' attack damage (a diamond sword is 7!)';
+  saveDesign();
+  updatePeek();
+}
+powerBar.addEventListener('input', updatePower);
+
+// =====================================================================
+// THE POWER READER — you type what your item does, in your own words,
+// and this works out which REAL Minecraft powers you meant.
+//
+// It is not magic and it is not a robot brain. It is a LIST: each power
+// knows the words that mean it, and we look through your sentence for
+// any of them. An awful lot of "the computer understood me" is exactly
+// this — a good list, checked carefully.
+//
+// Two kinds of power:
+//   🔧 GEAR    — a rule built into the item itself (wear it, it sparkles)
+//   ✨ EFFECT  — something you FEEL while holding it (jump high, run fast)
+// =====================================================================
+const POWERS = [
+  // ---- ✨ effects: these need the little program further down ----
+  { id: 'jump', kind: 'effect', effect: 'jump_boost', label: 'JUMP SUPER HIGH',
+    words: ['jump', 'bounce', 'hop', 'spring', 'moon'] },
+  { id: 'speed', kind: 'effect', effect: 'speed', label: 'RUN FAST',
+    words: ['fast', 'speed', 'quick', 'zoom', 'sprint', 'run', 'swift', 'rapid'] },
+  { id: 'strength', kind: 'effect', effect: 'strength', label: 'SUPER STRENGTH',
+    words: ['strength', 'strong', 'mighty', 'muscle', 'buff', 'punch', 'powerful'] },
+  { id: 'invis', kind: 'effect', effect: 'invisibility', label: 'TURN INVISIBLE', cap: 0,
+    words: ['invisible', 'invisibility', 'vanish', 'disappear', 'unseen', 'sneaky'] },
+  { id: 'night', kind: 'effect', effect: 'night_vision', label: 'SEE IN THE DARK', cap: 0,
+    words: ['dark', 'night vision', 'nightvision', 'see at night', 'darkness'] },
+  { id: 'water', kind: 'effect', effect: 'water_breathing', label: 'BREATHE UNDERWATER', cap: 0,
+    words: ['underwater', 'breathe', 'gills', 'scuba', 'swim', 'drown'] },
+  { id: 'fireproof', kind: 'effect', effect: 'fire_resistance', label: 'NEVER BURN', cap: 0,
+    words: ['fireproof', 'lava', 'fire', 'flame', 'burn', 'hot'] },
+  { id: 'resist', kind: 'effect', effect: 'resistance', label: 'TAKE LESS DAMAGE',
+    words: ['tough', 'protect', 'shield', 'resist', 'tank', 'armour', 'armor', 'safe'] },
+  { id: 'regen', kind: 'effect', effect: 'regeneration', label: 'HEAL YOU',
+    words: ['heal', 'healing', 'health', 'regen', 'medicine', 'cure', 'life'] },
+  { id: 'haste', kind: 'effect', effect: 'haste', label: 'MINE SUPER FAST',
+    words: ['mine', 'mining', 'dig', 'digging', 'pickaxe', 'break blocks'] },
+  { id: 'feather', kind: 'effect', effect: 'slow_falling', label: 'FLOAT DOWN GENTLY', cap: 0,
+    words: ['float', 'feather', 'parachute', 'slow fall', 'gentle', 'soft landing'] },
+  { id: 'fly', kind: 'effect', effect: 'levitation', label: 'LIFT OFF THE GROUND', cap: 0,
+    words: ['fly', 'flying', 'hover', 'levitate', 'lift', 'rocket', 'rise'] },
+  { id: 'fart', kind: 'effect', effect: 'levitation', label: 'FART PROPULSION 💨', cap: 0,
+    words: ['fart', 'farts', 'toot', 'parp', 'stinky', 'butt'] },
+
+  // ---- 🔧 gear: rules baked into the item itself ----
+  { id: 'hat', kind: 'gear', label: 'WEAR IT AS A HAT',
+    words: ['hat', 'helmet', 'wear', 'head', 'cap', 'crown'],
+    apply(c, pw) {
+      c['minecraft:wearable'] = { slot: 'slot.armor.head', protection: Math.max(1, Math.round(pw / 2)) };
+      c['minecraft:max_stack_size'] = 1;
+    } },
+  { id: 'glint', kind: 'gear', label: 'SPARKLES LIKE MAGIC', blockLabel: 'GLOWS IN THE DARK',
+    words: ['sparkle', 'sparkly', 'shiny', 'shine', 'glow', 'glowing', 'magic', 'magical', 'enchanted', 'glitter', 'light', 'lamp'],
+    apply(c) { c['minecraft:glint'] = true; },
+    block(c) { c['minecraft:light_emission'] = 15; } },
+  { id: 'sharp', kind: 'gear', label: 'HITS HARDER',
+    words: ['sharp', 'damage', 'hurt', 'sword', 'stab', 'slash', 'chop', 'weapon', 'attack'],
+    apply(c, pw) {
+      c['minecraft:hand_equipped'] = true;
+      c['minecraft:max_stack_size'] = 1;
+      c['minecraft:damage'] = Math.max(c['minecraft:damage'] || 0, pw);
+    } },
+  { id: 'tough', kind: 'gear', label: 'LASTS ALMOST FOREVER', blockLabel: 'ALMOST IMPOSSIBLE TO BREAK',
+    words: ['unbreakable', 'never break', 'never breaks', 'forever', 'durable', 'lasts', 'sturdy'],
+    apply(c) { c['minecraft:durability'] = { max_durability: 2000 }; },
+    block(c) {
+      c['minecraft:destructible_by_mining'] = { seconds_to_destroy: 30 };
+      c['minecraft:destructible_by_explosion'] = { explosion_resistance: 1200 };
+    } },
+  // ---- 🧱 block-only tricks ----
+  { id: 'slippery', kind: 'gear', label: 'SLIPPERY LIKE ICE', blockLabel: 'SLIPPERY LIKE ICE',
+    words: ['slippery', 'slidy', 'slide', 'ice', 'skid'],
+    block(c) { c['minecraft:friction'] = 0.02; } },
+  { id: 'sticky', kind: 'gear', label: 'STICKY — HARD TO SLIDE ON', blockLabel: 'STICKY — HARD TO SLIDE ON',
+    words: ['sticky', 'grippy', 'glue', 'gluey', 'tacky'],
+    // Minecraft only allows friction from 0 to 0.9. Ask for 0.98 and it
+    // throws the WHOLE block away — that's a bug that cost us an evening.
+    block(c) { c['minecraft:friction'] = 0.9; } },
+  { id: 'flammable', kind: 'gear', label: 'CATCHES FIRE', blockLabel: 'CATCHES FIRE',
+    words: ['flammable', 'catches fire', 'burns up', 'firewood'],
+    block(c) { c['minecraft:flammable'] = { catch_chance_modifier: 20, destroy_chance_modifier: 20 }; } },
+  { id: 'edible', kind: 'gear', label: 'YOU CAN EAT IT',
+    words: ['eat', 'edible', 'yummy', 'tasty', 'snack', 'delicious', 'food', 'munch'],
+    apply(c, pw) {
+      c['minecraft:use_animation'] = 'eat';
+      c['minecraft:use_modifiers'] = { use_duration: 1.6, movement_modifier: 0.35 };
+      c['minecraft:food'] = { nutrition: pw, saturation_modifier: 1.0, can_always_eat: true };
+    } },
+  { id: 'fuel', kind: 'gear', label: 'BURNS AS FURNACE FUEL',
+    words: ['fuel', 'furnace', 'firewood', 'coal'],
+    apply(c) { c['minecraft:fuel'] = { duration: 80 }; } },
+  { id: 'offhand', kind: 'gear', label: 'HOLD IT IN YOUR OTHER HAND',
+    words: ['off hand', 'offhand', 'other hand', 'left hand'],
+    apply(c) { c['minecraft:allow_off_hand'] = true; } },
+];
+
+// look through the sentence for any power's words
+function findPowers(text) {
+  const t = ' ' + String(text || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ') + ' ';
+  return POWERS.filter(p => p.words.some(w => t.includes(' ' + w)));
+}
+// ...but not every power makes sense on every thing. You can't wear a
+// block as a hat, and an item can't be slippery to walk on.
+function isBlock() { return itemType === 'block'; }
+function powerWorksHere(p) {
+  if (p.kind === 'effect') return true;             // effects work on both
+  return isBlock() ? !!p.block : !!p.apply;
+}
+function powerLabel(p) {
+  return (isBlock() && p.blockLabel) ? p.blockLabel : p.label;
+}
+
+// The little program that grants the ✨ effects. Minecraft can run a
+// list of commands every single tick (20 times a second). Ours asks:
+// "is anybody HOLDING my item?" — and if so, tops up their power. That
+// is why it lasts exactly as long as you hold it, and stops when you
+// put it away.
+// how many should the starter kit hand you? 64 blocks is a good pile,
+// but 64 swords would jam your whole inventory.
+function starterCount() {
+  return itemType === 'block' ? 64 : itemType === 'treasure' ? 16
+       : itemType === 'food' ? 8 : 1;
+}
+// what version are we on? (used so a re-forge hands you the new one)
+function currentVersion(slug) {
+  try {
+    const all = JSON.parse(localStorage.getItem('forge_uuids')) || {};
+    return (all[slug] && all[slug].v) || 0;
+  } catch (e) { return 0; }
+}
+
+function makeTickFunction(slug, found, version) {
+  const effects = found.filter(p => p.kind === 'effect');
+  const hasStepActions = isBlock() && clickTrigger === 'step' &&
+                         clickCommands(findClicks(itemClicks)).length > 0;
+  if (!effects.length && !autoGive && !hasStepActions) return null;
+  const base = Math.max(0, Math.min(4, Math.floor(itemPower / 4)));
+  // An ITEM checks who is holding it. A BLOCK checks who is standing on
+  // it — "~ ~-1 ~" means "the spot one step BELOW your feet".
+  const blocky = isBlock();
+  // Keep this file plain ASCII — fancy dashes and emoji can upset
+  // Minecraft's command reader, and a comment isn't worth the risk.
+  const lines = [
+    '# ' + itemName.replace(/[^\x20-\x7E]/g, '') + ' - forged by Max in the Addon Forge',
+    '# This file runs 20 times a second.',
+  ];
+  if (effects.length) {
+    lines.push(blocky
+      ? '# It checks the block under each player\'s feet, and if they are'
+      : isArmor()
+        ? '# It checks who is WEARING the armour, and if they are,'
+        : '# It checks who is holding the item, and if they are,');
+    lines.push(blocky
+      ? '# standing on YOUR block, it tops up their power.'
+      : '# it tops up their power.');
+  }
+  const grant = (effect, secs, amp) => blocky
+    ? 'execute as @a at @s if block ~ ~-1 ~ max:' + slug +
+      ' run effect @s ' + effect + ' ' + secs + ' ' + amp + ' true'
+    : 'effect @a[hasitem={item=max:' + slug + ',location=' +
+      (isArmor() ? piece().slot : 'slot.weapon.mainhand') + '}] ' +
+      effect + ' ' + secs + ' ' + amp + ' true';
+  // THE STARTER KIT — the surest way to get your creation into your
+  // hands. The first time you play, it drops straight into your
+  // inventory. The "tag" is how it remembers it already gave you one:
+  // line 1 gives it to anybody without the tag, line 2 tags them. So
+  // it happens exactly once, no matter how long you play.
+  if (autoGive) {
+    const tag = 'got_' + slug + '_v' + (version || 1);
+    lines.push('');
+    lines.push('# --- STARTER KIT: hand it over the first time you play ---');
+    lines.push('give @a[tag=!' + tag + '] max:' + slug + ' ' + starterCount());
+    lines.push('tag @a[tag=!' + tag + '] add ' + tag);
+  }
+
+  // THE STAND-ON TRIGGER — a pressure plate, built out of nothing but
+  // commands, so it works everywhere. The trick is the tag again:
+  //   * anyone standing on it WITHOUT the tag sets off the actions
+  //   * then they get tagged, so it doesn't fire 20 times a second
+  //   * step off, and the last line takes the tag away again
+  // So it fires exactly once each time you step on. Like a real plate.
+  const stepCmds = (blocky && clickTrigger === 'step') ? clickCommands(findClicks(itemClicks)) : [];
+  if (stepCmds.length) {
+    const tag = 'step_' + slug;
+    const onPad = 'execute as @a[tag=!' + tag + '] at @s if block ~ ~-1 ~ max:' + slug + ' run ';
+    lines.push('');
+    lines.push('# --- STAND ON IT: fires once each time you step on ---');
+    for (const cmd of stepCmds) lines.push(onPad + cmd);
+    lines.push(onPad + 'tag @s add ' + tag);
+    lines.push('# stepped off? forget them, so it can fire again next time');
+    lines.push('execute as @a[tag=' + tag + '] at @s unless block ~ ~-1 ~ max:' + slug +
+               ' run tag @s remove ' + tag);
+  }
+
+  if (effects.length) {
+    lines.push('');
+    lines.push('# --- THE POWERS ---');
+  }
+  const seen = new Set();
+  for (const p of effects) {
+    if (seen.has(p.effect)) continue;
+    seen.add(p.effect);
+    const amp = Math.min(p.cap === undefined ? 4 : p.cap, base);
+    lines.push(grant(p.effect, 3, amp));
+  }
+  if (seen.has('levitation') && !seen.has('slow_falling')) {
+    lines.push('# what goes up must come down, so here is a soft landing');
+    lines.push(grant('slow_falling', 6, 0));
+  }
+  return lines.join('\n') + '\n';
+}
+
+// =====================================================================
+// A BLOCK is a different kind of instruction card from an item: it has
+// to say what it looks like on all six sides, how long it takes to
+// break, and whether it glows. Minecraft turns it into a placeable
+// block AND an item you can hold, both from this one card.
+// =====================================================================
+function makeBlockJSON() {
+  const slug = slugOf(itemName);
+  const components = {
+    // THE SHAPE. Without this, Minecraft has no idea what to draw or
+    // what to bump into — you get an invisible block you walk through.
+    // "full_block" means a normal 16×16×16 cube, like stone or dirt.
+    'minecraft:geometry': 'minecraft:geometry.full_block',
+    // THE SKIN. "*" means every side, and "opaque" means solid — you
+    // cannot see through it (that is why we fill in any empty pixels).
+    'minecraft:material_instances': {
+      '*': { texture: slug, render_method: 'opaque' },
+    },
+    // THE SOLID PART. The box you bump into, and the box that lights up
+    // when you point at it. Measured from the middle of the block, so
+    // it starts at -8 and runs the full 16 across.
+    'minecraft:collision_box': { origin: [-8, 0, -8], size: [16, 16, 16] },
+    'minecraft:selection_box': { origin: [-8, 0, -8], size: [16, 16, 16] },
+    'minecraft:destructible_by_mining': { seconds_to_destroy: Math.max(0.2, itemPower / 4) },
+    'minecraft:destructible_by_explosion': { explosion_resistance: 3 },
+  };
+  for (const p of findPowers(itemAbilities)) {
+    if (p.kind === 'gear' && p.block) p.block(components, itemPower);
+  }
+
+  const block = {
+    description: {
+      identifier: 'max:' + slug,
+      menu_category: { category: 'construction' },
+    },
+    components,
+  };
+
+  const clicks = findClicks(itemClicks);
+  // the crafting table is a real built-in component — right-clicking it
+  // opens the bench, and Minecraft handles that all by itself
+  for (const c of clicks) if (c.component) c.component(components, itemPower);
+
+  // THE RIGHT-CLICK, the risky way. Minecraft used to let a block carry
+  // its own "events", but Mojang has been moving that over to scripts.
+  // If this version doesn't understand it, it throws away the WHOLE
+  // block — which is why it's off unless you ask for it.
+  const cmds = clickCommands(clicks);
+  if (cmds.length && clickTrigger === 'click') {
+    components['minecraft:on_interact'] = { event: 'on_right_click', target: 'self' };
+    block.events = {
+      on_right_click: {
+        run_command: { command: cmds, target: 'self' },
+      },
+    };
+  }
+
+  return { format_version: '1.21.0', 'minecraft:block': block };
+}
+// =====================================================================
+// THE ATTACHABLE. The item card gets you armour you can equip — but on
+// its own, nobody can SEE it. This second card tells Minecraft to draw
+// your pattern onto the player's body, using the same armour shapes the
+// diamond gear uses. It lives in the LOOKS pack, so even if a version
+// of Minecraft doesn't understand it, your armour still works — it just
+// goes invisible. The item can never be lost over it.
+// =====================================================================
+function makeAttachableJSON(slug) {
+  const pc = piece();
+  return {
+    format_version: '1.10.0',
+    'minecraft:attachable': {
+      description: {
+        identifier: 'max:' + slug,
+        materials: { default: 'armor', enchanted: 'armor_enchanted' },
+        textures: {
+          default: 'textures/models/armor/' + slug + '_layer_' + pc.layer,
+          enchanted: 'textures/misc/enchanted_actor_glint',
+        },
+        geometry: { default: 'geometry.humanoid.armor.' + pc.geo },
+        // this hides the ordinary armour layer so yours shows instead
+        scripts: { parent_setup: 'variable.' + pc.hide + '_layer_visible = 0.0;' },
+        render_controllers: ['controller.render.armor'],
+      },
+    },
+  };
+}
+
+// The armour picture is a different shape from an item icon: it's 64
+// wide and 32 tall, and Minecraft wraps it around the player. Rather
+// than make you paint that awkward shape, we TILE your 16x16 painting
+// across it — so your pattern covers the whole suit.
+function armorTexturePNG() {
+  const c = document.createElement('canvas');
+  c.width = 64; c.height = 32;
+  const x = c.getContext('2d');
+  x.fillStyle = mainColor();
+  x.fillRect(0, 0, 64, 32);
+  for (let ty = 0; ty < 2; ty++) {
+    for (let tx = 0; tx < 4; tx++) {
+      for (let py = 0; py < GRID; py++) {
+        for (let px = 0; px < GRID; px++) {
+          const col = pixels[py * GRID + px];
+          if (!col) continue;
+          x.fillStyle = col;
+          x.fillRect(tx * 16 + px, ty * 16 + py, 1, 1);
+        }
+      }
+    }
+  }
+  const raw = atob(c.toDataURL('image/png').split(',')[1]);
+  const bytes = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+  return bytes;
+}
+
+// blocks get their name from the language file, not from a component
+function makeBlockLang(slug) {
+  return 'tile.max:' + slug + '.name=' + itemName + '\n';
+}
+// the map that tells Minecraft which picture covers your block
+function makeTerrainTextureJSON(slug) {
+  return {
+    resource_pack_name: 'forge',
+    texture_name: 'atlas.terrain',
+    padding: 8,
+    num_mip_levels: 4,
+    texture_data: { [slug]: { textures: 'textures/blocks/' + slug } },
+  };
+}
+
+// =====================================================================
+// THE RIGHT-CLICK LIST — for blocks only. Everything here is a real
+// Minecraft COMMAND, the same ones you can type into the chat with a
+// slash. Right-clicking your block runs them, standing right where the
+// block is. "@p" means "the nearest player" — which is you, because
+// you're the one poking it.
+// =====================================================================
+const CLICKS = [
+  { id: 'boom', label: 'EXPLODES (all bang, no damage)',
+    words: ['explode', 'explodes', 'explosion', 'boom', 'bang', 'blow up'],
+    cmds: ['particle minecraft:huge_explosion_emitter ~ ~1 ~', 'playsound random.explode @p'] },
+  { id: 'tnt', label: 'DROPS REAL TNT ⚠️ (it WILL wreck your stuff)',
+    words: ['tnt', 'real tnt', 'dynamite'],
+    cmds: ['summon minecraft:tnt ~ ~1 ~'] },
+  { id: 'launch', label: 'LAUNCHES YOU INTO THE SKY',
+    words: ['launch', 'fling', 'yeet', 'blast off', 'shoot me up', 'rocket'],
+    cmds: ['effect @p slow_falling 14 0 true', 'effect @p levitation 3 5 true'] },
+  { id: 'firework', label: 'SETS OFF FIREWORKS',
+    words: ['firework', 'fireworks', 'party', 'celebrate'],
+    cmds: ['summon minecraft:fireworks_rocket ~ ~1 ~'] },
+  { id: 'lightning', label: 'STRIKES LIGHTNING NEARBY',
+    words: ['lightning', 'zap', 'thunderbolt', 'thor'],
+    cmds: ['summon minecraft:lightning_bolt ~4 ~ ~4'] },
+  { id: 'day', label: 'TURNS IT TO DAY',
+    words: ['day', 'daytime', 'morning', 'sunrise', 'sun up'],
+    cmds: ['time set day'] },
+  { id: 'night', label: 'TURNS IT TO NIGHT',
+    words: ['night', 'nighttime', 'midnight', 'dark out'],
+    cmds: ['time set night'] },
+  { id: 'rain', label: 'MAKES IT RAIN',
+    words: ['rain', 'rains', 'storm', 'raining'],
+    cmds: ['weather rain'] },
+  { id: 'clear', label: 'CLEARS THE SKY',
+    words: ['sunny', 'clear', 'stop the rain', 'nice weather'],
+    cmds: ['weather clear'] },
+  { id: 'heal', label: 'HEALS YOU',
+    words: ['heal', 'heals', 'health', 'cure', 'fix me'],
+    cmds: ['effect @p instant_health 1 3'] },
+  { id: 'feed', label: 'FILLS YOUR HUNGER BAR',
+    words: ['feed', 'hunger', 'hungry', 'full', 'fed'],
+    cmds: ['effect @p saturation 1 4'] },
+  { id: 'diamond', label: 'GIVES YOU A DIAMOND',
+    words: ['diamond', 'diamonds', 'treasure', 'rich', 'loot'],
+    cmds: ['give @p diamond 1'] },
+  { id: 'cake', label: 'GIVES YOU CAKE',
+    words: ['cake', 'birthday'],
+    cmds: ['give @p cake 1'] },
+  { id: 'burp', label: 'BURPS LOUDLY 💨',
+    words: ['burp', 'fart', 'toot', 'parp', 'rude noise', 'stinky'],
+    cmds: ['playsound random.burp @p', 'particle minecraft:balloon_gas_particle ~ ~1 ~'] },
+  { id: 'ding', label: 'PLAYS A HAPPY DING',
+    words: ['sound', 'noise', 'ding', 'beep', 'music', 'chime', 'levelup'],
+    cmds: ['playsound random.levelup @p'] },
+  { id: 'hearts', label: 'PUFFS OUT LOVE HEARTS',
+    words: ['heart', 'hearts', 'love', 'cute'],
+    cmds: ['particle minecraft:heart_particle ~ ~1 ~'] },
+  { id: 'speed', label: 'GIVES YOU SPEED FOR 15 SECONDS',
+    words: ['fast', 'speed', 'zoom', 'quick', 'sprint'],
+    cmds: ['effect @p speed 15 2 true'] },
+  { id: 'jump', label: 'GIVES YOU JUMP BOOST FOR 15 SECONDS',
+    words: ['jump', 'bounce', 'hop', 'spring'],
+    cmds: ['effect @p jump_boost 15 2 true'] },
+  { id: 'strong', label: 'GIVES YOU STRENGTH FOR 15 SECONDS',
+    words: ['strong', 'strength', 'mighty', 'buff'],
+    cmds: ['effect @p strength 15 1 true'] },
+  { id: 'invis', label: 'TURNS YOU INVISIBLE FOR 15 SECONDS',
+    words: ['invisible', 'invisibility', 'vanish', 'disappear'],
+    cmds: ['effect @p invisibility 15 0 true'] },
+  { id: 'nightvision', label: 'GIVES YOU NIGHT VISION',
+    words: ['see in the dark', 'night vision', 'nightvision'],
+    cmds: ['effect @p night_vision 60 0 true'] },
+  { id: 'chicken', label: 'SPAWNS A CHICKEN 🐔',
+    words: ['chicken'], cmds: ['summon minecraft:chicken ~ ~1 ~'] },
+  { id: 'pig', label: 'SPAWNS A PIG 🐷',
+    words: ['pig'], cmds: ['summon minecraft:pig ~ ~1 ~'] },
+  { id: 'cow', label: 'SPAWNS A COW 🐮',
+    words: ['cow'], cmds: ['summon minecraft:cow ~ ~1 ~'] },
+  { id: 'cat', label: 'SPAWNS A CAT 🐱',
+    words: ['cat', 'kitten'], cmds: ['summon minecraft:cat ~ ~1 ~'] },
+  { id: 'wolf', label: 'SPAWNS A WOLF 🐺',
+    words: ['wolf', 'dog', 'puppy'], cmds: ['summon minecraft:wolf ~ ~1 ~'] },
+  { id: 'axolotl', label: 'SPAWNS AN AXOLOTL',
+    words: ['axolotl'], cmds: ['summon minecraft:axolotl ~ ~1 ~'] },
+  { id: 'allay', label: 'SPAWNS AN ALLAY',
+    words: ['allay'], cmds: ['summon minecraft:allay ~ ~1 ~'] },
+  { id: 'zombie', label: 'SPAWNS A ZOMBIE 🧟',
+    words: ['zombie'], cmds: ['summon minecraft:zombie ~ ~1 ~'] },
+  { id: 'creeper', label: 'SPAWNS A CREEPER ⚠️',
+    words: ['creeper'], cmds: ['summon minecraft:creeper ~ ~1 ~'] },
+  { id: 'crafting', label: 'OPENS A CRAFTING TABLE',
+    words: ['craft', 'crafting', 'workbench', 'bench'],
+    component(c) {
+      c['minecraft:crafting_table'] = {
+        table_name: itemName,
+        crafting_tags: ['crafting_table'],
+      };
+    } },
+];
+
+function findClicks(text) {
+  const t = ' ' + String(text || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ') + ' ';
+  return CLICKS.filter(p => p.words.some(w => t.includes(' ' + w)));
+}
+// the whole list of commands one right-click should run
+function clickCommands(found) {
+  const cmds = [];
+  for (const c of found) {
+    if (!c.cmds) continue;
+    for (const line of c.cmds) if (!cmds.includes(line)) cmds.push(line);
+  }
+  return cmds;
+}
+
+// ---- the typing box ----
+const abilityBox = document.getElementById('abilityBox');
+abilityBox.value = itemAbilities;
+abilityBox.addEventListener('input', () => {
+  itemAbilities = abilityBox.value;
+  saveDesign();
+  refreshAbilities();
+});
+const IDEAS = ['jump super high', 'run fast', 'see in the dark', 'breathe underwater',
+               'never burn in lava', 'heal you', 'mine super fast', 'turn invisible',
+               'float down gently', 'wear it as a hat', 'never breaks', 'sparkles',
+               'FART POWER',
+               // 🧱 these ones are for blocks
+               'glows in the dark', 'slippery like ice', 'sticky', 'catches fire'];
+IDEAS.forEach(txt => {
+  const b = document.createElement('button');
+  b.className = 'tmpl';
+  b.textContent = txt;
+  b.addEventListener('click', () => {
+    const cur = abilityBox.value.trim();
+    abilityBox.value = cur ? cur + ' and ' + txt : txt;
+    itemAbilities = abilityBox.value;
+    saveDesign();
+    refreshAbilities();
+  });
+  document.getElementById('ideaRow').appendChild(b);
+});
+
+function refreshAbilities() {
+  const box = document.getElementById('abilityReport');
+  box.innerHTML = '';
+  const found = findPowers(itemAbilities);
+  if (!itemAbilities.trim()) {
+    box.innerHTML = '<div class="plain">Type anything you want it to do. ' +
+      'I will work out which real Minecraft powers you mean.</div>';
+    updatePeek();
+    return;
+  }
+  if (!found.length) {
+    box.innerHTML = '<span class="pchip none">🤔 I don\'t know that one yet</span>' +
+      '<div class="plain">Try tapping one of the ideas below — every one of those really works.</div>';
+    updatePeek();
+    return;
+  }
+  const works = found.filter(powerWorksHere);
+  const wrongThing = found.filter(p => !powerWorksHere(p));
+  works.forEach(p => {
+    const s = document.createElement('span');
+    s.className = 'pchip' + (p.kind === 'gear' ? ' gear' : '');
+    s.textContent = (p.kind === 'gear' ? '🔧 ' : '✨ ') + powerLabel(p);
+    box.appendChild(s);
+  });
+  if (works.some(p => p.kind === 'effect')) {
+    const d = document.createElement('div');
+    d.className = 'plain';
+    d.textContent = isBlock()
+      ? '✨ powers happen while you STAND ON the block. Step off and they stop.'
+      : isArmor()
+        ? '✨ powers work while you WEAR it. Take it off and they stop.'
+        : '✨ powers work while you HOLD it in your hand. Put it away and they stop.';
+    box.appendChild(d);
+  }
+  if (wrongThing.length) {
+    const d = document.createElement('div');
+    d.className = 'plain';
+    d.textContent = '🚫 ' + wrongThing.map(p => p.label).join(', ') + ' — that only works on ' +
+                    (isBlock() ? 'items, not blocks.' : 'blocks, not items.');
+    box.appendChild(d);
+  }
+  if (!works.length && !wrongThing.length) {
+    box.innerHTML = '<span class="pchip none">🤔 I don\'t know that one yet</span>';
+  }
+  updatePeek();
+}
+
+// ---- the right-click typing box (blocks only) ----
+const clickBox = document.getElementById('clickBox');
+clickBox.value = itemClicks;
+clickBox.addEventListener('input', () => {
+  itemClicks = clickBox.value;
+  saveDesign();
+  refreshClicks();
+});
+const CLICK_IDEAS = ['it explodes', 'launches you into the sky', 'spawns a chicken',
+                     'turns it to night', 'makes it rain', 'gives you a diamond',
+                     'heals you', 'sets off fireworks', 'burps', 'plays a ding',
+                     'puffs out love hearts', 'opens a crafting table', 'strikes lightning',
+                     'spawns a creeper'];
+CLICK_IDEAS.forEach(txt => {
+  const b = document.createElement('button');
+  b.className = 'tmpl';
+  b.textContent = txt;
+  b.addEventListener('click', () => {
+    const cur = clickBox.value.trim();
+    clickBox.value = cur ? cur + ' and ' + txt : txt;
+    itemClicks = clickBox.value;
+    saveDesign();
+    refreshClicks();
+  });
+  document.getElementById('clickIdeaRow').appendChild(b);
+});
+
+function refreshClicks() {
+  document.getElementById('clickWrap').style.display = isBlock() ? '' : 'none';
+  const box = document.getElementById('clickReport');
+  box.innerHTML = '';
+  if (!isBlock()) { updatePeek(); return; }
+  const found = findClicks(itemClicks);
+  if (!itemClicks.trim()) {
+    box.innerHTML = '<div class="plain">Leave this empty and right-clicking does nothing. ' +
+      'Fill it in and your block becomes a BUTTON.</div>';
+    updatePeek();
+    return;
+  }
+  if (!found.length) {
+    box.innerHTML = '<span class="pchip none">🤔 I don\'t know that one yet</span>' +
+      '<div class="plain">Try tapping an idea below — every one of those really works.</div>';
+    updatePeek();
+    return;
+  }
+  found.forEach(c => {
+    const s = document.createElement('span');
+    s.className = 'pchip';
+    s.textContent = (clickTrigger === 'step' ? '🦶 ' : '🖱️ ') + c.label;
+    box.appendChild(s);
+  });
+  const d = document.createElement('div');
+  d.className = 'plain';
+  d.textContent = clickTrigger === 'step'
+    ? 'Every time you step onto it, all of that happens. Step off and back on to do it again.'
+    : 'Every single right-click runs all of that. Tap it again and it happens again.';
+  box.appendChild(d);
+  updatePeek();
+}
+
+function saveDesign() {
+  localStorage.setItem('forge_name', itemName);
+  localStorage.setItem('forge_type', itemType);
+  localStorage.setItem('forge_power', String(itemPower));
+  localStorage.setItem('forge_pixels', JSON.stringify(pixels));
+  localStorage.setItem('forge_abilities', itemAbilities);
+  localStorage.setItem('forge_clicks', itemClicks);
+  localStorage.setItem('forge_autogive', autoGive ? '1' : '0');
+  localStorage.setItem('forge_trigger', clickTrigger);
+  localStorage.setItem('forge_piece', armorPiece);
+}
+
+// ---- how do you set the block off? ----
+function setTrigger(t) {
+  clickTrigger = t;
+  document.getElementById('trigStep').classList.toggle('on', t === 'step');
+  document.getElementById('trigClick').classList.toggle('on', t === 'click');
+  document.getElementById('trigNote').innerHTML = t === 'step'
+    ? '✅ built out of plain commands — this works on every Bedrock Minecraft.'
+    : '⚠️ uses the old block-event system. Newer Minecraft may have dropped it, and if it ' +
+      'has, your block won\'t appear AT ALL. If that happens, switch back to STAND ON IT.';
+  saveDesign();
+  refreshClicks();
+}
+document.getElementById('trigStep').addEventListener('click', () => setTrigger('step'));
+document.getElementById('trigClick').addEventListener('click', () => setTrigger('click'));
+
+// ---- the "hand it to me" switch ----
+const giveToggle = document.getElementById('giveToggle');
+function refreshGive() {
+  giveToggle.textContent = '📦 PUT IT IN MY INVENTORY: ' + (autoGive ? 'ON' : 'OFF');
+  giveToggle.classList.toggle('on', autoGive);
+  updatePeek();
+}
+giveToggle.addEventListener('click', () => {
+  autoGive = !autoGive;
+  saveDesign();
+  refreshGive();
+});
+
+// ---------------------------------------------------------------------
+// THE INSTRUCTION CARDS (JSON) — this is what Minecraft actually reads
+// ---------------------------------------------------------------------
+function makeItemJSON() {
+  const slug = slugOf(itemName);
+  const components = {
+    'minecraft:icon': { texture: slug },
+    'minecraft:display_name': { value: itemName },
+  };
+  if (itemType === 'weapon') {
+    components['minecraft:hand_equipped'] = true;  // held like a sword, not a potato
+    components['minecraft:max_stack_size'] = 1;
+    components['minecraft:damage'] = itemPower;    // extra hurt per whack
+  } else if (itemType === 'food') {
+    components['minecraft:use_animation'] = 'eat';
+    components['minecraft:use_modifiers'] = { use_duration: 1.6, movement_modifier: 0.35 };
+    components['minecraft:food'] = {
+      nutrition: itemPower,                        // hunger points it fills
+      saturation_modifier: 1.0,
+      can_always_eat: true,                        // snack even when full. living the dream.
+    };
+  } else if (itemType === 'armor') {
+    // ARMOUR. "wearable" is the whole trick: it says which slot this
+    // goes in and how much it protects you. A diamond chestplate is 8.
+    const pc = piece();
+    components['minecraft:wearable'] = { slot: pc.slot, protection: itemPower };
+    components['minecraft:max_stack_size'] = 1;
+    components['minecraft:durability'] = { max_durability: 100 + itemPower * 40 };
+  } else {
+    components['minecraft:glint'] = true;          // enchanted sparkle, zero enchantments
+    components['minecraft:max_stack_size'] = 64;
+  }
+  // now add whatever you TYPED into the powers box — skipping the ones
+  // that only make sense on a block (an item can't be slippery to walk on)
+  for (const p of findPowers(itemAbilities)) {
+    if (p.kind === 'gear' && p.apply) p.apply(components, itemPower);
+  }
+  return {
+    format_version: '1.21.0',
+    'minecraft:item': {
+      description: {
+        identifier: 'max:' + slug,
+        menu_category: {
+          category: itemType === 'weapon' ? 'equipment' : itemType === 'food' ? 'nature' : 'items',
+        },
+      },
+      components,
+    },
+  };
+}
+
+// every pack needs an ID badge (a "UUID"). We remember your item's badges
+// so re-forging an improved version UPDATES it instead of making a clone.
+function uuid() {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  const b = crypto.getRandomValues(new Uint8Array(16));
+  b[6] = (b[6] & 15) | 64; b[8] = (b[8] & 63) | 128;
+  const h = Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
+  return h.slice(0, 8) + '-' + h.slice(8, 12) + '-' + h.slice(12, 16) + '-' +
+         h.slice(16, 20) + '-' + h.slice(20);
+}
+function getIds(slug) {
+  let all;
+  try { all = JSON.parse(localStorage.getItem('forge_uuids')) || {}; } catch (e) { all = {}; }
+  if (!all[slug]) {
+    all[slug] = { bh: uuid(), bm: uuid(), rh: uuid(), rm: uuid(), v: 0 };
+  }
+  all[slug].v++;                                   // version goes up every forge
+  localStorage.setItem('forge_uuids', JSON.stringify(all));
+  return all[slug];
+}
+
+function makeManifests(slug, ids) {
+  const ver = [1, 0, ids.v];
+  const behavior = {
+    format_version: 2,
+    header: {
+      name: itemName + ' (stuff)',
+      description: 'Forged by Max in the Addon Forge',
+      uuid: ids.bh, version: ver, min_engine_version: [1, 21, 0],
+    },
+    modules: [{ type: 'data', uuid: ids.bm, version: ver }],
+    // this line says "my looks-pack comes with me" so turning ON one pack
+    // automatically turns on the other. One switch, not two.
+    dependencies: [{ uuid: ids.rh, version: ver }],
+  };
+  const resource = {
+    format_version: 2,
+    header: {
+      name: itemName + ' (looks)',
+      description: 'Forged by Max in the Addon Forge',
+      uuid: ids.rh, version: ver, min_engine_version: [1, 21, 0],
+    },
+    modules: [{ type: 'resources', uuid: ids.rm, version: ver }],
+  };
+  return { behavior, resource };
+}
+
+function makeTextureListJSON(slug) {
+  // the map that tells Minecraft which picture belongs to which item
+  return {
+    resource_pack_name: 'forge',
+    texture_name: 'atlas.items',
+    texture_data: {},
+  };
+}
+
+// ---------------------------------------------------------------------
+// THE ZIP MACHINE — a .mcaddon is just a zip file wearing a costume.
+// Zips have a strict shape: each file gets a header, then at the end
+// there's a table of contents. We build those bytes by hand. No
+// squishing (compression) needed — Minecraft doesn't mind chunky zips.
+// ---------------------------------------------------------------------
+const CRC_TABLE = (() => {
+  const t = [];
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+// a CRC is a "fingerprint" of the bytes so unzippers can spot damage
+function crc32(bytes) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+function buildZip(files) {          // files: [{ name: 'path/in/zip', bytes: Uint8Array }]
+  const enc = new TextEncoder();
+  const chunks = [];                // pieces of the final file, in order
+  const central = [];               // the table of contents entries
+  let offset = 0;
+  const DOSDATE = ((2026 - 1980) << 9) | (8 << 5) | 19;   // zip files must carry a date
+
+  function u16(v) { return new Uint8Array([v & 255, (v >> 8) & 255]); }
+  function u32(v) { return new Uint8Array([v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255]); }
+
+  for (const f of files) {
+    const nameBytes = enc.encode(f.name);
+    const crc = crc32(f.bytes);
+    const head = [
+      u32(0x04034b50), u16(20), u16(0), u16(0),   // "a file starts here!", version, flags, method 0 = stored
+      u16(0), u16(DOSDATE),
+      u32(crc), u32(f.bytes.length), u32(f.bytes.length),
+      u16(nameBytes.length), u16(0),
+    ];
+    central.push({ nameBytes, crc, size: f.bytes.length, offset });
+    for (const part of head) { chunks.push(part); offset += part.length; }
+    chunks.push(nameBytes); offset += nameBytes.length;
+    chunks.push(f.bytes); offset += f.bytes.length;
+  }
+  const cdStart = offset;
+  for (const c of central) {
+    const entry = [
+      u32(0x02014b50), u16(20), u16(20), u16(0), u16(0),
+      u16(0), u16(DOSDATE),
+      u32(c.crc), u32(c.size), u32(c.size),
+      u16(c.nameBytes.length), u16(0), u16(0), u16(0), u16(0),
+      u32(0), u32(c.offset),
+    ];
+    for (const part of entry) { chunks.push(part); offset += part.length; }
+    chunks.push(c.nameBytes); offset += c.nameBytes.length;
+  }
+  const cdSize = offset - cdStart;
+  const end = [
+    u32(0x06054b50), u16(0), u16(0),
+    u16(central.length), u16(central.length),
+    u32(cdSize), u32(cdStart), u16(0),
+  ];
+  for (const part of end) chunks.push(part);
+  return chunks;
+}
+
+// gather every instruction card + picture into the list of files to zip
+function buildAddonFiles(iconPng, packIconPng) {
+  const enc = new TextEncoder();
+  const slug = slugOf(itemName);
+  const ids = getIds(slug);
+  const { behavior, resource } = makeManifests(slug, ids);
+  const textureList = makeTextureListJSON(slug);
+  textureList.texture_data[slug] = { textures: 'textures/items/' + slug };
+  const J = obj => enc.encode(JSON.stringify(obj, null, 2));
+  const BP = slug + '_stuff/', RP = slug + '_looks/';
+  const files = [
+    { name: BP + 'manifest.json', bytes: J(behavior) },
+    { name: BP + 'pack_icon.png', bytes: packIconPng },
+    { name: RP + 'manifest.json', bytes: J(resource) },
+    { name: RP + 'pack_icon.png', bytes: packIconPng },
+  ];
+  if (isBlock()) {
+    // a block: its picture goes in the TERRAIN atlas, and its name in
+    // the language file
+    files.push({ name: BP + 'blocks/' + slug + '.json', bytes: J(makeBlockJSON()) });
+    files.push({ name: RP + 'textures/terrain_texture.json', bytes: J(makeTerrainTextureJSON(slug)) });
+    files.push({ name: RP + 'textures/blocks/' + slug + '.png', bytes: iconPng });
+    files.push({ name: RP + 'texts/en_US.lang', bytes: enc.encode(makeBlockLang(slug)) });
+    files.push({ name: RP + 'texts/languages.json', bytes: enc.encode('["en_US"]') });
+  } else {
+    files.push({ name: BP + 'items/' + slug + '.json', bytes: J(makeItemJSON()) });
+    files.push({ name: RP + 'textures/item_texture.json', bytes: J(textureList) });
+    files.push({ name: RP + 'textures/items/' + slug + '.png', bytes: iconPng });
+    if (isArmor()) {
+      // the extra card and picture that draw it on your body
+      files.push({ name: RP + 'attachables/' + slug + '.json', bytes: J(makeAttachableJSON(slug)) });
+      files.push({ name: RP + 'textures/models/armor/' + slug + '_layer_' + piece().layer + '.png',
+                   bytes: armorTexturePNG() });
+    }
+  }
+  // items get a name in the language file too, in case the name
+  // component isn't understood by this version of Minecraft
+  if (!isBlock()) {
+    files.push({ name: RP + 'texts/en_US.lang',
+                 bytes: enc.encode('item.max:' + slug + '.name=' + itemName + '\n') });
+    files.push({ name: RP + 'texts/languages.json', bytes: enc.encode('["en_US"]') });
+  }
+  // the pack carries a tiny program if you typed ✨ powers, or if you
+  // asked for it to be handed to you when you join
+  const tick = makeTickFunction(slug, findPowers(itemAbilities), ids.v);
+  if (tick) {
+    files.push({ name: BP + 'functions/' + slug + '_tick.mcfunction', bytes: enc.encode(tick) });
+    files.push({ name: BP + 'functions/tick.json', bytes: J({ values: [slug + '_tick'] }) });
+  }
+  return files;
+}
+
+// Which colour did you use most? A solid block can't have see-through
+// holes in it, so we fill the empty pixels with your main colour.
+function mainColor() {
+  const counts = {};
+  let best = null, bestN = 0;
+  for (const c of pixels) {
+    if (!c) continue;
+    counts[c] = (counts[c] || 0) + 1;
+    if (counts[c] > bestN) { bestN = counts[c]; best = c; }
+  }
+  return best || '#9d9d97';                        // nothing painted? plain stone grey
+}
+
+// turn your painting into a real PNG picture file
+function paintingToPNG(size, background) {
+  const c = document.createElement('canvas');
+  c.width = size; c.height = size;
+  const x = c.getContext('2d');
+  x.imageSmoothingEnabled = false;                 // keep pixels CRUNCHY
+  if (background) { x.fillStyle = background; x.fillRect(0, 0, size, size); }
+  const scale = size / GRID;
+  for (let py = 0; py < GRID; py++) {
+    for (let px = 0; px < GRID; px++) {
+      const col = pixels[py * GRID + px];
+      if (col) { x.fillStyle = col; x.fillRect(px * scale, py * scale, scale, scale); }
+    }
+  }
+  const dataURL = c.toDataURL('image/png');
+  const raw = atob(dataURL.split(',')[1]);
+  const bytes = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+  return bytes;
+}
+
+// THE BIG MOMENT
+document.getElementById('forgeBtn').addEventListener('click', () => {
+  const slug = slugOf(itemName);
+  // a BLOCK gets a solid background (no see-through holes);
+  // an ITEM keeps its transparent edges so it isn't a coloured square
+  const bg = isBlock() ? mainColor() : null;
+  const files = buildAddonFiles(paintingToPNG(16, bg), paintingToPNG(256, bg));
+  const blob = new Blob(buildZip(files), { type: 'application/octet-stream' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = slug + '.mcaddon';
+  a.click();
+  URL.revokeObjectURL(a.href);
+  document.getElementById('forgedMsg').textContent =
+    '⚒ FORGED! Check your Downloads folder for ' + slug + '.mcaddon';
+});
+
+// the see-inside window: the actual JSON your addon will carry
+function updatePeek() {
+  const slug = slugOf(itemName);
+  document.getElementById('giveCmd').textContent = '/give @s max:' + slug;
+  const g2 = document.getElementById('giveCmd2');
+  if (g2) g2.textContent = '/give @s max:' + slug;
+  const blockNote = document.getElementById('blockNote');
+  if (blockNote) {
+    blockNote.style.display = isBlock() ? '' : 'none';
+  }
+  const peek = document.getElementById('jsonPeek');
+  if (!peek) return;
+  let txt = isBlock()
+    ? '// THE BLOCK CARD:\n' + JSON.stringify(makeBlockJSON(), null, 2)
+    : '// THE ITEM CARD:\n' + JSON.stringify(makeItemJSON(), null, 2);
+  const tick = makeTickFunction(slug, findPowers(itemAbilities), currentVersion(slug) + 1);
+  if (tick) txt += '\n\n// THE POWER PROGRAM (runs 20 times a second):\n' + tick;
+  peek.textContent = txt;
+}
+
+setType(itemType);
+updatePower();
+refreshAbilities();
+refreshClicks();
+refreshGive();
+setTrigger(clickTrigger);
+setPiece(armorPiece);
+drawArt();
+</script>
+</body>
+</html>
