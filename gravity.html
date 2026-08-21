@@ -131,7 +131,11 @@ window.onerror = (msg, src, line) => {
 // THE WORLD IS BIGGER THAN THE WINDOW — a camera looks into it, and
 // the scroll wheel zooms it out until the whole lab fits your eye
 // ---------------------------------------------------------------------
-const WORLD_W = 2800, WORLD_H = 1600;
+// The lab got a lot bigger — over twice the room to build in. Pinch out to
+// see it all, or two fingers to walk around it.
+const WORLD_W = 4200, WORLD_H = 3800;
+// A solid wall all the way round, thick enough to see, that things BOUNCE off.
+const WALL = 30;
 const cam = { x: 0, y: 0, zoom: 1 };
 let camReady = false;
 
@@ -145,13 +149,23 @@ function clampCam() {
 function screenToWorld(sx, sy) {
   return { x: cam.x + sx / cam.zoom, y: cam.y + sy / cam.zoom };
 }
-const ZOOM_MIN = 0.3, ZOOM_MAX = 2.4;
+const ZOOM_MAX = 2.4;
+
+// How far back you're allowed to pull. It used to be a flat 0.3, which on a
+// 4200-wide lab only ever showed you a corner. Instead of picking another
+// magic number, work it out: you can zoom out until the WHOLE lab is on
+// screen with a little margin, and no further — because past that you'd just
+// be shrinking the lab into the middle of an empty screen.
+function minZoom() {
+  return Math.min(0.3, Math.max(0.05,
+    Math.min(canvas.width / (WORLD_W * 1.06), canvas.height / (WORLD_H * 1.06))));
+}
 
 // Zoom so that the point under your finger/cursor stays exactly where it is.
 // That's the whole trick to zoom feeling right instead of feeling drunk.
 function zoomAt(sx, sy, factor) {
   const before = screenToWorld(sx, sy);
-  cam.zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, cam.zoom * factor));
+  cam.zoom = Math.max(minZoom(), Math.min(ZOOM_MAX, cam.zoom * factor));
   cam.x = before.x - sx / cam.zoom;
   cam.y = before.y - sy / cam.zoom;
   clampCam();
@@ -429,9 +443,34 @@ function addHole(x, y, size) {
                tents: [], tentT: 1.5, spin: Math.random() < 0.5 ? -1 : 1 });
   if (holes.length > 3) holes.shift();     // three black holes is plenty. THREE.
 }
+// How much a star can hold before it can't hold itself up any more. Real
+// stars have a number like this too — pile on more than you can support and
+// the whole thing falls in on itself in about a second.
+const SUN_CRIT = 2.2;
+
+// One place that decides how big a star is drawn, so the picture and the
+// physics can never disagree about where its surface is.
+function sunRadius(s) {
+  const mass = s.mass === undefined ? 1 : s.mass;
+  const swell = mass < 1.4 ? 1 : 1 + (mass - 1.4) * 1.4;    // the red giant phase
+  return 30 * swell * (0.45 + 0.55 * Math.min(1.6, Math.max(0, mass)));
+}
+
 function addSun(x, y) {
-  suns.push({ x, y, vx: 0, vy: 0, t: 0, rumbleT: 0 });
-  if (suns.length > 2) supernova(suns.shift());   // crowding a sun ENDS it
+  suns.push({ x, y, vx: 0, vy: 0, t: 0, rumbleT: 0, mass: 1 });
+  // Four stars is plenty. Placing a fifth doesn't blow one up any more —
+  // that made no sense once stars started exploding from being FED. Crowding
+  // isn't feeding. The oldest one just quietly burns out instead.
+  if (suns.length > 4) {
+    const old = suns.shift();
+    beep(140, 0.3, 'sine', 0.08);
+    floatTexts.push({ x: old.x, y: old.y - 40, t: 1.2, text: 'burnt out' });
+    for (let i = 0; i < 18; i++) {
+      const a = Math.random() * Math.PI * 2, sp = 40 + Math.random() * 140;
+      particles.push({ x: old.x, y: old.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+                       life: 0.5 + Math.random() * 0.4, color: '#ff9f43' });
+    }
+  }
 }
 function supernovaSound() {
   boomSound();
@@ -468,7 +507,10 @@ function supernova(sun) {
   // The hole used to appear inside its own explosion, so you never actually
   // saw the supernova. First the star blows itself apart. THEN the core that's
   // left over falls in on itself. Then, and only then, the hole.
-  remnants.push({ x: sun.x, y: sun.y, vx: sun.vx * 0.3, vy: sun.vy * 0.3, t: 0, size: 1.4 });
+  // the more it had piled on, the bigger the thing it leaves behind
+  const fed = Math.max(1, sun.mass === undefined ? 1 : sun.mass);
+  remnants.push({ x: sun.x, y: sun.y, vx: sun.vx * 0.3, vy: sun.vy * 0.3, t: 0,
+                  size: 1.0 + (fed - 1) * 0.55 });
 }
 
 // the collapsing core of a dead star: bright, shrinking, about to become
@@ -498,6 +540,73 @@ function updateRemnants(dt) {
     }
   }
   remnants = remnants.filter(r => !r.done);
+}
+
+// ---------------------------------------------------------------------
+// THE ACCRETION DISC
+// ---------------------------------------------------------------------
+// Stuff falling into a black hole doesn't drop straight down the plughole —
+// it piles up into a spinning ring first, and that ring gets so hot from
+// rubbing against itself that it GLOWS. That glow is the only reason anybody
+// can find a black hole at all: the hole itself is invisible, but its dinner
+// is the brightest thing for light years.
+//
+// Two real details worth knowing, both drawn here:
+//  - the inside of the ring goes round MUCH faster than the outside, so the
+//    disc is always shearing itself apart (that's the rubbing that heats it)
+//  - the side coming toward you looks brighter than the side going away.
+//    Light does that when its source is moving fast. It's why photos of real
+//    black holes are lopsided.
+function drawAccretionDisc(h) {
+  const S = h.size || 1;
+  const spin = h.spin || 1;
+  const horizon = 28 * S;
+  const inner = horizon * 1.10;
+  const outer = horizon * 3.7;
+
+  // the body of the disc: white-hot at the inside edge, cooling outward
+  const g = ctx.createRadialGradient(h.x, h.y, inner, h.x, h.y, outer);
+  g.addColorStop(0, 'rgba(255, 252, 232, 0.92)');
+  g.addColorStop(0.13, 'rgba(255, 214, 132, 0.50)');
+  g.addColorStop(0.40, 'rgba(255, 140, 52, 0.22)');
+  g.addColorStop(0.72, 'rgba(220, 78, 26, 0.09)');
+  g.addColorStop(1, 'rgba(160, 50, 20, 0)');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(h.x, h.y, outer, 0, Math.PI * 2);
+  ctx.arc(h.x, h.y, inner, 0, Math.PI * 2, true);    // punch out the middle
+  ctx.fill();
+
+  // the shear: streaks of matter, the inner ones whipping round far faster
+  ctx.lineCap = 'round';
+  for (let i = 0; i < 18; i++) {
+    const f = (i * 0.6180339) % 1;                   // spread them evenly-ish
+    const r = inner + (outer - inner) * f;
+    // Kepler's rule: go as r to the power of minus three halves
+    const omega = spin * 3.1 * Math.pow(inner / r, 1.5);
+    const a0 = elapsed * omega + i * 2.4;
+    const heat = 1 - f;                              // inner = hotter = whiter
+    ctx.strokeStyle = `rgba(255, ${Math.round(170 + heat * 82)}, ${Math.round(50 + heat * 160)}, ${0.14 + heat * 0.55})`;
+    ctx.lineWidth = (0.9 + heat * 3.2) * S;
+    ctx.beginPath();
+    ctx.arc(h.x, h.y, r, a0, a0 + 0.7 + heat * 0.9);
+    ctx.stroke();
+  }
+
+  // the lopsided bit: whichever side is racing toward us gets brighter
+  const dop = ctx.createLinearGradient(h.x - outer, h.y, h.x + outer, h.y);
+  if (spin > 0) {
+    dop.addColorStop(0, 'rgba(255, 248, 225, 0.34)');
+    dop.addColorStop(0.62, 'rgba(255, 248, 225, 0)');
+  } else {
+    dop.addColorStop(0.38, 'rgba(255, 248, 225, 0)');
+    dop.addColorStop(1, 'rgba(255, 248, 225, 0.34)');
+  }
+  ctx.fillStyle = dop;
+  ctx.beginPath();
+  ctx.arc(h.x, h.y, outer * 0.86, 0, Math.PI * 2);
+  ctx.arc(h.x, h.y, inner, 0, Math.PI * 2, true);
+  ctx.fill();
 }
 
 function drawRemnants() {
@@ -573,17 +682,21 @@ function updateHeavies(dt) {
     } else {
       const sp = Math.hypot(o.vx, o.vy);
       if (sp > BIG_MAX_V) { o.vx *= BIG_MAX_V / sp; o.vy *= BIG_MAX_V / sp; }
-      o.vx *= 1 - 0.25 * dt;              // a whisper of drag so they settle
-      o.vy *= 1 - 0.25 * dt;
+      // NO DRAG. An object in motion stays in motion — there's nothing out
+      // here to rub against. I'd put a "whisper of drag so they settle" in,
+      // which meant a hole you flicked across the lab quietly slowed to a
+      // stop for no reason at all. It coasts now, for ever, until it hits
+      // something. Losing speed off the walls is the only thing that slows
+      // it down, and that's a real collision, not empty space being sticky.
       o.x += o.vx * dt;
       o.y += o.vy * dt;
     }
-    // keep them inside the lab — bounce, don't escape
-    const pad = 50;
-    if (o.x < pad) { o.x = pad; o.vx = Math.abs(o.vx) * 0.5; }
-    if (o.x > WORLD_W - pad) { o.x = WORLD_W - pad; o.vx = -Math.abs(o.vx) * 0.5; }
-    if (o.y < pad) { o.y = pad; o.vy = Math.abs(o.vy) * 0.5; }
-    if (o.y > WORLD_H - pad) { o.y = WORLD_H - pad; o.vy = -Math.abs(o.vy) * 0.5; }
+    // the wall holds even these — they bounce off it like everything else
+    const pad = WALL + 40 * (it.kind === 'hole' ? (o.size || 1) : 1.2);
+    if (o.x < pad) { o.x = pad; o.vx = Math.abs(o.vx) * 0.6; }
+    if (o.x > WORLD_W - pad) { o.x = WORLD_W - pad; o.vx = -Math.abs(o.vx) * 0.6; }
+    if (o.y < pad) { o.y = pad; o.vy = Math.abs(o.vy) * 0.6; }
+    if (o.y > WORLD_H - pad) { o.y = WORLD_H - pad; o.vy = -Math.abs(o.vy) * 0.6; }
   }
   // ---- and what happens when they actually meet ----
   resolveHeavyCollisions();
@@ -603,6 +716,7 @@ function resolveHeavyCollisions() {
       big.vx = (big.vx * ma + small.vx * mb) / (ma + mb);   // momentum keeps
       big.vy = (big.vy * ma + small.vy * mb) / (ma + mb);
       big.size = ma + mb * 0.85;
+      big.fed = 2.2; big.fedColor = '#c8a4ff';
       big.tentMax = Math.max(big.tentMax || 2, small.tentMax || 2);
       holes.splice(holes.indexOf(small), 1);
       shake = Math.max(shake, 0.8);
@@ -618,27 +732,98 @@ function resolveHeavyCollisions() {
       return;                                   // one merger a frame is plenty
     }
   }
-  // A HOLE MEETS A SUN: the star gets torn apart and swallowed whole.
+  suns = suns.filter(s => !s.gone);
+}
+
+// ---------------------------------------------------------------------
+// A HOLE DRINKING A STAR
+// ---------------------------------------------------------------------
+// A black hole doesn't gulp a star down in one bite — it can't. What really
+// happens is that it peels the star apart from the outside, a layer at a
+// time, and the stolen gas spirals in along a bright stream. The star sits
+// there shrinking for ages while the hole gets fatter. It's the slowest,
+// meanest robbery in the universe, and it's much better to watch than a
+// SLURP and a puff of smoke.
+let siphons = [];              // the live streams, rebuilt every frame
+
+function updateSiphons(dt) {
+  siphons = [];
+  for (const s of suns) s.grip = 0;        // nobody's stealing from you yet
   for (const h of holes) {
     for (const s of suns) {
       if (s.gone) continue;
-      if (Math.hypot(h.x - s.x, h.y - s.y) > 30 * h.size + 40) continue;
-      s.gone = true;
-      h.size += 0.7;
-      shake = Math.max(shake, 0.7);
-      flashT = Math.max(flashT, 0.3);
-      slurpSound();
-      supernovaSound();
-      floatTexts.push({ x: h.x, y: h.y - 70 * h.size, t: 1.7, text: 'STAR EATEN!' });
-      for (let k = 0; k < 60; k++) {
-        const ang = Math.random() * Math.PI * 2, sp = 120 + Math.random() * 420;
-        particles.push({ x: s.x, y: s.y, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp,
-                         life: 0.3 + Math.random() * 0.6,
-                         color: ['#ffd23f', '#ff9f43', '#ffffff'][k % 3] });
+      const dx = h.x - s.x, dy = h.y - s.y;
+      const d = Math.hypot(dx, dy) || 1;
+      const reach = 300 + 120 * h.size;     // a bigger hole reaches further
+      if (d > reach) continue;
+      // closer = faster. It's a gentle trickle at the edge of its reach and
+      // a torrent when they're nearly touching.
+      const grip = Math.min(1, (1 - d / reach) * 1.6);
+      // Slow on purpose. A full star takes the best part of ten seconds to
+      // drink, because the point is to WATCH it happen.
+      const stolen = 0.12 * grip * dt;
+      s.mass = (s.mass === undefined ? 1 : s.mass) - stolen;
+      h.size += stolen * 0.8;               // not all of it makes it in
+      h.fed = Math.max(h.fed || 0, 0.25);
+      h.fedColor = '#ffb64a';
+      s.grip = Math.max(s.grip, grip);
+      siphons.push({ h, s, grip });
+      if (s.mass <= 0.12) {
+        // the last of the star goes down. no supernova — there's nothing
+        // left to explode; it's already inside.
+        s.gone = true;
+        h.size += 0.25;
+        h.fed = 2.4;
+        shake = Math.max(shake, 0.6);
+        flashT = Math.max(flashT, 0.25);
+        slurpSound();
+        floatTexts.push({ x: h.x, y: h.y - 70 * h.size, t: 1.8, text: 'STAR DRAINED!' });
+        for (let k = 0; k < 50; k++) {
+          const ang = Math.random() * Math.PI * 2, sp = 120 + Math.random() * 380;
+          particles.push({ x: s.x, y: s.y, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp,
+                           life: 0.3 + Math.random() * 0.6,
+                           color: ['#ffd23f', '#ff9f43', '#ffffff'][k % 3] });
+        }
       }
     }
   }
   suns = suns.filter(s => !s.gone);
+}
+
+// the stolen gas, drawn as a bright ribbon curving from star to hole
+function drawSiphons() {
+  for (const { h, s, grip } of siphons) {
+    const dx = h.x - s.x, dy = h.y - s.y;
+    const d = Math.hypot(dx, dy) || 1;
+    const nx = dx / d, ny = dy / d;
+    // the stream doesn't go straight in — it swings round the way the hole
+    // spins, which is why real ones look like a ribbon and not a pipe
+    const bowX = -ny * d * 0.28 * (h.spin || 1);
+    const bowY = nx * d * 0.28 * (h.spin || 1);
+    const mid = { x: s.x + dx * 0.5 + bowX, y: s.y + dy * 0.5 + bowY };
+    for (const pass of [[13 * grip, 'rgba(255, 150, 50, 0.20)'],
+                        [6 * grip, 'rgba(255, 205, 110, 0.45)'],
+                        [2.2 * grip, 'rgba(255, 250, 225, 0.85)']]) {
+      ctx.strokeStyle = pass[1];
+      ctx.lineWidth = pass[0];
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(s.x + nx * 20, s.y + ny * 20);
+      ctx.quadraticCurveTo(mid.x, mid.y, h.x, h.y);
+      ctx.stroke();
+    }
+    // blobs of gas travelling along it, so you can see which way it's flowing
+    for (let i = 0; i < 5; i++) {
+      const t = ((elapsed * 0.75 + i * 0.2) % 1);
+      const u = 1 - t;
+      const bx = u * u * (s.x + nx * 20) + 2 * u * t * mid.x + t * t * h.x;
+      const by = u * u * (s.y + ny * 20) + 2 * u * t * mid.y + t * t * h.y;
+      ctx.fillStyle = `rgba(255, 245, 210, ${0.9 * grip * (1 - t * 0.5)})`;
+      ctx.beginPath();
+      ctx.arc(bx, by, (4.5 - t * 2) * grip + 1, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
 }
 
 function slitherSound() {
@@ -788,21 +973,33 @@ function update(dt) {
     b.y += b.vy * dt;
     b.angle += b.angVel * dt;
     b.angVel *= 0.99;
-    if (!gravityOn) { b.vx *= 0.999; b.vy *= 0.999; }
+    // Crates and people used to lose 6% of their speed every second in
+    // zero-g, which is the same mistake as the black holes: there is nothing
+    // out there to slow them down. Fling something with gravity off and it
+    // keeps going until it hits a wall.
 
     // the walls and floor and ceiling of the lab
     const R = b.r;
     if (b.y + R * (b.type === 'person' ? 2 : 1) > floorY()) {
       b.y = floorY() - R * (b.type === 'person' ? 2 : 1);
-      if (b.vy > 60) {
-        b.vy *= -0.35;
+      if (b.vy > 40) {
+        b.vy *= -0.58;                   // the floor is springy now too
         b.angVel += b.vx * 0.01;
       } else b.vy = 0;
       b.vx *= 0.92;                    // floor friction
     }
-    if (b.y - R < 0) { b.y = R; b.vy *= -0.5; }
-    if (b.x - R < 0) { b.x = R; b.vx *= -0.6; if (b.type === 'person') b.walkDir = 1; }
-    if (b.x + R > WORLD_W) { b.x = WORLD_W - R; b.vx *= -0.6; if (b.type === 'person') b.walkDir = -1; }
+    // BOUNCE is how springy the walls are. 0 would be a beanbag, 1 would be a
+    // superball that never loses any height. 0.72 is a good rubber ball.
+    const BOUNCE = 0.72;
+    if (b.y - R < WALL) { b.y = WALL + R; b.vy = Math.abs(b.vy) * BOUNCE; b.angVel += b.vx * 0.01; }
+    if (b.x - R < WALL) {
+      b.x = WALL + R; b.vx = Math.abs(b.vx) * BOUNCE; b.angVel -= b.vy * 0.01;
+      if (b.type === 'person') b.walkDir = 1;
+    }
+    if (b.x + R > WORLD_W - WALL) {
+      b.x = WORLD_W - WALL - R; b.vx = -Math.abs(b.vx) * BOUNCE; b.angVel += b.vy * 0.01;
+      if (b.type === 'person') b.walkDir = -1;
+    }
 
     // bodies gently shoulder each other out of the way
     for (const o of bodies) {
@@ -861,22 +1058,42 @@ function update(dt) {
   }
 
   updateHeavies(dt);
+  updateSiphons(dt);
   updateRemnants(dt);
 
-  // ---- DYING SUNS: burn gold, swell red, then... goodnight. ----
+  // ---- STARS: they eat, they swell, and when they can't hold any more... ----
+  // A star used to go off on an eight-second egg timer, which had nothing to
+  // do with anything. Real stars explode when they can no longer hold up the
+  // weight they've piled on — so now it's about MASS, not minutes. Feed it.
+  // Starve it and it will sit there burning quite happily for ever.
   for (const sun of suns) {
-    sun.t += dt;
+    sun.t += dt;                            // just for the shimmer animation
+    if (sun.mass === undefined) sun.mass = 1;
     // a sun is heavy: a gentle pull on everything, warmer than a hole's
     for (const b of bodies) {
-      if (b === grabbed) continue;
+      if (b === grabbed || b.gone) continue;
       const dx = sun.x - b.x, dy = sun.y - b.y;
       const d = Math.hypot(dx, dy) || 1;
       const pull = Math.min(700, 30000 / Math.max(d, 40) + 80);
       b.vx += (dx / d) * pull * dt;
       b.vy += (dy / d) * pull * dt;
+      // ...and anything that reaches the surface goes IN, and counts.
+      if (d < sunRadius(sun) * 0.8 + b.r) {
+        b.gone = true;
+        sun.mass += 0.006 * b.r;            // bigger thing, bigger helping
+        sun.flare = 0.4;
+        beep(180 + Math.random() * 120, 0.18, 'sawtooth', 0.09);
+        floatTexts.push({ x: sun.x, y: sun.y - sunRadius(sun) - 14, t: 0.8, text: 'GULP' });
+        for (let i = 0; i < 12; i++) {
+          const a = Math.random() * Math.PI * 2, sp = 60 + Math.random() * 220;
+          particles.push({ x: b.x, y: b.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+                           life: 0.35, color: ['#ffd23f', '#ff9f43', '#ffffff'][i % 3] });
+        }
+      }
     }
-    // the last three seconds rumble, so nobody can say they weren't warned
-    if (sun.t > 5) {
+    if (sun.flare > 0) sun.flare -= dt;
+    // the last of the swelling rumbles, so nobody can say they weren't warned
+    if (sun.mass > SUN_CRIT * 0.82) {
       sun.rumbleT -= dt;
       if (sun.rumbleT <= 0) {
         sun.rumbleT = 0.4;
@@ -884,7 +1101,7 @@ function update(dt) {
         shake = Math.max(shake, 0.12);
       }
     }
-    if (sun.t >= 8) { sun.gone = true; supernova(sun); }
+    if (sun.mass >= SUN_CRIT) { sun.gone = true; supernova(sun); }
   }
   suns = suns.filter(s => !s.gone);
   if (flashT > 0) flashT -= dt;
@@ -906,6 +1123,8 @@ function update(dt) {
         // down the hatch — and the hole gets a little bigger for it
         b.gone = true;
         h.size += 0.08;
+        h.fed = 1.3;                       // debris to fling about for a moment
+        h.fedColor = b.shirt || (b.type === 'crate' ? '#c98a4a' : '#ffd23f');
         slurpSound();
         floatTexts.push({ x: h.x, y: h.y - 34 * h.size, t: 1, text: 'SLURP!' });
         if (b.type === 'bomb') burps.push({ hole: h, t: 0.6 });
@@ -965,14 +1184,23 @@ function update(dt) {
       p.vy += (dy / d) * pull * dt + (dx / d) * pull * 0.5 * dt;
       if (d < 16) p.life = 0;
     }
-    // a steady snack of glowing dust, so the hole always looks hungry
-    if (Math.random() < 0.3) {
-      const a = Math.random() * Math.PI * 2;
-      particles.push({
-        x: h.x + Math.cos(a) * 90, y: h.y + Math.sin(a) * 90,
-        vx: -Math.sin(a) * 120, vy: Math.cos(a) * 120,
-        life: 1.2, color: ['#b482ff', '#7dd3ff', '#ffffff'][Math.floor(Math.random() * 3)],
-      });
+    // Debris from whatever it just ate, whirling round before it goes down.
+    // This used to spray out non-stop whether the hole had eaten anything or
+    // not — a permanent shower of confetti with nothing feeding it. Now it
+    // only appears when there's actually something to be debris FROM, and it
+    // comes out the colour of the meal.
+    if (h.fed > 0) {
+      h.fed -= dt;
+      if (Math.random() < 0.55) {
+        const a = Math.random() * Math.PI * 2;
+        const r = (70 + Math.random() * 50) * (h.size || 1);
+        particles.push({
+          x: h.x + Math.cos(a) * r, y: h.y + Math.sin(a) * r,
+          vx: -Math.sin(a) * 140 * (h.spin || 1), vy: Math.cos(a) * 140 * (h.spin || 1),
+          life: 0.9, color: Math.random() < 0.5 ? (h.fedColor || '#ffd23f')
+                                                : ['#ffd23f', '#ffffff'][Math.random() < 0.5 ? 0 : 1],
+        });
+      }
     }
   }
   // swallowed bombs come back up as a BURP
@@ -1126,7 +1354,7 @@ addEventListener('pointerdown', e => {
         }
       } else if (r.id === 'clear') {
         bodies = []; spikes = []; particles = []; holes = []; burps = [];
-        launchers = []; suns = []; remnants = [];
+        launchers = []; suns = []; remnants = []; siphons = [];
       } else tool = r.id;
       return;
     }
@@ -1339,47 +1567,115 @@ function drawBomb(b) {
 // how much spacetime bends at (x, y): every hole (and sun) drags the
 // grid toward itself — strong up close, gentle far away. this is the
 // classic "rubber sheet" picture of gravity, drawn live.
-function warpOffset(x, y) {
-  let ox = 0, oy = 0;
+// WHY THE GRID USED TO FOLD OVER ITSELF
+// -------------------------------------
+// The old version pulled each point toward the hole by a distance that was
+// capped — "move up to 120px inward". But if a point is only 100px away and
+// you move it 120px inward, it doesn't land ON the hole. It sails straight
+// THROUGH and comes out the other side. So a whole disc of points around the
+// middle got turned inside out, and grid lines that should have nestled
+// alongside each other crossed at hard angles instead — which is exactly the
+// spiky star shape you could see.
+//
+// The fix is a rule that can't be broken: a point is dragged a FRACTION of
+// the way to the hole, never a fixed distance, and never more than 85% of
+// the way. m/d works out to A/(d² + c), and with A/c = 0.92 that fraction
+// can never reach 1, however close in you get. Nothing crosses the middle,
+// so nothing folds.
+// How hard spacetime is being worked at a point — 0 out in the quiet, 1 right
+// on top of a hole. This is what the grid's brightness follows.
+//
+// It has to be its OWN sum, not the size of the displacement. When the pull
+// became a fraction-of-the-way-in, distant points started being dragged a
+// long way too — the whole sheet slides toward the hole — so displacement
+// stopped saying anything about strain and every line came out equally bright.
+// This uses the same fraction the pull uses, which does fall away properly.
+function warpStrain(x, y) {
+  let s = 0;
   for (const h of holes) {
-    const dx = h.x - x, dy = h.y - y;
+    const S = h.size || 1;
+    const dx = x - h.x, dy = y - h.y;
+    s += (55200 * S) / (dx * dx + dy * dy + 60000 * S);
+  }
+  for (const sn of suns) {
+    const m = 1 + (sn.mass === undefined ? 1 : sn.mass);
+    const dx = x - sn.x, dy = y - sn.y;
+    s += 0.6 * (9000 * m) / (dx * dx + dy * dy + 15000 * m);
+  }
+  return Math.min(1, s / 0.92);
+}
+
+function warpOffset(x, y) {
+  let px = x, py = y;
+  for (const h of holes) {
+    const S = h.size || 1;
+    const A = 55200 * S, c = 60000 * S;      // A/c = 0.92 — the safety rule
+    const dx = px - h.x, dy = py - h.y;      // from the hole out to the point
     const d2 = dx * dx + dy * dy;
     const d = Math.sqrt(d2) || 1;
-    const S = h.size || 1;
-    // A much deeper, much wider dent than before — about six times the pull
-    // at arm's length, and it still shows a screen away. You should be able
-    // to SEE the funnel, not squint for it.
-    const m = Math.min(120 * S, 4000000 * S / (d2 + 26000));
-    ox += (dx / d) * m;
-    oy += (dy / d) * m;
-    // ...and a TWIST, because the hole is spinning. The sheet gets wound
-    // around it, not just sucked in. This is what makes it look alive.
-    const tw = Math.min(46 * S, 1200000 * S / (d2 + 34000)) * (h.spin || 1);
-    ox += (-dy / d) * tw;
-    oy += (dx / d) * tw;
+    const near = A * d / (d2 + c);           // how far in this point is dragged
+    const nd = Math.max(0.001, d - near);    // ...always still outside the hole
+    // The twist is an ANGLE now, not a sideways shove. Rotating a point can
+    // never push it through anything; adding a sideways offset could.
+    const ang = Math.min(0.5, 34000 * S / (d2 + c)) * (h.spin || 1);
+    const ux = dx / d, uy = dy / d;
+    if (ang > 0.004 || ang < -0.004) {
+      const ca = Math.cos(ang), sa = Math.sin(ang);
+      px = h.x + (ux * ca - uy * sa) * nd;
+      py = h.y + (ux * sa + uy * ca) * nd;
+    } else {
+      // miles away, the twist is far less than a pixel — don't pay for the
+      // trig, and most of the grid is miles away
+      px = h.x + ux * nd;
+      py = h.y + uy * nd;
+    }
   }
   for (const s of suns) {
-    const dx = s.x - x, dy = s.y - y;
+    // a star dents the sheet too, gently, and no twist — it isn't a hole
+    const m = 1 + (s.mass === undefined ? 1 : s.mass);
+    const A = 9000 * m, c = 15000 * m;       // A/c = 0.6, same safety rule
+    const dx = px - s.x, dy = py - s.y;
     const d2 = dx * dx + dy * dy;
     const d = Math.sqrt(d2) || 1;
-    const m = Math.min(34, 420000 / (d2 + 12000));
-    ox += (dx / d) * m;
-    oy += (dy / d) * m;
+    const nd = Math.max(0.001, d - A * d / (d2 + c));
+    px = s.x + (dx / d) * nd;
+    py = s.y + (dy / d) * nd;
   }
-  return [ox, oy];
+  return [px - x, py - y];
 }
 
 function drawWarpedGrid() {
-  const step = 60;
   const bend = holes.length || suns.length;
-  // finer sampling where it's bending, so the curve is a CURVE and not a
-  // row of little straight bits
-  const seg = bend ? 14 : 40;
+  // Everything here is measured in SCREEN pixels and converted back, so the
+  // grid looks the same however far in or out you are — and, just as
+  // importantly, we never do work that lands on a fraction of a pixel.
+  //
+  // The squares get bigger (in world terms) as you pull back, so they stay
+  // about 22 screen pixels apart instead of collapsing into a grey mush.
+  const step = 60 * Math.max(1, Math.ceil(22 / (60 * cam.zoom)));
+  // How finely each curve is sampled: fine up close to a hole, coarse when
+  // you've pulled right back and the wiggles would be sub-pixel anyway.
+  const seg = bend ? Math.max(5, Math.min(step, 9 / cam.zoom)) : step;
   const vw = canvas.width / cam.zoom, vh = canvas.height / cam.zoom;
-  const x0 = Math.max(0, Math.floor((cam.x - 60) / step) * step);
-  const x1 = Math.min(WORLD_W, cam.x + vw + 60);
-  const y0 = Math.max(0, Math.floor((cam.y - 60) / step) * step);
-  const y1 = Math.min(WORLD_H, cam.y + vh + 60);
+  // Every point gets dragged INWARD toward the holes, which means the line
+  // that started at the edge of the screen ends up somewhere short of it,
+  // leaving a bare margin all the way round. So start from further out than
+  // we can see — far enough that whatever gets dragged in still covers the
+  // edge. How much further? The most any hole can ever drag a point, which
+  // for A·d/(d²+c) peaks at A/(2√c). Add them up and you have the answer.
+  let margin = 80;
+  for (const h of holes) {
+    const S = h.size || 1;
+    margin += (55200 * S) / (2 * Math.sqrt(60000 * S));
+  }
+  for (const s of suns) {
+    const m = 1 + (s.mass === undefined ? 1 : s.mass);
+    margin += (9000 * m) / (2 * Math.sqrt(15000 * m));
+  }
+  const x0 = Math.max(0, Math.floor((cam.x - margin) / step) * step);
+  const x1 = Math.min(WORLD_W, cam.x + vw + margin);
+  const y0 = Math.max(0, Math.floor((cam.y - margin) / step) * step);
+  const y1 = Math.min(WORLD_H, cam.y + vh + margin);
 
   // A flat lab is one cheap path and we're done.
   if (!bend) {
@@ -1396,7 +1692,10 @@ function drawWarpedGrid() {
   // buckets by how hard IT is being pulled, so the strain glows exactly where
   // spacetime is actually stretched instead of lighting the whole line.
   // Sorting first means four stroke calls instead of a thousand.
-  const LEVELS = 4;
+  // Twelve brightness levels instead of four. The gradient was stepping in
+  // visible bands where the hole bends the grid hardest; three times as many
+  // levels smooths that out, and it still costs only one stroke call each.
+  const LEVELS = 12;
   const paths = [];
   for (let i = 0; i < LEVELS; i++) paths.push(new Path2D());
 
@@ -1417,35 +1716,35 @@ function drawWarpedGrid() {
     return dim;
   };
 
-  const addSeg = (ax, ay, bx, by, warp) => {
-    // check BOTH ends and the middle — a segment can straddle the horizon
-    // with its midpoint safely outside and one end already swallowed
-    const dim = Math.min(escaping(ax, ay), escaping(bx, by),
-                         escaping((ax + bx) / 2, (ay + by) / 2));
+  // Each point is shared by the two segments either side of it, so its warp
+  // and its dimming are worked out ONCE and carried forward — it used to
+  // measure the same point three times over.
+  const addSeg = (ax, ay, aw, ad, bx, by, bw, bd) => {
+    const dim = Math.min(ad, bd);
     if (dim <= 0.02) return;
-    const k = Math.min(LEVELS - 1, Math.floor(Math.min(1, warp / 85) * dim * LEVELS));
+    // smoothstep: eases in and out instead of ramping dead straight, which is
+    // what stops you seeing where one level becomes the next
+    const raw = Math.max(aw, bw) * dim;
+    const eased = raw * raw * (3 - 2 * raw);
+    const k = Math.min(LEVELS - 1, Math.floor(eased * LEVELS));
     paths[k].moveTo(ax, ay);
     paths[k].lineTo(bx, by);
   };
 
-  for (let x = x0; x <= x1; x += step) {
-    let px = null, py = null, pw = 0;
-    for (let y = y0; y <= y1; y += seg) {
-      const [ox, oy] = warpOffset(x, y);
-      const w = Math.hypot(ox, oy);
-      if (px !== null) addSeg(px, py, x + ox, y + oy, Math.max(pw, w));
-      px = x + ox; py = y + oy; pw = w;
+  const walk = (fixed, from, to, vertical) => {
+    let px = 0, py = 0, pw = 0, pd = 0, first = true;
+    for (let t = from; t <= to; t += seg) {
+      const gx = vertical ? fixed : t, gy = vertical ? t : fixed;
+      const [ox, oy] = warpOffset(gx, gy);
+      const x = gx + ox, y = gy + oy;
+      const w = warpStrain(gx, gy);
+      const d = escaping(x, y);
+      if (!first) addSeg(px, py, pw, pd, x, y, w, d);
+      px = x; py = y; pw = w; pd = d; first = false;
     }
-  }
-  for (let y = y0; y <= y1; y += step) {
-    let px = null, py = null, pw = 0;
-    for (let x = x0; x <= x1; x += seg) {
-      const [ox, oy] = warpOffset(x, y);
-      const w = Math.hypot(ox, oy);
-      if (px !== null) addSeg(px, py, x + ox, y + oy, Math.max(pw, w));
-      px = x + ox; py = y + oy; pw = w;
-    }
-  }
+  };
+  for (let x = x0; x <= x1; x += step) walk(x, y0, y1, true);
+  for (let y = y0; y <= y1; y += step) walk(y, x0, x1, false);
   for (let i = 0; i < LEVELS; i++) {
     const t = i / (LEVELS - 1);
     // a cool blue-white, not neon purple — the stressed lines get paler and
@@ -1454,6 +1753,7 @@ function drawWarpedGrid() {
     ctx.lineWidth = (0.9 + t * 1.7) / cam.zoom;
     ctx.stroke(paths[i]);
   }
+  ctx.lineWidth = 1;
 }
 
 function draw() {
@@ -1482,10 +1782,36 @@ function draw() {
   ctx.fillStyle = gravityOn ? '#12141c' : '#0e1626';   // zero-g tints the room
   ctx.fillRect(0, 0, WORLD_W, WORLD_H);
   drawWarpedGrid();                        // spacetime, doing its thing
-  ctx.fillStyle = '#2a3040';
+  ctx.fillStyle = '#3b4460';
   ctx.fillRect(0, floorY(), WORLD_W, FLOOR_H + 20);
   ctx.fillStyle = gravityOn ? '#4a5a78' : '#7a5aff';
   ctx.fillRect(0, floorY(), WORLD_W, 5);
+
+  // THE WALL — a solid rim right round the lab, with a bright lip on the
+  // inside so you can see exactly what you're going to bounce off.
+  ctx.fillStyle = '#3b4460';
+  ctx.fillRect(0, 0, WORLD_W, WALL);                       // ceiling
+  ctx.fillRect(0, 0, WALL, WORLD_H);                       // left
+  ctx.fillRect(WORLD_W - WALL, 0, WALL, WORLD_H);          // right
+  const lip = gravityOn ? '#8ea6d8' : '#b49aff';
+  ctx.fillStyle = lip;
+  ctx.fillRect(0, WALL - 5, WORLD_W, 5);
+  ctx.fillRect(WALL - 5, 0, 5, WORLD_H);
+  ctx.fillRect(WORLD_W - WALL, 0, 5, WORLD_H);
+  // rivets, so it looks built rather than painted on
+  ctx.fillStyle = 'rgba(255,255,255,0.20)';
+  for (let x = WALL + 60; x < WORLD_W - WALL; x += 120) {
+    ctx.fillRect(x, WALL / 2 - 3, 6, 6);
+  }
+  for (let y = WALL + 60; y < WORLD_H - WALL; y += 120) {
+    ctx.fillRect(WALL / 2 - 3, y, 6, 6);
+    ctx.fillRect(WORLD_W - WALL / 2 - 3, y, 6, 6);
+  }
+
+  // Gas being stolen from a star, drawn BEFORE the holes so the black
+  // disc covers where the stream ends — it should vanish into the hole,
+  // not paint a bright line across it.
+  drawSiphons();
 
   // black holes: a dark heart, a glowing swirl, tentacles, appetite —
   // and they've been GROWING while you weren't watching
@@ -1520,35 +1846,42 @@ function draw() {
       ctx.arc(tipX, tipY, 6 * S, 0, Math.PI * 2);
       ctx.fill();
     }
-    const g = ctx.createRadialGradient(h.x, h.y, 4, h.x, h.y, 80 * S);
-    g.addColorStop(0, 'rgba(180, 130, 255, 0.5)');
-    g.addColorStop(0.5, 'rgba(90, 60, 160, 0.2)');
+    // a faint violet halo, so it still belongs in this lab
+    const g = ctx.createRadialGradient(h.x, h.y, 4, h.x, h.y, 110 * S);
+    g.addColorStop(0, 'rgba(180, 130, 255, 0.30)');
+    g.addColorStop(0.5, 'rgba(90, 60, 160, 0.14)');
     g.addColorStop(1, 'rgba(90, 60, 160, 0)');
     ctx.fillStyle = g;
-    ctx.fillRect(h.x - 80 * S, h.y - 80 * S, 160 * S, 160 * S);
-    for (let ring = 0; ring < 3; ring++) {
-      ctx.strokeStyle = `rgba(${ring % 2 ? '125, 211, 255' : '180, 130, 255'}, ${0.5 - ring * 0.12})`;
-      ctx.lineWidth = (3 - ring * 0.7) * S;
-      ctx.beginPath();
-      ctx.arc(h.x, h.y, (26 + ring * 12) * S,
-              h.swirl * (ring % 2 ? 1.4 : -1.1) + ring,
-              h.swirl * (ring % 2 ? 1.4 : -1.1) + ring + 4.2);
-      ctx.stroke();
-    }
+    ctx.fillRect(h.x - 110 * S, h.y - 110 * S, 220 * S, 220 * S);
+
+    drawAccretionDisc(h);
+
+    // THE EVENT HORIZON. Drawn at exactly the radius that eats things, so
+    // what you can see is what will actually get you. (It used to be drawn
+    // at 20·size while the swallowing happened at 28·size — the black circle
+    // was a lie by eight pixels.)
+    const horizon = 28 * S;
     ctx.fillStyle = '#000000';
     ctx.beginPath();
-    ctx.arc(h.x, h.y, 20 * S, 0, Math.PI * 2);
+    ctx.arc(h.x, h.y, horizon, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = 'rgba(200, 170, 255, 0.8)';
-    ctx.lineWidth = 2;
+    // the photon ring: light that got caught circling and never left. This is
+    // the bright hoop in the real photographs of black holes.
+    ctx.strokeStyle = `rgba(255, 235, 190, ${0.75 + Math.sin(elapsed * 3 + h.x) * 0.12})`;
+    ctx.lineWidth = 2.4 * S;
+    ctx.beginPath();
+    ctx.arc(h.x, h.y, horizon * 1.04, 0, Math.PI * 2);
     ctx.stroke();
   }
 
   // dying suns: gold in their youth, swollen and red at the end
   for (const s of suns) {
-    const p = Math.min(1, s.t / 8);              // 0 = newborn, 1 = goodbye
-    const swell = p < 0.6 ? 1 : 1 + (p - 0.6) * 2.2;   // the red giant phase
-    const R = 34 * swell + Math.sin(elapsed * (4 + p * 14)) * 3 * p;
+    // p is how close this star is to bursting: 0 = fine, 1 = goodbye.
+    // It used to be a clock. It's how full it is now.
+    const mass = s.mass === undefined ? 1 : s.mass;
+    const p = Math.min(1, Math.max(0, (mass - 1) / (SUN_CRIT - 1)));
+    const R = sunRadius(s) + Math.sin(elapsed * (4 + p * 14)) * 3 * p
+              + (s.flare > 0 ? s.flare * 26 : 0);
     const cr = 255;
     const cg = Math.floor(210 - p * 150);
     const cb = Math.floor(80 - p * 60);
@@ -1577,11 +1910,18 @@ function draw() {
     ctx.beginPath();
     ctx.arc(s.x - R * 0.2, s.y - R * 0.2, R * 0.45, 0, Math.PI * 2);
     ctx.fill();
-    if (s.t > 5) {
+    if (p > 0.06) {
+      // a little gauge: how close this star is to not coping any more
+      const gw = Math.max(46, R * 1.5), gx = s.x - gw / 2, gy = s.y - R - 20;
+      ctx.fillStyle = 'rgba(0,0,0,0.45)';
+      ctx.fillRect(gx, gy, gw, 8);
+      ctx.fillStyle = p > 0.8 ? (Math.floor(elapsed * 6) % 2 ? '#ff5a4a' : '#ffd23f')
+                    : p > 0.5 ? '#ff9f43' : '#ffd23f';
+      ctx.fillRect(gx + 1, gy + 1, (gw - 2) * p, 6);
       ctx.textAlign = 'center';
-      ctx.fillStyle = `rgba(255, 120, 90, ${0.6 + Math.sin(elapsed * 10) * 0.4})`;
-      ctx.font = 'bold 13px monospace';
-      ctx.fillText((8 - s.t).toFixed(1), s.x, s.y - R - 12);
+      ctx.fillStyle = `rgba(255, 190, 120, ${0.55 + Math.sin(elapsed * 8) * 0.25})`;
+      ctx.font = 'bold 12px monospace';
+      ctx.fillText(Math.round(p * 100) + '%', s.x, gy - 4);
       ctx.textAlign = 'left';
     }
   }
