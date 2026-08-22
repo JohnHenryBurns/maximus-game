@@ -80,6 +80,10 @@ const COLS = 39, ROWS = 25;      // odd numbers, so there is a middle square
 const WIN_SCORE = 5;
 const START_LEN = 5;
 const GROW_EVERY = 16;           // both snakes grow anyway, so rounds always end
+// About three squares in every hundred hold an apple. Worked out from
+// the arena size rather than typed in, so the board stays this busy even
+// if COLS and ROWS ever change.
+const FOOD_COUNT = Math.round(COLS * ROWS * 0.03);
 
 // ---- the two players ----
 // Everything about a player lives in one object. Want a third snake one
@@ -96,7 +100,7 @@ const STEPS = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] };
 const OPPOSITE = { up: 'down', down: 'up', left: 'right', right: 'left' };
 
 let snakes = [];                 // the live snakes, one per player
-let food = null;
+let foods = [];                  // apples, all over the place
 let scores = [0, 0];
 let screen = 'title';            // 'title' | 'countdown' | 'play' | 'roundover' | 'matchover'
 let countdown = 0;
@@ -168,21 +172,32 @@ function newSnake(p) {
   }
   return { p, body, dir: p.dir, next: p.dir, grow: 0, alive: true };
 }
-function placeFood() {
-  // somewhere empty - keep looking until we find a free square
-  for (let tries = 0; tries < 500; tries++) {
+// find one empty square: not a snake, not already an apple
+function freeSquare() {
+  for (let tries = 0; tries < 400; tries++) {
     const x = 1 + Math.floor(Math.random() * (COLS - 2));
     const y = 1 + Math.floor(Math.random() * (ROWS - 2));
-    if (!snakes.some(s => s.body.some(b => b.x === x && b.y === y))) {
-      food = { x, y, pop: 0 };
-      return;
-    }
+    if (snakes.some(s => s.body.some(b => b.x === x && b.y === y))) continue;
+    if (foods.some(f => f.x === x && f.y === y)) continue;
+    // a random pop means they do not all pulse in time with each other
+    return { x, y, pop: Math.random() * 6 };
   }
-  food = null;
+  return null;                   // board is stuffed - no room left
+}
+// keep the orchard topped up. Called at the start, and every time one
+// gets eaten, so the board never runs dry.
+function topUpFood() {
+  let guard = 0;
+  while (foods.length < FOOD_COUNT && guard++ < FOOD_COUNT * 2) {
+    const f = freeSquare();
+    if (!f) break;
+    foods.push(f);
+  }
 }
 function startRound() {
   snakes = PLAYERS.map(newSnake);
-  placeFood();
+  foods = [];
+  topUpFood();
   ticks = 0;
   stepTimer = 0;
   particles = [];
@@ -225,9 +240,11 @@ function step() {
     const [dx, dy] = STEPS[s.dir];
     return { x: s.body[0].x + dx, y: s.body[0].y + dy };
   });
-  // 3. everyone about to eat keeps their tail this move
+  // 3. everyone about to eat keeps their tail this move. This has to
+  // happen BEFORE we judge crashes, because a growing snake holds on to
+  // its tail, so that square is not free for anyone else.
   heads.forEach((h, i) => {
-    if (food && h.x === food.x && h.y === food.y) snakes[i].grow += 4;
+    if (foods.some(f => f.x === h.x && f.y === h.y)) snakes[i].grow += 4;
   });
   if (ticks % GROW_EVERY === 0) snakes.forEach(s => { s.grow += 1; });
   // 4. NOW judge the crashes
@@ -265,8 +282,10 @@ function step() {
     if (doomed[i]) return;
     s.body.unshift(h);
     if (s.grow > 0) s.grow--; else s.body.pop();
-    if (food && h.x === food.x && h.y === food.y) {
-      placeFood();
+    const bite = foods.findIndex(f => f.x === h.x && f.y === h.y);
+    if (bite >= 0) {
+      foods.splice(bite, 1);
+      topUpFood();                 // one gone, another appears elsewhere
       beep(880, 0.07, 'square', 0.09);
       beep(1320, 0.05, 'square', 0.05);
     }
@@ -350,7 +369,7 @@ function update(dt) {
     pt.life -= dt;
   }
   particles = particles.filter(pt => pt.life > 0);
-  if (food) food.pop += dt;
+  for (const f of foods) f.pop += dt;
 
   if (screen === 'countdown') {
     const was = Math.ceil(countdown);
@@ -421,15 +440,17 @@ function draw() {
   ctx.lineWidth = 3;
   ctx.strokeRect(ox - 1.5, oy - 1.5, gw + 3, gh + 3);
 
-  // ---- the apple ----
-  if (food) {
-    const pulse = 1 + Math.sin(food.pop * 6) * 0.12;
-    const s = cell * 0.72 * pulse;
-    const cx = ox + food.x * cell + cell / 2, cy = oy + food.y * cell + cell / 2;
+  // ---- the apples ----
+  for (const f of foods) {
+    const pulse = 1 + Math.sin(f.pop * 6) * 0.12;
+    const s = cell * 0.66 * pulse;
+    const cx = ox + f.x * cell + cell / 2, cy = oy + f.y * cell + cell / 2;
     ctx.fillStyle = '#ff3b30';
     ctx.beginPath(); ctx.arc(cx, cy, s / 2, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.45)';       // a little shine
+    ctx.beginPath(); ctx.arc(cx - s * 0.16, cy - s * 0.16, s * 0.13, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = '#7fdf3f';
-    ctx.fillRect(cx - 1.5, cy - s / 2 - cell * 0.16, 3, cell * 0.18);
+    ctx.fillRect(cx - 1.5, cy - s / 2 - cell * 0.14, 3, cell * 0.16);
   }
 
   // ---- the snakes ----
@@ -512,8 +533,10 @@ function drawScreens(L) {
                  W / 2, H * 0.56 + 66);
     ctx.fillStyle = '#ffd83d';
     ctx.fillText('HEAD TO HEAD? the LONGER snake wins - so EAT', W / 2, H * 0.56 + 88);
+    ctx.fillStyle = '#ff6b60';
+    ctx.fillText(FOOD_COUNT + ' apples on the board at once. get stuck in.', W / 2, H * 0.56 + 110);
     ctx.fillStyle = 'rgba(255,255,255,0.65)';
-    ctx.fillText('on a phone: one thumb pad each, bottom corners', W / 2, H * 0.56 + 110);
+    ctx.fillText('on a phone: one thumb pad each, bottom corners', W / 2, H * 0.56 + 132);
     ctx.fillStyle = 'rgba(255,255,255,' + (0.55 + Math.sin(Date.now() / 300) * 0.35) + ')';
     ctx.font = 'bold ' + Math.min(24, W / 24) + 'px monospace';
     ctx.fillText('PRESS ANY KEY  /  TAP TO START', W / 2, H * 0.82);
@@ -651,7 +674,7 @@ function loop(now) {
   requestAnimationFrame(loop);
 }
 snakes = PLAYERS.map(newSnake);      // something to look at behind the title
-placeFood();
+topUpFood();
 requestAnimationFrame(loop);
 </script>
 </body>
