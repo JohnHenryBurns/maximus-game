@@ -90,8 +90,14 @@ const JUMP_V = -880;
 const BALL_BOUNCE = 0.84;        // how much bounce it keeps when it lands
 const KICK_POWER = 1150;         // the boot
 const KICK_LIFT = 620;           // ...and how much of it goes upward
-const KICK_TIME = 0.16;          // how long the boot is stuck out
-const KICK_COOLDOWN = 0.42;
+// These three decide whether booting the ball feels GOOD or feels like
+// swinging at thin air. The boot stays out longer than you would think,
+// the lockout afterwards is short, and pressing too early is remembered
+// rather than wasted. Miss and you get another go almost at once.
+const KICK_TIME = 0.24;          // how long the boot is stuck out
+const KICK_COOLDOWN = 0.26;      // ...and how long before you can swing again
+const KICK_BUFFER = 0.32;        // press early and it waits for you
+const KICK_REACH = 1.15;         // how far past yourself the boot reaches
 const GOAL_H = 0.30;             // goal mouth, as a share of the pitch height
 const WIN_GOALS = 5;
 
@@ -125,6 +131,31 @@ let ball = null;
 let scores = [0, 0];
 let screen = 'title';            // 'title' | 'kickoff' | 'play' | 'goal' | 'over'
 let held = {};                   // which keys are down right now
+// =====================================================================
+// HOW GOOD IS THE ROBOT?
+//
+// Three things make a computer player easier to beat, and none of them
+// is "make it stupid":
+//   react - how often it is allowed to change its mind. A slow reaction
+//           means it commits to a decision and can be wrong-footed.
+//   err   - how far off it thinks the ball is. Small mistakes, like a
+//           person misjudging a bouncing ball.
+//   speed - simply how fast it can run.
+// Left at full whack it scores about 25 goals a minute, which is no fun
+// for anybody.
+// =====================================================================
+const AI_LEVELS = [
+  { name: 'EASY', react: 0.34, err: 110, speed: 0.55, desc: 'slow and clumsy' },
+  { name: 'NORMAL', react: 0.15, err: 45, speed: 0.82, desc: 'a decent game' },
+  // even HARD gets a whisker of error. Two PERFECT robots mirror each
+  // other exactly and pin the ball between them forever - a tiny wobble
+  // is the difference between a match and a staring contest.
+  { name: 'HARD', react: 0.04, err: 16, speed: 1.0, desc: 'it will destroy you' },
+];
+let aiLevel = parseInt(localStorage.getItem('boot_ailevel') || '0');
+if (!(aiLevel >= 0 && aiLevel < AI_LEVELS.length)) aiLevel = 0;
+function aiSkill() { return AI_LEVELS[aiLevel]; }
+
 let ai = [false, false];
 try {
   const saved = JSON.parse(localStorage.getItem('boot_ai'));
@@ -196,6 +227,9 @@ function newPlayer(i) {
     face: i === 0 ? 1 : -1,        // which way the boot points
     kick: 0,                       // how long the boot has left out
     cool: 0,
+    buffered: 0,                   // pressed BOOT a bit early? remembered here
+    wasKick: false,                // so holding it down does not spam
+    flash: 0,                      // lights up when you actually connect
   };
 }
 function newBall(towards) {
@@ -256,14 +290,23 @@ function physics(dt) {
     // running
     p.vx += want.dir * PLAYER_ACCEL * dt;
     if (want.dir !== 0) p.face = want.dir;
-    p.vx = Math.max(-PLAYER_MAX, Math.min(PLAYER_MAX, p.vx));
+    const top = PLAYER_MAX * (ai[p.i] ? aiSkill().speed : 1);
+    p.vx = Math.max(-top, Math.min(top, p.vx));
     if (want.dir === 0) p.vx *= p.onGround ? Math.pow(GROUND_DRAG, dt * 60) : Math.pow(AIR_DRAG, dt * 60);
     // jumping
     if (want.jump && p.onGround) { p.vy = JUMP_V; p.onGround = false; tone(420, 0.07, 'square', 0.05, 620); }
     // booting
     p.cool = Math.max(0, p.cool - dt);
     p.kick = Math.max(0, p.kick - dt);
-    if (want.kick && p.cool <= 0) {
+    p.flash = Math.max(0, p.flash - dt);
+    p.buffered = Math.max(0, p.buffered - dt);
+    // Asking to boot at ANY moment is remembered for a short while, so
+    // pressing early still lands - and holding it down keeps swinging as
+    // fast as the boot recovers. That matters for the robot too, which
+    // simply asks to kick the whole time the ball is in range.
+    if (want.kick) p.buffered = KICK_BUFFER;
+    if (p.buffered > 0 && p.cool <= 0) {
+      p.buffered = 0;
       p.kick = KICK_TIME;
       p.cool = KICK_COOLDOWN;
       tone(180, 0.06, 'sawtooth', 0.05);
@@ -289,6 +332,15 @@ function physics(dt) {
     a.x -= nx * push; a.y -= ny * push;
     b.x += nx * push; b.y += ny * push;
     a.vx -= nx * 40; b.vx += nx * 40;
+    // A SHOVE CAN PUSH SOMEBODY OFF THE PITCH. The wall check happened
+    // before this, so without doing it again a hard barge in the corner
+    // sends a player straight through the touchline.
+    for (const q of players) {
+      if (q.x < PLAYER_R) { q.x = PLAYER_R; q.vx = Math.max(0, q.vx); }
+      if (q.x > P.W - PLAYER_R) { q.x = P.W - PLAYER_R; q.vx = Math.min(0, q.vx); }
+      if (q.y > P.ground - PLAYER_R) { q.y = P.ground - PLAYER_R; q.vy = Math.min(0, q.vy); q.onGround = true; }
+      if (q.y < P.hud + PLAYER_R) { q.y = P.hud + PLAYER_R; q.vy = Math.max(0, q.vy); }
+    }
   }
 
   // ---- the ball ----
@@ -318,7 +370,7 @@ function physics(dt) {
   for (const p of players) {
     const bx = ball.x - p.x, by = ball.y - p.y;
     const bd = Math.hypot(bx, by) || 1;
-    const reach = PLAYER_R + R + (p.kick > 0 ? PLAYER_R * 0.75 : 0);
+    const reach = PLAYER_R + R + (p.kick > 0 ? PLAYER_R * KICK_REACH : 0);
     if (bd > reach) continue;
     const nx = bx / bd, ny = by / bd;
     if (p.kick > 0) {
@@ -327,8 +379,9 @@ function physics(dt) {
       ball.vy = ny * KICK_POWER * 0.4 - KICK_LIFT;
       ball.spin = p.face * 14;
       p.kick = 0;
+      p.flash = 0.22;
       thump(KICK_POWER);
-      shake = Math.max(shake, 10);
+      shake = Math.max(shake, 12);
       for (let i = 0; i < 12; i++) {
         const ang = Math.random() * Math.PI * 2, sp = 60 + Math.random() * 240;
         particles.push({ x: ball.x, y: ball.y, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp,
@@ -338,9 +391,12 @@ function physics(dt) {
       // just bumped into: shove it out of the way
       const overlap = PLAYER_R + R - bd;
       if (overlap > 0) { ball.x += nx * overlap; ball.y += ny * overlap; }
-      const hit = 260 + Math.abs(p.vx) * 0.9;
-      ball.vx = nx * hit + p.vx * 0.55;
-      ball.vy = Math.min(ball.vy, ny * hit - 120);
+      // Running into it counts as a hit too - a body check. It has to
+      // send the ball off FASTER than you are running, or you would just
+      // trample straight over it and never be able to dribble.
+      const hit = 300 + Math.abs(p.vx) * 1.25;
+      ball.vx = nx * hit + p.vx * 0.6;
+      ball.vy = Math.min(ball.vy, ny * hit - 150);
       ball.spin = p.vx * 0.06;
       bounceSound(hit * 0.4);
     }
@@ -385,24 +441,36 @@ function checkGoal() {
 // checked in order. Get between the ball and your own goal, then boot it.
 // ---------------------------------------------------------------------
 function aiWant(p) {
+  const S = aiSkill();
+  // it only changes its mind every so often, so it can be wrong-footed
+  p.aiTimer = (p.aiTimer || 0) - SUB;
+  if (p.aiTimer > 0 && p.aiPlan) return p.aiPlan;
+  p.aiTimer = S.react;
+  p.aiErrX = (Math.random() - 0.5) * 2 * S.err;
+  p.aiErrY = (Math.random() - 0.5) * 2 * S.err;
+  p.aiPlan = aiThink(p);
+  return p.aiPlan;
+}
+function aiThink(p) {
+  const S = aiSkill();
   const P = pitch();
-  const own = p.i === 0 ? 0 : P.W;                 // the goal it is defending
-  const target = p.i === 0 ? P.W : 0;              // the goal it is aiming at
-  const toBall = ball.x - p.x;
-  const dist = Math.hypot(ball.x - p.x, ball.y - p.y);
+  // where it THINKS the ball is - not quite where it really is
+  const bx = ball.x + (p.aiErrX || 0), by = ball.y + (p.aiErrY || 0);
+  const toBall = bx - p.x;
+  const dist = Math.hypot(bx - p.x, by - p.y);
   // stand on the goal side of the ball, so a boot sends it the right way
-  const standX = ball.x + (p.i === 0 ? -PLAYER_R * 1.1 : PLAYER_R * 1.1);
+  const standX = bx + (p.i === 0 ? -PLAYER_R * 1.1 : PLAYER_R * 1.1);
   let dir = 0;
   if (Math.abs(standX - p.x) > 12) dir = standX > p.x ? 1 : -1;
   // if the ball has got behind it, hurry back
-  const behind = p.i === 0 ? ball.x < p.x - PLAYER_R : ball.x > p.x + PLAYER_R;
+  const behind = p.i === 0 ? bx < p.x - PLAYER_R : bx > p.x + PLAYER_R;
   if (behind && Math.abs(toBall) > 40) dir = toBall > 0 ? 1 : -1;
   // jump for a high ball that is close
-  const jump = p.onGround && dist < PLAYER_R * 4.5 && ball.y < p.y - PLAYER_R * 1.2;
+  const jump = p.onGround && dist < PLAYER_R * 4.5 && by < p.y - PLAYER_R * 1.2;
   // boot it when it is in range and on the correct side
   const facingRight = p.i === 0;
-  const onGoodSide = facingRight ? ball.x > p.x - PLAYER_R : ball.x < p.x + PLAYER_R;
-  const kick = dist < PLAYER_R + ballR() + PLAYER_R * 0.8 && onGoodSide && p.cool <= 0;
+  const onGoodSide = facingRight ? bx > p.x - PLAYER_R : bx < p.x + PLAYER_R;
+  const kick = dist < PLAYER_R + ballR() + PLAYER_R * KICK_REACH && onGoodSide;
   return { dir, jump, kick };
 }
 
@@ -446,8 +514,26 @@ function update(dt) {
 // ---------------------------------------------------------------------
 function drawPlayer(p) {
   const kicking = p.kick > 0;
+  if (kicking) {
+    // the swing: an arc showing exactly how far the boot reaches
+    const reach = PLAYER_R + ballR() + PLAYER_R * KICK_REACH;
+    ctx.strokeStyle = 'rgba(255, 216, 63, ' + (0.15 + (p.kick / KICK_TIME) * 0.35) + ')';
+    ctx.lineWidth = Math.max(4, PLAYER_R * 0.3);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, reach * 0.82,
+            p.face > 0 ? -0.9 : Math.PI + 0.9,
+            p.face > 0 ? 0.9 : Math.PI - 0.9,
+            p.face < 0);
+    ctx.stroke();
+  }
+  if (p.flash > 0) {
+    ctx.fillStyle = 'rgba(255,255,255,' + (p.flash / 0.22) * 0.5 + ')';
+    ctx.beginPath();
+    ctx.arc(p.x + p.face * PLAYER_R, p.y + PLAYER_R * 0.4, PLAYER_R * 0.9, 0, Math.PI * 2);
+    ctx.fill();
+  }
   // the boot swings out in front when kicking
-  const reach = kicking ? PLAYER_R * 1.15 : PLAYER_R * 0.55;
+  const reach = kicking ? PLAYER_R * 1.5 : PLAYER_R * 0.6;
   const bx = p.x + p.face * reach, by = p.y + PLAYER_R * 0.55;
   ctx.strokeStyle = p.t.dark;
   ctx.lineWidth = Math.max(5, PLAYER_R * 0.28);
@@ -457,7 +543,8 @@ function drawPlayer(p) {
   ctx.lineTo(bx, by);
   ctx.stroke();
   ctx.fillStyle = p.t.boot;
-  roundRect(bx - PLAYER_R * 0.34, by - PLAYER_R * 0.2, PLAYER_R * 0.72, PLAYER_R * 0.42, 5);
+  const bw = kicking ? PLAYER_R * 1.0 : PLAYER_R * 0.78;
+  roundRect(bx - bw * 0.45, by - PLAYER_R * 0.24, bw, PLAYER_R * 0.5, 6);
   ctx.fill();
   ctx.lineCap = 'butt';
   // the body
@@ -589,7 +676,7 @@ function draw() {
     const x = i === 0 ? W * 0.3 : W * 0.7;
     ctx.fillStyle = t.body;
     ctx.font = 'bold ' + Math.min(22, W / 26) + 'px monospace';
-    ctx.fillText(ai[i] ? 'ROBOT ' + t.name : t.name, x, P.hud * 0.45);
+    ctx.fillText(ai[i] ? AI_LEVELS[aiLevel].name + ' ROBOT' : t.name, x, P.hud * 0.45);
     ctx.font = 'bold ' + Math.min(40, W / 16) + 'px monospace';
     ctx.fillText(String(scores[i]), x, P.hud * 0.92);
   });
@@ -648,6 +735,11 @@ function drawScreens(P) {
     ctx.fillStyle = 'rgba(255,255,255,0.55)';
     ctx.font = Math.min(18, W / 32) + 'px monospace';
     ctx.fillText('football, but wrong', W / 2, H * 0.2 + 30);
+    if (!ai[0] && !ai[1]) {
+      ctx.fillStyle = 'rgba(168, 228, 255,' + (0.55 + Math.sin(Date.now() / 400) * 0.35) + ')';
+      ctx.font = 'bold ' + Math.min(16, W / 36) + 'px monospace';
+      ctx.fillText('ON YOUR OWN?  tap a HUMAN below to make it a ROBOT', W / 2, H * 0.2 + 56);
+    }
 
     TEAMS.forEach((t, i) => {
       const x = i === 0 ? W * 0.27 : W * 0.73;
@@ -673,8 +765,19 @@ function drawScreens(P) {
     });
 
     const dy = H * 0.63;
-    drawDial(W * 0.3, dy, W, 'BALL  (1)', BALL_SIZES[ballSize].name, BALL_SIZES[ballSize].desc, '#ffd83d', 'ball');
-    drawDial(W * 0.7, dy, W, 'GRAVITY  (2)', GRAVITIES[gravLevel].name, GRAVITIES[gravLevel].desc, '#9ad4ff', 'grav');
+    if (ai[0] || ai[1]) {
+      drawDial(W * 0.2, dy, W, 'BALL  (1)', BALL_SIZES[ballSize].name,
+               BALL_SIZES[ballSize].desc, '#ffd83d', 'ball');
+      drawDial(W * 0.5, dy, W, 'GRAVITY  (2)', GRAVITIES[gravLevel].name,
+               GRAVITIES[gravLevel].desc, '#9ad4ff', 'grav');
+      drawDial(W * 0.8, dy, W, 'ROBOT  (3)', AI_LEVELS[aiLevel].name,
+               AI_LEVELS[aiLevel].desc, '#a8e4ff', 'skill');
+    } else {
+      drawDial(W * 0.3, dy, W, 'BALL  (1)', BALL_SIZES[ballSize].name,
+               BALL_SIZES[ballSize].desc, '#ffd83d', 'ball');
+      drawDial(W * 0.7, dy, W, 'GRAVITY  (2)', GRAVITIES[gravLevel].name,
+               GRAVITIES[gravLevel].desc, '#9ad4ff', 'grav');
+    }
     ctx.fillStyle = 'rgba(255,255,255,' + (0.55 + Math.sin(Date.now() / 300) * 0.35) + ')';
     ctx.font = 'bold ' + Math.min(24, W / 24) + 'px monospace';
     ctx.fillText('SPACE  /  TAP  =  KICK OFF', W / 2, H * 0.85);
@@ -752,6 +855,12 @@ function cycleGrav(step) {
   localStorage.setItem('boot_grav', String(gravLevel));
   tone(400, 0.08, 'sine', 0.06);
 }
+function cycleSkill(step) {
+  aiLevel = (aiLevel + step + AI_LEVELS.length) % AI_LEVELS.length;
+  localStorage.setItem('boot_ailevel', String(aiLevel));
+  tone(700 + aiLevel * 120, 0.07, 'square', 0.06);
+}
+
 function toggleAI(i) {
   ai[i] = !ai[i];
   localStorage.setItem('boot_ai', JSON.stringify(ai));
@@ -765,6 +874,7 @@ addEventListener('keydown', e => {
     if (e.key === 'Escape') { screen = 'title'; return; }
     if (e.key === '1') { cycleBall(1); return; }
     if (e.key === '2') { cycleGrav(1); return; }
+    if (e.key === '3') { cycleSkill(1); return; }
     if (e.key.toLowerCase() === 'q') { toggleAI(0); return; }
     if (e.key.toLowerCase() === 'p') { toggleAI(1); return; }
   }
@@ -793,6 +903,7 @@ canvas.addEventListener('pointerdown', e => {
       if (b.aiToggle !== undefined) toggleAI(b.aiToggle);
       else if (b.ball) cycleBall(b.ball);
       else if (b.grav) cycleGrav(b.grav);
+      else if (b.skill) cycleSkill(b.skill);
       return;
     }
     startFromTitle();
