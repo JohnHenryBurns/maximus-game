@@ -85,6 +85,72 @@ const GROW_EVERY = 16;           // both snakes grow anyway, so rounds always en
 // if COLS and ROWS ever change.
 const FOOD_COUNT = Math.round(COLS * ROWS * 0.03);
 
+// =====================================================================
+// THE SKINS.
+//
+// A skin is just a few colours plus a PATTERN - a rule for what colour
+// each segment should be. The rule is applied by segColor() further
+// down, so adding a brand new look here needs no new drawing code at
+// all, unless you invent a whole new kind of pattern.
+// =====================================================================
+const SKINS = [
+  { id: 'green',  name: 'GREEN',     body: '#7fdf3f', alt: '#5cb02a', head: '#c6ff6a', pattern: 'solid' },
+  { id: 'pink',   name: 'BUBBLEGUM', body: '#ff5fa8', alt: '#d63d84', head: '#ffa8d2', pattern: 'solid' },
+  { id: 'tiger',  name: 'TIGER',     body: '#ff9d1f', alt: '#2b1a08', head: '#ffc45c', pattern: 'stripe' },
+  { id: 'fire',   name: 'FIRE',      body: '#ffe14a', alt: '#e01b1b', head: '#fff2a0', pattern: 'fade' },
+  { id: 'ice',    name: 'ICE',       body: '#eaffff', alt: '#2b8fd6', head: '#ffffff', pattern: 'fade' },
+  { id: 'slime',  name: 'SLIME',     body: '#8ce33f', alt: '#3d7a1a', head: '#c4ff8a', pattern: 'spots' },
+  { id: 'robot',  name: 'ROBOT',     body: '#b8c0c8', alt: '#3ad6e0', head: '#e8f0f4', pattern: 'stripe' },
+  { id: 'ghost',  name: 'GHOST',     body: '#dfe8ff', alt: '#9aa8d0', head: '#ffffff', pattern: 'solid', alpha: 0.5 },
+  { id: 'stinker', name: 'STINKER',  body: '#9a8b3f', alt: '#6f5f22', head: '#c8b85a', pattern: 'spots' },
+  { id: 'shadow', name: 'SHADOW',    body: '#2a2a3a', alt: '#5a5a7a', head: '#8a8ab0', pattern: 'stripe' },
+  // ---- these two have to be earned ----
+  { id: 'gold',   name: 'GOLD',      body: '#f2c236', alt: '#fff3b0', head: '#fff8d0', pattern: 'stripe',
+    lock: 'win a whole match' },
+  { id: 'rainbow', name: 'RAINBOW',  body: '#ff0000', alt: '#00ff00', head: '#ffffff', pattern: 'rainbow',
+    lock: 'win a match 5-0' },
+];
+let unlocked = {};
+try { unlocked = JSON.parse(localStorage.getItem('snake_unlocks')) || {}; } catch (e) { unlocked = {}; }
+function isUnlocked(sk) { return !sk.lock || unlocked[sk.id]; }
+function unlock(id, why) {
+  if (unlocked[id]) return false;
+  unlocked[id] = true;
+  localStorage.setItem('snake_unlocks', JSON.stringify(unlocked));
+  newlyUnlocked = { id, why };
+  return true;
+}
+let newlyUnlocked = null;
+
+// mix two colours together - used by the FADE pattern
+function mixHex(a, b, f) {
+  const pa = [1, 3, 5].map(i => parseInt(a.substr(i, 2), 16));
+  const pb = [1, 3, 5].map(i => parseInt(b.substr(i, 2), 16));
+  return 'rgb(' + pa.map((v, i) => Math.round(v + (pb[i] - v) * f)).join(',') + ')';
+}
+function darker(hex, f) {
+  const p = [1, 3, 5].map(i => Math.round(parseInt(hex.substr(i, 2), 16) * f));
+  return 'rgb(' + p.join(',') + ')';
+}
+// THE PATTERN RULE: what colour is segment number j?
+function segColor(sk, j, len, t) {
+  switch (sk.pattern) {
+    case 'stripe':  return (j % 2) ? sk.alt : sk.body;
+    case 'spots':   return (j % 4 === 1) ? sk.alt : sk.body;
+    case 'fade':    return mixHex(sk.body, sk.alt, Math.min(1, j / Math.max(1, len - 1)));
+    case 'rainbow': return 'hsl(' + Math.floor((j * 22 + t * 90) % 360) + ', 92%, 58%)';
+    default:        return sk.body;
+  }
+}
+
+// which skin each player is wearing right now
+let picks = [0, 1];
+try {
+  const saved = JSON.parse(localStorage.getItem('snake_picks'));
+  if (Array.isArray(saved) && saved.length === 2) picks = saved;
+} catch (e) {}
+function skinOf(i) { return SKINS[picks[i]] || SKINS[i]; }
+
 // ---- the two players ----
 // Everything about a player lives in one object. Want a third snake one
 // day? Add a third object - the rest of the code already loops over them.
@@ -113,6 +179,7 @@ let shake = 0;
 let lastResult = null;           // what happened at the end of the round
 let touchMode = false;           // switches the thumb pads on
 let headbutt = null;             // set when a round ends nose to nose
+let skinRects = [];              // the tappable < > arrows on the title screen
 </script>
 <script>
 // ---------------------------------------------------------------------
@@ -206,6 +273,7 @@ function startRound() {
   screen = 'countdown';
 }
 function startMatch() {
+  newlyUnlocked = null;
   scores = [0, 0];
   stepTime = 0.125;
   startRound();
@@ -312,7 +380,7 @@ function endRound(doomed) {
   doomed.forEach((d, i) => {
     if (!d) return;
     snakes[i].alive = false;
-    boom(snakes[i].body[0], PLAYERS[i].head);
+    boom(snakes[i].body[0], skinOf(i).head);
   });
   crashSound();
   shake = 16;
@@ -327,11 +395,11 @@ function endRound(doomed) {
       boom(snakes[winner].body[0], '#ffffff');
       thud();
       lastResult = { winner,
-        text: PLAYERS[winner].name + ' HEAD-BUTTS! ' +
+        text: skinOf(winner).name + ' HEAD-BUTTS! ' +
               headbutt[winner === 0 ? 'len0' : 'len1'] + ' vs ' +
               headbutt[winner === 0 ? 'len1' : 'len0'] };
     } else {
-      lastResult = { winner, text: PLAYERS[winner].name + ' WINS THE ROUND' };
+      lastResult = { winner, text: skinOf(winner).name + ' WINS THE ROUND' };
     }
   }
   roundTimer = 1.8;
@@ -341,13 +409,16 @@ function afterRound() {
   if (scores[0] >= WIN_SCORE || scores[1] >= WIN_SCORE) {
     screen = 'matchover';
     winJingle();
+    // rewards for the winner
+    unlock('gold', 'you won a whole match');
+    if (Math.min(scores[0], scores[1]) === 0) unlock('rainbow', 'a 5-0 whitewash!');
     // confetti in the winner's colour
     const w = scores[0] > scores[1] ? 0 : 1;
     for (let i = 0; i < 90; i++) {
       particles.push({
         x: Math.random() * COLS, y: -1 - Math.random() * 6,
         vx: (Math.random() - 0.5) * 60, vy: 60 + Math.random() * 140,
-        life: 3, color: Math.random() < 0.5 ? PLAYERS[w].head : PLAYERS[w].body,
+        life: 3, color: Math.random() < 0.5 ? skinOf(w).head : skinOf(w).body,
       });
     }
     return;
@@ -454,15 +525,19 @@ function draw() {
   }
 
   // ---- the snakes ----
+  const now = Date.now() / 1000;
   snakes.forEach((s, i) => {
-    const p = PLAYERS[i];
+    const sk = skinOf(i);
+    ctx.globalAlpha = sk.alpha || 1;
     s.body.forEach((b, j) => {
       const x = ox + b.x * cell, y = oy + b.y * cell;
       const inset = j === 0 ? 1 : 2;
-      ctx.fillStyle = !s.alive ? p.dead : (j === 0 ? p.head : p.body);
+      const live = j === 0 ? sk.head : segColor(sk, j, s.body.length, now);
+      ctx.fillStyle = s.alive ? live : darker(sk.body, 0.32);
       roundRect(x + inset, y + inset, cell - inset * 2, cell - inset * 2, Math.max(2, cell * 0.28));
       ctx.fill();
       if (j === 0 && s.alive) {
+        ctx.globalAlpha = 1;
         // eyes, looking where it is going
         const [dx, dy] = STEPS[s.dir];
         const ex = x + cell / 2 + dx * cell * 0.18, ey = y + cell / 2 + dy * cell * 0.18;
@@ -472,8 +547,10 @@ function draw() {
         ctx.arc(ex - sx, ey - sy, Math.max(1.4, cell * 0.1), 0, Math.PI * 2);
         ctx.arc(ex + sx, ey + sy, Math.max(1.4, cell * 0.1), 0, Math.PI * 2);
         ctx.fill();
+        ctx.globalAlpha = sk.alpha || 1;
       }
     });
+    ctx.globalAlpha = 1;
   });
 
   // ---- sparks ----
@@ -488,15 +565,16 @@ function draw() {
   ctx.textAlign = 'center';
   const midY = L.hud * 0.52;
   PLAYERS.forEach((p, i) => {
+    const sk = skinOf(i);
     const x = i === 0 ? W * 0.26 : W * 0.74;
-    ctx.fillStyle = p.head;
+    ctx.fillStyle = sk.head;
     ctx.font = 'bold ' + Math.min(20, W / 26) + 'px monospace';
-    ctx.fillText(p.name, x, midY - 6);
+    ctx.fillText(sk.name, x, midY - 6);
     // one pip per round won
     const pips = WIN_SCORE, size = Math.min(13, W / 44), gap = size * 1.7;
     for (let k = 0; k < pips; k++) {
       const px = x - (pips - 1) * gap / 2 + k * gap;
-      ctx.fillStyle = k < scores[i] ? p.body : 'rgba(255,255,255,0.14)';
+      ctx.fillStyle = k < scores[i] ? sk.body : 'rgba(255,255,255,0.14)';
       ctx.beginPath(); ctx.arc(px, midY + 14, size / 2, 0, Math.PI * 2); ctx.fill();
     }
   });
@@ -515,31 +593,94 @@ function drawScreens(L) {
   const { W, H } = L;
   ctx.textAlign = 'center';
   if (screen === 'title') {
-    ctx.fillStyle = 'rgba(6, 12, 9, 0.86)';
+    ctx.fillStyle = 'rgba(6, 12, 9, 0.9)';
     ctx.fillRect(0, 0, W, H);
+    const big = Math.min(52, W / 11);
     ctx.fillStyle = '#7fdf3f';
-    ctx.font = 'bold ' + Math.min(64, W / 9) + 'px monospace';
-    ctx.fillText('SNAKE', W / 2, H * 0.3);
+    ctx.font = 'bold ' + big + 'px monospace';
+    ctx.fillText('SNAKE', W / 2 - big * 1.6, H * 0.13);
     ctx.fillStyle = '#ff5fa8';
-    ctx.fillText('FIGHT', W / 2, H * 0.3 + Math.min(66, W / 8.6));
-    ctx.font = 'bold ' + Math.min(19, W / 30) + 'px monospace';
-    ctx.fillStyle = '#7fdf3f';
-    ctx.fillText('GREEN:  W  A  S  D', W / 2, H * 0.56);
-    ctx.fillStyle = '#ff5fa8';
-    ctx.fillText('PINK:  ARROW KEYS', W / 2, H * 0.56 + 30);
-    ctx.fillStyle = 'rgba(255,255,255,0.65)';
-    ctx.font = Math.min(15, W / 36) + 'px monospace';
-    ctx.fillText('crash into a wall, your own tail, or theirs - and you lose the round',
-                 W / 2, H * 0.56 + 66);
+    ctx.fillText('FIGHT', W / 2 + big * 1.6, H * 0.13);
+
+    // ---- one wardrobe each ----
+    skinRects = [];
+    PLAYERS.forEach((p, i) => {
+      const cx = i === 0 ? W * 0.27 : W * 0.73;
+      const sk = skinOf(i);
+      const top = H * 0.26;
+      ctx.fillStyle = 'rgba(255,255,255,0.05)';
+      roundRect(cx - W * 0.21, top - 26, W * 0.42, H * 0.36, 12);
+      ctx.fill();
+      ctx.strokeStyle = sk.body;
+      ctx.lineWidth = 3;
+      roundRect(cx - W * 0.21, top - 26, W * 0.42, H * 0.36, 12);
+      ctx.stroke();
+
+      ctx.fillStyle = 'rgba(255,255,255,0.55)';
+      ctx.font = 'bold ' + Math.min(15, W / 42) + 'px monospace';
+      ctx.fillText(i === 0 ? 'PLAYER 1   -   W A S D' : 'PLAYER 2   -   ARROW KEYS', cx, top);
+
+      // a little snake, wearing the skin, wriggling
+      const cellP = Math.min(26, W / 34);
+      const t = Date.now() / 1000;
+      const segs = 7;
+      ctx.globalAlpha = sk.alpha || 1;
+      for (let j = segs - 1; j >= 0; j--) {
+        const sx = cx - (segs - 1) * cellP / 2 + j * cellP;
+        const sy = top + H * 0.11 + Math.sin(t * 3 + j * 0.7) * cellP * 0.42;
+        ctx.fillStyle = j === 0 ? sk.head : segColor(sk, j, segs, t);
+        roundRect(sx - cellP / 2 + 2, sy - cellP / 2 + 2, cellP - 4, cellP - 4, cellP * 0.3);
+        ctx.fill();
+        if (j === 0) {
+          ctx.globalAlpha = 1;
+          ctx.fillStyle = '#0b1410';
+          ctx.beginPath();
+          ctx.arc(sx + cellP * 0.12, sy - cellP * 0.14, cellP * 0.11, 0, Math.PI * 2);
+          ctx.arc(sx + cellP * 0.12, sy + cellP * 0.14, cellP * 0.11, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.globalAlpha = sk.alpha || 1;
+        }
+      }
+      ctx.globalAlpha = 1;
+
+      ctx.fillStyle = sk.head;
+      ctx.font = 'bold ' + Math.min(26, W / 26) + 'px monospace';
+      ctx.fillText(sk.name, cx, top + H * 0.21);
+
+      // the arrows you press to change it (and can tap on a phone)
+      const ay = top + H * 0.21 - Math.min(9, W / 90);
+      const ar = Math.min(20, W / 40);
+      [[-1, cx - W * 0.16], [1, cx + W * 0.16]].forEach(([dir, ax]) => {
+        ctx.fillStyle = 'rgba(255,255,255,0.09)';
+        ctx.beginPath(); ctx.arc(ax, ay, ar, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = sk.body;
+        ctx.font = 'bold ' + ar * 1.1 + 'px monospace';
+        ctx.fillText(dir < 0 ? '<' : '>', ax, ay + ar * 0.38);
+        skinRects.push({ x: ax, y: ay, r: ar * 1.4, player: i, step: dir });
+      });
+      ctx.fillStyle = 'rgba(255,255,255,0.4)';
+      ctx.font = Math.min(13, W / 48) + 'px monospace';
+      ctx.fillText(i === 0 ? 'A / D to change' : 'left / right to change', cx, top + H * 0.28);
+    });
+
+    // ---- the rules, in one line each ----
+    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+    ctx.font = Math.min(14, W / 40) + 'px monospace';
+    ctx.fillText('wall, your own tail, or theirs - you lose the round', W / 2, H * 0.7);
     ctx.fillStyle = '#ffd83d';
-    ctx.fillText('HEAD TO HEAD? the LONGER snake wins - so EAT', W / 2, H * 0.56 + 88);
+    ctx.fillText('HEAD TO HEAD? the LONGER snake wins - so EAT', W / 2, H * 0.7 + 22);
     ctx.fillStyle = '#ff6b60';
-    ctx.fillText(FOOD_COUNT + ' apples on the board at once. get stuck in.', W / 2, H * 0.56 + 110);
-    ctx.fillStyle = 'rgba(255,255,255,0.65)';
-    ctx.fillText('on a phone: one thumb pad each, bottom corners', W / 2, H * 0.56 + 132);
+    ctx.fillText(FOOD_COUNT + ' apples on the board. first to ' + WIN_SCORE + ' rounds.',
+                 W / 2, H * 0.7 + 44);
+    const locked = SKINS.filter(sk => !isUnlocked(sk));
+    if (locked.length) {
+      ctx.fillStyle = 'rgba(255,255,255,0.4)';
+      ctx.fillText('locked: ' + locked.map(sk => sk.name + ' (' + sk.lock + ')').join('   '),
+                   W / 2, H * 0.7 + 66);
+    }
     ctx.fillStyle = 'rgba(255,255,255,' + (0.55 + Math.sin(Date.now() / 300) * 0.35) + ')';
     ctx.font = 'bold ' + Math.min(24, W / 24) + 'px monospace';
-    ctx.fillText('PRESS ANY KEY  /  TAP TO START', W / 2, H * 0.82);
+    ctx.fillText('SPACE  /  TAP THE MIDDLE  =  FIGHT', W / 2, H * 0.93);
   } else if (screen === 'countdown') {
     const n = Math.ceil(countdown);
     const grow = 1 + (Math.ceil(countdown) - countdown) * 0.5;
@@ -553,22 +694,36 @@ function drawScreens(L) {
   } else if (screen === 'roundover' && lastResult) {
     ctx.fillStyle = 'rgba(6, 12, 9, 0.55)';
     ctx.fillRect(0, H * 0.38, W, H * 0.16);
-    ctx.fillStyle = lastResult.draw ? '#ffd83d' : PLAYERS[lastResult.winner].head;
+    ctx.fillStyle = lastResult.draw ? '#ffd83d' : skinOf(lastResult.winner).head;
     ctx.font = 'bold ' + Math.min(40, W / 15) + 'px monospace';
     ctx.fillText(lastResult.text, W / 2, H * 0.49);
   } else if (screen === 'matchover') {
     const w = scores[0] > scores[1] ? 0 : 1;
     ctx.fillStyle = 'rgba(6, 12, 9, 0.86)';
     ctx.fillRect(0, 0, W, H);
-    ctx.fillStyle = PLAYERS[w].head;
+    ctx.fillStyle = skinOf(w).head;
     ctx.font = 'bold ' + Math.min(56, W / 11) + 'px monospace';
-    ctx.fillText(PLAYERS[w].name + ' WINS!', W / 2, H * 0.42);
+    ctx.fillText(skinOf(w).name + ' WINS!', W / 2, H * 0.42);
     ctx.fillStyle = '#fff';
     ctx.font = 'bold ' + Math.min(30, W / 20) + 'px monospace';
     ctx.fillText(scores[0] + '  -  ' + scores[1], W / 2, H * 0.53);
+    if (newlyUnlocked) {
+      const sk = SKINS.find(x => x.id === newlyUnlocked.id);
+      const throb = 1 + Math.sin(Date.now() / 160) * 0.07;
+      ctx.save();
+      ctx.translate(W / 2, H * 0.63);
+      ctx.scale(throb, throb);
+      ctx.fillStyle = '#ffd83d';
+      ctx.font = 'bold ' + Math.min(26, W / 24) + 'px monospace';
+      ctx.fillText('NEW SKIN UNLOCKED: ' + sk.name + '!', 0, 0);
+      ctx.font = Math.min(15, W / 38) + 'px monospace';
+      ctx.fillStyle = 'rgba(255,255,255,0.7)';
+      ctx.fillText(newlyUnlocked.why, 0, 24);
+      ctx.restore();
+    }
     ctx.fillStyle = 'rgba(255,255,255,' + (0.55 + Math.sin(Date.now() / 300) * 0.35) + ')';
     ctx.font = 'bold ' + Math.min(22, W / 26) + 'px monospace';
-    ctx.fillText('PRESS ANY KEY  /  TAP FOR A REMATCH', W / 2, H * 0.72);
+    ctx.fillText('SPACE  /  TAP  =  REMATCH   (arrows change skins)', W / 2, H * 0.75);
   }
   ctx.textAlign = 'left';
 }
@@ -585,10 +740,10 @@ function drawPads(L) {
     [['up', 0, -1], ['down', 0, 1], ['left', -1, 0], ['right', 1, 0]].forEach(([dir, dx, dy]) => {
       const x = cx + dx * r * 1.5, y = cy + dy * r * 1.5;
       ctx.fillStyle = 'rgba(255,255,255,0.07)';
-      ctx.strokeStyle = p.body;
+      ctx.strokeStyle = skinOf(i).body;
       ctx.lineWidth = 2;
       ctx.beginPath(); ctx.arc(x, y, r * 0.62, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-      ctx.fillStyle = p.head;
+      ctx.fillStyle = skinOf(i).head;
       ctx.font = 'bold ' + r * 0.6 + 'px monospace';
       ctx.textAlign = 'center';
       ctx.fillText({ up: '▲', down: '▼', left: '◀', right: '▶' }[dir], x, y + r * 0.2);
@@ -615,6 +770,23 @@ function turn(playerIndex, dir) {
   if (OPPOSITE[dir] === s.dir) return;
   s.next = dir;
 }
+// Step to the next skin you are allowed to wear: skip the locked ones,
+// and skip whatever the other player is already wearing, so you can
+// never end up as two identical snakes.
+function cycleSkin(player, step) {
+  const other = picks[1 - player];
+  let i = picks[player];
+  for (let tries = 0; tries < SKINS.length; tries++) {
+    i = (i + step + SKINS.length) % SKINS.length;
+    if (i !== other && isUnlocked(SKINS[i])) {
+      picks[player] = i;
+      localStorage.setItem('snake_picks', JSON.stringify(picks));
+      beep(500 + player * 160, 0.05, 'square', 0.06);
+      return;
+    }
+  }
+}
+
 function anyKeyScreens() {
   if (screen === 'title') { startMatch(); return true; }
   if (screen === 'matchover') { startMatch(); return true; }
@@ -622,8 +794,16 @@ function anyKeyScreens() {
 }
 addEventListener('keydown', e => {
   ensureAudio();
-  if (e.key === ' ' || e.key.length === 1 || e.key.startsWith('Arrow')) {
-    if (anyKeyScreens()) { e.preventDefault(); return; }
+  // On the title and win screens, left/right browses your wardrobe and
+  // SPACE starts the fight. In game, the very same keys steer.
+  if (screen === 'title' || screen === 'matchover') {
+    if (e.key === ' ') { startMatch(); e.preventDefault(); return; }
+    PLAYERS.forEach((p, i) => {
+      const dir = p.keys[e.key] || p.keys[e.key.toLowerCase()];
+      if (dir === 'left') { cycleSkin(i, -1); e.preventDefault(); }
+      if (dir === 'right') { cycleSkin(i, 1); e.preventDefault(); }
+    });
+    return;
   }
   PLAYERS.forEach((p, i) => {
     const dir = p.keys[e.key] || p.keys[e.key.toLowerCase()];
@@ -636,7 +816,16 @@ const swipes = new Map();
 canvas.addEventListener('pointerdown', e => {
   ensureAudio();
   touchMode = touchMode || e.pointerType === 'touch';
-  if (anyKeyScreens()) return;
+  if (screen === 'title' || screen === 'matchover') {
+    for (const b of skinRects) {
+      if (Math.hypot(e.clientX - b.x, e.clientY - b.y) < b.r) {
+        cycleSkin(b.player, b.step);
+        return;
+      }
+    }
+    startMatch();                 // tapped anywhere else: fight
+    return;
+  }
   // did they hit one of the pad buttons?
   for (const b of padRects) {
     if (Math.hypot(e.clientX - b.x, e.clientY - b.y) < b.r) {
