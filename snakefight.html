@@ -108,6 +108,7 @@ let particles = [];
 let shake = 0;
 let lastResult = null;           // what happened at the end of the round
 let touchMode = false;           // switches the thumb pads on
+let headbutt = null;             // set when a round ends nose to nose
 </script>
 <script>
 // ---------------------------------------------------------------------
@@ -137,6 +138,17 @@ function crashSound() {
   g.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + 0.45);
   o.connect(g); g.connect(audio.destination);
   o.start(); o.stop(audio.currentTime + 0.5);
+}
+function thud() {
+  if (!audio) return;
+  const o = audio.createOscillator(), g = audio.createGain();
+  o.type = 'square';
+  o.frequency.setValueAtTime(120, audio.currentTime);
+  o.frequency.exponentialRampToValueAtTime(55, audio.currentTime + 0.18);
+  g.gain.setValueAtTime(0.25, audio.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + 0.25);
+  o.connect(g); g.connect(audio.destination);
+  o.start(); o.stop(audio.currentTime + 0.3);
 }
 function winJingle() {
   [523, 659, 784, 1047].forEach((n, i) => {
@@ -224,8 +236,28 @@ function step() {
     if (h.x < 0 || h.y < 0 || h.x >= COLS || h.y >= ROWS) doomed[i] = true;
     else if (occupied(h, true)) doomed[i] = true;
   });
+  // =====================================================================
+  // THE HEAD-BUTT.
+  //
+  // Nose to nose, both snakes crashed into a head at the very same
+  // instant - so "whoever hits a head wins" needs a tie-break, or they
+  // would both win at once. The tie-break is LENGTH: the bigger snake
+  // shoves the smaller one off and takes the round.
+  //
+  // That is what makes the apples matter. Every one you eat is another
+  // segment of head-butting power. And if you are exactly the same
+  // length, neither of you wins - you both go, which is only fair.
+  // =====================================================================
+  headbutt = null;
   if (heads[0].x === heads[1].x && heads[0].y === heads[1].y) {
-    doomed[0] = doomed[1] = true;                      // nose to nose: both lose
+    const len0 = snakes[0].body.length, len1 = snakes[1].body.length;
+    if (len0 === len1) {
+      doomed[0] = doomed[1] = true;                    // dead heat, both go
+    } else {
+      const winner = len0 > len1 ? 0 : 1;
+      doomed[1 - winner] = true;                       // the smaller one loses
+      headbutt = { winner, len0, len1 };
+    }
   }
   // 5. move everyone who survived
   heads.forEach((h, i) => {
@@ -266,11 +298,22 @@ function endRound(doomed) {
   crashSound();
   shake = 16;
   if (doomed[0] && doomed[1]) {
-    lastResult = { draw: true, text: 'BOTH OF YOU! nobody scores.' };
+    lastResult = { draw: true, text: 'DEAD HEAT! same length, both go.' };
   } else {
     const winner = doomed[0] ? 1 : 0;
     scores[winner]++;
-    lastResult = { winner, text: PLAYERS[winner].name + ' WINS THE ROUND' };
+    if (headbutt) {
+      // a head-butt deserves a bigger bang than an ordinary crash
+      shake = 26;
+      boom(snakes[winner].body[0], '#ffffff');
+      thud();
+      lastResult = { winner,
+        text: PLAYERS[winner].name + ' HEAD-BUTTS! ' +
+              headbutt[winner === 0 ? 'len0' : 'len1'] + ' vs ' +
+              headbutt[winner === 0 ? 'len1' : 'len0'] };
+    } else {
+      lastResult = { winner, text: PLAYERS[winner].name + ' WINS THE ROUND' };
+    }
   }
   roundTimer = 1.8;
   screen = 'roundover';
@@ -467,7 +510,10 @@ function drawScreens(L) {
     ctx.font = Math.min(15, W / 36) + 'px monospace';
     ctx.fillText('crash into a wall, your own tail, or theirs - and you lose the round',
                  W / 2, H * 0.56 + 66);
-    ctx.fillText('on a phone: one thumb pad each, bottom corners', W / 2, H * 0.56 + 88);
+    ctx.fillStyle = '#ffd83d';
+    ctx.fillText('HEAD TO HEAD? the LONGER snake wins - so EAT', W / 2, H * 0.56 + 88);
+    ctx.fillStyle = 'rgba(255,255,255,0.65)';
+    ctx.fillText('on a phone: one thumb pad each, bottom corners', W / 2, H * 0.56 + 110);
     ctx.fillStyle = 'rgba(255,255,255,' + (0.55 + Math.sin(Date.now() / 300) * 0.35) + ')';
     ctx.font = 'bold ' + Math.min(24, W / 24) + 'px monospace';
     ctx.fillText('PRESS ANY KEY  /  TAP TO START', W / 2, H * 0.82);
