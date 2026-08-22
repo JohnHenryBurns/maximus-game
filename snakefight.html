@@ -91,10 +91,16 @@ const COLS = 39, ROWS = 25;      // odd numbers, so there is a middle square
 const WIN_SCORE = 5;
 const START_LEN = 5;
 const GROW_EVERY = 16;           // both snakes grow anyway, so rounds always end
-// About three squares in every hundred hold an apple. Worked out from
-// the arena size rather than typed in, so the board stays this busy even
-// if COLS and ROWS ever change.
-const FOOD_COUNT = Math.round(COLS * ROWS * 0.03);
+// How thick the apples are, as a share of the whole board - so the
+// board stays this busy whatever size the arena is.
+const FOOD_LEVELS = [
+  { name: 'SOME', pct: 0.03, desc: 'a normal snake game' },
+  { name: 'LOTS', pct: 0.09, desc: 'apples everywhere. grow FAST' },
+  { name: 'SILLY', pct: 0.20, desc: 'you cannot move without eating' },
+];
+let foodLevel = parseInt(localStorage.getItem('snake_food') || '1');
+if (!(foodLevel >= 0 && foodLevel < FOOD_LEVELS.length)) foodLevel = 1;
+function foodTarget() { return Math.round(COLS * ROWS * FOOD_LEVELS[foodLevel].pct); }
 
 // =====================================================================
 // THE MAPS.
@@ -349,27 +355,28 @@ function newSnake(p) {
   }
   return { p, body, dir: p.dir, next: p.dir, grow: 0, alive: true };
 }
-// find one empty square: not a snake, not already an apple
-function freeSquare() {
-  for (let tries = 0; tries < 400; tries++) {
+// Keep the orchard topped up. Called at the start, and every time one
+// gets eaten, so the board never runs dry.
+//
+// It works out every taken square ONCE into a Set, rather than searching
+// the snakes and the apple list again for each square it tries. With 195
+// apples on a SILLY board that is the difference between smooth and a
+// stutter every time somebody takes a bite.
+function topUpFood() {
+  const target = foodTarget();
+  if (foods.length >= target) return;
+  const taken = new Set();
+  for (const s of snakes) for (const b of s.body) taken.add(b.x + ',' + b.y);
+  for (const f of foods) taken.add(f.x + ',' + f.y);
+  let guard = 0;
+  while (foods.length < target && guard++ < target * 14) {
     const x = 1 + Math.floor(Math.random() * (COLS - 2));
     const y = 1 + Math.floor(Math.random() * (ROWS - 2));
-    if (isWall(x, y)) continue;
-    if (snakes.some(s => s.body.some(b => b.x === x && b.y === y))) continue;
-    if (foods.some(f => f.x === x && f.y === y)) continue;
+    const key = x + ',' + y;
+    if (taken.has(key) || isWall(x, y)) continue;
+    taken.add(key);
     // a random pop means they do not all pulse in time with each other
-    return { x, y, pop: Math.random() * 6 };
-  }
-  return null;                   // board is stuffed - no room left
-}
-// keep the orchard topped up. Called at the start, and every time one
-// gets eaten, so the board never runs dry.
-function topUpFood() {
-  let guard = 0;
-  while (foods.length < FOOD_COUNT && guard++ < FOOD_COUNT * 2) {
-    const f = freeSquare();
-    if (!f) break;
-    foods.push(f);
+    foods.push({ x, y, pop: Math.random() * 6 });
   }
 }
 function startRound() {
@@ -997,7 +1004,7 @@ function drawScreens(L) {
 
     // ---- the map: a tiny picture of the real thing ----
     const M = currentMap();
-    const my = H * 0.705;
+    const my = H * 0.675;
     const mw = Math.min(W * 0.17, 150), mh = mw * (ROWS / COLS);
     ctx.fillStyle = 'rgba(255,255,255,0.05)';
     ctx.fillRect(W / 2 - mw / 2, my - mh / 2, mw, mh);
@@ -1018,9 +1025,27 @@ function drawScreens(L) {
     ctx.fillStyle = 'rgba(255,255,255,0.5)';
     ctx.font = Math.min(13, W / 44) + 'px monospace';
     ctx.fillText(M.desc, W / 2, my + mh / 2 + 42);
+    // the FOOD dial, right under the map
+    const FL = FOOD_LEVELS[foodLevel];
+    const fy = my + mh / 2 + 62;
+    ctx.fillStyle = '#ff6b60';
+    ctx.font = 'bold ' + Math.min(16, W / 40) + 'px monospace';
+    ctx.fillText('FOOD: ' + FL.name + '  -  ' + foodTarget() + ' apples', W / 2, fy);
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.font = Math.min(12, W / 50) + 'px monospace';
+    ctx.fillText(FL.desc, W / 2, fy + 16);
+    const fr = Math.min(15, W / 52);
+    [[-1, W / 2 - Math.min(W * 0.19, 165)], [1, W / 2 + Math.min(W * 0.19, 165)]].forEach(([dir, ax]) => {
+      ctx.fillStyle = 'rgba(255,255,255,0.09)';
+      ctx.beginPath(); ctx.arc(ax, fy - 5, fr, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#ff6b60';
+      ctx.font = 'bold ' + fr * 1.2 + 'px monospace';
+      ctx.fillText(dir < 0 ? '<' : '>', ax, fy);
+      skinRects.push({ x: ax, y: fy - 5, r: fr * 1.5, food: dir });
+    });
     ctx.fillStyle = 'rgba(255,255,255,0.35)';
-    ctx.fillText('W/S or up/down = map      1 / 2 = swap a player for AI_Dude',
-                 W / 2, my + mh / 2 + 60);
+    ctx.font = Math.min(12, W / 50) + 'px monospace';
+    ctx.fillText('up/down = map    F = food    1 / 2 = AI_Dude', W / 2, fy + 34);
     // tappable arrows either side of the little map
     const mr = Math.min(18, W / 44);
     [[-1, W / 2 - mw / 2 - mr * 2], [1, W / 2 + mw / 2 + mr * 2]].forEach(([dir, ax]) => {
@@ -1037,7 +1062,7 @@ function drawScreens(L) {
       ctx.fillStyle = 'rgba(255,255,255,0.35)';
       ctx.font = Math.min(12, W / 50) + 'px monospace';
       ctx.fillText('locked: ' + locked.map(sk => sk.name + ' (' + sk.lock + ')').join('   '),
-                   W / 2, my + mh / 2 + 78);
+                   W / 2, my + mh / 2 + 112);
     }
     ctx.fillStyle = 'rgba(255,255,255,' + (0.55 + Math.sin(Date.now() / 300) * 0.35) + ')';
     ctx.font = 'bold ' + Math.min(24, W / 24) + 'px monospace';
@@ -1139,6 +1164,14 @@ function turn(playerIndex, dir) {
 // and skip whatever the other player is already wearing, so you can
 // never end up as two identical snakes.
 // either player can change the map - it belongs to both of you
+function cycleFood(step) {
+  foodLevel = (foodLevel + step + FOOD_LEVELS.length) % FOOD_LEVELS.length;
+  localStorage.setItem('snake_food', String(foodLevel));
+  foods = [];
+  topUpFood();
+  beep(760, 0.05, 'square', 0.06);
+}
+
 function toggleAI(i) {
   ai[i] = !ai[i];
   localStorage.setItem('snake_ai', JSON.stringify(ai));
@@ -1180,6 +1213,7 @@ addEventListener('keydown', e => {
     if (e.key === 'Escape') { screen = 'title'; return; }
     if (e.key === '1') { toggleAI(0); return; }
     if (e.key === '2') { toggleAI(1); return; }
+    if (e.key.toLowerCase() === 'f') { cycleFood(1); return; }
     if (e.key === ' ') { startMatch(); e.preventDefault(); return; }
     PLAYERS.forEach((p, i) => {
       const dir = p.keys[e.key] || p.keys[e.key.toLowerCase()];
@@ -1212,6 +1246,7 @@ canvas.addEventListener('pointerdown', e => {
         : Math.hypot(e.clientX - b.x, e.clientY - b.y) < b.r;
       if (!hit) continue;
       if (b.aiToggle !== undefined) toggleAI(b.aiToggle);
+      else if (b.food) cycleFood(b.food);
       else if (b.map) cycleMap(b.map);
       else cycleSkin(b.player, b.step);
       return;
