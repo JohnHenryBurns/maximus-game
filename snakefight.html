@@ -545,26 +545,63 @@ function nearestFood(c) {
   return best === 999 ? 40 : best;
 }
 
+// Which single thing is AI_Dude going for right now? Picking ONE target
+// and sticking to it is what makes its path easy to follow. If it worked
+// out the nearest apple fresh from each square it was thinking about, it
+// would dither between two equally close ones and wiggle on the spot.
+function aiTarget(i) {
+  const me = snakes[i], foe = snakes[1 - i];
+  const head = me.body[0];
+  // bigger than them? then THEY are the target - the longer snake wins
+  // a head-butt, so charging is the right move
+  if (foe && foe.alive && me.body.length > foe.body.length + 1) {
+    return { x: foe.body[0].x, y: foe.body[0].y, hunt: true };
+  }
+  let best = null, bestD = 1e9;
+  for (const f of foods) {
+    const d = stepsTo(head, f);
+    if (d < bestD) { bestD = d; best = f; }
+  }
+  return best ? { x: best.x, y: best.y } : null;
+}
+
 function aiChoose(i) {
   const me = snakes[i];
   const foe = snakes[1 - i];
   if (!me || !me.alive) return;
   const head = me.body[0];
-  const bigger = foe && foe.alive && me.body.length > foe.body.length + 1;
+  const target = aiTarget(i);
+  me.aiTarget = target;                                // so we can draw it
+
+  // The room it needs before it will call a route safe: enough space to
+  // fit itself, with a bit spare. Below that, the route is a trap.
+  const needed = Math.min(ROOM_CAP, me.body.length + 5);
+
   let bestDir = null, bestScore = -Infinity;
-  for (const d of ['up', 'down', 'left', 'right']) {
+  // A FIXED order, and no random wobble anywhere. Given the same board
+  // AI_Dude always makes the same choice - which is what lets you learn
+  // it, predict it, and beat it.
+  for (const d of ['up', 'right', 'down', 'left']) {
     if (OPPOSITE[d] === me.dir) continue;              // never straight backwards
     const [dx, dy] = STEPS[d];
     const c = wrapCell({ x: head.x + dx, y: head.y + dy });
     if (aiBlocked(c)) continue;                        // instant death: not an option
-    let score = roomFrom(c) * 6;                       // ROOM matters most
-    score -= nearestFood(c) * 2;                       // then apples
-    if (foe && foe.alive) {
-      const toFoe = stepsTo(c, foe.body[0]);
-      // bigger: hunt them down. smaller: keep out of their way.
-      score += bigger ? -toFoe * 3 : Math.min(toFoe, 8) * 2;
+
+    let score = 0;
+    // 1. SAFETY FIRST, but as a veto rather than a nudge. Plenty of room
+    //    scores the same as loads of room, so having somewhere to go does
+    //    not drag it off a straight line.
+    const room = roomFrom(c);
+    if (room < needed) score -= 400 + (needed - room) * 12;
+    // 2. HEAD STRAIGHT AT THE TARGET. This is now the loudest voice, so
+    //    its route reads as a plain line rather than a wander.
+    if (target) score -= stepsTo(c, target) * 10;
+    // 3. DO NOT TURN FOR NO REASON. On a tie, carry straight on.
+    if (d === me.dir) score += 5;
+    // 4. If it is the smaller snake, stay out of head-butting range.
+    if (foe && foe.alive && !(target && target.hunt)) {
+      if (stepsTo(c, foe.body[0]) <= 2) score -= 60;
     }
-    score += Math.random() * 4;                        // a little wobble, so it is not a robot
     if (score > bestScore) { bestScore = score; bestDir = d; }
   }
   // every way is death? carry straight on and hope.
@@ -777,6 +814,27 @@ function draw() {
         ctx.globalAlpha = sk.alpha || 1;
       }
     });
+    ctx.globalAlpha = 1;
+  });
+
+  // ---- what AI_Dude is going for ----
+  // A ring round its target and a dotted line to it. You can watch it
+  // decide, which makes it far easier to get in the way.
+  snakes.forEach((sn, i) => {
+    if (!isAI(i) || !sn.alive || !sn.aiTarget || screen !== 'play') return;
+    const sk = skinOf(i);
+    const hx = ox + sn.body[0].x * cell + cell / 2, hy = oy + sn.body[0].y * cell + cell / 2;
+    const tx = ox + sn.aiTarget.x * cell + cell / 2, ty = oy + sn.aiTarget.y * cell + cell / 2;
+    ctx.strokeStyle = sk.head;
+    ctx.globalAlpha = 0.3;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([4, 6]);
+    ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(tx, ty); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 0.75;
+    ctx.beginPath();
+    ctx.arc(tx, ty, cell * 0.62, 0, Math.PI * 2);
+    ctx.stroke();
     ctx.globalAlpha = 1;
   });
 
