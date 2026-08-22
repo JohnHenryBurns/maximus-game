@@ -1,0 +1,950 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover">
+<title>BOOT BALL</title>
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #0d1a12; }
+  canvas { display: block; touch-action: none; }
+</style>
+<style>
+a.arcade-pill {
+  display: inline-flex !important; align-items: center !important; gap: 6px !important;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif !important;
+  font-size: 13px !important; font-weight: 600 !important; letter-spacing: 0.3px !important;
+  line-height: 1 !important; text-decoration: none !important; text-transform: none !important;
+  color: #ffe0c4 !important;
+  background: rgba(24, 14, 28, 0.62) !important;
+  border: 1px solid rgba(255, 200, 150, 0.42) !important;
+  padding: 7px 13px !important; border-radius: 999px !important;
+  cursor: pointer !important; white-space: nowrap !important;
+  -webkit-backdrop-filter: blur(5px) !important; backdrop-filter: blur(5px) !important;
+  -webkit-tap-highlight-color: transparent !important;
+  transition: transform 0.12s, border-color 0.12s, background 0.12s !important;
+}
+a.arcade-pill:hover, a.arcade-pill:active, a.arcade-pill:focus-visible {
+  transform: scale(1.05) !important;
+  border-color: rgba(255, 200, 150, 0.9) !important;
+  background: rgba(40, 22, 44, 0.78) !important;
+  color: #fff5e8 !important;
+}
+a.arcade-pill .ah-arrow { font-size: 14px !important; opacity: 0.9 !important; }
+a.arcade-pill.arcade-float {
+  position: fixed !important;
+  top: calc(8px + env(safe-area-inset-top, 0px)) !important;
+  left: calc(10px + env(safe-area-inset-left, 0px)) !important;
+  z-index: 2147483000 !important;
+}
+</style>
+</head>
+<body>
+<a id="back" class="arcade-pill arcade-float" href="index.html"
+   aria-label="Back to Max's Arcade"><span class="ah-arrow">&larr;</span>Arcade</a>
+<script>
+(function () {
+  var pill = document.getElementById('back');
+  if (!pill) return;
+  var go = function (e) { e.stopPropagation(); e.preventDefault(); location.href = 'index.html'; };
+  ['click', 'touchend'].forEach(function (t) { pill.addEventListener(t, go, { passive: false }); });
+  ['mousedown', 'touchstart', 'pointerdown'].forEach(function (t) {
+    pill.addEventListener(t, function (e) { e.stopPropagation(); }, { passive: false });
+  });
+})();
+</script>
+<canvas id="game"></canvas>
+<script>
+// =====================================================================
+// BOOT BALL - football, but wrong.
+//
+// Two players, one keyboard, one absurdly bouncy ball and two enormous
+// boots. There are no rules, no referee and no offside. There are own
+// goals. There is a lot of shouting.
+// =====================================================================
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+function fit() { canvas.width = innerWidth; canvas.height = innerHeight; }
+addEventListener('resize', fit);
+fit();
+
+window.onerror = (msg, src, line) => {
+  const d = document.createElement('div');
+  d.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#c0392b;' +
+    'color:#fff;font:14px monospace;padding:8px;z-index:9';
+  d.textContent = '🐛 BUG on line ' + line + ': ' + msg;
+  document.body.appendChild(d);
+};
+
+// ---------------------------------------------------------------------
+// THE RULES OF THIS UNIVERSE
+// Every one of these numbers changes how the game FEELS. They are all
+// gathered here so you can fiddle with one and see what happens.
+// ---------------------------------------------------------------------
+const GRAVITY = 2100;            // how hard everything is pulled down
+const PLAYER_R = 30;             // how fat a player is
+const PLAYER_ACCEL = 3400;       // how quickly you get going
+const PLAYER_MAX = 430;          // top running speed
+const GROUND_DRAG = 0.82;        // players are heavy and slidey
+const AIR_DRAG = 0.96;
+const JUMP_V = -880;
+const BALL_BOUNCE = 0.84;        // how much bounce it keeps when it lands
+const KICK_POWER = 1150;         // the boot
+const KICK_LIFT = 620;           // ...and how much of it goes upward
+// These three decide whether booting the ball feels GOOD or feels like
+// swinging at thin air. The boot stays out longer than you would think,
+// the lockout afterwards is short, and pressing too early is remembered
+// rather than wasted. Miss and you get another go almost at once.
+const KICK_TIME = 0.24;          // how long the boot is stuck out
+const KICK_COOLDOWN = 0.26;      // ...and how long before you can swing again
+const KICK_BUFFER = 0.32;        // press early and it waits for you
+const KICK_REACH = 1.15;         // how far past yourself the boot reaches
+const GOAL_H = 0.30;             // goal mouth, as a share of the pitch height
+const WIN_GOALS = 5;
+
+// ---- the dials you can turn on the title screen ----
+const BALL_SIZES = [
+  { name: 'NORMAL', r: 20, desc: 'a sensible football' },
+  { name: 'BEACH BALL', r: 42, desc: 'enormous and daft' },
+  { name: 'PEA', r: 11, desc: 'good luck hitting it' },
+];
+const GRAVITIES = [
+  { name: 'NORMAL', g: 1.0, desc: 'ordinary falling' },
+  { name: 'MOON', g: 0.35, desc: 'everything floats' },
+  { name: 'HEAVY', g: 1.9, desc: 'the ball is made of lead' },
+];
+let ballSize = parseInt(localStorage.getItem('boot_ball') || '0');
+let gravLevel = parseInt(localStorage.getItem('boot_grav') || '0');
+if (!(ballSize >= 0 && ballSize < BALL_SIZES.length)) ballSize = 0;
+if (!(gravLevel >= 0 && gravLevel < GRAVITIES.length)) gravLevel = 0;
+function ballR() { return BALL_SIZES[ballSize].r; }
+function gravity() { return GRAVITY * GRAVITIES[gravLevel].g; }
+
+// ---- the two players ----
+const TEAMS = [
+  { name: 'RED', body: '#ff5a4d', dark: '#c02c22', boot: '#ffd83d', side: -1,
+    keys: { a: 'left', d: 'right', w: 'jump', s: 'kick' } },
+  { name: 'BLUE', body: '#4da6ff', dark: '#1f63c0', boot: '#ffd83d', side: 1,
+    keys: { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'jump', ArrowDown: 'kick' } },
+];
+let players = [];
+let ball = null;
+let scores = [0, 0];
+let screen = 'title';            // 'title' | 'kickoff' | 'play' | 'goal' | 'over'
+let held = {};                   // which keys are down right now
+// =====================================================================
+// HOW GOOD IS THE ROBOT?
+//
+// Three things make a computer player easier to beat, and none of them
+// is "make it stupid":
+//   react - how often it is allowed to change its mind. A slow reaction
+//           means it commits to a decision and can be wrong-footed.
+//   err   - how far off it thinks the ball is. Small mistakes, like a
+//           person misjudging a bouncing ball.
+//   speed - simply how fast it can run.
+// Left at full whack it scores about 25 goals a minute, which is no fun
+// for anybody.
+// =====================================================================
+const AI_LEVELS = [
+  { name: 'EASY', react: 0.34, err: 110, speed: 0.55, desc: 'slow and clumsy' },
+  { name: 'NORMAL', react: 0.15, err: 45, speed: 0.82, desc: 'a decent game' },
+  // even HARD gets a whisker of error. Two PERFECT robots mirror each
+  // other exactly and pin the ball between them forever - a tiny wobble
+  // is the difference between a match and a staring contest.
+  { name: 'HARD', react: 0.04, err: 16, speed: 1.0, desc: 'it will destroy you' },
+];
+let aiLevel = parseInt(localStorage.getItem('boot_ailevel') || '0');
+if (!(aiLevel >= 0 && aiLevel < AI_LEVELS.length)) aiLevel = 0;
+function aiSkill() { return AI_LEVELS[aiLevel]; }
+
+let ai = [false, false];
+try {
+  const saved = JSON.parse(localStorage.getItem('boot_ai'));
+  if (Array.isArray(saved) && saved.length === 2) ai = saved;
+} catch (e) {}
+let timer = 0, shake = 0, particles = [], lastGoal = null, touchMode = false;
+let uiRects = [];
+</script>
+<script>
+// ---------------------------------------------------------------------
+// THE PITCH. Everything is measured off the canvas, so it works on a
+// phone in your hand or a telly on the wall.
+// ---------------------------------------------------------------------
+function pitch() {
+  const W = canvas.width, H = canvas.height;
+  const hud = Math.min(70, H * 0.12);
+  const ground = H * 0.88;
+  const goalH = (ground - hud) * GOAL_H;
+  return { W, H, hud, ground, goalH, goalTop: ground - goalH, goalDepth: Math.min(46, W * 0.05) };
+}
+
+// ---------------------------------------------------------------------
+// SOUND, all made of maths
+// ---------------------------------------------------------------------
+let audio = null;
+function ensureAudio() {
+  if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)();
+}
+function tone(freq, len, type, vol, slideTo) {
+  if (!audio) return;
+  const o = audio.createOscillator(), g = audio.createGain();
+  o.type = type || 'square';
+  o.frequency.setValueAtTime(freq, audio.currentTime);
+  if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, audio.currentTime + len);
+  g.gain.setValueAtTime(vol === undefined ? 0.08 : vol, audio.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + len);
+  o.connect(g); g.connect(audio.destination);
+  o.start(); o.stop(audio.currentTime + len + 0.02);
+}
+function thump(power) {
+  tone(150, 0.14, 'sine', Math.min(0.3, 0.08 + power * 0.0002), 60);
+  tone(320, 0.06, 'square', 0.05);
+}
+function bounceSound(speed) {
+  if (speed < 60) return;
+  tone(220 + Math.random() * 120, 0.05, 'sine', Math.min(0.12, speed * 0.00012));
+}
+function goalFanfare() {
+  [523, 659, 784, 1047, 1319].forEach((n, i) =>
+    setTimeout(() => tone(n, 0.22, 'square', 0.11), i * 100));
+}
+function whistle() {
+  tone(1800, 0.25, 'sine', 0.07, 2300);
+  setTimeout(() => tone(1900, 0.3, 'sine', 0.07, 1500), 260);
+}
+
+// ---------------------------------------------------------------------
+// SETTING UP
+// ---------------------------------------------------------------------
+function newPlayer(i) {
+  const P = pitch();
+  const t = TEAMS[i];
+  return {
+    t, i,
+    x: i === 0 ? P.W * 0.28 : P.W * 0.72,
+    y: P.ground - PLAYER_R,
+    vx: 0, vy: 0,
+    onGround: true,
+    face: i === 0 ? 1 : -1,        // which way the boot points
+    kick: 0,                       // how long the boot has left out
+    cool: 0,
+    buffered: 0,                   // pressed BOOT a bit early? remembered here
+    wasKick: false,                // so holding it down does not spam
+    flash: 0,                      // lights up when you actually connect
+  };
+}
+function newBall(towards) {
+  const P = pitch();
+  return {
+    x: P.W / 2, y: P.goalTop - 40,
+    vx: (towards || 0) * 90, vy: 0,
+    spin: 0, angle: 0,
+  };
+}
+function kickOff(towards) {
+  players = TEAMS.map((t, i) => newPlayer(i));
+  ball = newBall(towards);
+  particles = [];
+  timer = 1.6;
+  screen = 'kickoff';
+  whistle();
+}
+function newMatch() {
+  scores = [0, 0];
+  lastGoal = null;
+  kickOff(0);
+}
+</script>
+<script>
+// =====================================================================
+// THE PHYSICS.
+//
+// Run in tiny fixed slices rather than in one big jump per frame. If you
+// move everything by a whole frame at once, a fast ball can teleport
+// straight through the ground or a goal post between one frame and the
+// next. Small steps mean it never gets the chance.
+// =====================================================================
+const SUB = 1 / 240;
+
+function wantDir(p) {
+  if (ai[p.i]) return aiWant(p);
+  const k = p.t.keys;
+  let dir = 0;
+  for (const key in k) {
+    if (!held[key]) continue;
+    if (k[key] === 'left') dir -= 1;
+    if (k[key] === 'right') dir += 1;
+  }
+  return { dir, jump: pressed(p, 'jump'), kick: pressed(p, 'kick') };
+}
+function pressed(p, action) {
+  for (const key in p.t.keys) if (p.t.keys[key] === action && held[key]) return true;
+  return false;
+}
+
+function physics(dt) {
+  const P = pitch();
+  const g = gravity();
+
+  for (const p of players) {
+    const want = wantDir(p);
+    // running
+    p.vx += want.dir * PLAYER_ACCEL * dt;
+    if (want.dir !== 0) p.face = want.dir;
+    const top = PLAYER_MAX * (ai[p.i] ? aiSkill().speed : 1);
+    p.vx = Math.max(-top, Math.min(top, p.vx));
+    if (want.dir === 0) p.vx *= p.onGround ? Math.pow(GROUND_DRAG, dt * 60) : Math.pow(AIR_DRAG, dt * 60);
+    // jumping
+    if (want.jump && p.onGround) { p.vy = JUMP_V; p.onGround = false; tone(420, 0.07, 'square', 0.05, 620); }
+    // booting
+    p.cool = Math.max(0, p.cool - dt);
+    p.kick = Math.max(0, p.kick - dt);
+    p.flash = Math.max(0, p.flash - dt);
+    p.buffered = Math.max(0, p.buffered - dt);
+    // Asking to boot at ANY moment is remembered for a short while, so
+    // pressing early still lands - and holding it down keeps swinging as
+    // fast as the boot recovers. That matters for the robot too, which
+    // simply asks to kick the whole time the ball is in range.
+    if (want.kick) p.buffered = KICK_BUFFER;
+    if (p.buffered > 0 && p.cool <= 0) {
+      p.buffered = 0;
+      p.kick = KICK_TIME;
+      p.cool = KICK_COOLDOWN;
+      tone(180, 0.06, 'sawtooth', 0.05);
+    }
+    // falling
+    p.vy += g * dt;
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    // the ground, and the walls
+    if (p.y > P.ground - PLAYER_R) { p.y = P.ground - PLAYER_R; p.vy = 0; p.onGround = true; }
+    if (p.y < P.hud + PLAYER_R) { p.y = P.hud + PLAYER_R; p.vy = Math.max(0, p.vy); }
+    if (p.x < PLAYER_R) { p.x = PLAYER_R; p.vx = Math.max(0, p.vx); }
+    if (p.x > P.W - PLAYER_R) { p.x = P.W - PLAYER_R; p.vx = Math.min(0, p.vx); }
+  }
+
+  // players shove each other about
+  const a = players[0], b = players[1];
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const d = Math.hypot(dx, dy) || 1;
+  if (d < PLAYER_R * 2) {
+    const push = (PLAYER_R * 2 - d) / 2;
+    const nx = dx / d, ny = dy / d;
+    a.x -= nx * push; a.y -= ny * push;
+    b.x += nx * push; b.y += ny * push;
+    a.vx -= nx * 40; b.vx += nx * 40;
+    // A SHOVE CAN PUSH SOMEBODY OFF THE PITCH. The wall check happened
+    // before this, so without doing it again a hard barge in the corner
+    // sends a player straight through the touchline.
+    for (const q of players) {
+      if (q.x < PLAYER_R) { q.x = PLAYER_R; q.vx = Math.max(0, q.vx); }
+      if (q.x > P.W - PLAYER_R) { q.x = P.W - PLAYER_R; q.vx = Math.min(0, q.vx); }
+      if (q.y > P.ground - PLAYER_R) { q.y = P.ground - PLAYER_R; q.vy = Math.min(0, q.vy); q.onGround = true; }
+      if (q.y < P.hud + PLAYER_R) { q.y = P.hud + PLAYER_R; q.vy = Math.max(0, q.vy); }
+    }
+  }
+
+  // ---- the ball ----
+  const R = ballR();
+  ball.vy += g * dt;
+  ball.x += ball.vx * dt;
+  ball.y += ball.vy * dt;
+  ball.angle += ball.spin * dt;
+  ball.spin *= Math.pow(0.9, dt * 60);
+  if (ball.y > P.ground - R) {                     // the grass
+    ball.y = P.ground - R;
+    if (Math.abs(ball.vy) > 30) bounceSound(Math.abs(ball.vy));
+    ball.vy = -ball.vy * BALL_BOUNCE;
+    ball.vx *= 0.985;
+    ball.spin = ball.vx * 0.05;
+  }
+  if (ball.y < P.hud + R) { ball.y = P.hud + R; ball.vy = Math.abs(ball.vy) * BALL_BOUNCE; }
+  // the side walls, except where the goal mouth is
+  const inGoalMouth = ball.y > P.goalTop;
+  if (ball.x < R && !inGoalMouth) { ball.x = R; ball.vx = Math.abs(ball.vx) * BALL_BOUNCE; bounceSound(300); }
+  if (ball.x > P.W - R && !inGoalMouth) { ball.x = P.W - R; ball.vx = -Math.abs(ball.vx) * BALL_BOUNCE; bounceSound(300); }
+  // the back of the net
+  if (ball.x < R) { ball.x = R; ball.vx = Math.abs(ball.vx) * 0.3; }
+  if (ball.x > P.W - R) { ball.x = P.W - R; ball.vx = -Math.abs(ball.vx) * 0.3; }
+
+  // ---- players against the ball ----
+  for (const p of players) {
+    const bx = ball.x - p.x, by = ball.y - p.y;
+    const bd = Math.hypot(bx, by) || 1;
+    const reach = PLAYER_R + R + (p.kick > 0 ? PLAYER_R * KICK_REACH : 0);
+    if (bd > reach) continue;
+    const nx = bx / bd, ny = by / bd;
+    if (p.kick > 0) {
+      // THE BOOT. A proper wallop, away from the player and upward.
+      ball.vx = nx * KICK_POWER + p.face * KICK_POWER * 0.5 + p.vx * 0.4;
+      ball.vy = ny * KICK_POWER * 0.4 - KICK_LIFT;
+      ball.spin = p.face * 14;
+      p.kick = 0;
+      p.flash = 0.22;
+      thump(KICK_POWER);
+      shake = Math.max(shake, 12);
+      for (let i = 0; i < 12; i++) {
+        const ang = Math.random() * Math.PI * 2, sp = 60 + Math.random() * 240;
+        particles.push({ x: ball.x, y: ball.y, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp,
+                         life: 0.35, color: '#ffd83d' });
+      }
+    } else {
+      // just bumped into: shove it out of the way
+      const overlap = PLAYER_R + R - bd;
+      if (overlap > 0) { ball.x += nx * overlap; ball.y += ny * overlap; }
+      // Running into it counts as a hit too - a body check. It has to
+      // send the ball off FASTER than you are running, or you would just
+      // trample straight over it and never be able to dribble.
+      const hit = 300 + Math.abs(p.vx) * 1.25;
+      ball.vx = nx * hit + p.vx * 0.6;
+      ball.vy = Math.min(ball.vy, ny * hit - 150);
+      ball.spin = p.vx * 0.06;
+      bounceSound(hit * 0.4);
+    }
+  }
+}
+</script>
+<script>
+// ---------------------------------------------------------------------
+// GOALS
+// ---------------------------------------------------------------------
+function checkGoal() {
+  const P = pitch();
+  const R = ballR();
+  if (ball.y < P.goalTop) return;                  // over the bar
+  let scorer = -1;
+  if (ball.x < P.goalDepth - R * 0.2) scorer = 1;  // in the LEFT net: blue scores
+  if (ball.x > P.W - P.goalDepth + R * 0.2) scorer = 0;
+  if (scorer < 0) return;
+  scores[scorer]++;
+  // was it an own goal? whoever touched it last is not tracked, so we
+  // simply say so when the ball goes in the net you were defending
+  lastGoal = { team: scorer };
+  goalFanfare();
+  shake = 24;
+  for (let i = 0; i < 60; i++) {
+    const ang = Math.random() * Math.PI * 2, sp = 80 + Math.random() * 380;
+    particles.push({ x: ball.x, y: ball.y, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp,
+                     life: 0.9 + Math.random() * 0.6,
+                     color: Math.random() < 0.5 ? TEAMS[scorer].body : '#ffffff' });
+  }
+  if (scores[scorer] >= WIN_GOALS) {
+    screen = 'over';
+    timer = 0;
+  } else {
+    screen = 'goal';
+    timer = 1.9;
+  }
+}
+
+// ---------------------------------------------------------------------
+// AI - the same idea as AI_Dude: no magic, just a few simple rules,
+// checked in order. Get between the ball and your own goal, then boot it.
+// ---------------------------------------------------------------------
+function aiWant(p) {
+  const S = aiSkill();
+  // it only changes its mind every so often, so it can be wrong-footed
+  p.aiTimer = (p.aiTimer || 0) - SUB;
+  if (p.aiTimer > 0 && p.aiPlan) return p.aiPlan;
+  p.aiTimer = S.react;
+  p.aiErrX = (Math.random() - 0.5) * 2 * S.err;
+  p.aiErrY = (Math.random() - 0.5) * 2 * S.err;
+  p.aiPlan = aiThink(p);
+  return p.aiPlan;
+}
+function aiThink(p) {
+  const S = aiSkill();
+  const P = pitch();
+  // where it THINKS the ball is - not quite where it really is
+  const bx = ball.x + (p.aiErrX || 0), by = ball.y + (p.aiErrY || 0);
+  const toBall = bx - p.x;
+  const dist = Math.hypot(bx - p.x, by - p.y);
+  // stand on the goal side of the ball, so a boot sends it the right way
+  const standX = bx + (p.i === 0 ? -PLAYER_R * 1.1 : PLAYER_R * 1.1);
+  let dir = 0;
+  if (Math.abs(standX - p.x) > 12) dir = standX > p.x ? 1 : -1;
+  // if the ball has got behind it, hurry back
+  const behind = p.i === 0 ? bx < p.x - PLAYER_R : bx > p.x + PLAYER_R;
+  if (behind && Math.abs(toBall) > 40) dir = toBall > 0 ? 1 : -1;
+  // jump for a high ball that is close
+  const jump = p.onGround && dist < PLAYER_R * 4.5 && by < p.y - PLAYER_R * 1.2;
+  // boot it when it is in range and on the correct side
+  const facingRight = p.i === 0;
+  const onGoodSide = facingRight ? bx > p.x - PLAYER_R : bx < p.x + PLAYER_R;
+  const kick = dist < PLAYER_R + ballR() + PLAYER_R * KICK_REACH && onGoodSide;
+  return { dir, jump, kick };
+}
+
+// ---------------------------------------------------------------------
+// UPDATING
+// ---------------------------------------------------------------------
+let acc = 0;
+function update(dt) {
+  if (shake > 0) shake = Math.max(0, shake - dt * 60);
+  for (const pt of particles) {
+    pt.x += pt.vx * dt; pt.y += pt.vy * dt;
+    pt.vy += 900 * dt; pt.life -= dt;
+  }
+  particles = particles.filter(pt => pt.life > 0);
+
+  if (screen === 'kickoff') {
+    timer -= dt;
+    if (timer <= 0) screen = 'play';
+    return;
+  }
+  if (screen === 'goal') {
+    timer -= dt;
+    if (timer <= 0) kickOff(lastGoal ? (lastGoal.team === 0 ? -1 : 1) : 0);
+    return;
+  }
+  if (screen !== 'play') return;
+
+  // fixed slices, so nothing can tunnel through the floor
+  acc += Math.min(dt, 0.05);
+  let guard = 0;
+  while (acc >= SUB && guard++ < 60) {
+    physics(SUB);
+    acc -= SUB;
+  }
+  checkGoal();
+}
+</script>
+<script>
+// ---------------------------------------------------------------------
+// DRAWING
+// ---------------------------------------------------------------------
+function drawPlayer(p) {
+  const kicking = p.kick > 0;
+  if (kicking) {
+    // the swing: an arc showing exactly how far the boot reaches
+    const reach = PLAYER_R + ballR() + PLAYER_R * KICK_REACH;
+    ctx.strokeStyle = 'rgba(255, 216, 63, ' + (0.15 + (p.kick / KICK_TIME) * 0.35) + ')';
+    ctx.lineWidth = Math.max(4, PLAYER_R * 0.3);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, reach * 0.82,
+            p.face > 0 ? -0.9 : Math.PI + 0.9,
+            p.face > 0 ? 0.9 : Math.PI - 0.9,
+            p.face < 0);
+    ctx.stroke();
+  }
+  if (p.flash > 0) {
+    ctx.fillStyle = 'rgba(255,255,255,' + (p.flash / 0.22) * 0.5 + ')';
+    ctx.beginPath();
+    ctx.arc(p.x + p.face * PLAYER_R, p.y + PLAYER_R * 0.4, PLAYER_R * 0.9, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // the boot swings out in front when kicking
+  const reach = kicking ? PLAYER_R * 1.5 : PLAYER_R * 0.6;
+  const bx = p.x + p.face * reach, by = p.y + PLAYER_R * 0.55;
+  ctx.strokeStyle = p.t.dark;
+  ctx.lineWidth = Math.max(5, PLAYER_R * 0.28);
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(p.x, p.y + PLAYER_R * 0.3);
+  ctx.lineTo(bx, by);
+  ctx.stroke();
+  ctx.fillStyle = p.t.boot;
+  const bw = kicking ? PLAYER_R * 1.0 : PLAYER_R * 0.78;
+  roundRect(bx - bw * 0.45, by - PLAYER_R * 0.24, bw, PLAYER_R * 0.5, 6);
+  ctx.fill();
+  ctx.lineCap = 'butt';
+  // the body
+  const squash = p.onGround && p.vy === 0 ? 1 : 1 + Math.min(0.18, Math.abs(p.vy) / 5000);
+  ctx.fillStyle = p.t.body;
+  ctx.beginPath();
+  ctx.ellipse(p.x, p.y, PLAYER_R / squash, PLAYER_R * squash, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = p.t.dark;
+  ctx.beginPath();
+  ctx.ellipse(p.x, p.y + PLAYER_R * 0.42, PLAYER_R * 0.85, PLAYER_R * 0.4, 0, 0, Math.PI);
+  ctx.fill();
+  // eyes looking at the ball
+  const ang = Math.atan2(ball.y - p.y, ball.x - p.x);
+  const ex = Math.cos(ang) * PLAYER_R * 0.18, ey = Math.sin(ang) * PLAYER_R * 0.18;
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.arc(p.x - PLAYER_R * 0.3, p.y - PLAYER_R * 0.22, PLAYER_R * 0.24, 0, Math.PI * 2);
+  ctx.arc(p.x + PLAYER_R * 0.3, p.y - PLAYER_R * 0.22, PLAYER_R * 0.24, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#16202a';
+  ctx.beginPath();
+  ctx.arc(p.x - PLAYER_R * 0.3 + ex, p.y - PLAYER_R * 0.22 + ey, PLAYER_R * 0.12, 0, Math.PI * 2);
+  ctx.arc(p.x + PLAYER_R * 0.3 + ex, p.y - PLAYER_R * 0.22 + ey, PLAYER_R * 0.12, 0, Math.PI * 2);
+  ctx.fill();
+  if (ai[p.i]) {
+    ctx.fillStyle = '#a8e4ff';
+    ctx.font = 'bold ' + PLAYER_R * 0.5 + 'px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('🤖', p.x, p.y - PLAYER_R * 1.15);
+  }
+}
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+function drawBall() {
+  const R = ballR();
+  ctx.save();
+  ctx.translate(ball.x, ball.y);
+  ctx.rotate(ball.angle);
+  ctx.fillStyle = '#fdfdfd';
+  ctx.beginPath(); ctx.arc(0, 0, R, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#1d2430';
+  ctx.beginPath();                                    // the black patch
+  for (let i = 0; i < 5; i++) {
+    const a = (i / 5) * Math.PI * 2 - Math.PI / 2;
+    const px = Math.cos(a) * R * 0.42, py = Math.sin(a) * R * 0.42;
+    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
+  ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = '#1d2430';
+  ctx.lineWidth = Math.max(1.5, R * 0.1);
+  for (let i = 0; i < 5; i++) {
+    const a = (i / 5) * Math.PI * 2 - Math.PI / 2;
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(a) * R * 0.42, Math.sin(a) * R * 0.42);
+    ctx.lineTo(Math.cos(a) * R, Math.sin(a) * R);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+function drawGoal(P, side) {
+  const x = side < 0 ? 0 : P.W - P.goalDepth;
+  ctx.fillStyle = 'rgba(255,255,255,0.10)';
+  ctx.fillRect(x, P.goalTop, P.goalDepth, P.ground - P.goalTop);
+  ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 6; i++) {
+    const gx = x + (P.goalDepth / 6) * i;
+    ctx.beginPath(); ctx.moveTo(gx, P.goalTop); ctx.lineTo(gx, P.ground); ctx.stroke();
+  }
+  for (let i = 0; i <= 5; i++) {
+    const gy = P.goalTop + ((P.ground - P.goalTop) / 5) * i;
+    ctx.beginPath(); ctx.moveTo(x, gy); ctx.lineTo(x + P.goalDepth, gy); ctx.stroke();
+  }
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 5;
+  ctx.beginPath();
+  ctx.moveTo(side < 0 ? P.goalDepth : P.W - P.goalDepth, P.ground);
+  ctx.lineTo(side < 0 ? P.goalDepth : P.W - P.goalDepth, P.goalTop);
+  ctx.lineTo(x, P.goalTop);
+  ctx.stroke();
+}
+</script>
+<script>
+function draw() {
+  const P = pitch();
+  const { W, H } = P;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  // sky and grass
+  const sky = ctx.createLinearGradient(0, 0, 0, P.ground);
+  sky.addColorStop(0, '#132b1e');
+  sky.addColorStop(1, '#1d4a30');
+  ctx.fillStyle = sky;
+  ctx.fillRect(0, 0, W, H);
+  if (shake > 0) ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+
+  ctx.fillStyle = '#2f7a45';
+  ctx.fillRect(0, P.ground, W, H - P.ground);
+  ctx.fillStyle = '#3d9455';
+  for (let i = 0; i < W; i += 60) ctx.fillRect(i, P.ground, 30, H - P.ground);
+  ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+  ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(W / 2, P.hud); ctx.lineTo(W / 2, P.ground); ctx.stroke();
+  ctx.beginPath(); ctx.arc(W / 2, P.ground, Math.min(90, W * 0.1), Math.PI, 0); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, P.ground); ctx.lineTo(W, P.ground); ctx.stroke();
+
+  drawGoal(P, -1);
+  drawGoal(P, 1);
+  if (ball) drawBall();
+  for (const p of players) drawPlayer(p);
+
+  for (const pt of particles) {
+    ctx.globalAlpha = Math.max(0, Math.min(1, pt.life * 1.6));
+    ctx.fillStyle = pt.color;
+    ctx.fillRect(pt.x - 3, pt.y - 3, 6, 6);
+  }
+  ctx.globalAlpha = 1;
+
+  // ---- the scoreboard ----
+  ctx.textAlign = 'center';
+  TEAMS.forEach((t, i) => {
+    const x = i === 0 ? W * 0.3 : W * 0.7;
+    ctx.fillStyle = t.body;
+    ctx.font = 'bold ' + Math.min(22, W / 26) + 'px monospace';
+    ctx.fillText(ai[i] ? AI_LEVELS[aiLevel].name + ' ROBOT' : t.name, x, P.hud * 0.45);
+    ctx.font = 'bold ' + Math.min(40, W / 16) + 'px monospace';
+    ctx.fillText(String(scores[i]), x, P.hud * 0.92);
+  });
+  ctx.fillStyle = 'rgba(255,255,255,0.35)';
+  ctx.font = 'bold ' + Math.min(14, W / 40) + 'px monospace';
+  ctx.fillText('FIRST TO ' + WIN_GOALS, W / 2, P.hud * 0.6);
+
+  drawScreens(P);
+  if (touchMode && (screen === 'play' || screen === 'kickoff')) drawPads(P);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+}
+
+function drawScreens(P) {
+  const { W, H } = P;
+  uiRects = [];
+  ctx.textAlign = 'center';
+  if (screen === 'kickoff') {
+    ctx.fillStyle = 'rgba(255,255,255,' + Math.min(1, timer) + ')';
+    ctx.font = 'bold ' + Math.min(58, W / 11) + 'px monospace';
+    ctx.fillText(timer > 0.7 ? 'KICK OFF!' : 'GO!', W / 2, H * 0.42);
+  } else if (screen === 'goal') {
+    const t = TEAMS[lastGoal.team];
+    const pop = 1 + Math.sin(Date.now() / 90) * 0.06;
+    ctx.save();
+    ctx.translate(W / 2, H * 0.42);
+    ctx.scale(pop, pop);
+    ctx.fillStyle = t.body;
+    ctx.font = 'bold ' + Math.min(72, W / 9) + 'px monospace';
+    ctx.fillText('GOAL!', 0, 0);
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold ' + Math.min(26, W / 24) + 'px monospace';
+    ctx.fillText(t.name + ' SCORES', 0, 42);
+    ctx.restore();
+  } else if (screen === 'over') {
+    const w = scores[0] > scores[1] ? 0 : 1;
+    ctx.fillStyle = 'rgba(8, 20, 14, 0.86)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = TEAMS[w].body;
+    ctx.font = 'bold ' + Math.min(62, W / 10) + 'px monospace';
+    ctx.fillText(TEAMS[w].name + ' WINS!', W / 2, H * 0.42);
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold ' + Math.min(34, W / 18) + 'px monospace';
+    ctx.fillText(scores[0] + '  -  ' + scores[1], W / 2, H * 0.53);
+    ctx.fillStyle = 'rgba(255,255,255,' + (0.55 + Math.sin(Date.now() / 300) * 0.35) + ')';
+    ctx.font = 'bold ' + Math.min(22, W / 26) + 'px monospace';
+    ctx.fillText('SPACE  /  TAP  =  PLAY AGAIN', W / 2, H * 0.72);
+    ctx.font = Math.min(15, W / 38) + 'px monospace';
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.fillText('ESC  =  back to the settings', W / 2, H * 0.79);
+  } else if (screen === 'title') {
+    ctx.fillStyle = 'rgba(8, 20, 14, 0.9)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#ffd83d';
+    ctx.font = 'bold ' + Math.min(66, W / 9) + 'px monospace';
+    ctx.fillText('BOOT BALL', W / 2, H * 0.2);
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.font = Math.min(18, W / 32) + 'px monospace';
+    ctx.fillText('football, but wrong', W / 2, H * 0.2 + 30);
+    if (!ai[0] && !ai[1]) {
+      ctx.fillStyle = 'rgba(168, 228, 255,' + (0.55 + Math.sin(Date.now() / 400) * 0.35) + ')';
+      ctx.font = 'bold ' + Math.min(16, W / 36) + 'px monospace';
+      ctx.fillText('ON YOUR OWN?  tap a HUMAN below to make it a ROBOT', W / 2, H * 0.2 + 56);
+    }
+
+    TEAMS.forEach((t, i) => {
+      const x = i === 0 ? W * 0.27 : W * 0.73;
+      const y = H * 0.36;
+      ctx.fillStyle = t.body;
+      ctx.font = 'bold ' + Math.min(26, W / 24) + 'px monospace';
+      ctx.fillText(t.name, x, y);
+      ctx.fillStyle = 'rgba(255,255,255,0.6)';
+      ctx.font = 'bold ' + Math.min(14, W / 42) + 'px monospace';
+      ctx.fillText(i === 0 ? 'A / D  run' : 'LEFT / RIGHT  run', x, y + 26);
+      ctx.fillText(i === 0 ? 'W  jump      S  BOOT' : 'UP  jump    DOWN  BOOT', x, y + 46);
+      // human or robot
+      const bw = Math.min(W * 0.22, 210), bh = 30;
+      ctx.fillStyle = ai[i] ? 'rgba(90,200,255,0.16)' : 'rgba(255,255,255,0.06)';
+      roundRect(x - bw / 2, y + 60, bw, bh, 8); ctx.fill();
+      ctx.strokeStyle = ai[i] ? '#5ac8ff' : 'rgba(255,255,255,0.25)';
+      ctx.lineWidth = 2;
+      roundRect(x - bw / 2, y + 60, bw, bh, 8); ctx.stroke();
+      ctx.fillStyle = ai[i] ? '#a8e4ff' : 'rgba(255,255,255,0.6)';
+      ctx.font = 'bold ' + Math.min(14, W / 44) + 'px monospace';
+      ctx.fillText(ai[i] ? '🤖 ROBOT' : '🧑 HUMAN  (tap)', x, y + 80);
+      uiRects.push({ x, y: y + 75, w: bw / 2, h: bh, aiToggle: i });
+    });
+
+    const dy = H * 0.63;
+    if (ai[0] || ai[1]) {
+      drawDial(W * 0.2, dy, W, 'BALL  (1)', BALL_SIZES[ballSize].name,
+               BALL_SIZES[ballSize].desc, '#ffd83d', 'ball');
+      drawDial(W * 0.5, dy, W, 'GRAVITY  (2)', GRAVITIES[gravLevel].name,
+               GRAVITIES[gravLevel].desc, '#9ad4ff', 'grav');
+      drawDial(W * 0.8, dy, W, 'ROBOT  (3)', AI_LEVELS[aiLevel].name,
+               AI_LEVELS[aiLevel].desc, '#a8e4ff', 'skill');
+    } else {
+      drawDial(W * 0.3, dy, W, 'BALL  (1)', BALL_SIZES[ballSize].name,
+               BALL_SIZES[ballSize].desc, '#ffd83d', 'ball');
+      drawDial(W * 0.7, dy, W, 'GRAVITY  (2)', GRAVITIES[gravLevel].name,
+               GRAVITIES[gravLevel].desc, '#9ad4ff', 'grav');
+    }
+    ctx.fillStyle = 'rgba(255,255,255,' + (0.55 + Math.sin(Date.now() / 300) * 0.35) + ')';
+    ctx.font = 'bold ' + Math.min(24, W / 24) + 'px monospace';
+    ctx.fillText('SPACE  /  TAP  =  KICK OFF', W / 2, H * 0.85);
+  }
+  ctx.textAlign = 'left';
+}
+function drawDial(cx, y, W, title, value, desc, color, tag) {
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.font = 'bold ' + Math.min(12, W / 58) + 'px monospace';
+  ctx.fillText(title, cx, y - 16);
+  ctx.fillStyle = color;
+  ctx.font = 'bold ' + Math.min(18, W / 40) + 'px monospace';
+  ctx.fillText(value, cx, y + 5);
+  ctx.fillStyle = 'rgba(255,255,255,0.42)';
+  ctx.font = Math.min(12, W / 58) + 'px monospace';
+  ctx.fillText(desc, cx, y + 24);
+  const r = Math.min(15, W / 56);
+  [[-1, cx - Math.min(W * 0.13, 120)], [1, cx + Math.min(W * 0.13, 120)]].forEach(([dir, ax]) => {
+    ctx.fillStyle = 'rgba(255,255,255,0.08)';
+    ctx.beginPath(); ctx.arc(ax, y - 2, r, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = color;
+    ctx.font = 'bold ' + r * 1.2 + 'px monospace';
+    ctx.fillText(dir < 0 ? '<' : '>', ax, y + 4);
+    const hit = { x: ax, y: y - 2, w: r * 1.6, h: r * 1.6 };
+    hit[tag] = dir;
+    uiRects.push(hit);
+  });
+}
+</script>
+<script>
+// ---------------------------------------------------------------------
+// CONTROLS
+// ---------------------------------------------------------------------
+let padRects = [];
+function drawPads(P) {
+  const { W, H } = P;
+  const r = Math.min(34, W / 13);
+  padRects = [];
+  TEAMS.forEach((t, i) => {
+    if (ai[i]) return;
+    const cx = i === 0 ? r * 2.6 : W - r * 2.6;
+    const cy = H - r * 2.2;
+    const buttons = [
+      ['left', -1.5, 0, '◀'], ['right', 1.5, 0, '▶'],
+      ['jump', 0, -1.5, '▲'], ['kick', 0, 1.4, 'BOOT'],
+    ];
+    buttons.forEach(([act, dx, dy, label]) => {
+      const x = cx + dx * r * 1.4, y = cy + dy * r * 1.1;
+      ctx.fillStyle = act === 'kick' ? 'rgba(255,216,63,0.18)' : 'rgba(255,255,255,0.07)';
+      ctx.strokeStyle = act === 'kick' ? '#ffd83d' : t.body;
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(x, y, r * 0.66, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = act === 'kick' ? '#ffd83d' : t.body;
+      ctx.font = 'bold ' + (act === 'kick' ? r * 0.3 : r * 0.55) + 'px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(label, x, y + r * 0.18);
+      padRects.push({ x, y, r: r * 0.85, team: i, act });
+    });
+  });
+  ctx.textAlign = 'left';
+}
+
+function startFromTitle() {
+  if (screen === 'title' || screen === 'over') { newMatch(); return true; }
+  return false;
+}
+function cycleBall(step) {
+  ballSize = (ballSize + step + BALL_SIZES.length) % BALL_SIZES.length;
+  localStorage.setItem('boot_ball', String(ballSize));
+  tone(600, 0.06, 'square', 0.06);
+}
+function cycleGrav(step) {
+  gravLevel = (gravLevel + step + GRAVITIES.length) % GRAVITIES.length;
+  localStorage.setItem('boot_grav', String(gravLevel));
+  tone(400, 0.08, 'sine', 0.06);
+}
+function cycleSkill(step) {
+  aiLevel = (aiLevel + step + AI_LEVELS.length) % AI_LEVELS.length;
+  localStorage.setItem('boot_ailevel', String(aiLevel));
+  tone(700 + aiLevel * 120, 0.07, 'square', 0.06);
+}
+
+function toggleAI(i) {
+  ai[i] = !ai[i];
+  localStorage.setItem('boot_ai', JSON.stringify(ai));
+  tone(ai[i] ? 900 : 400, 0.08, 'square', 0.07);
+}
+
+addEventListener('keydown', e => {
+  ensureAudio();
+  if (screen === 'title' || screen === 'over') {
+    if (e.key === ' ') { startFromTitle(); e.preventDefault(); return; }
+    if (e.key === 'Escape') { screen = 'title'; return; }
+    if (e.key === '1') { cycleBall(1); return; }
+    if (e.key === '2') { cycleGrav(1); return; }
+    if (e.key === '3') { cycleSkill(1); return; }
+    if (e.key.toLowerCase() === 'q') { toggleAI(0); return; }
+    if (e.key.toLowerCase() === 'p') { toggleAI(1); return; }
+  }
+  if (e.key === 'Escape') { screen = 'title'; return; }
+  held[e.key] = true;
+  held[e.key.toLowerCase()] = true;
+  if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) e.preventDefault();
+});
+addEventListener('keyup', e => {
+  held[e.key] = false;
+  held[e.key.toLowerCase()] = false;
+});
+addEventListener('blur', () => { held = {}; });
+
+// ---- touch ----
+const touches = new Map();
+canvas.addEventListener('pointerdown', e => {
+  ensureAudio();
+  touchMode = touchMode || e.pointerType === 'touch';
+  if (screen === 'title' || screen === 'over') {
+    for (const b of uiRects) {
+      const hit = b.w
+        ? (Math.abs(e.clientX - b.x) < b.w && Math.abs(e.clientY - b.y) < (b.h || b.w))
+        : Math.hypot(e.clientX - b.x, e.clientY - b.y) < b.r;
+      if (!hit) continue;
+      if (b.aiToggle !== undefined) toggleAI(b.aiToggle);
+      else if (b.ball) cycleBall(b.ball);
+      else if (b.grav) cycleGrav(b.grav);
+      else if (b.skill) cycleSkill(b.skill);
+      return;
+    }
+    startFromTitle();
+    return;
+  }
+  for (const b of padRects) {
+    if (Math.hypot(e.clientX - b.x, e.clientY - b.y) < b.r) {
+      // press the matching key for that player, so touch and keys share
+      // exactly the same path through the game
+      const t = TEAMS[b.team];
+      for (const key in t.keys) if (t.keys[key] === b.act) held[key] = true;
+      touches.set(e.pointerId, { team: b.team, act: b.act });
+      return;
+    }
+  }
+});
+function releaseTouch(e) {
+  const t = touches.get(e.pointerId);
+  if (!t) return;
+  const team = TEAMS[t.team];
+  for (const key in team.keys) if (team.keys[key] === t.act) held[key] = false;
+  touches.delete(e.pointerId);
+}
+canvas.addEventListener('pointerup', releaseTouch);
+canvas.addEventListener('pointercancel', releaseTouch);
+addEventListener('touchstart', () => { touchMode = true; }, { passive: true });
+
+// ---------------------------------------------------------------------
+// THE GAME LOOP
+// ---------------------------------------------------------------------
+let last = 0;
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  update(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+players = TEAMS.map((t, i) => newPlayer(i));
+ball = newBall(0);
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
