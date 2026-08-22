@@ -690,16 +690,18 @@ function drawPlayer(p) {
   const look = nearestBall(p) || { x: p.x + p.face * 100, y: p.y };
   const ang = Math.atan2(look.y - p.y, look.x - p.x);
   const ex = Math.cos(ang) * PLAYER_R * 0.18, ey = Math.sin(ang) * PLAYER_R * 0.18;
-  ctx.fillStyle = '#fff';
-  ctx.beginPath();
-  ctx.arc(p.x - PLAYER_R * 0.3, p.y - PLAYER_R * 0.22, PLAYER_R * 0.24, 0, Math.PI * 2);
-  ctx.arc(p.x + PLAYER_R * 0.3, p.y - PLAYER_R * 0.22, PLAYER_R * 0.24, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = '#16202a';
-  ctx.beginPath();
-  ctx.arc(p.x - PLAYER_R * 0.3 + ex, p.y - PLAYER_R * 0.22 + ey, PLAYER_R * 0.12, 0, Math.PI * 2);
-  ctx.arc(p.x + PLAYER_R * 0.3 + ex, p.y - PLAYER_R * 0.22 + ey, PLAYER_R * 0.12, 0, Math.PI * 2);
-  ctx.fill();
+  // A swollen-shut eye is drawn later, as a bruise - so skip that one
+  // here rather than drawing an open eye and covering it up.
+  const eyeY = p.y - PLAYER_R * 0.22;
+  const shutSide = p.hurt.blackEye ? p.face : 0;
+  for (const side of [-1, 1]) {
+    if (side === shutSide) continue;
+    const exx = p.x + side * PLAYER_R * 0.3;
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(exx, eyeY, PLAYER_R * 0.24, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#16202a';
+    ctx.beginPath(); ctx.arc(exx + ex, eyeY + ey, PLAYER_R * 0.12, 0, Math.PI * 2); ctx.fill();
+  }
   // ---- the war wounds ----
   const R = PLAYER_R;
   if (p.hurt.stitches) {
@@ -723,40 +725,66 @@ function drawPlayer(p) {
     }
   }
   if (p.hurt.bandage) {
-    // on top of the head: a proper wrapped bandage with a little knot
+    // A cap on TOP of the head only. It stops at the top of the eyes -
+    // a bandage over your eyes would be a blindfold, not a bandage.
+    const capY = p.y - R * 0.73;
+    ctx.save();
+    ctx.beginPath();                                 // clipped to the head
+    ctx.arc(p.x, p.y, R * 0.99, 0, Math.PI * 2);
+    ctx.clip();
     ctx.fillStyle = '#f4f1e8';
     ctx.beginPath();
-    ctx.ellipse(p.x, p.y - R * 0.52, R * 0.94, R * 0.42, 0, 0, Math.PI * 2);
+    ctx.ellipse(p.x, capY, R * 0.86, R * 0.27, 0, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = '#d8d2c2';
+    ctx.strokeStyle = '#d8d2c2';                     // the wrapped-round lines
     ctx.lineWidth = Math.max(1.2, R * 0.05);
     for (let i = -1; i <= 1; i++) {
       ctx.beginPath();
-      ctx.moveTo(p.x + i * R * 0.4, p.y - R * 0.92);
-      ctx.lineTo(p.x + i * R * 0.4 + R * 0.14, p.y - R * 0.14);
+      ctx.moveTo(p.x + i * R * 0.34 - R * 0.06, capY - R * 0.26);
+      ctx.lineTo(p.x + i * R * 0.34 + R * 0.06, capY + R * 0.26);
       ctx.stroke();
     }
-    ctx.fillStyle = '#f4f1e8';                       // the knot
+    ctx.restore();
+    // the little knot, poking out at the side
+    const kx = p.x + R * 0.8, ky = capY;
+    ctx.fillStyle = '#f4f1e8';
     ctx.beginPath();
-    ctx.arc(p.x + R * 0.82, p.y - R * 0.62, R * 0.2, 0, Math.PI * 2);
+    ctx.arc(kx, ky, R * 0.17, 0, Math.PI * 2);
     ctx.fill();
     ctx.beginPath();
-    ctx.moveTo(p.x + R * 0.82, p.y - R * 0.62);
-    ctx.lineTo(p.x + R * 1.16, p.y - R * 0.86);
-    ctx.lineTo(p.x + R * 1.12, p.y - R * 0.5);
+    ctx.moveTo(kx, ky);
+    ctx.lineTo(kx + R * 0.34, ky - R * 0.22);
+    ctx.lineTo(kx + R * 0.3, ky + R * 0.16);
     ctx.closePath();
     ctx.fill();
   }
   if (p.hurt.blackEye) {
-    // a proper shiner, on the eye at the front
-    const ex2 = p.x + p.face * R * 0.3;
-    ctx.fillStyle = 'rgba(90, 40, 120, 0.75)';
+    // SWOLLEN SHUT. A puffy bruised mound where the eye should be, with
+    // the eye squeezed into a line underneath it.
+    const ex2 = p.x + p.face * R * 0.3, ey2 = p.y - R * 0.22;
+    ctx.fillStyle = '#8f4a78';                       // the puffy bit
     ctx.beginPath();
-    ctx.ellipse(ex2, p.y - R * 0.2, R * 0.34, R * 0.3, 0, 0, Math.PI * 2);
+    ctx.ellipse(ex2, ey2, R * 0.29, R * 0.27, 0, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = 'rgba(50, 20, 80, 0.85)';
-    ctx.lineWidth = Math.max(1.4, R * 0.06);
+    ctx.fillStyle = '#632b55';                       // darker underneath
+    ctx.beginPath();
+    ctx.ellipse(ex2, ey2 + R * 0.09, R * 0.27, R * 0.16, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#2a1220';                     // the eye, squeezed shut
+    ctx.lineWidth = Math.max(2, R * 0.085);
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.arc(ex2, ey2 - R * 0.1, R * 0.2, Math.PI * 0.22, Math.PI * 0.78);
     ctx.stroke();
+    ctx.lineWidth = Math.max(1.2, R * 0.05);         // sore little creases
+    ctx.strokeStyle = 'rgba(42,18,32,0.6)';
+    for (const d of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(ex2 + d * R * 0.26, ey2 - R * 0.16);
+      ctx.lineTo(ex2 + d * R * 0.36, ey2 - R * 0.24);
+      ctx.stroke();
+    }
+    ctx.lineCap = 'butt';
   }
   if (p.ow > 0) {
     ctx.fillStyle = 'rgba(255, 224, 102,' + Math.min(1, p.ow * 1.6) + ')';
