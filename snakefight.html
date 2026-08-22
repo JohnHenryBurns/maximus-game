@@ -875,6 +875,50 @@ function layout() {
   const gw = cell * COLS, gh = cell * ROWS;
   return { W, H, hud, cell, ox: Math.floor((W - gw) / 2), oy: hud + Math.floor((H - hud - gh) / 2), gw, gh };
 }
+// =====================================================================
+// TONGUES.
+//
+// The MATHS of the flick is kept separate from the DRAWING of it. This
+// bit answers one question - "how far out is the tongue right now?" -
+// and gives back a number from 0 (tucked away) to 1 (fully out). Split
+// like that it can be tested, which you cannot really do with drawing.
+//
+// Real snakes flick: out fast, back fast, then a pause. So the tongue is
+// only out for the first fifth of each cycle, and it eases out and back
+// on a sine wave rather than snapping. The offset means two snakes never
+// flick in time with each other, which would look like clockwork.
+// =====================================================================
+const FLICK_TIME = 0.85;         // seconds for one flick-and-pause
+const FLICK_OUT = 0.2;           // the share of that spent with it out
+function tongueOut(now, offset) {
+  const p = ((now / FLICK_TIME + offset) % 1 + 1) % 1;
+  if (p >= FLICK_OUT) return 0;                  // tucked away, most of the time
+  return Math.sin((p / FLICK_OUT) * Math.PI);    // out and back, smoothly
+}
+// and this bit just draws it: a stalk with a fork on the end
+function drawTongue(cx, cy, dx, dy, size, out) {
+  if (out <= 0.01) return;
+  const len = size * 0.95 * out;
+  const tipX = cx + dx * len, tipY = cy + dy * len;
+  ctx.strokeStyle = '#ff3b6b';
+  ctx.lineWidth = Math.max(1.5, size * 0.11);
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(cx + dx * size * 0.3, cy + dy * size * 0.3);
+  ctx.lineTo(tipX, tipY);
+  ctx.stroke();
+  // the fork: two little prongs, sideways from the tip
+  const sx = -dy, sy = dx;                       // the sideways direction
+  const fork = len * 0.42;
+  ctx.beginPath();
+  ctx.moveTo(tipX, tipY);
+  ctx.lineTo(tipX + dx * fork + sx * fork * 0.8, tipY + dy * fork + sy * fork * 0.8);
+  ctx.moveTo(tipX, tipY);
+  ctx.lineTo(tipX + dx * fork - sx * fork * 0.8, tipY + dy * fork - sy * fork * 0.8);
+  ctx.stroke();
+  ctx.lineCap = 'butt';
+}
+
 function roundRect(x, y, w, h, r) {
   ctx.beginPath();
   ctx.moveTo(x + r, y);
@@ -966,6 +1010,9 @@ function draw() {
         ctx.arc(ex - sx, ey - sy, Math.max(1.4, cell * 0.1), 0, Math.PI * 2);
         ctx.arc(ex + sx, ey + sy, Math.max(1.4, cell * 0.1), 0, Math.PI * 2);
         ctx.fill();
+        // and out flicks the tongue, pointing the way it is going
+        drawTongue(x + cell / 2, y + cell / 2, dx, dy, cell,
+                   tongueOut(now, i * 0.41));
         ctx.globalAlpha = sk.alpha || 1;
       }
     });
@@ -1153,6 +1200,8 @@ function drawScreens(L) {
           ctx.arc(sx + cellP * 0.12, sy - cellP * 0.14, cellP * 0.11, 0, Math.PI * 2);
           ctx.arc(sx + cellP * 0.12, sy + cellP * 0.14, cellP * 0.11, 0, Math.PI * 2);
           ctx.fill();
+          // the preview snake faces left, away from its own body
+          drawTongue(sx, sy, -1, 0, cellP, tongueOut(t, i * 0.41));
           ctx.globalAlpha = sk.alpha || 1;
         }
       }
