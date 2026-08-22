@@ -1,0 +1,1689 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover">
+<title>SNAKE FIGHT</title>
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #0b1410; }
+  canvas { display: block; touch-action: none; }
+  input.nameBox {
+    position: fixed; display: none; z-index: 50;
+    font-family: monospace; font-weight: bold; text-align: center;
+    background: rgba(0,0,0,0.45); color: #fff;
+    border: 2px solid #fff; border-radius: 8px;
+    outline: none; padding: 0 6px;
+    text-transform: uppercase;
+  }
+  input.nameBox::placeholder { color: rgba(255,255,255,0.3); }
+</style>
+<style>
+a.arcade-pill {
+  display: inline-flex !important; align-items: center !important; gap: 6px !important;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif !important;
+  font-size: 13px !important; font-weight: 600 !important; letter-spacing: 0.3px !important;
+  line-height: 1 !important; text-decoration: none !important; text-transform: none !important;
+  color: #ffe0c4 !important;
+  background: rgba(24, 14, 28, 0.62) !important;
+  border: 1px solid rgba(255, 200, 150, 0.42) !important;
+  padding: 7px 13px !important; border-radius: 999px !important;
+  cursor: pointer !important; white-space: nowrap !important;
+  -webkit-backdrop-filter: blur(5px) !important; backdrop-filter: blur(5px) !important;
+  -webkit-tap-highlight-color: transparent !important;
+  transition: transform 0.12s, border-color 0.12s, background 0.12s !important;
+}
+a.arcade-pill:hover, a.arcade-pill:active, a.arcade-pill:focus-visible {
+  transform: scale(1.05) !important;
+  border-color: rgba(255, 200, 150, 0.9) !important;
+  background: rgba(40, 22, 44, 0.78) !important;
+  color: #fff5e8 !important;
+}
+a.arcade-pill .ah-arrow { font-size: 14px !important; opacity: 0.9 !important; }
+a.arcade-pill.arcade-float {
+  position: fixed !important;
+  top: calc(8px + env(safe-area-inset-top, 0px)) !important;
+  left: calc(10px + env(safe-area-inset-left, 0px)) !important;
+  z-index: 2147483000 !important;
+}
+</style>
+</head>
+<body>
+<a id="back" class="arcade-pill arcade-float" href="index.html"
+   aria-label="Back to Max's Arcade"><span class="ah-arrow">&larr;</span>Arcade</a>
+<script>
+(function () {
+  var pill = document.getElementById('back');
+  if (!pill) return;
+  var go = function (e) { e.stopPropagation(); e.preventDefault(); location.href = 'index.html'; };
+  ['click', 'touchend'].forEach(function (t) { pill.addEventListener(t, go, { passive: false }); });
+  ['mousedown', 'touchstart', 'pointerdown'].forEach(function (t) {
+    pill.addEventListener(t, function (e) { e.stopPropagation(); }, { passive: false });
+  });
+})();
+</script>
+<canvas id="game"></canvas>
+<input class="nameBox" id="name0" maxlength="10" placeholder="PLAYER 1" autocomplete="off" spellcheck="false">
+<input class="nameBox" id="name1" maxlength="10" placeholder="PLAYER 2" autocomplete="off" spellcheck="false">
+<script>
+// =====================================================================
+// SNAKE FIGHT - two snakes, one box, one keyboard.
+//
+// GREEN plays with W A S D.  PINK plays with the arrow keys.
+// Hit a wall, your own tail, or THEIRS, and you lose the round.
+// First to five wins the match.
+// =====================================================================
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+function fit() { canvas.width = innerWidth; canvas.height = innerHeight; }
+addEventListener('resize', fit);
+fit();
+
+window.onerror = (msg, src, line) => {
+  const d = document.createElement('div');
+  d.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#c0392b;' +
+    'color:#fff;font:14px monospace;padding:8px;z-index:9';
+  d.textContent = '🐛 BUG on line ' + line + ': ' + msg;
+  document.body.appendChild(d);
+};
+
+// ---- the arena, measured in squares ----
+const COLS = 39, ROWS = 25;      // odd numbers, so there is a middle square
+const WIN_SCORE = 5;
+const START_LEN = 5;
+const GROW_EVERY = 16;           // both snakes grow anyway, so rounds always end
+// How thick the apples are, as a share of the whole board - so the
+// board stays this busy whatever size the arena is.
+const FOOD_LEVELS = [
+  { name: 'SOME', pct: 0.03, desc: 'a normal snake game' },
+  { name: 'LOTS', pct: 0.09, desc: 'apples everywhere. grow FAST' },
+  { name: 'SILLY', pct: 0.20, desc: 'you cannot move without eating' },
+];
+let foodLevel = parseInt(localStorage.getItem('snake_food') || '1');
+if (!(foodLevel >= 0 && foodLevel < FOOD_LEVELS.length)) foodLevel = 1;
+function foodTarget() { return Math.round(COLS * ROWS * FOOD_LEVELS[foodLevel].pct); }
+
+// =====================================================================
+// THE MAPS.
+//
+// Each map is a little function that says which squares are walls. It
+// gets handed an "add" function and calls it for every wall square it
+// wants - so a map is a recipe, not a picture, and a new one is about
+// three lines.
+//
+// The rule every map must obey: leave row 12 clear at both ends, or the
+// snakes would start life already inside a wall. There is a test that
+// checks exactly that, for every map, because it would be a miserable
+// thing to discover mid-game.
+// =====================================================================
+const MID_X = Math.floor(COLS / 2), MID_Y = Math.floor(ROWS / 2);
+const MAPS = [
+  { name: 'OPEN FIELD', desc: 'nothing in your way. pure snake.',
+    wrap: false, walls: () => {} },
+
+  { name: 'THE WALL', desc: 'one doorway in the middle. good luck.',
+    wrap: false, walls: add => {
+      for (let y = 0; y <= MID_Y - 3; y++) add(MID_X, y);
+      for (let y = MID_Y + 3; y < ROWS; y++) add(MID_X, y);
+    } },
+
+  { name: 'FOUR ROOMS', desc: 'two long walls, three ways through.',
+    wrap: false, walls: add => {
+      for (let y = 0; y < ROWS; y++) if (y !== MID_Y) add(MID_X, y);
+      for (let x = 6; x <= COLS - 7; x++) {
+        if (x === MID_X) continue;
+        add(x, 5); add(x, ROWS - 6);
+      }
+    } },
+
+  { name: 'PILLARS', desc: 'dodge the blocks. the middle lane is clear.',
+    wrap: false, walls: add => {
+      [4, 9, ROWS - 10, ROWS - 5].forEach(y => {
+        [5, 11, 17, 23, 29].forEach(x => {
+          add(x, y); add(x + 1, y); add(x, y + 1); add(x + 1, y + 1);
+        });
+      });
+    } },
+
+  { name: 'THE VOID', desc: 'NO WALLS AT ALL. off one edge, in the other.',
+    wrap: true, walls: () => {} },
+];
+let mapIndex = parseInt(localStorage.getItem('snake_map') || '0');
+if (!(mapIndex >= 0 && mapIndex < MAPS.length)) mapIndex = 0;
+function currentMap() { return MAPS[mapIndex]; }
+
+// The wall squares, kept in a Set so "is this a wall?" is one instant
+// lookup instead of searching a list every single move.
+let wallSet = new Set();
+let wallList = [];
+function buildWalls() {
+  wallSet = new Set();
+  wallList = [];
+  currentMap().walls((x, y) => {
+    if (x < 0 || y < 0 || x >= COLS || y >= ROWS) return;
+    const key = x + ',' + y;
+    if (wallSet.has(key)) return;
+    wallSet.add(key);
+    wallList.push({ x, y });
+  });
+}
+function isWall(x, y) { return wallSet.has(x + ',' + y); }
+// off the edge: on most maps that is death, but THE VOID wraps you
+// round to the other side instead
+function wrapCell(c) {
+  if (!currentMap().wrap) return c;
+  c.x = (c.x + COLS) % COLS;
+  c.y = (c.y + ROWS) % ROWS;
+  return c;
+}
+
+// =====================================================================
+// THE SKINS.
+//
+// A skin is just a few colours plus a PATTERN - a rule for what colour
+// each segment should be. The rule is applied by segColor() further
+// down, so adding a brand new look here needs no new drawing code at
+// all, unless you invent a whole new kind of pattern.
+// =====================================================================
+const SKINS = [
+  { id: 'green',  name: 'GREEN',     body: '#7fdf3f', alt: '#5cb02a', head: '#c6ff6a', pattern: 'solid' },
+  { id: 'pink',   name: 'BUBBLEGUM', body: '#ff5fa8', alt: '#d63d84', head: '#ffa8d2', pattern: 'solid' },
+  { id: 'tiger',  name: 'TIGER',     body: '#ff9d1f', alt: '#2b1a08', head: '#ffc45c', pattern: 'stripe' },
+  { id: 'fire',   name: 'FIRE',      body: '#ffe14a', alt: '#e01b1b', head: '#fff2a0', pattern: 'fade' },
+  { id: 'ice',    name: 'ICE',       body: '#eaffff', alt: '#2b8fd6', head: '#ffffff', pattern: 'fade' },
+  { id: 'slime',  name: 'SLIME',     body: '#8ce33f', alt: '#3d7a1a', head: '#c4ff8a', pattern: 'spots' },
+  { id: 'robot',  name: 'ROBOT',     body: '#b8c0c8', alt: '#3ad6e0', head: '#e8f0f4', pattern: 'stripe' },
+  { id: 'ghost',  name: 'GHOST',     body: '#dfe8ff', alt: '#9aa8d0', head: '#ffffff', pattern: 'solid', alpha: 0.5 },
+  { id: 'stinker', name: 'STINKER',  body: '#9a8b3f', alt: '#6f5f22', head: '#c8b85a', pattern: 'spots' },
+  { id: 'shadow', name: 'SHADOW',    body: '#2a2a3a', alt: '#5a5a7a', head: '#8a8ab0', pattern: 'stripe' },
+  // ---- these two have to be earned ----
+  { id: 'gold',   name: 'GOLD',      body: '#f2c236', alt: '#fff3b0', head: '#fff8d0', pattern: 'stripe',
+    lock: 'win a whole match' },
+  { id: 'rainbow', name: 'RAINBOW',  body: '#ff0000', alt: '#00ff00', head: '#ffffff', pattern: 'rainbow',
+    lock: 'win a match 5-0' },
+];
+let unlocked = {};
+try { unlocked = JSON.parse(localStorage.getItem('snake_unlocks')) || {}; } catch (e) { unlocked = {}; }
+function isUnlocked(sk) { return !sk.lock || unlocked[sk.id]; }
+function unlock(id, why) {
+  if (unlocked[id]) return false;
+  unlocked[id] = true;
+  localStorage.setItem('snake_unlocks', JSON.stringify(unlocked));
+  newlyUnlocked = { id, why };
+  return true;
+}
+let newlyUnlocked = null;
+
+// mix two colours together - used by the FADE pattern
+function mixHex(a, b, f) {
+  const pa = [1, 3, 5].map(i => parseInt(a.substr(i, 2), 16));
+  const pb = [1, 3, 5].map(i => parseInt(b.substr(i, 2), 16));
+  return 'rgb(' + pa.map((v, i) => Math.round(v + (pb[i] - v) * f)).join(',') + ')';
+}
+function darker(hex, f) {
+  const p = [1, 3, 5].map(i => Math.round(parseInt(hex.substr(i, 2), 16) * f));
+  return 'rgb(' + p.join(',') + ')';
+}
+// THE PATTERN RULE: what colour is segment number j?
+function segColor(sk, j, len, t) {
+  switch (sk.pattern) {
+    case 'stripe':  return (j % 2) ? sk.alt : sk.body;
+    case 'spots':   return (j % 4 === 1) ? sk.alt : sk.body;
+    case 'fade':    return mixHex(sk.body, sk.alt, Math.min(1, j / Math.max(1, len - 1)));
+    case 'rainbow': return 'hsl(' + Math.floor((j * 22 + t * 90) % 360) + ', 92%, 58%)';
+    default:        return sk.body;
+  }
+}
+
+// which skin each player is wearing right now
+let picks = [0, 1];
+try {
+  const saved = JSON.parse(localStorage.getItem('snake_picks'));
+  if (Array.isArray(saved) && saved.length === 2) picks = saved;
+} catch (e) {}
+function skinOf(i) { return SKINS[picks[i]] || SKINS[i]; }
+
+// ---- the two players ----
+// Everything about a player lives in one object. Want a third snake one
+// day? Add a third object - the rest of the code already loops over them.
+const PLAYERS = [
+  { name: 'GREEN', body: '#7fdf3f', head: '#c6ff6a', dead: '#3a5c22',
+    keys: { w: 'up', a: 'left', s: 'down', d: 'right' },
+    start: { x: 6, y: 12 }, dir: 'right', side: 'left' },
+  { name: 'PINK', body: '#ff5fa8', head: '#ffa8d2', dead: '#5c2240',
+    keys: { ArrowUp: 'up', ArrowLeft: 'left', ArrowDown: 'down', ArrowRight: 'right' },
+    start: { x: COLS - 7, y: 12 }, dir: 'left', side: 'right' },
+];
+const STEPS = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] };
+const OPPOSITE = { up: 'down', down: 'up', left: 'right', right: 'left' };
+
+let snakes = [];                 // the live snakes, one per player
+let foods = [];                  // apples, all over the place
+let scores = [0, 0];
+let screen = 'title';            // 'title' | 'countdown' | 'play' | 'roundover' | 'matchover'
+let countdown = 0;
+let roundTimer = 0;
+let stepTimer = 0;
+let stepTime = 0.125;            // seconds between moves - lower is faster
+let ticks = 0;
+let particles = [];
+let shake = 0;
+let lastResult = null;           // what happened at the end of the round
+let touchMode = false;           // switches the thumb pads on
+let headbutt = null;             // set when a round ends nose to nose
+let skinRects = [];              // the tappable < > arrows on the title screen
+// ---- what everyone is called ----
+let names = ['', ''];
+try {
+  const saved = JSON.parse(localStorage.getItem('snake_names'));
+  if (Array.isArray(saved) && saved.length === 2) names = saved;
+} catch (e) {}
+const nameBoxes = [document.getElementById('name0'), document.getElementById('name1')];
+nameBoxes.forEach((box, i) => {
+  box.value = names[i];
+  box.addEventListener('input', () => {
+    names[i] = box.value.toUpperCase().slice(0, 10);
+    localStorage.setItem('snake_names', JSON.stringify(names));
+  });
+  // Enter means "done", not "type a new line"
+  box.addEventListener('keydown', e => {
+    if (e.key === 'Enter') box.blur();
+    e.stopPropagation();       // typing must not steer or start the game
+  });
+});
+// no name typed? then you are simply Player 1
+function playerName(i) {
+  if (isAI(i)) return 'AI_Dude';
+  return (names[i] || '').trim() || ('PLAYER ' + (i + 1));
+}
+function typing() { return nameBoxes.some(b => document.activeElement === b); }
+</script>
+<script>
+// ---------------------------------------------------------------------
+// SOUND - all made out of maths, no files to download
+// ---------------------------------------------------------------------
+let audio = null;
+function ensureAudio() {
+  if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)();
+}
+function beep(freq, len, type, vol) {
+  if (!audio) return;
+  const o = audio.createOscillator(), g = audio.createGain();
+  o.type = type || 'square';
+  o.frequency.value = freq;
+  g.gain.setValueAtTime(vol === undefined ? 0.08 : vol, audio.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + len);
+  o.connect(g); g.connect(audio.destination);
+  o.start(); o.stop(audio.currentTime + len + 0.02);
+}
+function crashSound() {
+  if (!audio) return;
+  const o = audio.createOscillator(), g = audio.createGain();
+  o.type = 'sawtooth';
+  o.frequency.setValueAtTime(320, audio.currentTime);
+  o.frequency.exponentialRampToValueAtTime(40, audio.currentTime + 0.4);
+  g.gain.setValueAtTime(0.18, audio.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + 0.45);
+  o.connect(g); g.connect(audio.destination);
+  o.start(); o.stop(audio.currentTime + 0.5);
+}
+function thud() {
+  if (!audio) return;
+  const o = audio.createOscillator(), g = audio.createGain();
+  o.type = 'square';
+  o.frequency.setValueAtTime(120, audio.currentTime);
+  o.frequency.exponentialRampToValueAtTime(55, audio.currentTime + 0.18);
+  g.gain.setValueAtTime(0.25, audio.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + 0.25);
+  o.connect(g); g.connect(audio.destination);
+  o.start(); o.stop(audio.currentTime + 0.3);
+}
+function winJingle() {
+  [523, 659, 784, 1047].forEach((n, i) => {
+    setTimeout(() => beep(n, 0.18, 'square', 0.1), i * 110);
+  });
+}
+
+// ---------------------------------------------------------------------
+// STARTING A ROUND
+// ---------------------------------------------------------------------
+function newSnake(p) {
+  // built facing the way it will travel, tail trailing behind the head
+  const body = [];
+  const [dx, dy] = STEPS[p.dir];
+  for (let i = 0; i < START_LEN; i++) {
+    body.push({ x: p.start.x - dx * i, y: p.start.y - dy * i });
+  }
+  return { p, body, dir: p.dir, next: p.dir, grow: 0, alive: true };
+}
+// Keep the orchard topped up. Called at the start, and every time one
+// gets eaten, so the board never runs dry.
+//
+// It works out every taken square ONCE into a Set, rather than searching
+// the snakes and the apple list again for each square it tries. With 195
+// apples on a SILLY board that is the difference between smooth and a
+// stutter every time somebody takes a bite.
+function topUpFood() {
+  const target = foodTarget();
+  if (foods.length >= target) return;
+  const taken = new Set();
+  for (const s of snakes) for (const b of s.body) taken.add(b.x + ',' + b.y);
+  for (const f of foods) taken.add(f.x + ',' + f.y);
+  let guard = 0;
+  while (foods.length < target && guard++ < target * 14) {
+    const x = 1 + Math.floor(Math.random() * (COLS - 2));
+    const y = 1 + Math.floor(Math.random() * (ROWS - 2));
+    const key = x + ',' + y;
+    if (taken.has(key) || isWall(x, y)) continue;
+    taken.add(key);
+    // a random pop means they do not all pulse in time with each other
+    foods.push({ x, y, pop: Math.random() * 6 });
+  }
+}
+function startRound() {
+  bombs = [];
+  bombTimer = 0;
+  spawnGhosts();
+  buildWalls();
+  snakes = PLAYERS.map(newSnake);
+  foods = [];
+  topUpFood();
+  ticks = 0;
+  stepTimer = 0;
+  particles = [];
+  lastResult = null;
+  countdown = 3.0;
+  screen = 'countdown';
+}
+function startMatch() {
+  newlyUnlocked = null;
+  scores = [0, 0];
+  stepTime = 0.125;
+  startRound();
+}
+
+// ---------------------------------------------------------------------
+// ONE MOVE OF THE GAME
+//
+// Both snakes move at the SAME MOMENT. That matters: it means we work
+// out both new heads first, and only then ask who crashed. Do it one
+// snake at a time and whoever moves first would win every head-on.
+// ---------------------------------------------------------------------
+function occupied(cell, ignoreTails) {
+  for (const s of snakes) {
+    // the last segment is about to move away, so it does not count
+    // (unless that snake is growing this move and keeps it)
+    const end = ignoreTails && !s.grow ? s.body.length - 1 : s.body.length;
+    for (let i = 0; i < end; i++) {
+      if (s.body[i].x === cell.x && s.body[i].y === cell.y) return true;
+    }
+  }
+  return false;
+}
+function step() {
+  ticks++;
+  // 0. any computer players decide which way to go
+  snakes.forEach((s, i) => { if (isAI(i)) aiChoose(i); });
+  // 1. everybody turns
+  for (const s of snakes) {
+    if (OPPOSITE[s.next] !== s.dir) s.dir = s.next;   // no turning back on yourself
+  }
+  // 2. work out where every head is going, before judging anyone
+  const heads = snakes.map(s => {
+    const [dx, dy] = STEPS[s.dir];
+    // wrapCell does nothing on most maps, but on THE VOID it carries
+    // you round to the far side instead of off the edge
+    return wrapCell({ x: s.body[0].x + dx, y: s.body[0].y + dy });
+  });
+  // 3. everyone about to eat keeps their tail this move. This has to
+  // happen BEFORE we judge crashes, because a growing snake holds on to
+  // its tail, so that square is not free for anyone else.
+  heads.forEach((h, i) => {
+    if (foods.some(f => f.x === h.x && f.y === h.y)) snakes[i].grow += 4;
+  });
+  if (ticks % GROW_EVERY === 0) snakes.forEach(s => { s.grow += 1; });
+  // 4. NOW judge the crashes
+  const doomed = [false, false];
+  heads.forEach((h, i) => {
+    if (h.x < 0 || h.y < 0 || h.x >= COLS || h.y >= ROWS) doomed[i] = true;
+    else if (isWall(h.x, h.y)) doomed[i] = true;
+    else if (occupied(h, true)) doomed[i] = true;
+    else if (ghostCaught(h)) doomed[i] = true;   // walked into a solid ghost
+  });
+  // =====================================================================
+  // THE HEAD-BUTT.
+  //
+  // Nose to nose, both snakes crashed into a head at the very same
+  // instant - so "whoever hits a head wins" needs a tie-break, or they
+  // would both win at once. The tie-break is LENGTH: the bigger snake
+  // shoves the smaller one off and takes the round.
+  //
+  // That is what makes the apples matter. Every one you eat is another
+  // segment of head-butting power. And if you are exactly the same
+  // length, neither of you wins - you both go, which is only fair.
+  // =====================================================================
+  headbutt = null;
+  if (heads[0].x === heads[1].x && heads[0].y === heads[1].y) {
+    const len0 = snakes[0].body.length, len1 = snakes[1].body.length;
+    if (len0 === len1) {
+      doomed[0] = doomed[1] = true;                    // dead heat, both go
+    } else {
+      const winner = len0 > len1 ? 0 : 1;
+      doomed[1 - winner] = true;                       // the smaller one loses
+      headbutt = { winner, len0, len1 };
+    }
+  }
+  // 5. move everyone who survived
+  heads.forEach((h, i) => {
+    const s = snakes[i];
+    if (doomed[i]) return;
+    s.body.unshift(h);
+    if (s.grow > 0) s.grow--; else s.body.pop();
+    const bite = foods.findIndex(f => f.x === h.x && f.y === h.y);
+    if (bite >= 0) {
+      foods.splice(bite, 1);
+      topUpFood();                 // one gone, another appears elsewhere
+      beep(880, 0.07, 'square', 0.09);
+      beep(1320, 0.05, 'square', 0.05);
+    }
+  });
+  if (doomed[0] || doomed[1]) endRound(doomed);
+}
+</script>
+<script>
+// =====================================================================
+// AI_DUDE.
+//
+// A computer player is not magic. Every move it looks at the three ways
+// it could turn (never backwards) and gives each one a SCORE, then takes
+// the best. All the cleverness lives in what the score counts.
+//
+// 1. Is it instant death? Then it is not an option at all.
+// 2. How much ROOM is through there? This is the big one. Rushing at an
+//    apple down a dead end is how snakes kill themselves, so AI_Dude
+//    counts the free squares it could still reach and hugely prefers
+//    open space. That one rule is most of what makes it look clever.
+// 3. How far to the nearest apple? Closer is better - but this counts
+//    for much less than room, so it will happily give an apple up
+//    rather than trap itself.
+// 4. Is it BIGGER than you? Then it starts hunting your head, because
+//    the longer snake wins a head-butt. If it is smaller it keeps away
+//    from you instead.
+// =====================================================================
+let ai = [false, false];
+try {
+  const saved = JSON.parse(localStorage.getItem('snake_ai'));
+  if (Array.isArray(saved) && saved.length === 2) ai = saved;
+} catch (e) {}
+function isAI(i) { return !!ai[i]; }
+
+// would moving here kill me right now?
+function aiBlocked(c) {
+  if (c.x < 0 || c.y < 0 || c.x >= COLS || c.y >= ROWS) return true;
+  if (isWall(c.x, c.y)) return true;
+  return occupied(c, true);
+}
+// how many squares can I still reach if I go this way? (capped, because
+// past a certain point "loads of room" is all we need to know)
+const ROOM_CAP = 140;
+function roomFrom(start) {
+  const seen = new Set([start.x + ',' + start.y]);
+  const queue = [start];
+  let count = 0;
+  while (queue.length && count < ROOM_CAP) {
+    const c = queue.shift();
+    count++;
+    for (const d of ['up', 'down', 'left', 'right']) {
+      const [dx, dy] = STEPS[d];
+      const nx = wrapCell({ x: c.x + dx, y: c.y + dy });
+      const key = nx.x + ',' + nx.y;
+      if (seen.has(key)) continue;
+      if (aiBlocked(nx)) continue;
+      seen.add(key);
+      queue.push(nx);
+    }
+  }
+  return count;
+}
+// how far away is the nearest apple, going round the edges if the map wraps
+function stepsTo(a, b) {
+  let dx = Math.abs(a.x - b.x), dy = Math.abs(a.y - b.y);
+  if (currentMap().wrap) { dx = Math.min(dx, COLS - dx); dy = Math.min(dy, ROWS - dy); }
+  return dx + dy;
+}
+function nearestFood(c) {
+  let best = 999;
+  for (const f of foods) best = Math.min(best, stepsTo(c, f));
+  return best === 999 ? 40 : best;
+}
+
+// Which single thing is AI_Dude going for right now? Picking ONE target
+// and sticking to it is what makes its path easy to follow. If it worked
+// out the nearest apple fresh from each square it was thinking about, it
+// would dither between two equally close ones and wiggle on the spot.
+function aiTarget(i) {
+  const me = snakes[i], foe = snakes[1 - i];
+  const head = me.body[0];
+  // bigger than them? then THEY are the target - the longer snake wins
+  // a head-butt, so charging is the right move
+  if (foe && foe.alive && me.body.length > foe.body.length + 1) {
+    return { x: foe.body[0].x, y: foe.body[0].y, hunt: true };
+  }
+  let best = null, bestD = 1e9;
+  for (const f of foods) {
+    const d = stepsTo(head, f);
+    if (d < bestD) { bestD = d; best = f; }
+  }
+  return best ? { x: best.x, y: best.y } : null;
+}
+
+// Is this square about to be blown up? Only bombs that are nearly down
+// count - anything further off, AI_Dude will have walked out of by the
+// time it lands, and dodging it now would just make it look twitchy.
+// a solid ghost is as bad as a wall; a faded one is nothing at all
+function underGhost(c) {
+  const now = Date.now() / 1000;
+  for (const g of ghosts) {
+    if (ghostAlpha(now + g.phase) < GHOST_DEADLY - 0.25) continue;
+    const gc = ghostCell(g);
+    if (gc.x === c.x && gc.y === c.y) return true;
+  }
+  return false;
+}
+
+function underBomb(c) {
+  for (const b of bombs) {
+    if (b.fuse > 0.85) continue;
+    const R = blastSize();
+    let dx = Math.abs(c.x - b.x), dy = Math.abs(c.y - b.y);
+    if (currentMap().wrap) { dx = Math.min(dx, COLS - dx); dy = Math.min(dy, ROWS - dy); }
+    if (dx <= R && dy <= R) return true;
+  }
+  return false;
+}
+
+function aiChoose(i) {
+  const me = snakes[i];
+  const foe = snakes[1 - i];
+  if (!me || !me.alive) return;
+  const head = me.body[0];
+  const target = aiTarget(i);
+  me.aiTarget = target;                                // so we can draw it
+
+  // The room it needs before it will call a route safe: enough space to
+  // fit itself, with a bit spare. Below that, the route is a trap.
+  const needed = Math.min(ROOM_CAP, me.body.length + 5);
+
+  let bestDir = null, bestScore = -Infinity;
+  // A FIXED order, and no random wobble anywhere. Given the same board
+  // AI_Dude always makes the same choice - which is what lets you learn
+  // it, predict it, and beat it.
+  for (const d of ['up', 'right', 'down', 'left']) {
+    if (OPPOSITE[d] === me.dir) continue;              // never straight backwards
+    const [dx, dy] = STEPS[d];
+    const c = wrapCell({ x: head.x + dx, y: head.y + dy });
+    if (aiBlocked(c)) continue;                        // instant death: not an option
+
+    let score = 0;
+    // 0. About to be bombed, or haunted? Nearly as bad as a wall.
+    if (underBomb(c)) score -= 900;
+    if (underGhost(c)) score -= 900;
+    // 1. SAFETY FIRST, but as a veto rather than a nudge. Plenty of room
+    //    scores the same as loads of room, so having somewhere to go does
+    //    not drag it off a straight line.
+    const room = roomFrom(c);
+    if (room < needed) score -= 400 + (needed - room) * 12;
+    // 2. HEAD STRAIGHT AT THE TARGET. This is now the loudest voice, so
+    //    its route reads as a plain line rather than a wander.
+    if (target) score -= stepsTo(c, target) * 10;
+    // 3. DO NOT TURN FOR NO REASON. On a tie, carry straight on.
+    if (d === me.dir) score += 5;
+    // 4. If it is the smaller snake, stay out of head-butting range.
+    if (foe && foe.alive && !(target && target.hunt)) {
+      if (stepsTo(c, foe.body[0]) <= 2) score -= 60;
+    }
+    if (score > bestScore) { bestScore = score; bestDir = d; }
+  }
+  // every way is death? carry straight on and hope.
+  me.next = bestDir || me.dir;
+}
+
+// =====================================================================
+// BOMBS FROM THE SKY.
+//
+// One lands every few seconds. It does NOT just appear and explode -
+// that would be a death you could do nothing about, which is never fun.
+// Instead the exact squares it will hit are marked out while it falls,
+// so getting blown up is always your own fault for standing there.
+//
+// If it catches your HEAD, you lose the round. If it catches your BODY
+// further down, it does not kill you - it CHOPS you, and everything
+// past that point is gone. Which matters, because the longer snake wins
+// a head-butt, so a bomb can lose you a fight without touching you.
+// =====================================================================
+// How hard it is raining. "every" is seconds between bombs, and "blast"
+// is how far the boom reaches - 1 makes a 3x3 hole, 2 makes a 5x5 one.
+const BOMB_LEVELS = [
+  { name: 'NONE',  every: 0,   blast: 0, desc: 'no bombs. just snakes.' },
+  { name: 'A FEW', every: 7.0, blast: 1, desc: 'the odd surprise' },
+  { name: 'LOTS',  every: 3.0, blast: 1, desc: 'keep moving' },
+  { name: 'STORM', every: 1.1, blast: 1, desc: 'constant rain. good luck.' },
+  { name: 'NUKES', every: 4.5, blast: 2, desc: 'fewer, but ENORMOUS' },
+];
+let bombLevel = parseInt(localStorage.getItem('snake_bombs') || '2');
+if (!(bombLevel >= 0 && bombLevel < BOMB_LEVELS.length)) bombLevel = 2;
+function bombsOn() { return BOMB_LEVELS[bombLevel].every > 0; }
+function bombEvery() { return BOMB_LEVELS[bombLevel].every; }
+function blastSize() { return BOMB_LEVELS[bombLevel].blast; }
+
+const BOMB_FUSE = 1.5;           // how long you get to move
+let bombs = [];
+let bombTimer = 0;
+
+function dropBomb() {
+  // somewhere on the board, but not inside a wall - a bomb that lands in
+  // a wall would waste its whole warning doing nothing
+  for (let tries = 0; tries < 60; tries++) {
+    const x = 1 + Math.floor(Math.random() * (COLS - 2));
+    const y = 1 + Math.floor(Math.random() * (ROWS - 2));
+    if (isWall(x, y)) continue;
+    bombs.push({ x, y, fuse: BOMB_FUSE });
+    if (audio) {
+      // a falling whistle
+      const o = audio.createOscillator(), g = audio.createGain();
+      o.type = 'sine';
+      o.frequency.setValueAtTime(1200, audio.currentTime);
+      o.frequency.exponentialRampToValueAtTime(300, audio.currentTime + BOMB_FUSE);
+      g.gain.setValueAtTime(0.05, audio.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + BOMB_FUSE);
+      o.connect(g); g.connect(audio.destination);
+      o.start(); o.stop(audio.currentTime + BOMB_FUSE);
+    }
+    return;
+  }
+}
+function blastCells(b) {
+  const cells = [];
+  const R = blastSize();
+  for (let dy = -R; dy <= R; dy++) {
+    for (let dx = -R; dx <= R; dx++) {
+      const c = wrapCell({ x: b.x + dx, y: b.y + dy });
+      if (c.x < 0 || c.y < 0 || c.x >= COLS || c.y >= ROWS) continue;
+      cells.push(c);
+    }
+  }
+  return cells;
+}
+function explode(b) {
+  const cells = blastCells(b);
+  const hit = c => cells.some(k => k.x === c.x && k.y === c.y);
+  // fire and smoke
+  for (const c of cells) {
+    for (let i = 0; i < 5; i++) {
+      const a = Math.random() * Math.PI * 2, sp = 30 + Math.random() * 200;
+      particles.push({ x: c.x + 0.5, y: c.y + 0.5,
+        vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+        life: 0.4 + Math.random() * 0.5,
+        color: ['#ffd83d', '#ff8b1f', '#ff3b30', '#7a7a7a'][i % 4] });
+    }
+  }
+  shake = Math.max(shake, 18);
+  crashSound();
+  // apples caught in it are gone (and the board fills back up)
+  const before = foods.length;
+  foods = foods.filter(f => !hit(f));
+  if (foods.length !== before) topUpFood();
+  // and now the snakes
+  const doomed = [false, false];
+  snakes.forEach((sn, i) => {
+    if (!sn.alive) return;
+    if (hit(sn.body[0])) { doomed[i] = true; return; }   // caught the head: gone
+    const cut = sn.body.findIndex((seg, j) => j > 0 && hit(seg));
+    if (cut > 0) {
+      sn.body.length = Math.max(2, cut);                 // chopped off there
+      sn.grow = 0;
+      beep(200, 0.12, 'sawtooth', 0.12);
+    }
+  });
+  if (doomed[0] || doomed[1]) {
+    if (doomed[0] && doomed[1]) {
+      snakes.forEach((sn, i) => { sn.alive = false; boom(sn.body[0], skinOf(i).head); });
+      scores[0] += 0; scores[1] += 0;
+      lastResult = { draw: true, text: 'BLOWN UP! both of you.' };
+      roundTimer = 1.8;
+      screen = 'roundover';
+    } else {
+      const loser = doomed[0] ? 0 : 1;
+      const winner = 1 - loser;
+      snakes[loser].alive = false;
+      boom(snakes[loser].body[0], skinOf(loser).head);
+      scores[winner]++;
+      lastResult = { winner, text: playerName(loser) + ' GOT BOMBED!' };
+      roundTimer = 1.8;
+      screen = 'roundover';
+    }
+  }
+}
+
+// =====================================================================
+// GHOSTS.
+//
+// They drift about the arena, straight through walls, and fade in and
+// out. A ghost is only DEADLY while it is solid - faded out, you can
+// walk right through it. So they are a timing puzzle rather than a
+// random death, and you can always see one coming back.
+//
+// The fairness rule: a ghost turning solid on top of you does NOT kill
+// you. You only die if YOU move into a solid one. Being killed by
+// something that appeared on you would be miserable.
+// =====================================================================
+const GHOST_LEVELS = [
+  { name: 'NONE', count: 0, desc: 'nothing haunting you' },
+  { name: 'A FEW', count: 2, desc: 'two drifting about' },
+  { name: 'LOTS', count: 4, desc: 'getting crowded' },
+  { name: 'HAUNTED', count: 7, desc: 'they are EVERYWHERE' },
+];
+let ghostLevel = parseInt(localStorage.getItem('snake_ghosts') || '0');
+if (!(ghostLevel >= 0 && ghostLevel < GHOST_LEVELS.length)) ghostLevel = 0;
+function ghostCount() { return GHOST_LEVELS[ghostLevel].count; }
+let ghosts = [];
+
+// How solid is a ghost right now? Another maths-only function, like the
+// tongue - one number from 0 (gone) to 1 (solid), so it can be tested.
+// Solid, fade out, gone, fade back in, over and over.
+const GHOST_CYCLE = 5.0;
+function ghostAlpha(t) {
+  const p = ((t / GHOST_CYCLE) % 1 + 1) % 1;
+  if (p < 0.36) return 1;                        // solid
+  if (p < 0.48) return 1 - (p - 0.36) / 0.12;    // fading away
+  if (p < 0.84) return 0;                        // gone
+  return (p - 0.84) / 0.16;                      // coming back
+}
+const GHOST_DEADLY = 0.6;                        // solid enough to hurt you
+function ghostIsDeadly(g, now) { return ghostAlpha(now + g.phase) >= GHOST_DEADLY; }
+function ghostCell(g) { return { x: Math.round(g.x), y: Math.round(g.y) }; }
+
+function spawnGhosts() {
+  ghosts = [];
+  for (let i = 0; i < ghostCount(); i++) {
+    const a = Math.random() * Math.PI * 2;
+    ghosts.push({
+      // start away from both snakes, in the middle band of the board
+      x: 6 + Math.random() * (COLS - 12),
+      y: 2 + Math.random() * (ROWS - 4),
+      vx: Math.cos(a) * 2.2, vy: Math.sin(a) * 2.2,   // squares per second
+      phase: Math.random() * GHOST_CYCLE,
+    });
+  }
+}
+function moveGhosts(dt) {
+  for (const g of ghosts) {
+    g.x += g.vx * dt;
+    g.y += g.vy * dt;
+    // they drift through walls - they are ghosts - but they do turn
+    // round at the edge of the arena rather than wandering off forever
+    if (g.x < 0.5) { g.x = 0.5; g.vx = Math.abs(g.vx); }
+    if (g.x > COLS - 1.5) { g.x = COLS - 1.5; g.vx = -Math.abs(g.vx); }
+    if (g.y < 0.5) { g.y = 0.5; g.vy = Math.abs(g.vy); }
+    if (g.y > ROWS - 1.5) { g.y = ROWS - 1.5; g.vy = -Math.abs(g.vy); }
+  }
+}
+// did anybody just walk into a solid one?
+function ghostCaught(head) {
+  const now = Date.now() / 1000;
+  for (const g of ghosts) {
+    if (!ghostIsDeadly(g, now)) continue;
+    const c = ghostCell(g);
+    if (c.x === head.x && c.y === head.y) return true;
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------------
+// ENDING A ROUND
+// ---------------------------------------------------------------------
+function boom(cell, color) {
+  for (let i = 0; i < 26; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const sp = 40 + Math.random() * 260;
+    particles.push({
+      x: cell.x + 0.5, y: cell.y + 0.5,
+      vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+      life: 0.5 + Math.random() * 0.5, color,
+    });
+  }
+}
+function endRound(doomed) {
+  doomed.forEach((d, i) => {
+    if (!d) return;
+    snakes[i].alive = false;
+    boom(snakes[i].body[0], skinOf(i).head);
+  });
+  crashSound();
+  shake = 16;
+  if (doomed[0] && doomed[1]) {
+    lastResult = { draw: true, text: 'DEAD HEAT! same length, both go.' };
+  } else {
+    const winner = doomed[0] ? 1 : 0;
+    scores[winner]++;
+    if (headbutt) {
+      // a head-butt deserves a bigger bang than an ordinary crash
+      shake = 26;
+      boom(snakes[winner].body[0], '#ffffff');
+      thud();
+      lastResult = { winner,
+        text: playerName(winner) + ' HEAD-BUTTS! ' +
+              headbutt[winner === 0 ? 'len0' : 'len1'] + ' vs ' +
+              headbutt[winner === 0 ? 'len1' : 'len0'] };
+    } else {
+      lastResult = { winner, text: playerName(winner) + ' WINS THE ROUND' };
+    }
+  }
+  roundTimer = 1.8;
+  screen = 'roundover';
+}
+function afterRound() {
+  if (scores[0] >= WIN_SCORE || scores[1] >= WIN_SCORE) {
+    screen = 'matchover';
+    winJingle();
+    // rewards for the winner
+    unlock('gold', 'you won a whole match');
+    if (Math.min(scores[0], scores[1]) === 0) unlock('rainbow', 'a 5-0 whitewash!');
+    // confetti in the winner's colour
+    const w = scores[0] > scores[1] ? 0 : 1;
+    for (let i = 0; i < 90; i++) {
+      particles.push({
+        x: Math.random() * COLS, y: -1 - Math.random() * 6,
+        vx: (Math.random() - 0.5) * 60, vy: 60 + Math.random() * 140,
+        life: 3, color: Math.random() < 0.5 ? skinOf(w).head : skinOf(w).body,
+      });
+    }
+    return;
+  }
+  // rounds speed up a little as the match goes on
+  stepTime = Math.max(0.075, stepTime - 0.004);
+  startRound();
+}
+
+// ---------------------------------------------------------------------
+// UPDATING
+// ---------------------------------------------------------------------
+function update(dt) {
+  if (shake > 0) shake = Math.max(0, shake - dt * 60);
+  for (const pt of particles) {
+    pt.x += pt.vx * dt / 24;
+    pt.y += pt.vy * dt / 24;
+    pt.vy += dt * 9;
+    pt.life -= dt;
+  }
+  particles = particles.filter(pt => pt.life > 0);
+  for (const f of foods) f.pop += dt;
+
+  if (screen === 'title') moveGhosts(dt);
+  if (screen === 'countdown') {
+    const was = Math.ceil(countdown);
+    countdown -= dt;
+    const now = Math.ceil(countdown);
+    if (now !== was && now > 0) beep(440, 0.12, 'square', 0.08);
+    if (countdown <= 0) { beep(880, 0.2, 'square', 0.1); screen = 'play'; }
+    return;
+  }
+  if (screen === 'roundover') {
+    roundTimer -= dt;
+    if (roundTimer <= 0) afterRound();
+    return;
+  }
+  if (screen !== 'play') return;
+  // bombs run on their own clock, so they keep falling smoothly however
+  // fast the snakes happen to be moving
+  if (bombsOn()) {
+    bombTimer += dt;
+    if (bombTimer >= bombEvery()) { bombTimer = 0; dropBomb(); }
+    for (const b of bombs) b.fuse -= dt;
+    const landed = bombs.filter(b => b.fuse <= 0);
+    bombs = bombs.filter(b => b.fuse > 0);
+    for (const b of landed) {
+      if (screen === 'play') explode(b);
+    }
+    if (screen !== 'play') return;
+  }
+  moveGhosts(dt);
+  stepTimer += dt;
+  while (stepTimer >= stepTime) {
+    stepTimer -= stepTime;
+    if (screen === 'play') step();
+  }
+}
+
+// ---------------------------------------------------------------------
+// DRAWING
+// ---------------------------------------------------------------------
+function layout() {
+  const W = canvas.width, H = canvas.height;
+  const hud = Math.min(74, H * 0.11);
+  const pad = 10;
+  const cell = Math.floor(Math.min((W - pad * 2) / COLS, (H - hud - pad * 2) / ROWS));
+  const gw = cell * COLS, gh = cell * ROWS;
+  return { W, H, hud, cell, ox: Math.floor((W - gw) / 2), oy: hud + Math.floor((H - hud - gh) / 2), gw, gh };
+}
+// =====================================================================
+// TONGUES.
+//
+// The MATHS of the flick is kept separate from the DRAWING of it. This
+// bit answers one question - "how far out is the tongue right now?" -
+// and gives back a number from 0 (tucked away) to 1 (fully out). Split
+// like that it can be tested, which you cannot really do with drawing.
+//
+// Real snakes flick: out fast, back fast, then a pause. So the tongue is
+// only out for the first fifth of each cycle, and it eases out and back
+// on a sine wave rather than snapping. The offset means two snakes never
+// flick in time with each other, which would look like clockwork.
+// =====================================================================
+const FLICK_TIME = 0.85;         // seconds for one flick-and-pause
+const FLICK_OUT = 0.2;           // the share of that spent with it out
+function tongueOut(now, offset) {
+  const p = ((now / FLICK_TIME + offset) % 1 + 1) % 1;
+  if (p >= FLICK_OUT) return 0;                  // tucked away, most of the time
+  return Math.sin((p / FLICK_OUT) * Math.PI);    // out and back, smoothly
+}
+// and this bit just draws it: a stalk with a fork on the end
+function drawTongue(cx, cy, dx, dy, size, out) {
+  if (out <= 0.01) return;
+  const len = size * 0.95 * out;
+  const tipX = cx + dx * len, tipY = cy + dy * len;
+  ctx.strokeStyle = '#ff3b6b';
+  ctx.lineWidth = Math.max(1.5, size * 0.11);
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(cx + dx * size * 0.3, cy + dy * size * 0.3);
+  ctx.lineTo(tipX, tipY);
+  ctx.stroke();
+  // the fork: two little prongs, sideways from the tip
+  const sx = -dy, sy = dx;                       // the sideways direction
+  const fork = len * 0.42;
+  ctx.beginPath();
+  ctx.moveTo(tipX, tipY);
+  ctx.lineTo(tipX + dx * fork + sx * fork * 0.8, tipY + dy * fork + sy * fork * 0.8);
+  ctx.moveTo(tipX, tipY);
+  ctx.lineTo(tipX + dx * fork - sx * fork * 0.8, tipY + dy * fork - sy * fork * 0.8);
+  ctx.stroke();
+  ctx.lineCap = 'butt';
+}
+
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+</script>
+<script>
+function draw() {
+  const L = layout();
+  const { W, H, cell, ox, oy, gw, gh } = L;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = '#0b1410';
+  ctx.fillRect(0, 0, W, H);
+  // the whole arena wobbles when somebody crashes
+  if (shake > 0) {
+    ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+  }
+
+  // ---- the box they fight in ----
+  ctx.fillStyle = '#101d17';
+  ctx.fillRect(ox, oy, gw, gh);
+  ctx.strokeStyle = '#2b4a38';
+  ctx.lineWidth = 1;
+  for (let x = 1; x < COLS; x++) {
+    ctx.beginPath(); ctx.moveTo(ox + x * cell, oy); ctx.lineTo(ox + x * cell, oy + gh); ctx.stroke();
+  }
+  for (let y = 1; y < ROWS; y++) {
+    ctx.beginPath(); ctx.moveTo(ox, oy + y * cell); ctx.lineTo(ox + gw, oy + y * cell); ctx.stroke();
+  }
+  ctx.lineWidth = 3;
+  if (currentMap().wrap) {
+    // dashed edge = you can go straight through it
+    ctx.strokeStyle = '#c98bff';
+    ctx.setLineDash([cell * 0.5, cell * 0.5]);
+    ctx.strokeRect(ox - 1.5, oy - 1.5, gw + 3, gh + 3);
+    ctx.setLineDash([]);
+  } else {
+    ctx.strokeStyle = '#7fdf8f';
+    ctx.strokeRect(ox - 1.5, oy - 1.5, gw + 3, gh + 3);
+  }
+
+  // ---- the walls ----
+  for (const w of wallList) {
+    const x = ox + w.x * cell, y = oy + w.y * cell;
+    ctx.fillStyle = '#31543f';
+    roundRect(x + 1, y + 1, cell - 2, cell - 2, Math.max(2, cell * 0.2));
+    ctx.fill();
+    ctx.fillStyle = '#456f55';
+    ctx.fillRect(x + 3, y + 3, cell - 6, Math.max(1, cell * 0.16));
+  }
+
+  // ---- the apples ----
+  for (const f of foods) {
+    const pulse = 1 + Math.sin(f.pop * 6) * 0.12;
+    const s = cell * 0.66 * pulse;
+    const cx = ox + f.x * cell + cell / 2, cy = oy + f.y * cell + cell / 2;
+    ctx.fillStyle = '#ff3b30';
+    ctx.beginPath(); ctx.arc(cx, cy, s / 2, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.45)';       // a little shine
+    ctx.beginPath(); ctx.arc(cx - s * 0.16, cy - s * 0.16, s * 0.13, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#7fdf3f';
+    ctx.fillRect(cx - 1.5, cy - s / 2 - cell * 0.14, 3, cell * 0.16);
+  }
+
+  // ---- the snakes ----
+  const now = Date.now() / 1000;
+  snakes.forEach((s, i) => {
+    const sk = skinOf(i);
+    ctx.globalAlpha = sk.alpha || 1;
+    s.body.forEach((b, j) => {
+      const x = ox + b.x * cell, y = oy + b.y * cell;
+      const inset = j === 0 ? 1 : 2;
+      const live = j === 0 ? sk.head : segColor(sk, j, s.body.length, now);
+      ctx.fillStyle = s.alive ? live : darker(sk.body, 0.32);
+      roundRect(x + inset, y + inset, cell - inset * 2, cell - inset * 2, Math.max(2, cell * 0.28));
+      ctx.fill();
+      if (j === 0 && s.alive) {
+        ctx.globalAlpha = 1;
+        // eyes, looking where it is going
+        const [dx, dy] = STEPS[s.dir];
+        const ex = x + cell / 2 + dx * cell * 0.18, ey = y + cell / 2 + dy * cell * 0.18;
+        const sx = Math.abs(dx) ? 0 : cell * 0.18, sy = Math.abs(dy) ? 0 : cell * 0.18;
+        ctx.fillStyle = '#0b1410';
+        ctx.beginPath();
+        ctx.arc(ex - sx, ey - sy, Math.max(1.4, cell * 0.1), 0, Math.PI * 2);
+        ctx.arc(ex + sx, ey + sy, Math.max(1.4, cell * 0.1), 0, Math.PI * 2);
+        ctx.fill();
+        // and out flicks the tongue, pointing the way it is going
+        drawTongue(x + cell / 2, y + cell / 2, dx, dy, cell,
+                   tongueOut(now, i * 0.41));
+        ctx.globalAlpha = sk.alpha || 1;
+      }
+    });
+    ctx.globalAlpha = 1;
+  });
+
+  // ---- ghosts ----
+  {
+    const gnow = Date.now() / 1000;
+    for (const g of ghosts) {
+      const a = ghostAlpha(gnow + g.phase);
+      if (a <= 0.02) continue;
+      const gx = ox + g.x * cell + cell / 2, gy = oy + g.y * cell + cell / 2;
+      const r = cell * 0.52;
+      const deadly = a >= GHOST_DEADLY;
+      ctx.globalAlpha = a * 0.9;
+      // a solid one glows faintly, so you can tell at a glance
+      ctx.fillStyle = deadly ? '#dfe8ff' : '#8fa0c8';
+      ctx.beginPath();
+      ctx.arc(gx, gy - r * 0.2, r, Math.PI, 0);          // the domed head
+      // and a wavy sheet for the bottom
+      const waves = 3, bottom = gy + r * 0.85;
+      ctx.lineTo(gx + r, bottom);
+      for (let w = 0; w < waves; w++) {
+        const x0 = gx + r - (r * 2 / waves) * w;
+        const x1 = x0 - (r * 2 / waves);
+        const dip = (w % 2 === 0) ? -r * 0.28 : 0;
+        ctx.quadraticCurveTo((x0 + x1) / 2, bottom + r * 0.3 + dip, x1, bottom);
+      }
+      ctx.closePath();
+      ctx.fill();
+      if (deadly) {
+        ctx.strokeStyle = 'rgba(200,220,255,0.8)';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+      // eyes, looking the way it is drifting
+      const ex = Math.max(-1, Math.min(1, g.vx)) * r * 0.16;
+      const ey = Math.max(-1, Math.min(1, g.vy)) * r * 0.16;
+      ctx.fillStyle = '#1a2038';
+      ctx.beginPath();
+      ctx.arc(gx - r * 0.34 + ex, gy - r * 0.25 + ey, r * 0.19, 0, Math.PI * 2);
+      ctx.arc(gx + r * 0.34 + ex, gy - r * 0.25 + ey, r * 0.19, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  // ---- bombs on the way down ----
+  for (const b of bombs) {
+    const t = 1 - b.fuse / BOMB_FUSE;               // 0 just dropped, 1 landing
+    // the squares it is going to hit, marked out while there is still
+    // time to walk away
+    for (const c of blastCells(b)) {
+      const x = ox + c.x * cell, y = oy + c.y * cell;
+      ctx.fillStyle = 'rgba(255, 59, 48, ' + (0.10 + t * 0.28) + ')';
+      ctx.fillRect(x + 1, y + 1, cell - 2, cell - 2);
+    }
+    const bx = ox + b.x * cell + cell / 2, by = oy + b.y * cell + cell / 2;
+    ctx.strokeStyle = 'rgba(255, 59, 48, ' + (0.5 + t * 0.5) + ')';
+    ctx.lineWidth = 2;
+    const R = blastSize();
+    ctx.strokeRect(ox + (b.x - R) * cell + 1, oy + (b.y - R) * cell + 1,
+                   cell * (R * 2 + 1) - 2, cell * (R * 2 + 1) - 2);
+    // the bomb itself, falling in from above the arena
+    const fallY = by - (1 - t) * cell * 9;
+    const r = cell * (0.28 + t * 0.14);
+    ctx.fillStyle = '#15151a';
+    ctx.beginPath(); ctx.arc(bx, fallY, r, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.25)';
+    ctx.beginPath(); ctx.arc(bx - r * 0.3, fallY - r * 0.3, r * 0.28, 0, Math.PI * 2); ctx.fill();
+    // a sparking fuse on top
+    ctx.strokeStyle = '#8a6a3a';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(bx, fallY - r); ctx.lineTo(bx + r * 0.5, fallY - r * 1.6); ctx.stroke();
+    ctx.fillStyle = (Math.floor(Date.now() / 60) % 2) ? '#ffd83d' : '#ff6b1f';
+    ctx.beginPath(); ctx.arc(bx + r * 0.5, fallY - r * 1.6, r * 0.28, 0, Math.PI * 2); ctx.fill();
+  }
+
+  // ---- what AI_Dude is going for ----
+  // A ring round its target and a dotted line to it. You can watch it
+  // decide, which makes it far easier to get in the way.
+  snakes.forEach((sn, i) => {
+    if (!isAI(i) || !sn.alive || !sn.aiTarget || screen !== 'play') return;
+    const sk = skinOf(i);
+    const hx = ox + sn.body[0].x * cell + cell / 2, hy = oy + sn.body[0].y * cell + cell / 2;
+    const tx = ox + sn.aiTarget.x * cell + cell / 2, ty = oy + sn.aiTarget.y * cell + cell / 2;
+    ctx.strokeStyle = sk.head;
+    ctx.globalAlpha = 0.3;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([4, 6]);
+    ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(tx, ty); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 0.75;
+    ctx.beginPath();
+    ctx.arc(tx, ty, cell * 0.62, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  });
+
+  // ---- sparks ----
+  for (const pt of particles) {
+    ctx.globalAlpha = Math.max(0, Math.min(1, pt.life));
+    ctx.fillStyle = pt.color;
+    ctx.fillRect(ox + pt.x * cell - 2, oy + pt.y * cell - 2, 5, 5);
+  }
+  ctx.globalAlpha = 1;
+
+  // ---- the scoreboard ----
+  ctx.textAlign = 'center';
+  const midY = L.hud * 0.52;
+  PLAYERS.forEach((p, i) => {
+    const sk = skinOf(i);
+    const x = i === 0 ? W * 0.26 : W * 0.74;
+    ctx.fillStyle = sk.head;
+    ctx.font = 'bold ' + Math.min(20, W / 26) + 'px monospace';
+    ctx.fillText(playerName(i), x, midY - 8);
+    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    ctx.font = 'bold ' + Math.min(11, W / 48) + 'px monospace';
+    ctx.fillText(sk.name, x, midY + 4);
+    // one pip per round won
+    const pips = WIN_SCORE, size = Math.min(13, W / 44), gap = size * 1.7;
+    for (let k = 0; k < pips; k++) {
+      const px = x - (pips - 1) * gap / 2 + k * gap;
+      ctx.fillStyle = k < scores[i] ? sk.body : 'rgba(255,255,255,0.14)';
+      ctx.beginPath(); ctx.arc(px, midY + 14, size / 2, 0, Math.PI * 2); ctx.fill();
+    }
+  });
+  ctx.fillStyle = 'rgba(255,255,255,0.35)';
+  ctx.font = 'bold ' + Math.min(15, W / 34) + 'px monospace';
+  ctx.fillText('FIRST TO ' + WIN_SCORE, W / 2, midY + 6);
+
+  drawScreens(L);
+  if (touchMode && (screen === 'play' || screen === 'countdown')) drawPads(L);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+}
+</script>
+<script>
+// ---- the title, countdown, and end-of-round messages ----
+// Three settings that all work the same way, so they are all drawn by
+// the same function. Change how a dial looks once, and all three change.
+function drawDial(cx, y, W, title, value, desc, color, tag) {
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.font = 'bold ' + Math.min(11, W / 62) + 'px monospace';
+  ctx.fillText(title, cx, y - 15);
+  ctx.fillStyle = color;
+  ctx.font = 'bold ' + Math.min(15, W / 46) + 'px monospace';
+  ctx.fillText(value, cx, y + 4);
+  ctx.fillStyle = 'rgba(255,255,255,0.42)';
+  ctx.font = Math.min(10.5, W / 68) + 'px monospace';
+  ctx.fillText(desc, cx, y + 19);
+  const r = Math.min(13, W / 62);
+  [[-1, cx - Math.min(W * 0.125, 108)], [1, cx + Math.min(W * 0.125, 108)]].forEach(([dir, ax]) => {
+    ctx.fillStyle = 'rgba(255,255,255,0.08)';
+    ctx.beginPath(); ctx.arc(ax, y - 2, r, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = color;
+    ctx.font = 'bold ' + r * 1.2 + 'px monospace';
+    ctx.fillText(dir < 0 ? '<' : '>', ax, y + 3);
+    const hit = { x: ax, y: y - 2, r: r * 1.5 };
+    hit[tag] = dir;
+    skinRects.push(hit);
+  });
+}
+
+function drawScreens(L) {
+  const { W, H } = L;
+  ctx.textAlign = 'center';
+  // the typing boxes only exist on the title screen
+  if (screen !== 'title') nameBoxes.forEach(b => { b.style.display = 'none'; b.blur(); });
+  if (screen === 'title') {
+    ctx.fillStyle = 'rgba(6, 12, 9, 0.9)';
+    ctx.fillRect(0, 0, W, H);
+    const big = Math.min(52, W / 11);
+    ctx.fillStyle = '#7fdf3f';
+    ctx.font = 'bold ' + big + 'px monospace';
+    ctx.fillText('SNAKE', W / 2 - big * 1.6, H * 0.13);
+    ctx.fillStyle = '#ff5fa8';
+    ctx.fillText('FIGHT', W / 2 + big * 1.6, H * 0.13);
+
+    // ---- one wardrobe each ----
+    skinRects = [];
+    PLAYERS.forEach((p, i) => {
+      const cx = i === 0 ? W * 0.27 : W * 0.73;
+      const sk = skinOf(i);
+      const top = H * 0.225;
+      ctx.fillStyle = 'rgba(255,255,255,0.05)';
+      roundRect(cx - W * 0.21, top - 26, W * 0.42, H * 0.355, 12);
+      ctx.fill();
+      ctx.strokeStyle = sk.body;
+      ctx.lineWidth = 3;
+      roundRect(cx - W * 0.21, top - 26, W * 0.42, H * 0.355, 12);
+      ctx.stroke();
+
+      ctx.fillStyle = 'rgba(255,255,255,0.45)';
+      ctx.font = 'bold ' + Math.min(13, W / 50) + 'px monospace';
+      ctx.fillText(i === 0 ? 'W A S D' : 'ARROW KEYS', cx, top - 6);
+
+      // the HUMAN / AI_Dude switch
+      const tw = Math.min(W * 0.3, 260), th = Math.min(30, H * 0.05);
+      const ty = top + H * 0.265;
+      ctx.fillStyle = isAI(i) ? 'rgba(90,200,255,0.16)' : 'rgba(255,255,255,0.06)';
+      roundRect(cx - tw / 2, ty, tw, th, 8);
+      ctx.fill();
+      ctx.strokeStyle = isAI(i) ? '#5ac8ff' : 'rgba(255,255,255,0.25)';
+      ctx.lineWidth = 2;
+      roundRect(cx - tw / 2, ty, tw, th, 8);
+      ctx.stroke();
+      ctx.fillStyle = isAI(i) ? '#a8e4ff' : 'rgba(255,255,255,0.6)';
+      ctx.font = 'bold ' + Math.min(15, W / 42) + 'px monospace';
+      ctx.fillText(isAI(i) ? '🤖 AI_Dude' : '🧑 HUMAN   (tap for AI)', cx, ty + th * 0.68);
+      skinRects.push({ x: cx, y: ty + th / 2, r: th, aiToggle: i, wide: tw / 2 });
+
+      // the real typing box goes right here - but a robot does not need
+      // one, so it only appears for a human
+      const box = nameBoxes[i];
+      const bw = Math.min(W * 0.3, 260), bh = Math.min(38, H * 0.06);
+      if (isAI(i)) {
+        box.style.display = 'none';
+        ctx.fillStyle = '#5ac8ff';
+        ctx.font = 'bold ' + Math.min(20, bw / 9) + 'px monospace';
+        ctx.fillText('AI_Dude', cx, top + 4 + bh * 0.68);
+        ctx.strokeStyle = '#5ac8ff';
+        ctx.lineWidth = 2;
+        roundRect(cx - bw / 2, top + 4, bw, bh, 8);
+        ctx.stroke();
+      } else {
+      box.style.display = 'block';
+      box.style.left = (cx - bw / 2) + 'px';
+      box.style.top = (top + 4) + 'px';
+      box.style.width = bw + 'px';
+      box.style.height = bh + 'px';
+      box.style.fontSize = Math.min(20, bw / 9) + 'px';
+      box.style.borderColor = sk.body;
+      box.style.color = sk.head;
+      }
+
+      // a little snake, wearing the skin, wriggling
+      const cellP = Math.min(26, W / 34);
+      const t = Date.now() / 1000;
+      const segs = 7;
+      ctx.globalAlpha = sk.alpha || 1;
+      for (let j = segs - 1; j >= 0; j--) {
+        const sx = cx - (segs - 1) * cellP / 2 + j * cellP;
+        const sy = top + H * 0.135 + Math.sin(t * 3 + j * 0.7) * cellP * 0.42;
+        ctx.fillStyle = j === 0 ? sk.head : segColor(sk, j, segs, t);
+        roundRect(sx - cellP / 2 + 2, sy - cellP / 2 + 2, cellP - 4, cellP - 4, cellP * 0.3);
+        ctx.fill();
+        if (j === 0) {
+          ctx.globalAlpha = 1;
+          ctx.fillStyle = '#0b1410';
+          ctx.beginPath();
+          ctx.arc(sx + cellP * 0.12, sy - cellP * 0.14, cellP * 0.11, 0, Math.PI * 2);
+          ctx.arc(sx + cellP * 0.12, sy + cellP * 0.14, cellP * 0.11, 0, Math.PI * 2);
+          ctx.fill();
+          // the preview snake faces left, away from its own body
+          drawTongue(sx, sy, -1, 0, cellP, tongueOut(t, i * 0.41));
+          ctx.globalAlpha = sk.alpha || 1;
+        }
+      }
+      ctx.globalAlpha = 1;
+
+      ctx.fillStyle = sk.head;
+      ctx.font = 'bold ' + Math.min(26, W / 26) + 'px monospace';
+      ctx.fillText(sk.name, cx, top + H * 0.21);
+
+      // the arrows you press to change it (and can tap on a phone)
+      const ay = top + H * 0.21 - Math.min(9, W / 90);
+      const ar = Math.min(20, W / 40);
+      [[-1, cx - W * 0.16], [1, cx + W * 0.16]].forEach(([dir, ax]) => {
+        ctx.fillStyle = 'rgba(255,255,255,0.09)';
+        ctx.beginPath(); ctx.arc(ax, ay, ar, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = sk.body;
+        ctx.font = 'bold ' + ar * 1.1 + 'px monospace';
+        ctx.fillText(dir < 0 ? '<' : '>', ax, ay + ar * 0.38);
+        skinRects.push({ x: ax, y: ay, r: ar * 1.4, player: i, step: dir });
+      });
+      ctx.fillStyle = 'rgba(255,255,255,0.4)';
+      ctx.font = Math.min(13, W / 48) + 'px monospace';
+      ctx.fillText(i === 0 ? 'A / D to change' : 'left / right to change', cx, top + H * 0.245);
+    });
+    ctx.fillStyle = '#ffd83d';
+    ctx.font = Math.min(14, W / 42) + 'px monospace';
+    ctx.fillText('HEAD TO HEAD? the LONGER snake wins - so EAT', W / 2, H * 0.575);
+
+    // ---- the map: a tiny picture of the real thing ----
+    const M = currentMap();
+    const my = H * 0.665;
+    const mw = Math.min(W * 0.145, 128), mh = mw * (ROWS / COLS);
+    ctx.fillStyle = 'rgba(255,255,255,0.05)';
+    ctx.fillRect(W / 2 - mw / 2, my - mh / 2, mw, mh);
+    ctx.strokeStyle = M.wrap ? '#c98bff' : '#7fdf8f';
+    ctx.lineWidth = 2;
+    if (M.wrap) ctx.setLineDash([5, 5]);
+    ctx.strokeRect(W / 2 - mw / 2, my - mh / 2, mw, mh);
+    ctx.setLineDash([]);
+    const pw = mw / COLS, ph = mh / ROWS;
+    ctx.fillStyle = '#456f55';
+    for (const w of wallList) {
+      ctx.fillRect(W / 2 - mw / 2 + w.x * pw, my - mh / 2 + w.y * ph,
+                   Math.max(1, pw), Math.max(1, ph));
+    }
+    ctx.fillStyle = M.wrap ? '#c98bff' : '#7fdf8f';
+    ctx.font = 'bold ' + Math.min(20, W / 32) + 'px monospace';
+    ctx.fillText(M.name, W / 2, my + mh / 2 + 24);
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.font = Math.min(13, W / 44) + 'px monospace';
+    ctx.fillText(M.desc, W / 2, my + mh / 2 + 42);
+    // ---- the three dials, side by side ----
+    const dy2 = my + mh / 2 + 46;
+    const FL = FOOD_LEVELS[foodLevel];
+    const BL = BOMB_LEVELS[bombLevel];
+    const GL = GHOST_LEVELS[ghostLevel];
+    drawDial(W * 0.19, dy2, W, 'FOOD  (F)', FL.name + '  ' + foodTarget(),
+             FL.desc, '#ff6b60', 'food');
+    drawDial(W * 0.5, dy2, W, 'BOMBS  (B)', BL.name,
+             bombsOn() ? 'every ' + BL.every + 's, ' + (BL.blast * 2 + 1) + 'x' + (BL.blast * 2 + 1) : BL.desc,
+             bombsOn() ? '#ff8b7f' : 'rgba(255,255,255,0.45)', 'bombs');
+    drawDial(W * 0.81, dy2, W, 'GHOSTS  (G)', GL.name + (ghostCount() ? '  ' + ghostCount() : ''),
+             GL.desc, ghostCount() ? '#cfe0ff' : 'rgba(255,255,255,0.45)', 'ghosts');
+    ctx.fillStyle = 'rgba(255,255,255,0.32)';
+    ctx.font = Math.min(12, W / 52) + 'px monospace';
+    ctx.fillText('up/down = map      1 / 2 = swap a player for AI_Dude', W / 2, dy2 + 42);
+
+    const locked = SKINS.filter(sk => !isUnlocked(sk));
+    if (locked.length) {
+      ctx.fillStyle = 'rgba(255,255,255,0.3)';
+      ctx.font = Math.min(11, W / 56) + 'px monospace';
+      ctx.fillText(locked.length + ' skins still locked: ' +
+                   locked.map(sk => sk.name).join(', '), W / 2, H * 0.6);
+    }
+    ctx.fillStyle = 'rgba(255,255,255,' + (0.55 + Math.sin(Date.now() / 300) * 0.35) + ')';
+    ctx.font = 'bold ' + Math.min(24, W / 24) + 'px monospace';
+    ctx.fillText('SPACE  /  TAP THE MIDDLE  =  FIGHT', W / 2, H * 0.93);
+  } else if (screen === 'countdown') {
+    const n = Math.ceil(countdown);
+    const grow = 1 + (Math.ceil(countdown) - countdown) * 0.5;
+    ctx.save();
+    ctx.translate(W / 2, H * 0.5);
+    ctx.scale(grow, grow);
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold ' + Math.min(96, W / 6) + 'px monospace';
+    ctx.fillText(n > 0 ? String(n) : 'GO!', 0, 0);
+    ctx.restore();
+  } else if (screen === 'roundover' && lastResult) {
+    ctx.fillStyle = 'rgba(6, 12, 9, 0.55)';
+    ctx.fillRect(0, H * 0.38, W, H * 0.16);
+    ctx.fillStyle = lastResult.draw ? '#ffd83d' : skinOf(lastResult.winner).head;
+    ctx.font = 'bold ' + Math.min(40, W / 15) + 'px monospace';
+    ctx.fillText(lastResult.text, W / 2, H * 0.49);
+  } else if (screen === 'matchover') {
+    const w = scores[0] > scores[1] ? 0 : 1;
+    ctx.fillStyle = 'rgba(6, 12, 9, 0.86)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = skinOf(w).head;
+    ctx.font = 'bold ' + Math.min(56, W / 11) + 'px monospace';
+    ctx.fillText(playerName(w) + ' WINS!', W / 2, H * 0.42);
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold ' + Math.min(30, W / 20) + 'px monospace';
+    ctx.fillText(scores[0] + '  -  ' + scores[1], W / 2, H * 0.53);
+    if (newlyUnlocked) {
+      const sk = SKINS.find(x => x.id === newlyUnlocked.id);
+      const throb = 1 + Math.sin(Date.now() / 160) * 0.07;
+      ctx.save();
+      ctx.translate(W / 2, H * 0.63);
+      ctx.scale(throb, throb);
+      ctx.fillStyle = '#ffd83d';
+      ctx.font = 'bold ' + Math.min(26, W / 24) + 'px monospace';
+      ctx.fillText('NEW SKIN UNLOCKED: ' + sk.name + '!', 0, 0);
+      ctx.font = Math.min(15, W / 38) + 'px monospace';
+      ctx.fillStyle = 'rgba(255,255,255,0.7)';
+      ctx.fillText(newlyUnlocked.why, 0, 24);
+      ctx.restore();
+    }
+    ctx.fillStyle = 'rgba(255,255,255,' + (0.55 + Math.sin(Date.now() / 300) * 0.35) + ')';
+    ctx.font = 'bold ' + Math.min(22, W / 26) + 'px monospace';
+    ctx.fillText('SPACE  /  TAP  =  REMATCH', W / 2, H * 0.75);
+    ctx.font = Math.min(15, W / 38) + 'px monospace';
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.fillText('ESC  /  tap the top  =  change names and skins', W / 2, H * 0.81);
+  }
+  ctx.textAlign = 'left';
+}
+
+// ---- thumb pads, one per player, so two people can play on a phone ----
+let padRects = [];
+function drawPads(L) {
+  const { W, H } = L;
+  const r = Math.min(38, W / 11);
+  padRects = [];
+  PLAYERS.forEach((p, i) => {
+    if (isAI(i)) return;                 // AI_Dude does not need buttons
+    const cx = i === 0 ? r * 2.9 : W - r * 2.9;
+    const cy = H - r * 2.6;
+    [['up', 0, -1], ['down', 0, 1], ['left', -1, 0], ['right', 1, 0]].forEach(([dir, dx, dy]) => {
+      const x = cx + dx * r * 1.5, y = cy + dy * r * 1.5;
+      ctx.fillStyle = 'rgba(255,255,255,0.07)';
+      ctx.strokeStyle = skinOf(i).body;
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(x, y, r * 0.62, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = skinOf(i).head;
+      ctx.font = 'bold ' + r * 0.6 + 'px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText({ up: '▲', down: '▼', left: '◀', right: '▶' }[dir], x, y + r * 0.2);
+      padRects.push({ x, y, r: r * 0.78, player: i, dir });
+    });
+  });
+  ctx.textAlign = 'left';
+}
+</script>
+<script>
+// ---------------------------------------------------------------------
+// CONTROLS
+//
+// Each player has their own set of keys, written down in PLAYERS above.
+// We just look the pressed key up in both lists - so adding a third
+// player later would need no new code down here at all.
+// ---------------------------------------------------------------------
+function turn(playerIndex, dir) {
+  const s = snakes[playerIndex];
+  if (!s || !s.alive) return;
+  // You may not turn back on yourself. We compare against the direction
+  // actually MOVED, not the one queued, or a quick double-tap could spin
+  // you into your own neck.
+  if (OPPOSITE[dir] === s.dir) return;
+  s.next = dir;
+}
+// Step to the next skin you are allowed to wear: skip the locked ones,
+// and skip whatever the other player is already wearing, so you can
+// never end up as two identical snakes.
+// either player can change the map - it belongs to both of you
+function cycleGhosts(step) {
+  ghostLevel = (ghostLevel + step + GHOST_LEVELS.length) % GHOST_LEVELS.length;
+  localStorage.setItem('snake_ghosts', String(ghostLevel));
+  spawnGhosts();
+  beep(ghostCount() ? 520 : 300, 0.12, 'sine', 0.07);
+}
+
+function cycleBombs(step) {
+  bombLevel = (bombLevel + step + BOMB_LEVELS.length) % BOMB_LEVELS.length;
+  localStorage.setItem('snake_bombs', String(bombLevel));
+  bombs = [];
+  bombTimer = 0;
+  beep(bombsOn() ? 260 + bombLevel * 60 : 700, 0.1, 'sawtooth', 0.08);
+}
+
+function cycleFood(step) {
+  foodLevel = (foodLevel + step + FOOD_LEVELS.length) % FOOD_LEVELS.length;
+  localStorage.setItem('snake_food', String(foodLevel));
+  foods = [];
+  topUpFood();
+  beep(760, 0.05, 'square', 0.06);
+}
+
+function toggleAI(i) {
+  ai[i] = !ai[i];
+  localStorage.setItem('snake_ai', JSON.stringify(ai));
+  beep(ai[i] ? 900 : 400, 0.08, 'square', 0.07);
+}
+
+function cycleMap(step) {
+  mapIndex = (mapIndex + step + MAPS.length) % MAPS.length;
+  localStorage.setItem('snake_map', String(mapIndex));
+  buildWalls();
+  beep(700, 0.05, 'square', 0.06);
+}
+
+function cycleSkin(player, step) {
+  const other = picks[1 - player];
+  let i = picks[player];
+  for (let tries = 0; tries < SKINS.length; tries++) {
+    i = (i + step + SKINS.length) % SKINS.length;
+    if (i !== other && isUnlocked(SKINS[i])) {
+      picks[player] = i;
+      localStorage.setItem('snake_picks', JSON.stringify(picks));
+      beep(500 + player * 160, 0.05, 'square', 0.06);
+      return;
+    }
+  }
+}
+
+function anyKeyScreens() {
+  if (screen === 'title') { startMatch(); return true; }
+  if (screen === 'matchover') { startMatch(); return true; }
+  return false;
+}
+addEventListener('keydown', e => {
+  if (typing()) return;          // somebody is entering their name - leave them be
+  ensureAudio();
+  // On the title and win screens, left/right browses your wardrobe and
+  // SPACE starts the fight. In game, the very same keys steer.
+  if (screen === 'title' || screen === 'matchover') {
+    if (e.key === 'Escape') { screen = 'title'; return; }
+    if (e.key === '1') { toggleAI(0); return; }
+    if (e.key === '2') { toggleAI(1); return; }
+    if (e.key.toLowerCase() === 'f') { cycleFood(1); return; }
+    if (e.key.toLowerCase() === 'b') { cycleBombs(1); return; }
+    if (e.key.toLowerCase() === 'g') { cycleGhosts(1); return; }
+    if (e.key === ' ') { startMatch(); e.preventDefault(); return; }
+    PLAYERS.forEach((p, i) => {
+      const dir = p.keys[e.key] || p.keys[e.key.toLowerCase()];
+      if (dir === 'left') { cycleSkin(i, -1); e.preventDefault(); }
+      if (dir === 'right') { cycleSkin(i, 1); e.preventDefault(); }
+      if (dir === 'up') { cycleMap(-1); e.preventDefault(); }
+      if (dir === 'down') { cycleMap(1); e.preventDefault(); }
+    });
+    return;
+  }
+  PLAYERS.forEach((p, i) => {
+    const dir = p.keys[e.key] || p.keys[e.key.toLowerCase()];
+    if (dir) { turn(i, dir); e.preventDefault(); }
+  });
+});
+
+// ---- touch: thumb pads, plus swipe anywhere on your half ----
+const swipes = new Map();
+canvas.addEventListener('pointerdown', e => {
+  ensureAudio();
+  touchMode = touchMode || e.pointerType === 'touch';
+  if (screen === 'matchover' && e.clientY < canvas.height * 0.25) {
+    screen = 'title';            // back to the wardrobe
+    return;
+  }
+  if (screen === 'title' || screen === 'matchover') {
+    for (const b of skinRects) {
+      const hit = b.wide
+        ? (Math.abs(e.clientX - b.x) < b.wide && Math.abs(e.clientY - b.y) < b.r)
+        : Math.hypot(e.clientX - b.x, e.clientY - b.y) < b.r;
+      if (!hit) continue;
+      if (b.aiToggle !== undefined) toggleAI(b.aiToggle);
+      else if (b.bombs) cycleBombs(b.bombs);
+      else if (b.ghosts) cycleGhosts(b.ghosts);
+      else if (b.food) cycleFood(b.food);
+      else if (b.map) cycleMap(b.map);
+      else cycleSkin(b.player, b.step);
+      return;
+    }
+    startMatch();                 // tapped anywhere else: fight
+    return;
+  }
+  // did they hit one of the pad buttons?
+  for (const b of padRects) {
+    if (Math.hypot(e.clientX - b.x, e.clientY - b.y) < b.r) {
+      turn(b.player, b.dir);
+      return;
+    }
+  }
+  // otherwise start tracking a swipe, on whichever half they touched
+  swipes.set(e.pointerId, { x: e.clientX, y: e.clientY,
+                            player: e.clientX < canvas.width / 2 ? 0 : 1 });
+});
+canvas.addEventListener('pointermove', e => {
+  const sw = swipes.get(e.pointerId);
+  if (!sw) return;
+  const dx = e.clientX - sw.x, dy = e.clientY - sw.y;
+  if (Math.abs(dx) < 26 && Math.abs(dy) < 26) return;      // not a swipe yet
+  turn(sw.player, Math.abs(dx) > Math.abs(dy)
+    ? (dx > 0 ? 'right' : 'left')
+    : (dy > 0 ? 'down' : 'up'));
+  swipes.delete(e.pointerId);
+});
+canvas.addEventListener('pointerup', e => swipes.delete(e.pointerId));
+canvas.addEventListener('pointercancel', e => swipes.delete(e.pointerId));
+addEventListener('touchstart', () => { touchMode = true; }, { passive: true });
+
+// ---------------------------------------------------------------------
+// THE GAME LOOP
+// ---------------------------------------------------------------------
+let last = 0;
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  update(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+buildWalls();
+snakes = PLAYERS.map(newSnake);      // something to look at behind the title
+topUpFood();
+spawnGhosts();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
