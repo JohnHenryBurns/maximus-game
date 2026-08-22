@@ -285,7 +285,10 @@ nameBoxes.forEach((box, i) => {
   });
 });
 // no name typed? then you are simply Player 1
-function playerName(i) { return (names[i] || '').trim() || ('PLAYER ' + (i + 1)); }
+function playerName(i) {
+  if (isAI(i)) return 'AI_Dude';
+  return (names[i] || '').trim() || ('PLAYER ' + (i + 1));
+}
 function typing() { return nameBoxes.some(b => document.activeElement === b); }
 </script>
 <script>
@@ -408,6 +411,8 @@ function occupied(cell, ignoreTails) {
 }
 function step() {
   ticks++;
+  // 0. any computer players decide which way to go
+  snakes.forEach((s, i) => { if (isAI(i)) aiChoose(i); });
   // 1. everybody turns
   for (const s of snakes) {
     if (OPPOSITE[s.next] !== s.dir) s.dir = s.next;   // no turning back on yourself
@@ -474,6 +479,98 @@ function step() {
 }
 </script>
 <script>
+// =====================================================================
+// AI_DUDE.
+//
+// A computer player is not magic. Every move it looks at the three ways
+// it could turn (never backwards) and gives each one a SCORE, then takes
+// the best. All the cleverness lives in what the score counts.
+//
+// 1. Is it instant death? Then it is not an option at all.
+// 2. How much ROOM is through there? This is the big one. Rushing at an
+//    apple down a dead end is how snakes kill themselves, so AI_Dude
+//    counts the free squares it could still reach and hugely prefers
+//    open space. That one rule is most of what makes it look clever.
+// 3. How far to the nearest apple? Closer is better - but this counts
+//    for much less than room, so it will happily give an apple up
+//    rather than trap itself.
+// 4. Is it BIGGER than you? Then it starts hunting your head, because
+//    the longer snake wins a head-butt. If it is smaller it keeps away
+//    from you instead.
+// =====================================================================
+let ai = [false, false];
+try {
+  const saved = JSON.parse(localStorage.getItem('snake_ai'));
+  if (Array.isArray(saved) && saved.length === 2) ai = saved;
+} catch (e) {}
+function isAI(i) { return !!ai[i]; }
+
+// would moving here kill me right now?
+function aiBlocked(c) {
+  if (c.x < 0 || c.y < 0 || c.x >= COLS || c.y >= ROWS) return true;
+  if (isWall(c.x, c.y)) return true;
+  return occupied(c, true);
+}
+// how many squares can I still reach if I go this way? (capped, because
+// past a certain point "loads of room" is all we need to know)
+const ROOM_CAP = 140;
+function roomFrom(start) {
+  const seen = new Set([start.x + ',' + start.y]);
+  const queue = [start];
+  let count = 0;
+  while (queue.length && count < ROOM_CAP) {
+    const c = queue.shift();
+    count++;
+    for (const d of ['up', 'down', 'left', 'right']) {
+      const [dx, dy] = STEPS[d];
+      const nx = wrapCell({ x: c.x + dx, y: c.y + dy });
+      const key = nx.x + ',' + nx.y;
+      if (seen.has(key)) continue;
+      if (aiBlocked(nx)) continue;
+      seen.add(key);
+      queue.push(nx);
+    }
+  }
+  return count;
+}
+// how far away is the nearest apple, going round the edges if the map wraps
+function stepsTo(a, b) {
+  let dx = Math.abs(a.x - b.x), dy = Math.abs(a.y - b.y);
+  if (currentMap().wrap) { dx = Math.min(dx, COLS - dx); dy = Math.min(dy, ROWS - dy); }
+  return dx + dy;
+}
+function nearestFood(c) {
+  let best = 999;
+  for (const f of foods) best = Math.min(best, stepsTo(c, f));
+  return best === 999 ? 40 : best;
+}
+
+function aiChoose(i) {
+  const me = snakes[i];
+  const foe = snakes[1 - i];
+  if (!me || !me.alive) return;
+  const head = me.body[0];
+  const bigger = foe && foe.alive && me.body.length > foe.body.length + 1;
+  let bestDir = null, bestScore = -Infinity;
+  for (const d of ['up', 'down', 'left', 'right']) {
+    if (OPPOSITE[d] === me.dir) continue;              // never straight backwards
+    const [dx, dy] = STEPS[d];
+    const c = wrapCell({ x: head.x + dx, y: head.y + dy });
+    if (aiBlocked(c)) continue;                        // instant death: not an option
+    let score = roomFrom(c) * 6;                       // ROOM matters most
+    score -= nearestFood(c) * 2;                       // then apples
+    if (foe && foe.alive) {
+      const toFoe = stepsTo(c, foe.body[0]);
+      // bigger: hunt them down. smaller: keep out of their way.
+      score += bigger ? -toFoe * 3 : Math.min(toFoe, 8) * 2;
+    }
+    score += Math.random() * 4;                        // a little wobble, so it is not a robot
+    if (score > bestScore) { bestScore = score; bestDir = d; }
+  }
+  // every way is death? carry straight on and hope.
+  me.next = bestDir || me.dir;
+}
+
 // ---------------------------------------------------------------------
 // ENDING A ROUND
 // ---------------------------------------------------------------------
@@ -742,22 +839,48 @@ function drawScreens(L) {
     PLAYERS.forEach((p, i) => {
       const cx = i === 0 ? W * 0.27 : W * 0.73;
       const sk = skinOf(i);
-      const top = H * 0.26;
+      const top = H * 0.225;
       ctx.fillStyle = 'rgba(255,255,255,0.05)';
-      roundRect(cx - W * 0.21, top - 26, W * 0.42, H * 0.36, 12);
+      roundRect(cx - W * 0.21, top - 26, W * 0.42, H * 0.355, 12);
       ctx.fill();
       ctx.strokeStyle = sk.body;
       ctx.lineWidth = 3;
-      roundRect(cx - W * 0.21, top - 26, W * 0.42, H * 0.36, 12);
+      roundRect(cx - W * 0.21, top - 26, W * 0.42, H * 0.355, 12);
       ctx.stroke();
 
       ctx.fillStyle = 'rgba(255,255,255,0.45)';
       ctx.font = 'bold ' + Math.min(13, W / 50) + 'px monospace';
       ctx.fillText(i === 0 ? 'W A S D' : 'ARROW KEYS', cx, top - 6);
 
-      // the real typing box goes right here
+      // the HUMAN / AI_Dude switch
+      const tw = Math.min(W * 0.3, 260), th = Math.min(30, H * 0.05);
+      const ty = top + H * 0.265;
+      ctx.fillStyle = isAI(i) ? 'rgba(90,200,255,0.16)' : 'rgba(255,255,255,0.06)';
+      roundRect(cx - tw / 2, ty, tw, th, 8);
+      ctx.fill();
+      ctx.strokeStyle = isAI(i) ? '#5ac8ff' : 'rgba(255,255,255,0.25)';
+      ctx.lineWidth = 2;
+      roundRect(cx - tw / 2, ty, tw, th, 8);
+      ctx.stroke();
+      ctx.fillStyle = isAI(i) ? '#a8e4ff' : 'rgba(255,255,255,0.6)';
+      ctx.font = 'bold ' + Math.min(15, W / 42) + 'px monospace';
+      ctx.fillText(isAI(i) ? '🤖 AI_Dude' : '🧑 HUMAN   (tap for AI)', cx, ty + th * 0.68);
+      skinRects.push({ x: cx, y: ty + th / 2, r: th, aiToggle: i, wide: tw / 2 });
+
+      // the real typing box goes right here - but a robot does not need
+      // one, so it only appears for a human
       const box = nameBoxes[i];
       const bw = Math.min(W * 0.3, 260), bh = Math.min(38, H * 0.06);
+      if (isAI(i)) {
+        box.style.display = 'none';
+        ctx.fillStyle = '#5ac8ff';
+        ctx.font = 'bold ' + Math.min(20, bw / 9) + 'px monospace';
+        ctx.fillText('AI_Dude', cx, top + 4 + bh * 0.68);
+        ctx.strokeStyle = '#5ac8ff';
+        ctx.lineWidth = 2;
+        roundRect(cx - bw / 2, top + 4, bw, bh, 8);
+        ctx.stroke();
+      } else {
       box.style.display = 'block';
       box.style.left = (cx - bw / 2) + 'px';
       box.style.top = (top + 4) + 'px';
@@ -766,6 +889,7 @@ function drawScreens(L) {
       box.style.fontSize = Math.min(20, bw / 9) + 'px';
       box.style.borderColor = sk.body;
       box.style.color = sk.head;
+      }
 
       // a little snake, wearing the skin, wriggling
       const cellP = Math.min(26, W / 34);
@@ -807,7 +931,7 @@ function drawScreens(L) {
       });
       ctx.fillStyle = 'rgba(255,255,255,0.4)';
       ctx.font = Math.min(13, W / 48) + 'px monospace';
-      ctx.fillText(i === 0 ? 'A / D to change' : 'left / right to change', cx, top + H * 0.28);
+      ctx.fillText(i === 0 ? 'A / D to change' : 'left / right to change', cx, top + H * 0.245);
     });
     ctx.fillStyle = '#ffd83d';
     ctx.font = Math.min(14, W / 42) + 'px monospace';
@@ -815,8 +939,8 @@ function drawScreens(L) {
 
     // ---- the map: a tiny picture of the real thing ----
     const M = currentMap();
-    const my = H * 0.655;
-    const mw = Math.min(W * 0.2, 170), mh = mw * (ROWS / COLS);
+    const my = H * 0.705;
+    const mw = Math.min(W * 0.17, 150), mh = mw * (ROWS / COLS);
     ctx.fillStyle = 'rgba(255,255,255,0.05)';
     ctx.fillRect(W / 2 - mw / 2, my - mh / 2, mw, mh);
     ctx.strokeStyle = M.wrap ? '#c98bff' : '#7fdf8f';
@@ -837,7 +961,8 @@ function drawScreens(L) {
     ctx.font = Math.min(13, W / 44) + 'px monospace';
     ctx.fillText(M.desc, W / 2, my + mh / 2 + 42);
     ctx.fillStyle = 'rgba(255,255,255,0.35)';
-    ctx.fillText('W/S or up/down to change the map', W / 2, my + mh / 2 + 60);
+    ctx.fillText('W/S or up/down = map      1 / 2 = swap a player for AI_Dude',
+                 W / 2, my + mh / 2 + 60);
     // tappable arrows either side of the little map
     const mr = Math.min(18, W / 44);
     [[-1, W / 2 - mw / 2 - mr * 2], [1, W / 2 + mw / 2 + mr * 2]].forEach(([dir, ax]) => {
@@ -916,6 +1041,7 @@ function drawPads(L) {
   const r = Math.min(38, W / 11);
   padRects = [];
   PLAYERS.forEach((p, i) => {
+    if (isAI(i)) return;                 // AI_Dude does not need buttons
     const cx = i === 0 ? r * 2.9 : W - r * 2.9;
     const cy = H - r * 2.6;
     [['up', 0, -1], ['down', 0, 1], ['left', -1, 0], ['right', 1, 0]].forEach(([dir, dx, dy]) => {
@@ -955,6 +1081,12 @@ function turn(playerIndex, dir) {
 // and skip whatever the other player is already wearing, so you can
 // never end up as two identical snakes.
 // either player can change the map - it belongs to both of you
+function toggleAI(i) {
+  ai[i] = !ai[i];
+  localStorage.setItem('snake_ai', JSON.stringify(ai));
+  beep(ai[i] ? 900 : 400, 0.08, 'square', 0.07);
+}
+
 function cycleMap(step) {
   mapIndex = (mapIndex + step + MAPS.length) % MAPS.length;
   localStorage.setItem('snake_map', String(mapIndex));
@@ -988,6 +1120,8 @@ addEventListener('keydown', e => {
   // SPACE starts the fight. In game, the very same keys steer.
   if (screen === 'title' || screen === 'matchover') {
     if (e.key === 'Escape') { screen = 'title'; return; }
+    if (e.key === '1') { toggleAI(0); return; }
+    if (e.key === '2') { toggleAI(1); return; }
     if (e.key === ' ') { startMatch(); e.preventDefault(); return; }
     PLAYERS.forEach((p, i) => {
       const dir = p.keys[e.key] || p.keys[e.key.toLowerCase()];
@@ -1015,10 +1149,14 @@ canvas.addEventListener('pointerdown', e => {
   }
   if (screen === 'title' || screen === 'matchover') {
     for (const b of skinRects) {
-      if (Math.hypot(e.clientX - b.x, e.clientY - b.y) < b.r) {
-        if (b.map) cycleMap(b.map); else cycleSkin(b.player, b.step);
-        return;
-      }
+      const hit = b.wide
+        ? (Math.abs(e.clientX - b.x) < b.wide && Math.abs(e.clientY - b.y) < b.r)
+        : Math.hypot(e.clientX - b.x, e.clientY - b.y) < b.r;
+      if (!hit) continue;
+      if (b.aiToggle !== undefined) toggleAI(b.aiToggle);
+      else if (b.map) cycleMap(b.map);
+      else cycleSkin(b.player, b.step);
+      return;
     }
     startMatch();                 // tapped anywhere else: fight
     return;
