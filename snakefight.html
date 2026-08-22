@@ -7,6 +7,15 @@
 <style>
   html, body { margin: 0; padding: 0; overflow: hidden; background: #0b1410; }
   canvas { display: block; touch-action: none; }
+  input.nameBox {
+    position: fixed; display: none; z-index: 50;
+    font-family: monospace; font-weight: bold; text-align: center;
+    background: rgba(0,0,0,0.45); color: #fff;
+    border: 2px solid #fff; border-radius: 8px;
+    outline: none; padding: 0 6px;
+    text-transform: uppercase;
+  }
+  input.nameBox::placeholder { color: rgba(255,255,255,0.3); }
 </style>
 <style>
 a.arcade-pill {
@@ -53,6 +62,8 @@ a.arcade-pill.arcade-float {
 })();
 </script>
 <canvas id="game"></canvas>
+<input class="nameBox" id="name0" maxlength="10" placeholder="PLAYER 1" autocomplete="off" spellcheck="false">
+<input class="nameBox" id="name1" maxlength="10" placeholder="PLAYER 2" autocomplete="off" spellcheck="false">
 <script>
 // =====================================================================
 // SNAKE FIGHT - two snakes, one box, one keyboard.
@@ -180,6 +191,28 @@ let lastResult = null;           // what happened at the end of the round
 let touchMode = false;           // switches the thumb pads on
 let headbutt = null;             // set when a round ends nose to nose
 let skinRects = [];              // the tappable < > arrows on the title screen
+// ---- what everyone is called ----
+let names = ['', ''];
+try {
+  const saved = JSON.parse(localStorage.getItem('snake_names'));
+  if (Array.isArray(saved) && saved.length === 2) names = saved;
+} catch (e) {}
+const nameBoxes = [document.getElementById('name0'), document.getElementById('name1')];
+nameBoxes.forEach((box, i) => {
+  box.value = names[i];
+  box.addEventListener('input', () => {
+    names[i] = box.value.toUpperCase().slice(0, 10);
+    localStorage.setItem('snake_names', JSON.stringify(names));
+  });
+  // Enter means "done", not "type a new line"
+  box.addEventListener('keydown', e => {
+    if (e.key === 'Enter') box.blur();
+    e.stopPropagation();       // typing must not steer or start the game
+  });
+});
+// no name typed? then you are simply Player 1
+function playerName(i) { return (names[i] || '').trim() || ('PLAYER ' + (i + 1)); }
+function typing() { return nameBoxes.some(b => document.activeElement === b); }
 </script>
 <script>
 // ---------------------------------------------------------------------
@@ -395,11 +428,11 @@ function endRound(doomed) {
       boom(snakes[winner].body[0], '#ffffff');
       thud();
       lastResult = { winner,
-        text: skinOf(winner).name + ' HEAD-BUTTS! ' +
+        text: playerName(winner) + ' HEAD-BUTTS! ' +
               headbutt[winner === 0 ? 'len0' : 'len1'] + ' vs ' +
               headbutt[winner === 0 ? 'len1' : 'len0'] };
     } else {
-      lastResult = { winner, text: skinOf(winner).name + ' WINS THE ROUND' };
+      lastResult = { winner, text: playerName(winner) + ' WINS THE ROUND' };
     }
   }
   roundTimer = 1.8;
@@ -569,7 +602,10 @@ function draw() {
     const x = i === 0 ? W * 0.26 : W * 0.74;
     ctx.fillStyle = sk.head;
     ctx.font = 'bold ' + Math.min(20, W / 26) + 'px monospace';
-    ctx.fillText(sk.name, x, midY - 6);
+    ctx.fillText(playerName(i), x, midY - 8);
+    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    ctx.font = 'bold ' + Math.min(11, W / 48) + 'px monospace';
+    ctx.fillText(sk.name, x, midY + 4);
     // one pip per round won
     const pips = WIN_SCORE, size = Math.min(13, W / 44), gap = size * 1.7;
     for (let k = 0; k < pips; k++) {
@@ -592,6 +628,8 @@ function draw() {
 function drawScreens(L) {
   const { W, H } = L;
   ctx.textAlign = 'center';
+  // the typing boxes only exist on the title screen
+  if (screen !== 'title') nameBoxes.forEach(b => { b.style.display = 'none'; b.blur(); });
   if (screen === 'title') {
     ctx.fillStyle = 'rgba(6, 12, 9, 0.9)';
     ctx.fillRect(0, 0, W, H);
@@ -616,9 +654,21 @@ function drawScreens(L) {
       roundRect(cx - W * 0.21, top - 26, W * 0.42, H * 0.36, 12);
       ctx.stroke();
 
-      ctx.fillStyle = 'rgba(255,255,255,0.55)';
-      ctx.font = 'bold ' + Math.min(15, W / 42) + 'px monospace';
-      ctx.fillText(i === 0 ? 'PLAYER 1   -   W A S D' : 'PLAYER 2   -   ARROW KEYS', cx, top);
+      ctx.fillStyle = 'rgba(255,255,255,0.45)';
+      ctx.font = 'bold ' + Math.min(13, W / 50) + 'px monospace';
+      ctx.fillText(i === 0 ? 'W A S D' : 'ARROW KEYS', cx, top - 6);
+
+      // the real typing box goes right here
+      const box = nameBoxes[i];
+      const bw = Math.min(W * 0.3, 260), bh = Math.min(38, H * 0.06);
+      box.style.display = 'block';
+      box.style.left = (cx - bw / 2) + 'px';
+      box.style.top = (top + 4) + 'px';
+      box.style.width = bw + 'px';
+      box.style.height = bh + 'px';
+      box.style.fontSize = Math.min(20, bw / 9) + 'px';
+      box.style.borderColor = sk.body;
+      box.style.color = sk.head;
 
       // a little snake, wearing the skin, wriggling
       const cellP = Math.min(26, W / 34);
@@ -627,7 +677,7 @@ function drawScreens(L) {
       ctx.globalAlpha = sk.alpha || 1;
       for (let j = segs - 1; j >= 0; j--) {
         const sx = cx - (segs - 1) * cellP / 2 + j * cellP;
-        const sy = top + H * 0.11 + Math.sin(t * 3 + j * 0.7) * cellP * 0.42;
+        const sy = top + H * 0.135 + Math.sin(t * 3 + j * 0.7) * cellP * 0.42;
         ctx.fillStyle = j === 0 ? sk.head : segColor(sk, j, segs, t);
         roundRect(sx - cellP / 2 + 2, sy - cellP / 2 + 2, cellP - 4, cellP - 4, cellP * 0.3);
         ctx.fill();
@@ -703,7 +753,7 @@ function drawScreens(L) {
     ctx.fillRect(0, 0, W, H);
     ctx.fillStyle = skinOf(w).head;
     ctx.font = 'bold ' + Math.min(56, W / 11) + 'px monospace';
-    ctx.fillText(skinOf(w).name + ' WINS!', W / 2, H * 0.42);
+    ctx.fillText(playerName(w) + ' WINS!', W / 2, H * 0.42);
     ctx.fillStyle = '#fff';
     ctx.font = 'bold ' + Math.min(30, W / 20) + 'px monospace';
     ctx.fillText(scores[0] + '  -  ' + scores[1], W / 2, H * 0.53);
@@ -723,7 +773,10 @@ function drawScreens(L) {
     }
     ctx.fillStyle = 'rgba(255,255,255,' + (0.55 + Math.sin(Date.now() / 300) * 0.35) + ')';
     ctx.font = 'bold ' + Math.min(22, W / 26) + 'px monospace';
-    ctx.fillText('SPACE  /  TAP  =  REMATCH   (arrows change skins)', W / 2, H * 0.75);
+    ctx.fillText('SPACE  /  TAP  =  REMATCH', W / 2, H * 0.75);
+    ctx.font = Math.min(15, W / 38) + 'px monospace';
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.fillText('ESC  /  tap the top  =  change names and skins', W / 2, H * 0.81);
   }
   ctx.textAlign = 'left';
 }
@@ -793,10 +846,12 @@ function anyKeyScreens() {
   return false;
 }
 addEventListener('keydown', e => {
+  if (typing()) return;          // somebody is entering their name - leave them be
   ensureAudio();
   // On the title and win screens, left/right browses your wardrobe and
   // SPACE starts the fight. In game, the very same keys steer.
   if (screen === 'title' || screen === 'matchover') {
+    if (e.key === 'Escape') { screen = 'title'; return; }
     if (e.key === ' ') { startMatch(); e.preventDefault(); return; }
     PLAYERS.forEach((p, i) => {
       const dir = p.keys[e.key] || p.keys[e.key.toLowerCase()];
@@ -816,6 +871,10 @@ const swipes = new Map();
 canvas.addEventListener('pointerdown', e => {
   ensureAudio();
   touchMode = touchMode || e.pointerType === 'touch';
+  if (screen === 'matchover' && e.clientY < canvas.height * 0.25) {
+    screen = 'title';            // back to the wardrobe
+    return;
+  }
   if (screen === 'title' || screen === 'matchover') {
     for (const b of skinRects) {
       if (Math.hypot(e.clientX - b.x, e.clientY - b.y) < b.r) {
