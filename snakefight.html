@@ -574,6 +574,20 @@ function aiTarget(i) {
   return best ? { x: best.x, y: best.y } : null;
 }
 
+// Is this square about to be blown up? Only bombs that are nearly down
+// count - anything further off, AI_Dude will have walked out of by the
+// time it lands, and dodging it now would just make it look twitchy.
+function underBomb(c) {
+  for (const b of bombs) {
+    if (b.fuse > 0.85) continue;
+    const R = blastSize();
+    let dx = Math.abs(c.x - b.x), dy = Math.abs(c.y - b.y);
+    if (currentMap().wrap) { dx = Math.min(dx, COLS - dx); dy = Math.min(dy, ROWS - dy); }
+    if (dx <= R && dy <= R) return true;
+  }
+  return false;
+}
+
 function aiChoose(i) {
   const me = snakes[i];
   const foe = snakes[1 - i];
@@ -597,6 +611,8 @@ function aiChoose(i) {
     if (aiBlocked(c)) continue;                        // instant death: not an option
 
     let score = 0;
+    // 0. About to be bombed? Then this is nearly as bad as a wall.
+    if (underBomb(c)) score -= 900;
     // 1. SAFETY FIRST, but as a veto rather than a nudge. Plenty of room
     //    scores the same as loads of room, so having somewhere to go does
     //    not drag it off a straight line.
@@ -630,12 +646,24 @@ function aiChoose(i) {
 // past that point is gone. Which matters, because the longer snake wins
 // a head-butt, so a bomb can lose you a fight without touching you.
 // =====================================================================
-const BOMB_EVERY = 4.5;          // seconds between bombs
+// How hard it is raining. "every" is seconds between bombs, and "blast"
+// is how far the boom reaches - 1 makes a 3x3 hole, 2 makes a 5x5 one.
+const BOMB_LEVELS = [
+  { name: 'NONE',  every: 0,   blast: 0, desc: 'no bombs. just snakes.' },
+  { name: 'A FEW', every: 7.0, blast: 1, desc: 'the odd surprise' },
+  { name: 'LOTS',  every: 3.0, blast: 1, desc: 'keep moving' },
+  { name: 'STORM', every: 1.1, blast: 1, desc: 'constant rain. good luck.' },
+  { name: 'NUKES', every: 4.5, blast: 2, desc: 'fewer, but ENORMOUS' },
+];
+let bombLevel = parseInt(localStorage.getItem('snake_bombs') || '2');
+if (!(bombLevel >= 0 && bombLevel < BOMB_LEVELS.length)) bombLevel = 2;
+function bombsOn() { return BOMB_LEVELS[bombLevel].every > 0; }
+function bombEvery() { return BOMB_LEVELS[bombLevel].every; }
+function blastSize() { return BOMB_LEVELS[bombLevel].blast; }
+
 const BOMB_FUSE = 1.5;           // how long you get to move
-const BLAST = 1;                 // 1 means a 3x3 hole
 let bombs = [];
 let bombTimer = 0;
-let bombsOn = localStorage.getItem('snake_bombs') !== '0';
 
 function dropBomb() {
   // somewhere on the board, but not inside a wall - a bomb that lands in
@@ -661,8 +689,9 @@ function dropBomb() {
 }
 function blastCells(b) {
   const cells = [];
-  for (let dy = -BLAST; dy <= BLAST; dy++) {
-    for (let dx = -BLAST; dx <= BLAST; dx++) {
+  const R = blastSize();
+  for (let dy = -R; dy <= R; dy++) {
+    for (let dx = -R; dx <= R; dx++) {
       const c = wrapCell({ x: b.x + dx, y: b.y + dy });
       if (c.x < 0 || c.y < 0 || c.x >= COLS || c.y >= ROWS) continue;
       cells.push(c);
@@ -817,9 +846,9 @@ function update(dt) {
   if (screen !== 'play') return;
   // bombs run on their own clock, so they keep falling smoothly however
   // fast the snakes happen to be moving
-  if (bombsOn) {
+  if (bombsOn()) {
     bombTimer += dt;
-    if (bombTimer >= BOMB_EVERY) { bombTimer = 0; dropBomb(); }
+    if (bombTimer >= bombEvery()) { bombTimer = 0; dropBomb(); }
     for (const b of bombs) b.fuse -= dt;
     const landed = bombs.filter(b => b.fuse <= 0);
     bombs = bombs.filter(b => b.fuse > 0);
@@ -956,8 +985,9 @@ function draw() {
     const bx = ox + b.x * cell + cell / 2, by = oy + b.y * cell + cell / 2;
     ctx.strokeStyle = 'rgba(255, 59, 48, ' + (0.5 + t * 0.5) + ')';
     ctx.lineWidth = 2;
-    ctx.strokeRect(ox + (b.x - BLAST) * cell + 1, oy + (b.y - BLAST) * cell + 1,
-                   cell * (BLAST * 2 + 1) - 2, cell * (BLAST * 2 + 1) - 2);
+    const R = blastSize();
+    ctx.strokeRect(ox + (b.x - R) * cell + 1, oy + (b.y - R) * cell + 1,
+                   cell * (R * 2 + 1) - 2, cell * (R * 2 + 1) - 2);
     // the bomb itself, falling in from above the arena
     const fallY = by - (1 - t) * cell * 9;
     const r = cell * (0.28 + t * 0.14);
@@ -1149,12 +1179,12 @@ function drawScreens(L) {
     });
     ctx.fillStyle = '#ffd83d';
     ctx.font = Math.min(14, W / 42) + 'px monospace';
-    ctx.fillText('HEAD TO HEAD? the LONGER snake wins - so EAT', W / 2, H * 0.615);
+    ctx.fillText('HEAD TO HEAD? the LONGER snake wins - so EAT', W / 2, H * 0.575);
 
     // ---- the map: a tiny picture of the real thing ----
     const M = currentMap();
-    const my = H * 0.645;
-    const mw = Math.min(W * 0.17, 150), mh = mw * (ROWS / COLS);
+    const my = H * 0.665;
+    const mw = Math.min(W * 0.145, 128), mh = mw * (ROWS / COLS);
     ctx.fillStyle = 'rgba(255,255,255,0.05)';
     ctx.fillRect(W / 2 - mw / 2, my - mh / 2, mw, mh);
     ctx.strokeStyle = M.wrap ? '#c98bff' : '#7fdf8f';
@@ -1192,25 +1222,31 @@ function drawScreens(L) {
       ctx.fillText(dir < 0 ? '<' : '>', ax, fy);
       skinRects.push({ x: ax, y: fy - 5, r: fr * 1.5, food: dir });
     });
-    // the BOMBS switch
-    const by2 = fy + 38;
-    const bw2 = Math.min(W * 0.26, 240), bh2 = Math.min(28, H * 0.045);
-    ctx.fillStyle = bombsOn ? 'rgba(255,59,48,0.16)' : 'rgba(255,255,255,0.05)';
-    roundRect(W / 2 - bw2 / 2, by2 - bh2 * 0.7, bw2, bh2, 8);
-    ctx.fill();
-    ctx.strokeStyle = bombsOn ? '#ff3b30' : 'rgba(255,255,255,0.25)';
-    ctx.lineWidth = 2;
-    roundRect(W / 2 - bw2 / 2, by2 - bh2 * 0.7, bw2, bh2, 8);
-    ctx.stroke();
-    ctx.fillStyle = bombsOn ? '#ff8b7f' : 'rgba(255,255,255,0.5)';
-    ctx.font = 'bold ' + Math.min(14, W / 44) + 'px monospace';
-    ctx.fillText(bombsOn ? '💣 BOMBS: ON' : '💣 BOMBS: OFF', W / 2, by2 + bh2 * 0.02);
-    skinRects.push({ x: W / 2, y: by2 - bh2 * 0.2, r: bh2, bombs: true, wide: bw2 / 2 });
+    // the BOMBS dial
+    const BL = BOMB_LEVELS[bombLevel];
+    const by2 = fy + 42;
+    ctx.fillStyle = bombsOn() ? '#ff8b7f' : 'rgba(255,255,255,0.45)';
+    ctx.font = 'bold ' + Math.min(16, W / 40) + 'px monospace';
+    ctx.fillText('💣 BOMBS: ' + BL.name +
+      (bombsOn() ? '  -  one every ' + BL.every + 's, ' +
+        (BL.blast * 2 + 1) + 'x' + (BL.blast * 2 + 1) : ''), W / 2, by2);
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.font = Math.min(12, W / 50) + 'px monospace';
+    ctx.fillText(BL.desc, W / 2, by2 + 16);
+    const br = Math.min(15, W / 52);
+    [[-1, W / 2 - Math.min(W * 0.19, 165)], [1, W / 2 + Math.min(W * 0.19, 165)]].forEach(([dir, ax]) => {
+      ctx.fillStyle = 'rgba(255,255,255,0.09)';
+      ctx.beginPath(); ctx.arc(ax, by2 - 5, br, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = bombsOn() ? '#ff6b60' : 'rgba(255,255,255,0.45)';
+      ctx.font = 'bold ' + br * 1.2 + 'px monospace';
+      ctx.fillText(dir < 0 ? '<' : '>', ax, by2);
+      skinRects.push({ x: ax, y: by2 - 5, r: br * 1.5, bombs: dir });
+    });
 
     ctx.fillStyle = 'rgba(255,255,255,0.35)';
     ctx.font = Math.min(12, W / 50) + 'px monospace';
     ctx.fillText('up/down = map    F = food    B = bombs    1 / 2 = AI_Dude',
-                 W / 2, by2 + bh2 + 12);
+                 W / 2, by2 + 36);
     // tappable arrows either side of the little map
     const mr = Math.min(18, W / 44);
     [[-1, W / 2 - mw / 2 - mr * 2], [1, W / 2 + mw / 2 + mr * 2]].forEach(([dir, ax]) => {
@@ -1224,10 +1260,10 @@ function drawScreens(L) {
 
     const locked = SKINS.filter(sk => !isUnlocked(sk));
     if (locked.length) {
-      ctx.fillStyle = 'rgba(255,255,255,0.35)';
-      ctx.font = Math.min(12, W / 50) + 'px monospace';
-      ctx.fillText('locked: ' + locked.map(sk => sk.name + ' (' + sk.lock + ')').join('   '),
-                   W / 2, my + mh / 2 + 152);
+      ctx.fillStyle = 'rgba(255,255,255,0.3)';
+      ctx.font = Math.min(11, W / 56) + 'px monospace';
+      ctx.fillText(locked.length + ' skins still locked: ' +
+                   locked.map(sk => sk.name).join(', '), W / 2, H * 0.6);
     }
     ctx.fillStyle = 'rgba(255,255,255,' + (0.55 + Math.sin(Date.now() / 300) * 0.35) + ')';
     ctx.font = 'bold ' + Math.min(24, W / 24) + 'px monospace';
@@ -1329,11 +1365,12 @@ function turn(playerIndex, dir) {
 // and skip whatever the other player is already wearing, so you can
 // never end up as two identical snakes.
 // either player can change the map - it belongs to both of you
-function toggleBombs() {
-  bombsOn = !bombsOn;
-  localStorage.setItem('snake_bombs', bombsOn ? '1' : '0');
-  if (!bombsOn) bombs = [];
-  beep(bombsOn ? 300 : 700, 0.1, 'sawtooth', 0.08);
+function cycleBombs(step) {
+  bombLevel = (bombLevel + step + BOMB_LEVELS.length) % BOMB_LEVELS.length;
+  localStorage.setItem('snake_bombs', String(bombLevel));
+  bombs = [];
+  bombTimer = 0;
+  beep(bombsOn() ? 260 + bombLevel * 60 : 700, 0.1, 'sawtooth', 0.08);
 }
 
 function cycleFood(step) {
@@ -1386,7 +1423,7 @@ addEventListener('keydown', e => {
     if (e.key === '1') { toggleAI(0); return; }
     if (e.key === '2') { toggleAI(1); return; }
     if (e.key.toLowerCase() === 'f') { cycleFood(1); return; }
-    if (e.key.toLowerCase() === 'b') { toggleBombs(); return; }
+    if (e.key.toLowerCase() === 'b') { cycleBombs(1); return; }
     if (e.key === ' ') { startMatch(); e.preventDefault(); return; }
     PLAYERS.forEach((p, i) => {
       const dir = p.keys[e.key] || p.keys[e.key.toLowerCase()];
@@ -1419,7 +1456,7 @@ canvas.addEventListener('pointerdown', e => {
         : Math.hypot(e.clientX - b.x, e.clientY - b.y) < b.r;
       if (!hit) continue;
       if (b.aiToggle !== undefined) toggleAI(b.aiToggle);
-      else if (b.bombs) toggleBombs();
+      else if (b.bombs) cycleBombs(b.bombs);
       else if (b.food) cycleFood(b.food);
       else if (b.map) cycleMap(b.map);
       else cycleSkin(b.player, b.step);
