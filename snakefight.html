@@ -382,6 +382,7 @@ function topUpFood() {
 function startRound() {
   bombs = [];
   bombTimer = 0;
+  spawnGhosts();
   buildWalls();
   snakes = PLAYERS.map(newSnake);
   foods = [];
@@ -446,6 +447,7 @@ function step() {
     if (h.x < 0 || h.y < 0 || h.x >= COLS || h.y >= ROWS) doomed[i] = true;
     else if (isWall(h.x, h.y)) doomed[i] = true;
     else if (occupied(h, true)) doomed[i] = true;
+    else if (ghostCaught(h)) doomed[i] = true;   // walked into a solid ghost
   });
   // =====================================================================
   // THE HEAD-BUTT.
@@ -577,6 +579,17 @@ function aiTarget(i) {
 // Is this square about to be blown up? Only bombs that are nearly down
 // count - anything further off, AI_Dude will have walked out of by the
 // time it lands, and dodging it now would just make it look twitchy.
+// a solid ghost is as bad as a wall; a faded one is nothing at all
+function underGhost(c) {
+  const now = Date.now() / 1000;
+  for (const g of ghosts) {
+    if (ghostAlpha(now + g.phase) < GHOST_DEADLY - 0.25) continue;
+    const gc = ghostCell(g);
+    if (gc.x === c.x && gc.y === c.y) return true;
+  }
+  return false;
+}
+
 function underBomb(c) {
   for (const b of bombs) {
     if (b.fuse > 0.85) continue;
@@ -611,8 +624,9 @@ function aiChoose(i) {
     if (aiBlocked(c)) continue;                        // instant death: not an option
 
     let score = 0;
-    // 0. About to be bombed? Then this is nearly as bad as a wall.
+    // 0. About to be bombed, or haunted? Nearly as bad as a wall.
     if (underBomb(c)) score -= 900;
+    if (underGhost(c)) score -= 900;
     // 1. SAFETY FIRST, but as a veto rather than a nudge. Plenty of room
     //    scores the same as loads of room, so having somewhere to go does
     //    not drag it off a straight line.
@@ -750,6 +764,80 @@ function explode(b) {
   }
 }
 
+// =====================================================================
+// GHOSTS.
+//
+// They drift about the arena, straight through walls, and fade in and
+// out. A ghost is only DEADLY while it is solid - faded out, you can
+// walk right through it. So they are a timing puzzle rather than a
+// random death, and you can always see one coming back.
+//
+// The fairness rule: a ghost turning solid on top of you does NOT kill
+// you. You only die if YOU move into a solid one. Being killed by
+// something that appeared on you would be miserable.
+// =====================================================================
+const GHOST_LEVELS = [
+  { name: 'NONE', count: 0, desc: 'nothing haunting you' },
+  { name: 'A FEW', count: 2, desc: 'two drifting about' },
+  { name: 'LOTS', count: 4, desc: 'getting crowded' },
+  { name: 'HAUNTED', count: 7, desc: 'they are EVERYWHERE' },
+];
+let ghostLevel = parseInt(localStorage.getItem('snake_ghosts') || '0');
+if (!(ghostLevel >= 0 && ghostLevel < GHOST_LEVELS.length)) ghostLevel = 0;
+function ghostCount() { return GHOST_LEVELS[ghostLevel].count; }
+let ghosts = [];
+
+// How solid is a ghost right now? Another maths-only function, like the
+// tongue - one number from 0 (gone) to 1 (solid), so it can be tested.
+// Solid, fade out, gone, fade back in, over and over.
+const GHOST_CYCLE = 5.0;
+function ghostAlpha(t) {
+  const p = ((t / GHOST_CYCLE) % 1 + 1) % 1;
+  if (p < 0.36) return 1;                        // solid
+  if (p < 0.48) return 1 - (p - 0.36) / 0.12;    // fading away
+  if (p < 0.84) return 0;                        // gone
+  return (p - 0.84) / 0.16;                      // coming back
+}
+const GHOST_DEADLY = 0.6;                        // solid enough to hurt you
+function ghostIsDeadly(g, now) { return ghostAlpha(now + g.phase) >= GHOST_DEADLY; }
+function ghostCell(g) { return { x: Math.round(g.x), y: Math.round(g.y) }; }
+
+function spawnGhosts() {
+  ghosts = [];
+  for (let i = 0; i < ghostCount(); i++) {
+    const a = Math.random() * Math.PI * 2;
+    ghosts.push({
+      // start away from both snakes, in the middle band of the board
+      x: 6 + Math.random() * (COLS - 12),
+      y: 2 + Math.random() * (ROWS - 4),
+      vx: Math.cos(a) * 2.2, vy: Math.sin(a) * 2.2,   // squares per second
+      phase: Math.random() * GHOST_CYCLE,
+    });
+  }
+}
+function moveGhosts(dt) {
+  for (const g of ghosts) {
+    g.x += g.vx * dt;
+    g.y += g.vy * dt;
+    // they drift through walls - they are ghosts - but they do turn
+    // round at the edge of the arena rather than wandering off forever
+    if (g.x < 0.5) { g.x = 0.5; g.vx = Math.abs(g.vx); }
+    if (g.x > COLS - 1.5) { g.x = COLS - 1.5; g.vx = -Math.abs(g.vx); }
+    if (g.y < 0.5) { g.y = 0.5; g.vy = Math.abs(g.vy); }
+    if (g.y > ROWS - 1.5) { g.y = ROWS - 1.5; g.vy = -Math.abs(g.vy); }
+  }
+}
+// did anybody just walk into a solid one?
+function ghostCaught(head) {
+  const now = Date.now() / 1000;
+  for (const g of ghosts) {
+    if (!ghostIsDeadly(g, now)) continue;
+    const c = ghostCell(g);
+    if (c.x === head.x && c.y === head.y) return true;
+  }
+  return false;
+}
+
 // ---------------------------------------------------------------------
 // ENDING A ROUND
 // ---------------------------------------------------------------------
@@ -830,6 +918,7 @@ function update(dt) {
   particles = particles.filter(pt => pt.life > 0);
   for (const f of foods) f.pop += dt;
 
+  if (screen === 'title') moveGhosts(dt);
   if (screen === 'countdown') {
     const was = Math.ceil(countdown);
     countdown -= dt;
@@ -857,6 +946,7 @@ function update(dt) {
     }
     if (screen !== 'play') return;
   }
+  moveGhosts(dt);
   stepTimer += dt;
   while (stepTimer >= stepTime) {
     stepTimer -= stepTime;
@@ -1019,6 +1109,48 @@ function draw() {
     ctx.globalAlpha = 1;
   });
 
+  // ---- ghosts ----
+  {
+    const gnow = Date.now() / 1000;
+    for (const g of ghosts) {
+      const a = ghostAlpha(gnow + g.phase);
+      if (a <= 0.02) continue;
+      const gx = ox + g.x * cell + cell / 2, gy = oy + g.y * cell + cell / 2;
+      const r = cell * 0.52;
+      const deadly = a >= GHOST_DEADLY;
+      ctx.globalAlpha = a * 0.9;
+      // a solid one glows faintly, so you can tell at a glance
+      ctx.fillStyle = deadly ? '#dfe8ff' : '#8fa0c8';
+      ctx.beginPath();
+      ctx.arc(gx, gy - r * 0.2, r, Math.PI, 0);          // the domed head
+      // and a wavy sheet for the bottom
+      const waves = 3, bottom = gy + r * 0.85;
+      ctx.lineTo(gx + r, bottom);
+      for (let w = 0; w < waves; w++) {
+        const x0 = gx + r - (r * 2 / waves) * w;
+        const x1 = x0 - (r * 2 / waves);
+        const dip = (w % 2 === 0) ? -r * 0.28 : 0;
+        ctx.quadraticCurveTo((x0 + x1) / 2, bottom + r * 0.3 + dip, x1, bottom);
+      }
+      ctx.closePath();
+      ctx.fill();
+      if (deadly) {
+        ctx.strokeStyle = 'rgba(200,220,255,0.8)';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+      // eyes, looking the way it is drifting
+      const ex = Math.max(-1, Math.min(1, g.vx)) * r * 0.16;
+      const ey = Math.max(-1, Math.min(1, g.vy)) * r * 0.16;
+      ctx.fillStyle = '#1a2038';
+      ctx.beginPath();
+      ctx.arc(gx - r * 0.34 + ex, gy - r * 0.25 + ey, r * 0.19, 0, Math.PI * 2);
+      ctx.arc(gx + r * 0.34 + ex, gy - r * 0.25 + ey, r * 0.19, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+  }
+
   // ---- bombs on the way down ----
   for (const b of bombs) {
     const t = 1 - b.fuse / BOMB_FUSE;               // 0 just dropped, 1 landing
@@ -1110,6 +1242,32 @@ function draw() {
 </script>
 <script>
 // ---- the title, countdown, and end-of-round messages ----
+// Three settings that all work the same way, so they are all drawn by
+// the same function. Change how a dial looks once, and all three change.
+function drawDial(cx, y, W, title, value, desc, color, tag) {
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.font = 'bold ' + Math.min(11, W / 62) + 'px monospace';
+  ctx.fillText(title, cx, y - 15);
+  ctx.fillStyle = color;
+  ctx.font = 'bold ' + Math.min(15, W / 46) + 'px monospace';
+  ctx.fillText(value, cx, y + 4);
+  ctx.fillStyle = 'rgba(255,255,255,0.42)';
+  ctx.font = Math.min(10.5, W / 68) + 'px monospace';
+  ctx.fillText(desc, cx, y + 19);
+  const r = Math.min(13, W / 62);
+  [[-1, cx - Math.min(W * 0.125, 108)], [1, cx + Math.min(W * 0.125, 108)]].forEach(([dir, ax]) => {
+    ctx.fillStyle = 'rgba(255,255,255,0.08)';
+    ctx.beginPath(); ctx.arc(ax, y - 2, r, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = color;
+    ctx.font = 'bold ' + r * 1.2 + 'px monospace';
+    ctx.fillText(dir < 0 ? '<' : '>', ax, y + 3);
+    const hit = { x: ax, y: y - 2, r: r * 1.5 };
+    hit[tag] = dir;
+    skinRects.push(hit);
+  });
+}
+
 function drawScreens(L) {
   const { W, H } = L;
   ctx.textAlign = 'center';
@@ -1253,59 +1411,21 @@ function drawScreens(L) {
     ctx.fillStyle = 'rgba(255,255,255,0.5)';
     ctx.font = Math.min(13, W / 44) + 'px monospace';
     ctx.fillText(M.desc, W / 2, my + mh / 2 + 42);
-    // the FOOD dial, right under the map
+    // ---- the three dials, side by side ----
+    const dy2 = my + mh / 2 + 46;
     const FL = FOOD_LEVELS[foodLevel];
-    const fy = my + mh / 2 + 62;
-    ctx.fillStyle = '#ff6b60';
-    ctx.font = 'bold ' + Math.min(16, W / 40) + 'px monospace';
-    ctx.fillText('FOOD: ' + FL.name + '  -  ' + foodTarget() + ' apples', W / 2, fy);
-    ctx.fillStyle = 'rgba(255,255,255,0.5)';
-    ctx.font = Math.min(12, W / 50) + 'px monospace';
-    ctx.fillText(FL.desc, W / 2, fy + 16);
-    const fr = Math.min(15, W / 52);
-    [[-1, W / 2 - Math.min(W * 0.19, 165)], [1, W / 2 + Math.min(W * 0.19, 165)]].forEach(([dir, ax]) => {
-      ctx.fillStyle = 'rgba(255,255,255,0.09)';
-      ctx.beginPath(); ctx.arc(ax, fy - 5, fr, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = '#ff6b60';
-      ctx.font = 'bold ' + fr * 1.2 + 'px monospace';
-      ctx.fillText(dir < 0 ? '<' : '>', ax, fy);
-      skinRects.push({ x: ax, y: fy - 5, r: fr * 1.5, food: dir });
-    });
-    // the BOMBS dial
     const BL = BOMB_LEVELS[bombLevel];
-    const by2 = fy + 42;
-    ctx.fillStyle = bombsOn() ? '#ff8b7f' : 'rgba(255,255,255,0.45)';
-    ctx.font = 'bold ' + Math.min(16, W / 40) + 'px monospace';
-    ctx.fillText('💣 BOMBS: ' + BL.name +
-      (bombsOn() ? '  -  one every ' + BL.every + 's, ' +
-        (BL.blast * 2 + 1) + 'x' + (BL.blast * 2 + 1) : ''), W / 2, by2);
-    ctx.fillStyle = 'rgba(255,255,255,0.5)';
-    ctx.font = Math.min(12, W / 50) + 'px monospace';
-    ctx.fillText(BL.desc, W / 2, by2 + 16);
-    const br = Math.min(15, W / 52);
-    [[-1, W / 2 - Math.min(W * 0.19, 165)], [1, W / 2 + Math.min(W * 0.19, 165)]].forEach(([dir, ax]) => {
-      ctx.fillStyle = 'rgba(255,255,255,0.09)';
-      ctx.beginPath(); ctx.arc(ax, by2 - 5, br, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = bombsOn() ? '#ff6b60' : 'rgba(255,255,255,0.45)';
-      ctx.font = 'bold ' + br * 1.2 + 'px monospace';
-      ctx.fillText(dir < 0 ? '<' : '>', ax, by2);
-      skinRects.push({ x: ax, y: by2 - 5, r: br * 1.5, bombs: dir });
-    });
-
-    ctx.fillStyle = 'rgba(255,255,255,0.35)';
-    ctx.font = Math.min(12, W / 50) + 'px monospace';
-    ctx.fillText('up/down = map    F = food    B = bombs    1 / 2 = AI_Dude',
-                 W / 2, by2 + 36);
-    // tappable arrows either side of the little map
-    const mr = Math.min(18, W / 44);
-    [[-1, W / 2 - mw / 2 - mr * 2], [1, W / 2 + mw / 2 + mr * 2]].forEach(([dir, ax]) => {
-      ctx.fillStyle = 'rgba(255,255,255,0.09)';
-      ctx.beginPath(); ctx.arc(ax, my, mr, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = M.wrap ? '#c98bff' : '#7fdf8f';
-      ctx.font = 'bold ' + mr * 1.2 + 'px monospace';
-      ctx.fillText(dir < 0 ? '<' : '>', ax, my + mr * 0.4);
-      skinRects.push({ x: ax, y: my, r: mr * 1.5, map: dir });
-    });
+    const GL = GHOST_LEVELS[ghostLevel];
+    drawDial(W * 0.19, dy2, W, 'FOOD  (F)', FL.name + '  ' + foodTarget(),
+             FL.desc, '#ff6b60', 'food');
+    drawDial(W * 0.5, dy2, W, 'BOMBS  (B)', BL.name,
+             bombsOn() ? 'every ' + BL.every + 's, ' + (BL.blast * 2 + 1) + 'x' + (BL.blast * 2 + 1) : BL.desc,
+             bombsOn() ? '#ff8b7f' : 'rgba(255,255,255,0.45)', 'bombs');
+    drawDial(W * 0.81, dy2, W, 'GHOSTS  (G)', GL.name + (ghostCount() ? '  ' + ghostCount() : ''),
+             GL.desc, ghostCount() ? '#cfe0ff' : 'rgba(255,255,255,0.45)', 'ghosts');
+    ctx.fillStyle = 'rgba(255,255,255,0.32)';
+    ctx.font = Math.min(12, W / 52) + 'px monospace';
+    ctx.fillText('up/down = map      1 / 2 = swap a player for AI_Dude', W / 2, dy2 + 42);
 
     const locked = SKINS.filter(sk => !isUnlocked(sk));
     if (locked.length) {
@@ -1414,6 +1534,13 @@ function turn(playerIndex, dir) {
 // and skip whatever the other player is already wearing, so you can
 // never end up as two identical snakes.
 // either player can change the map - it belongs to both of you
+function cycleGhosts(step) {
+  ghostLevel = (ghostLevel + step + GHOST_LEVELS.length) % GHOST_LEVELS.length;
+  localStorage.setItem('snake_ghosts', String(ghostLevel));
+  spawnGhosts();
+  beep(ghostCount() ? 520 : 300, 0.12, 'sine', 0.07);
+}
+
 function cycleBombs(step) {
   bombLevel = (bombLevel + step + BOMB_LEVELS.length) % BOMB_LEVELS.length;
   localStorage.setItem('snake_bombs', String(bombLevel));
@@ -1473,6 +1600,7 @@ addEventListener('keydown', e => {
     if (e.key === '2') { toggleAI(1); return; }
     if (e.key.toLowerCase() === 'f') { cycleFood(1); return; }
     if (e.key.toLowerCase() === 'b') { cycleBombs(1); return; }
+    if (e.key.toLowerCase() === 'g') { cycleGhosts(1); return; }
     if (e.key === ' ') { startMatch(); e.preventDefault(); return; }
     PLAYERS.forEach((p, i) => {
       const dir = p.keys[e.key] || p.keys[e.key.toLowerCase()];
@@ -1506,6 +1634,7 @@ canvas.addEventListener('pointerdown', e => {
       if (!hit) continue;
       if (b.aiToggle !== undefined) toggleAI(b.aiToggle);
       else if (b.bombs) cycleBombs(b.bombs);
+      else if (b.ghosts) cycleGhosts(b.ghosts);
       else if (b.food) cycleFood(b.food);
       else if (b.map) cycleMap(b.map);
       else cycleSkin(b.player, b.step);
@@ -1553,6 +1682,7 @@ function loop(now) {
 buildWalls();
 snakes = PLAYERS.map(newSnake);      // something to look at behind the title
 topUpFood();
+spawnGhosts();
 requestAnimationFrame(loop);
 </script>
 </body>
