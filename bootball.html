@@ -215,7 +215,12 @@ let timer = 0, shake = 0, particles = [], lastGoal = null, touchMode = false;
 // built fresh at every kick off - keep them in there and everyone would
 // heal perfectly between goals, which is much less funny.
 // =====================================================================
-let hurts = [{}, {}];
+const TOOTH_COUNT = 5;
+function freshHurt() {
+  // all present and correct, at the start of a match
+  return { teeth: [true, true, true, true, true] };
+}
+let hurts = [freshHurt(), freshHurt()];
 const HURT_SPEED = 620;          // gentle nudges do not count, only a proper wallop
 let uiRects = [];
 </script>
@@ -335,7 +340,7 @@ function kickOff(towards) {
 }
 function newMatch() {
   scores = [0, 0];
-  hurts = [{}, {}];                // everyone starts the match in one piece
+  hurts = [freshHurt(), freshHurt()];   // everyone starts the match in one piece
   lastGoal = null;
   kickOff(0);
 }
@@ -478,10 +483,31 @@ function hurtBy(p, nx, ny) {
   if (nx * p.face < -0.45) return 'stitches';      // round the back
   return null;                                     // a glancing one, you got away with it
 }
+// One tooth at a time, and only from a smack in the mouth. Which one
+// goes is random, so the gap is different every match.
+function knockTooth(p) {
+  const teeth = p.hurt.teeth || (p.hurt.teeth = [true, true, true, true, true]);
+  const left = [];
+  for (let i = 0; i < TOOTH_COUNT; i++) if (teeth[i]) left.push(i);
+  if (!left.length) return false;                  // none left to lose
+  teeth[left[Math.floor(Math.random() * left.length)]] = false;
+  tone(1400, 0.05, 'square', 0.09, 380);           // the crack
+  for (let k = 0; k < 3; k++) {
+    particles.push({
+      x: p.x + p.face * PLAYER_R * 0.3, y: p.y + PLAYER_R * 0.25,
+      vx: p.face * (150 + Math.random() * 200), vy: -180 - Math.random() * 140,
+      life: 0.9, color: '#ffffff',
+    });
+  }
+  return true;
+}
 function doHurt(p, nx, ny) {
   const kind = hurtBy(p, nx, ny);
   if (!kind) return;
   p.ow = 0.9;
+  // straight in the mouth: that is a tooth gone, EVERY time - not just
+  // the first, so keep getting hit and keep losing them
+  if (kind === 'blackEye') knockTooth(p);
   if (p.hurt[kind]) return;                        // already got that one
   p.hurt[kind] = true;
   tone(300, 0.16, 'square', 0.09, 120);            // a comedy OW
@@ -725,8 +751,25 @@ function drawPlayer(p) {
     ctx.fillStyle = '#16202a';
     ctx.beginPath(); ctx.arc(exx + ex, eyeY + ey, PLAYER_R * 0.12, 0, Math.PI * 2); ctx.fill();
   }
-  // ---- the war wounds ----
+  // ---- the mouth, and whatever teeth survive ----
   const R = PLAYER_R;
+  {
+    const mw = R * 0.84, mh = R * 0.34, my2 = p.y + R * 0.3;
+    ctx.fillStyle = '#2a1016';
+    roundRect(p.x - mw / 2, my2 - mh / 2, mw, mh, mh * 0.45);
+    ctx.fill();
+    const teeth = p.hurt.teeth || [true, true, true, true, true];
+    const tw = mw / TOOTH_COUNT;
+    for (let i = 0; i < TOOTH_COUNT; i++) {
+      if (!teeth[i]) continue;                     // that one got knocked out
+      ctx.fillStyle = '#fdfdfd';
+      roundRect(p.x - mw / 2 + i * tw + tw * 0.14, my2 - mh / 2 + Math.max(1, R * 0.03),
+                tw * 0.72, mh * 0.55, Math.max(1.5, R * 0.05));
+      ctx.fill();
+    }
+  }
+
+  // ---- the war wounds ----
   if (p.hurt.stitches) {
     // round the back: a line of little crosses, on the side away from
     // whichever way you are facing
