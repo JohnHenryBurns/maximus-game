@@ -102,10 +102,27 @@ const GOAL_H = 0.30;             // goal mouth, as a share of the pitch height
 const WIN_GOALS = 5;
 
 // ---- the dials you can turn on the title screen ----
-const BALL_SIZES = [
-  { name: 'NORMAL', r: 20, desc: 'a sensible football' },
-  { name: 'BEACH BALL', r: 42, desc: 'enormous and daft' },
-  { name: 'PEA', r: 11, desc: 'good luck hitting it' },
+// =====================================================================
+// THINGS YOU CAN KICK.
+//
+// A ball is not one thing any more, it is a KIND of thing. Each kind
+// carries its own weight, bounce and air resistance, so a pizza floats
+// about like a frisbee and a rugby ball goes wherever it fancies.
+// Adding a fourth kind is one line here plus a way to draw it.
+// =====================================================================
+const BALL_KINDS = {
+  football: { r: 20, bounce: 0.84, grav: 1.0, drag: 1.0, wobble: 0, spinny: 0.05 },
+  american: { r: 22, bounce: 0.66, grav: 1.05, drag: 1.0, wobble: 260, spinny: 0.12 },
+  pizza:    { r: 27, bounce: 0.5, grav: 0.5, drag: 0.985, wobble: 0, spinny: 0.3 },
+};
+const BALL_MODES = [
+  { name: 'THE LOT', desc: 'football, rugby ball AND a pizza',
+    list: ['football', 'american', 'pizza'] },
+  { name: 'NORMAL', desc: 'one sensible football', list: ['football'] },
+  { name: 'BEACH BALL', desc: 'enormous and daft', list: ['football'], scale: 2.1 },
+  { name: 'PEA', desc: 'good luck hitting it', list: ['football'], scale: 0.55 },
+  { name: 'PIZZA PARTY', desc: 'three pizzas. why not.',
+    list: ['pizza', 'pizza', 'pizza'] },
 ];
 const GRAVITIES = [
   { name: 'NORMAL', g: 1.0, desc: 'ordinary falling' },
@@ -114,9 +131,15 @@ const GRAVITIES = [
 ];
 let ballSize = parseInt(localStorage.getItem('boot_ball') || '0');
 let gravLevel = parseInt(localStorage.getItem('boot_grav') || '0');
-if (!(ballSize >= 0 && ballSize < BALL_SIZES.length)) ballSize = 0;
+if (!(ballSize >= 0 && ballSize < BALL_MODES.length)) ballSize = 0;
 if (!(gravLevel >= 0 && gravLevel < GRAVITIES.length)) gravLevel = 0;
-function ballR() { return BALL_SIZES[ballSize].r; }
+function ballMode() { return BALL_MODES[ballSize]; }
+// the biggest thing on the pitch - used for reach and goal-line checks
+function ballR() {
+  let r = 0;
+  for (const b of balls) r = Math.max(r, b.r);
+  return r || BALL_KINDS.football.r;
+}
 function gravity() { return GRAVITY * GRAVITIES[gravLevel].g; }
 
 // ---- the two players ----
@@ -127,7 +150,7 @@ const TEAMS = [
     keys: { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'jump', ArrowDown: 'kick' } },
 ];
 let players = [];
-let ball = null;
+let balls = [];
 let scores = [0, 0];
 let screen = 'title';            // 'title' | 'kickoff' | 'play' | 'goal' | 'over'
 let held = {};                   // which keys are down right now
@@ -232,17 +255,30 @@ function newPlayer(i) {
     flash: 0,                      // lights up when you actually connect
   };
 }
-function newBall(towards) {
-  const P = pitch();
+function newBall(kind, x, y, towards) {
+  const K = BALL_KINDS[kind];
+  const scale = ballMode().scale || 1;
   return {
-    x: P.W / 2, y: P.goalTop - 40,
+    kind, x, y,
+    r: K.r * scale,
+    bounce: K.bounce, grav: K.grav, drag: K.drag,
+    wobble: K.wobble, spinny: K.spinny,
     vx: (towards || 0) * 90, vy: 0,
     spin: 0, angle: 0,
   };
 }
+function makeBalls(towards) {
+  const P = pitch();
+  const list = ballMode().list;
+  // spread them out so they do not all start inside each other
+  return list.map((kind, i) => {
+    const spread = (i - (list.length - 1) / 2) * Math.min(150, P.W * 0.14);
+    return newBall(kind, P.W / 2 + spread, P.goalTop - 60 - i * 70, towards);
+  });
+}
 function kickOff(towards) {
   players = TEAMS.map((t, i) => newPlayer(i));
-  ball = newBall(towards);
+  balls = makeBalls(towards);
   particles = [];
   timer = 1.6;
   screen = 'kickoff';
@@ -343,63 +379,76 @@ function physics(dt) {
     }
   }
 
-  // ---- the ball ----
-  const R = ballR();
-  ball.vy += g * dt;
-  ball.x += ball.vx * dt;
-  ball.y += ball.vy * dt;
-  ball.angle += ball.spin * dt;
-  ball.spin *= Math.pow(0.9, dt * 60);
-  if (ball.y > P.ground - R) {                     // the grass
-    ball.y = P.ground - R;
-    if (Math.abs(ball.vy) > 30) bounceSound(Math.abs(ball.vy));
-    ball.vy = -ball.vy * BALL_BOUNCE;
-    ball.vx *= 0.985;
-    ball.spin = ball.vx * 0.05;
-  }
-  if (ball.y < P.hud + R) { ball.y = P.hud + R; ball.vy = Math.abs(ball.vy) * BALL_BOUNCE; }
-  // the side walls, except where the goal mouth is
-  const inGoalMouth = ball.y > P.goalTop;
-  if (ball.x < R && !inGoalMouth) { ball.x = R; ball.vx = Math.abs(ball.vx) * BALL_BOUNCE; bounceSound(300); }
-  if (ball.x > P.W - R && !inGoalMouth) { ball.x = P.W - R; ball.vx = -Math.abs(ball.vx) * BALL_BOUNCE; bounceSound(300); }
-  // the back of the net
-  if (ball.x < R) { ball.x = R; ball.vx = Math.abs(ball.vx) * 0.3; }
-  if (ball.x > P.W - R) { ball.x = P.W - R; ball.vx = -Math.abs(ball.vx) * 0.3; }
+  // ---- everything you can kick ----
+  for (const b of balls) ballPhysics(b, dt, P, g);
 
-  // ---- players against the ball ----
+  // ---- players against everything ----
   for (const p of players) {
-    const bx = ball.x - p.x, by = ball.y - p.y;
-    const bd = Math.hypot(bx, by) || 1;
-    const reach = PLAYER_R + R + (p.kick > 0 ? PLAYER_R * KICK_REACH : 0);
-    if (bd > reach) continue;
-    const nx = bx / bd, ny = by / bd;
-    if (p.kick > 0) {
-      // THE BOOT. A proper wallop, away from the player and upward.
-      ball.vx = nx * KICK_POWER + p.face * KICK_POWER * 0.5 + p.vx * 0.4;
-      ball.vy = ny * KICK_POWER * 0.4 - KICK_LIFT;
-      ball.spin = p.face * 14;
-      p.kick = 0;
-      p.flash = 0.22;
-      thump(KICK_POWER);
-      shake = Math.max(shake, 12);
-      for (let i = 0; i < 12; i++) {
-        const ang = Math.random() * Math.PI * 2, sp = 60 + Math.random() * 240;
-        particles.push({ x: ball.x, y: ball.y, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp,
-                         life: 0.35, color: '#ffd83d' });
-      }
-    } else {
-      // just bumped into: shove it out of the way
-      const overlap = PLAYER_R + R - bd;
-      if (overlap > 0) { ball.x += nx * overlap; ball.y += ny * overlap; }
-      // Running into it counts as a hit too - a body check. It has to
-      // send the ball off FASTER than you are running, or you would just
-      // trample straight over it and never be able to dribble.
-      const hit = 300 + Math.abs(p.vx) * 1.25;
-      ball.vx = nx * hit + p.vx * 0.6;
-      ball.vy = Math.min(ball.vy, ny * hit - 150);
-      ball.spin = p.vx * 0.06;
-      bounceSound(hit * 0.4);
+    for (const b of balls) playerVsBall(p, b);
+  }
+}
+
+// One thing on the pitch, one step of physics. Each kind brings its own
+// weight, bounce and drag, so this same code makes a football bounce
+// true and a pizza float about.
+function ballPhysics(b, dt, P, g) {
+  b.vy += g * b.grav * dt;
+  b.vx *= Math.pow(b.drag, dt * 60);
+  b.x += b.vx * dt;
+  b.y += b.vy * dt;
+  b.angle += b.spin * dt;
+  b.spin *= Math.pow(0.9, dt * 60);
+  if (b.y > P.ground - b.r) {                      // the grass
+    b.y = P.ground - b.r;
+    if (Math.abs(b.vy) > 30) bounceSound(Math.abs(b.vy));
+    b.vy = -b.vy * b.bounce;
+    b.vx *= 0.985;
+    b.spin = b.vx * b.spinny;
+    // a rugby ball does not bounce straight. THAT is the whole joke.
+    if (b.wobble && Math.abs(b.vy) > 60) {
+      b.vx += (Math.random() - 0.5) * b.wobble;
+      b.spin += (Math.random() - 0.5) * 18;
     }
+  }
+  if (b.y < P.hud + b.r) { b.y = P.hud + b.r; b.vy = Math.abs(b.vy) * b.bounce; }
+  const inGoalMouth = b.y > P.goalTop;
+  if (b.x < b.r && !inGoalMouth) { b.x = b.r; b.vx = Math.abs(b.vx) * b.bounce; bounceSound(300); }
+  if (b.x > P.W - b.r && !inGoalMouth) { b.x = P.W - b.r; b.vx = -Math.abs(b.vx) * b.bounce; bounceSound(300); }
+  if (b.x < b.r) { b.x = b.r; b.vx = Math.abs(b.vx) * 0.3; }
+  if (b.x > P.W - b.r) { b.x = P.W - b.r; b.vx = -Math.abs(b.vx) * 0.3; }
+}
+
+function playerVsBall(p, b) {
+  const bx = b.x - p.x, by = b.y - p.y;
+  const bd = Math.hypot(bx, by) || 1;
+  const reach = PLAYER_R + b.r + (p.kick > 0 ? PLAYER_R * KICK_REACH : 0);
+  if (bd > reach) return;
+  const nx = bx / bd, ny = by / bd;
+  if (p.kick > 0) {
+    // THE BOOT. A proper wallop, away from the player and upward.
+    b.vx = nx * KICK_POWER + p.face * KICK_POWER * 0.5 + p.vx * 0.4;
+    b.vy = ny * KICK_POWER * 0.4 - KICK_LIFT;
+    b.spin = p.face * 14;
+    p.kick = 0;
+    p.flash = 0.22;
+    thump(KICK_POWER);
+    shake = Math.max(shake, 12);
+    for (let i = 0; i < 12; i++) {
+      const ang = Math.random() * Math.PI * 2, sp = 60 + Math.random() * 240;
+      particles.push({ x: b.x, y: b.y, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp,
+                       life: 0.35, color: '#ffd83d' });
+    }
+  } else {
+    // Running into it counts as a hit too - a body check. It has to
+    // send it off FASTER than you are running, or you would just
+    // trample straight over it and never be able to dribble.
+    const overlap = PLAYER_R + b.r - bd;
+    if (overlap > 0) { b.x += nx * overlap; b.y += ny * overlap; }
+    const hit = 300 + Math.abs(p.vx) * 1.25;
+    b.vx = nx * hit + p.vx * 0.6;
+    b.vy = Math.min(b.vy, ny * hit - 150);
+    b.spin = p.vx * b.spinny;
+    bounceSound(hit * 0.4);
   }
 }
 </script>
@@ -409,16 +458,18 @@ function physics(dt) {
 // ---------------------------------------------------------------------
 function checkGoal() {
   const P = pitch();
-  const R = ballR();
-  if (ball.y < P.goalTop) return;                  // over the bar
-  let scorer = -1;
-  if (ball.x < P.goalDepth - R * 0.2) scorer = 1;  // in the LEFT net: blue scores
-  if (ball.x > P.W - P.goalDepth + R * 0.2) scorer = 0;
+  let scorer = -1, scoredWith = null;
+  for (const b of balls) {
+    if (b.y < P.goalTop) continue;                 // over the bar
+    if (b.x < P.goalDepth - b.r * 0.2) { scorer = 1; scoredWith = b; break; }
+    if (b.x > P.W - P.goalDepth + b.r * 0.2) { scorer = 0; scoredWith = b; break; }
+  }
   if (scorer < 0) return;
+  const ball = scoredWith;                         // the one that went in
   scores[scorer]++;
   // was it an own goal? whoever touched it last is not tracked, so we
   // simply say so when the ball goes in the net you were defending
-  lastGoal = { team: scorer };
+  lastGoal = { team: scorer, kind: ball.kind };
   goalFanfare();
   shake = 24;
   for (let i = 0; i < 60; i++) {
@@ -451,9 +502,20 @@ function aiWant(p) {
   p.aiPlan = aiThink(p);
   return p.aiPlan;
 }
+// which thing on the pitch is closest to me?
+function nearestBall(p) {
+  let best = balls[0], bd = 1e9;
+  for (const b of balls) {
+    const d = Math.hypot(b.x - p.x, b.y - p.y);
+    if (d < bd) { bd = d; best = b; }
+  }
+  return best;
+}
 function aiThink(p) {
   const S = aiSkill();
   const P = pitch();
+  const ball = nearestBall(p);
+  if (!ball) return { dir: 0, jump: false, kick: false };
   // where it THINKS the ball is - not quite where it really is
   const bx = ball.x + (p.aiErrX || 0), by = ball.y + (p.aiErrY || 0);
   const toBall = bx - p.x;
@@ -470,7 +532,7 @@ function aiThink(p) {
   // boot it when it is in range and on the correct side
   const facingRight = p.i === 0;
   const onGoodSide = facingRight ? bx > p.x - PLAYER_R : bx < p.x + PLAYER_R;
-  const kick = dist < PLAYER_R + ballR() + PLAYER_R * KICK_REACH && onGoodSide;
+  const kick = dist < PLAYER_R + ball.r + PLAYER_R * KICK_REACH && onGoodSide;
   return { dir, jump, kick };
 }
 
@@ -558,7 +620,8 @@ function drawPlayer(p) {
   ctx.ellipse(p.x, p.y + PLAYER_R * 0.42, PLAYER_R * 0.85, PLAYER_R * 0.4, 0, 0, Math.PI);
   ctx.fill();
   // eyes looking at the ball
-  const ang = Math.atan2(ball.y - p.y, ball.x - p.x);
+  const look = nearestBall(p) || { x: p.x + p.face * 100, y: p.y };
+  const ang = Math.atan2(look.y - p.y, look.x - p.x);
   const ex = Math.cos(ang) * PLAYER_R * 0.18, ey = Math.sin(ang) * PLAYER_R * 0.18;
   ctx.fillStyle = '#fff';
   ctx.beginPath();
@@ -586,15 +649,22 @@ function roundRect(x, y, w, h, r) {
   ctx.arcTo(x, y, x + w, y, r);
   ctx.closePath();
 }
-function drawBall() {
-  const R = ballR();
+// Each kind draws itself. Same idea as the snake skins: the game does
+// not care what a ball looks like, it just asks it to draw.
+function drawBall(b) {
   ctx.save();
-  ctx.translate(ball.x, ball.y);
-  ctx.rotate(ball.angle);
+  ctx.translate(b.x, b.y);
+  ctx.rotate(b.angle);
+  if (b.kind === 'american') drawAmerican(b.r);
+  else if (b.kind === 'pizza') drawPizza(b.r);
+  else drawFootball(b.r);
+  ctx.restore();
+}
+function drawFootball(R) {
   ctx.fillStyle = '#fdfdfd';
   ctx.beginPath(); ctx.arc(0, 0, R, 0, Math.PI * 2); ctx.fill();
   ctx.fillStyle = '#1d2430';
-  ctx.beginPath();                                    // the black patch
+  ctx.beginPath();
   for (let i = 0; i < 5; i++) {
     const a = (i / 5) * Math.PI * 2 - Math.PI / 2;
     const px = Math.cos(a) * R * 0.42, py = Math.sin(a) * R * 0.42;
@@ -610,7 +680,61 @@ function drawBall() {
     ctx.lineTo(Math.cos(a) * R, Math.sin(a) * R);
     ctx.stroke();
   }
-  ctx.restore();
+}
+function drawAmerican(R) {
+  // a pointy oval, with laces
+  ctx.fillStyle = '#8a4b22';
+  ctx.beginPath();
+  ctx.ellipse(0, 0, R * 1.35, R * 0.82, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#5e3115';
+  ctx.lineWidth = Math.max(2, R * 0.12);
+  ctx.stroke();
+  ctx.strokeStyle = '#fdfdfd';
+  ctx.lineWidth = Math.max(2, R * 0.14);
+  ctx.beginPath();                                  // the white bands
+  ctx.moveTo(-R * 0.95, -R * 0.32); ctx.lineTo(-R * 0.95, R * 0.32);
+  ctx.moveTo(R * 0.95, -R * 0.32); ctx.lineTo(R * 0.95, R * 0.32);
+  ctx.stroke();
+  ctx.lineWidth = Math.max(1.5, R * 0.1);
+  ctx.beginPath();                                  // the laces
+  ctx.moveTo(-R * 0.42, 0); ctx.lineTo(R * 0.42, 0);
+  ctx.stroke();
+  for (let i = -2; i <= 2; i++) {
+    ctx.beginPath();
+    ctx.moveTo(i * R * 0.2, -R * 0.2);
+    ctx.lineTo(i * R * 0.2, R * 0.2);
+    ctx.stroke();
+  }
+}
+function drawPizza(R) {
+  ctx.fillStyle = '#e8a83c';                        // crust
+  ctx.beginPath(); ctx.arc(0, 0, R, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#f5cf6b';
+  ctx.beginPath(); ctx.arc(0, 0, R * 0.88, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#e34b2a';                        // sauce
+  ctx.beginPath(); ctx.arc(0, 0, R * 0.78, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#ffd98a';                        // cheese
+  ctx.beginPath(); ctx.arc(0, 0, R * 0.72, 0, Math.PI * 2); ctx.fill();
+  // pepperoni, in a ring plus one in the middle
+  ctx.fillStyle = '#c0301c';
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.arc(Math.cos(a) * R * 0.44, Math.sin(a) * R * 0.44, R * 0.15, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.beginPath(); ctx.arc(0, 0, R * 0.15, 0, Math.PI * 2); ctx.fill();
+  // slice lines, so it reads as a pizza and not a biscuit
+  ctx.strokeStyle = 'rgba(190,120,40,0.55)';
+  ctx.lineWidth = Math.max(1, R * 0.06);
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * Math.PI;
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(a) * R * 0.8, Math.sin(a) * R * 0.8);
+    ctx.lineTo(-Math.cos(a) * R * 0.8, -Math.sin(a) * R * 0.8);
+    ctx.stroke();
+  }
 }
 function drawGoal(P, side) {
   const x = side < 0 ? 0 : P.W - P.goalDepth;
@@ -660,7 +784,7 @@ function draw() {
 
   drawGoal(P, -1);
   drawGoal(P, 1);
-  if (ball) drawBall();
+  for (const b of balls) drawBall(b);
   for (const p of players) drawPlayer(p);
 
   for (const pt of particles) {
@@ -708,7 +832,12 @@ function drawScreens(P) {
     ctx.fillText('GOAL!', 0, 0);
     ctx.fillStyle = '#fff';
     ctx.font = 'bold ' + Math.min(26, W / 24) + 'px monospace';
+    const what = { football: 'with the FOOTBALL', american: 'with the RUGBY BALL',
+                   pizza: 'WITH A PIZZA' }[lastGoal.kind] || '';
     ctx.fillText(t.name + ' SCORES', 0, 42);
+    ctx.fillStyle = 'rgba(255,255,255,0.75)';
+    ctx.font = 'bold ' + Math.min(19, W / 32) + 'px monospace';
+    ctx.fillText(what, 0, 70);
     ctx.restore();
   } else if (screen === 'over') {
     const w = scores[0] > scores[1] ? 0 : 1;
@@ -766,15 +895,15 @@ function drawScreens(P) {
 
     const dy = H * 0.63;
     if (ai[0] || ai[1]) {
-      drawDial(W * 0.2, dy, W, 'BALL  (1)', BALL_SIZES[ballSize].name,
-               BALL_SIZES[ballSize].desc, '#ffd83d', 'ball');
+      drawDial(W * 0.2, dy, W, 'BALLS  (1)', ballMode().name,
+               ballMode().desc, '#ffd83d', 'ball');
       drawDial(W * 0.5, dy, W, 'GRAVITY  (2)', GRAVITIES[gravLevel].name,
                GRAVITIES[gravLevel].desc, '#9ad4ff', 'grav');
       drawDial(W * 0.8, dy, W, 'ROBOT  (3)', AI_LEVELS[aiLevel].name,
                AI_LEVELS[aiLevel].desc, '#a8e4ff', 'skill');
     } else {
-      drawDial(W * 0.3, dy, W, 'BALL  (1)', BALL_SIZES[ballSize].name,
-               BALL_SIZES[ballSize].desc, '#ffd83d', 'ball');
+      drawDial(W * 0.3, dy, W, 'BALLS  (1)', ballMode().name,
+               ballMode().desc, '#ffd83d', 'ball');
       drawDial(W * 0.7, dy, W, 'GRAVITY  (2)', GRAVITIES[gravLevel].name,
                GRAVITIES[gravLevel].desc, '#9ad4ff', 'grav');
     }
@@ -846,7 +975,7 @@ function startFromTitle() {
   return false;
 }
 function cycleBall(step) {
-  ballSize = (ballSize + step + BALL_SIZES.length) % BALL_SIZES.length;
+  ballSize = (ballSize + step + BALL_MODES.length) % BALL_MODES.length;
   localStorage.setItem('boot_ball', String(ballSize));
   tone(600, 0.06, 'square', 0.06);
 }
@@ -943,7 +1072,7 @@ function loop(now) {
   requestAnimationFrame(loop);
 }
 players = TEAMS.map((t, i) => newPlayer(i));
-ball = newBall(0);
+balls = makeBalls(0);
 requestAnimationFrame(loop);
 </script>
 </body>
