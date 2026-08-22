@@ -64,6 +64,16 @@ a.arcade-pill.arcade-float {
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 function fit() { canvas.width = innerWidth; canvas.height = innerHeight; }
+
+// The Arcade pill is a real HTML link floating over the top-left corner, so
+// the canvas can't see it. Ask the browser where it is — the BOOT BALL title
+// was being drawn straight underneath it on a phone held sideways.
+function pillBox() {
+  const el = document.getElementById('back');
+  if (!el) return { right: 109, bottom: 38 };
+  const r = el.getBoundingClientRect();
+  return { right: Math.ceil(r.right), bottom: Math.ceil(r.bottom) };
+}
 addEventListener('resize', fit);
 fit();
 
@@ -671,18 +681,42 @@ function draw() {
   ctx.globalAlpha = 1;
 
   // ---- the scoreboard ----
+  // Sized to the strip it's given rather than to fixed pixels, so a phone
+  // held sideways doesn't clip the tops off the letters. And RED is pushed
+  // right if it would otherwise slide under the Arcade pill — which it did
+  // as soon as it read "NORMAL ROBOT" instead of just "RED".
   ctx.textAlign = 'center';
+  let nameFont = Math.min(22, W / 26, P.hud * 0.36);
+  const scoreFont = Math.min(40, W / 16, P.hud * 0.52);
+  const pill = pillBox();
+  // On a narrow screen "NORMAL ROBOT" is too long to fit beside the pill AND
+  // still leave room for the other team — pushing RED right drags BLUE left
+  // until they collide. So it's just "ROBOT" when the screen is narrow.
+  const roomy = W >= 560;
+  const labels = TEAMS.map((t, i) =>
+    ai[i] ? (roomy ? AI_LEVELS[aiLevel].name + ' ROBOT' : 'ROBOT') : t.name);
+  ctx.font = 'bold ' + nameFont + 'px monospace';
+  let widest = Math.max(...labels.map(l => ctx.measureText(l).width));
+  // and a safety net: never let a label take more than its own half
+  const room = W / 2 - 30;
+  if (widest > room) {
+    nameFont = Math.max(8, nameFont * room / widest);
+    ctx.font = 'bold ' + nameFont + 'px monospace';
+    widest = Math.max(...labels.map(l => ctx.measureText(l).width));
+  }
+  const halfLeft = ctx.measureText(labels[0]).width / 2;
+  const leftX = Math.max(W * 0.3, pill.right + halfLeft + 12);
   TEAMS.forEach((t, i) => {
-    const x = i === 0 ? W * 0.3 : W * 0.7;
+    const x = i === 0 ? leftX : W - leftX;
     ctx.fillStyle = t.body;
-    ctx.font = 'bold ' + Math.min(22, W / 26) + 'px monospace';
-    ctx.fillText(ai[i] ? AI_LEVELS[aiLevel].name + ' ROBOT' : t.name, x, P.hud * 0.45);
-    ctx.font = 'bold ' + Math.min(40, W / 16) + 'px monospace';
-    ctx.fillText(String(scores[i]), x, P.hud * 0.92);
+    ctx.font = 'bold ' + nameFont + 'px monospace';
+    ctx.fillText(labels[i], x, P.hud * 0.45);
+    ctx.font = 'bold ' + scoreFont + 'px monospace';
+    ctx.fillText(String(scores[i]), x, P.hud * 0.94);
   });
   ctx.fillStyle = 'rgba(255,255,255,0.35)';
-  ctx.font = 'bold ' + Math.min(14, W / 40) + 'px monospace';
-  ctx.fillText('FIRST TO ' + WIN_GOALS, W / 2, P.hud * 0.6);
+  ctx.font = 'bold ' + Math.min(14, W / 40, P.hud * 0.24) + 'px monospace';
+  ctx.fillText('FIRST TO ' + WIN_GOALS, W / 2, P.hud * 0.62);
 
   drawScreens(P);
   if (touchMode && (screen === 'play' || screen === 'kickoff')) drawPads(P);
@@ -729,74 +763,99 @@ function drawScreens(P) {
   } else if (screen === 'title') {
     ctx.fillStyle = 'rgba(8, 20, 14, 0.9)';
     ctx.fillRect(0, 0, W, H);
+    // ---- LAY THE MENU OUT FROM THE ROOM WE ACTUALLY HAVE ----
+    // It used to be pinned to fixed fractions of the height (0.2, 0.36, 0.63,
+    // 0.85) which is fine on a tall screen and a pile-up on a short one: on a
+    // phone held sideways the title sat under the Arcade pill, the hint line
+    // ran through the team names, and the HUMAN buttons landed on top of the
+    // dials. Now the space below the pill is divided into four bands that
+    // always add up to exactly what's there, and the writing is sized to fit
+    // its own band — so nothing can ever land on anything else.
+    const top = pillBox().bottom + 8;
+    const avail = H - top - 10;
+    const headH = avail * 0.24, teamH = avail * 0.36;
+    const dialH = avail * 0.24, kickH = avail * 0.16;
+    const teamTop = top + headH, dialTop = teamTop + teamH, kickTop = dialTop + dialH;
+
     ctx.fillStyle = '#ffd83d';
-    ctx.font = 'bold ' + Math.min(66, W / 9) + 'px monospace';
-    ctx.fillText('BOOT BALL', W / 2, H * 0.2);
+    ctx.font = 'bold ' + Math.min(66, W / 9, headH * 0.46) + 'px monospace';
+    ctx.fillText('BOOT BALL', W / 2, top + headH * 0.44);
     ctx.fillStyle = 'rgba(255,255,255,0.55)';
-    ctx.font = Math.min(18, W / 32) + 'px monospace';
-    ctx.fillText('football, but wrong', W / 2, H * 0.2 + 30);
+    ctx.font = Math.min(18, W / 32, headH * 0.16) + 'px monospace';
+    ctx.fillText('football, but wrong', W / 2, top + headH * 0.70);
     if (!ai[0] && !ai[1]) {
       ctx.fillStyle = 'rgba(168, 228, 255,' + (0.55 + Math.sin(Date.now() / 400) * 0.35) + ')';
-      ctx.font = 'bold ' + Math.min(16, W / 36) + 'px monospace';
-      ctx.fillText('ON YOUR OWN?  tap a HUMAN below to make it a ROBOT', W / 2, H * 0.2 + 56);
+      ctx.font = 'bold ' + Math.min(16, W / 36, headH * 0.15) + 'px monospace';
+      // the long version only if there's room for it
+      const hint = W < 560 ? 'tap a HUMAN below to make it a ROBOT'
+                           : 'ON YOUR OWN?  tap a HUMAN below to make it a ROBOT';
+      ctx.fillText(hint, W / 2, top + headH * 0.95);
     }
 
     TEAMS.forEach((t, i) => {
       const x = i === 0 ? W * 0.27 : W * 0.73;
-      const y = H * 0.36;
       ctx.fillStyle = t.body;
-      ctx.font = 'bold ' + Math.min(26, W / 24) + 'px monospace';
-      ctx.fillText(t.name, x, y);
+      ctx.font = 'bold ' + Math.min(26, W / 24, teamH * 0.21) + 'px monospace';
+      ctx.fillText(t.name, x, teamTop + teamH * 0.19);
       ctx.fillStyle = 'rgba(255,255,255,0.6)';
-      ctx.font = 'bold ' + Math.min(14, W / 42) + 'px monospace';
-      ctx.fillText(i === 0 ? 'A / D  run' : 'LEFT / RIGHT  run', x, y + 26);
-      ctx.fillText(i === 0 ? 'W  jump      S  BOOT' : 'UP  jump    DOWN  BOOT', x, y + 46);
+      ctx.font = 'bold ' + Math.min(14, W / 42, teamH * 0.12) + 'px monospace';
+      ctx.fillText(i === 0 ? 'A / D  run' : 'LEFT / RIGHT  run', x, teamTop + teamH * 0.40);
+      ctx.fillText(i === 0 ? 'W  jump      S  BOOT' : 'UP  jump    DOWN  BOOT',
+                   x, teamTop + teamH * 0.57);
       // human or robot
-      const bw = Math.min(W * 0.22, 210), bh = 30;
+      const bw = Math.min(W * 0.22, 210), bh = Math.min(30, teamH * 0.26);
+      const by = teamTop + teamH * 0.66;
       ctx.fillStyle = ai[i] ? 'rgba(90,200,255,0.16)' : 'rgba(255,255,255,0.06)';
-      roundRect(x - bw / 2, y + 60, bw, bh, 8); ctx.fill();
+      roundRect(x - bw / 2, by, bw, bh, 8); ctx.fill();
       ctx.strokeStyle = ai[i] ? '#5ac8ff' : 'rgba(255,255,255,0.25)';
       ctx.lineWidth = 2;
-      roundRect(x - bw / 2, y + 60, bw, bh, 8); ctx.stroke();
+      roundRect(x - bw / 2, by, bw, bh, 8); ctx.stroke();
       ctx.fillStyle = ai[i] ? '#a8e4ff' : 'rgba(255,255,255,0.6)';
-      ctx.font = 'bold ' + Math.min(14, W / 44) + 'px monospace';
-      ctx.fillText(ai[i] ? '🤖 ROBOT' : '🧑 HUMAN  (tap)', x, y + 80);
-      uiRects.push({ x, y: y + 75, w: bw / 2, h: bh, aiToggle: i });
+      ctx.font = 'bold ' + Math.min(14, W / 44, bh * 0.48) + 'px monospace';
+      ctx.fillText(ai[i] ? '🤖 ROBOT' : '🧑 HUMAN  (tap)', x, by + bh * 0.68);
+      uiRects.push({ x, y: by + bh / 2, w: bw / 2, h: bh, aiToggle: i });
     });
 
-    const dy = H * 0.63;
+    const dy = dialTop + dialH * 0.5;
     if (ai[0] || ai[1]) {
+      const gap = W * 0.3;
       drawDial(W * 0.2, dy, W, 'BALL  (1)', BALL_SIZES[ballSize].name,
-               BALL_SIZES[ballSize].desc, '#ffd83d', 'ball');
+               BALL_SIZES[ballSize].desc, '#ffd83d', 'ball', dialH, gap);
       drawDial(W * 0.5, dy, W, 'GRAVITY  (2)', GRAVITIES[gravLevel].name,
-               GRAVITIES[gravLevel].desc, '#9ad4ff', 'grav');
+               GRAVITIES[gravLevel].desc, '#9ad4ff', 'grav', dialH, gap);
       drawDial(W * 0.8, dy, W, 'ROBOT  (3)', AI_LEVELS[aiLevel].name,
-               AI_LEVELS[aiLevel].desc, '#a8e4ff', 'skill');
+               AI_LEVELS[aiLevel].desc, '#a8e4ff', 'skill', dialH, gap);
     } else {
+      const gap = W * 0.4;
       drawDial(W * 0.3, dy, W, 'BALL  (1)', BALL_SIZES[ballSize].name,
-               BALL_SIZES[ballSize].desc, '#ffd83d', 'ball');
+               BALL_SIZES[ballSize].desc, '#ffd83d', 'ball', dialH, gap);
       drawDial(W * 0.7, dy, W, 'GRAVITY  (2)', GRAVITIES[gravLevel].name,
-               GRAVITIES[gravLevel].desc, '#9ad4ff', 'grav');
+               GRAVITIES[gravLevel].desc, '#9ad4ff', 'grav', dialH, gap);
     }
     ctx.fillStyle = 'rgba(255,255,255,' + (0.55 + Math.sin(Date.now() / 300) * 0.35) + ')';
-    ctx.font = 'bold ' + Math.min(24, W / 24) + 'px monospace';
-    ctx.fillText('SPACE  /  TAP  =  KICK OFF', W / 2, H * 0.85);
+    ctx.font = 'bold ' + Math.min(24, W / 24, kickH * 0.52) + 'px monospace';
+    ctx.fillText('SPACE  /  TAP  =  KICK OFF', W / 2, kickTop + kickH * 0.68);
   }
   ctx.textAlign = 'left';
 }
-function drawDial(cx, y, W, title, value, desc, color, tag) {
+function drawDial(cx, y, W, title, value, desc, color, tag, dh, gap) {
+  // dh = how tall a band this dial has been given; gap = how far to the next
+  // dial along, so the arrows can never reach into their neighbour
+  dh = dh || 70;
+  gap = gap || W;
   ctx.textAlign = 'center';
   ctx.fillStyle = 'rgba(255,255,255,0.4)';
-  ctx.font = 'bold ' + Math.min(12, W / 58) + 'px monospace';
-  ctx.fillText(title, cx, y - 16);
+  ctx.font = 'bold ' + Math.min(12, W / 58, dh * 0.17) + 'px monospace';
+  ctx.fillText(title, cx, y - dh * 0.24);
   ctx.fillStyle = color;
-  ctx.font = 'bold ' + Math.min(18, W / 40) + 'px monospace';
-  ctx.fillText(value, cx, y + 5);
+  ctx.font = 'bold ' + Math.min(18, W / 40, dh * 0.26) + 'px monospace';
+  ctx.fillText(value, cx, y + dh * 0.07);
   ctx.fillStyle = 'rgba(255,255,255,0.42)';
-  ctx.font = Math.min(12, W / 58) + 'px monospace';
-  ctx.fillText(desc, cx, y + 24);
-  const r = Math.min(15, W / 56);
-  [[-1, cx - Math.min(W * 0.13, 120)], [1, cx + Math.min(W * 0.13, 120)]].forEach(([dir, ax]) => {
+  ctx.font = Math.min(12, W / 58, dh * 0.17) + 'px monospace';
+  ctx.fillText(desc, cx, y + dh * 0.35);
+  const r = Math.min(15, W / 56, dh * 0.22);
+  const reach = Math.min(W * 0.13, 120, gap * 0.42);
+  [[-1, cx - reach], [1, cx + reach]].forEach(([dir, ax]) => {
     ctx.fillStyle = 'rgba(255,255,255,0.08)';
     ctx.beginPath(); ctx.arc(ax, y - 2, r, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = color;
