@@ -479,7 +479,13 @@ function checkGoal() {
   scores[scorer]++;
   // was it an own goal? whoever touched it last is not tracked, so we
   // simply say so when the ball goes in the net you were defending
-  lastGoal = { team: scorer, kind: ball.kind };
+  // THE NET SPITS IT BACK. It has just hit the back of the net, so it
+  // fires out the way it came in, spinning, while everyone celebrates.
+  const out = scorer === 0 ? -1 : 1;
+  ball.vx = out * 1000;
+  ball.vy = -720;
+  ball.spin = out * 22;
+  lastGoal = { team: scorer, kind: ball.kind, at: Date.now(), side: scorer === 0 ? 1 : -1 };
   goalFanfare();
   shake = 24;
   for (let i = 0; i < 60; i++) {
@@ -564,7 +570,14 @@ function update(dt) {
     return;
   }
   if (screen === 'goal') {
+    // The game does NOT freeze while you celebrate. Everything keeps
+    // moving, so you get to watch the ball fly back out of the net. We
+    // just stop counting goals, or the same one would score twice on
+    // its way out.
     timer -= dt;
+    acc += Math.min(dt, 0.05);
+    let g = 0;
+    while (acc >= SUB && g++ < 60) { physics(SUB); acc -= SUB; }
     if (timer <= 0) kickOff(lastGoal ? (lastGoal.team === 0 ? -1 : 1) : 0);
     return;
   }
@@ -748,13 +761,28 @@ function drawPizza(R) {
 }
 function drawGoal(P, side) {
   const x = side < 0 ? 0 : P.W - P.goalDepth;
+  // a net that has just been hit bulges and flashes for a moment
+  let bulge = 0;
+  if (lastGoal && lastGoal.side === side && screen === 'goal') {
+    const age = (Date.now() - lastGoal.at) / 1000;
+    if (age < 0.5) bulge = 1 - age / 0.5;
+  }
+  if (bulge > 0) {
+    ctx.fillStyle = 'rgba(255,255,255,' + bulge * 0.28 + ')';
+    ctx.fillRect(x, P.goalTop, P.goalDepth, P.ground - P.goalTop);
+  }
   ctx.fillStyle = 'rgba(255,255,255,0.10)';
   ctx.fillRect(x, P.goalTop, P.goalDepth, P.ground - P.goalTop);
   ctx.strokeStyle = 'rgba(255,255,255,0.5)';
   ctx.lineWidth = 1;
   for (let i = 0; i <= 6; i++) {
     const gx = x + (P.goalDepth / 6) * i;
-    ctx.beginPath(); ctx.moveTo(gx, P.goalTop); ctx.lineTo(gx, P.ground); ctx.stroke();
+    // the middle strings stretch furthest when the net is hit
+    const pull = bulge * Math.sin((i / 6) * Math.PI) * P.goalDepth * 0.5 * -side;
+    ctx.beginPath();
+    ctx.moveTo(gx, P.goalTop);
+    ctx.quadraticCurveTo(gx + pull, (P.goalTop + P.ground) / 2, gx, P.ground);
+    ctx.stroke();
   }
   for (let i = 0; i <= 5; i++) {
     const gy = P.goalTop + ((P.ground - P.goalTop) / 5) * i;
