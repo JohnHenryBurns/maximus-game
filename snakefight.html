@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover">
+<title>SNAKE FIGHT</title>
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #0b1410; }
+  canvas { display: block; touch-action: none; }
+</style>
+<style>
+a.arcade-pill {
+  display: inline-flex !important; align-items: center !important; gap: 6px !important;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif !important;
+  font-size: 13px !important; font-weight: 600 !important; letter-spacing: 0.3px !important;
+  line-height: 1 !important; text-decoration: none !important; text-transform: none !important;
+  color: #ffe0c4 !important;
+  background: rgba(24, 14, 28, 0.62) !important;
+  border: 1px solid rgba(255, 200, 150, 0.42) !important;
+  padding: 7px 13px !important; border-radius: 999px !important;
+  cursor: pointer !important; white-space: nowrap !important;
+  -webkit-backdrop-filter: blur(5px) !important; backdrop-filter: blur(5px) !important;
+  -webkit-tap-highlight-color: transparent !important;
+  transition: transform 0.12s, border-color 0.12s, background 0.12s !important;
+}
+a.arcade-pill:hover, a.arcade-pill:active, a.arcade-pill:focus-visible {
+  transform: scale(1.05) !important;
+  border-color: rgba(255, 200, 150, 0.9) !important;
+  background: rgba(40, 22, 44, 0.78) !important;
+  color: #fff5e8 !important;
+}
+a.arcade-pill .ah-arrow { font-size: 14px !important; opacity: 0.9 !important; }
+a.arcade-pill.arcade-float {
+  position: fixed !important;
+  top: calc(8px + env(safe-area-inset-top, 0px)) !important;
+  left: calc(10px + env(safe-area-inset-left, 0px)) !important;
+  z-index: 2147483000 !important;
+}
+</style>
+</head>
+<body>
+<a id="back" class="arcade-pill arcade-float" href="index.html"
+   aria-label="Back to Max's Arcade"><span class="ah-arrow">&larr;</span>Arcade</a>
+<script>
+(function () {
+  var pill = document.getElementById('back');
+  if (!pill) return;
+  var go = function (e) { e.stopPropagation(); e.preventDefault(); location.href = 'index.html'; };
+  ['click', 'touchend'].forEach(function (t) { pill.addEventListener(t, go, { passive: false }); });
+  ['mousedown', 'touchstart', 'pointerdown'].forEach(function (t) {
+    pill.addEventListener(t, function (e) { e.stopPropagation(); }, { passive: false });
+  });
+})();
+</script>
+<canvas id="game"></canvas>
+<script>
+// =====================================================================
+// SNAKE FIGHT - two snakes, one box, one keyboard.
+//
+// GREEN plays with W A S D.  PINK plays with the arrow keys.
+// Hit a wall, your own tail, or THEIRS, and you lose the round.
+// First to five wins the match.
+// =====================================================================
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+function fit() { canvas.width = innerWidth; canvas.height = innerHeight; }
+addEventListener('resize', fit);
+fit();
+
+window.onerror = (msg, src, line) => {
+  const d = document.createElement('div');
+  d.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#c0392b;' +
+    'color:#fff;font:14px monospace;padding:8px;z-index:9';
+  d.textContent = '🐛 BUG on line ' + line + ': ' + msg;
+  document.body.appendChild(d);
+};
+
+// ---- the arena, measured in squares ----
+const COLS = 39, ROWS = 25;      // odd numbers, so there is a middle square
+const WIN_SCORE = 5;
+const START_LEN = 5;
+const GROW_EVERY = 16;           // both snakes grow anyway, so rounds always end
+
+// ---- the two players ----
+// Everything about a player lives in one object. Want a third snake one
+// day? Add a third object - the rest of the code already loops over them.
+const PLAYERS = [
+  { name: 'GREEN', body: '#7fdf3f', head: '#c6ff6a', dead: '#3a5c22',
+    keys: { w: 'up', a: 'left', s: 'down', d: 'right' },
+    start: { x: 6, y: 12 }, dir: 'right', side: 'left' },
+  { name: 'PINK', body: '#ff5fa8', head: '#ffa8d2', dead: '#5c2240',
+    keys: { ArrowUp: 'up', ArrowLeft: 'left', ArrowDown: 'down', ArrowRight: 'right' },
+    start: { x: COLS - 7, y: 12 }, dir: 'left', side: 'right' },
+];
+const STEPS = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] };
+const OPPOSITE = { up: 'down', down: 'up', left: 'right', right: 'left' };
+
+let snakes = [];                 // the live snakes, one per player
+let food = null;
+let scores = [0, 0];
+let screen = 'title';            // 'title' | 'countdown' | 'play' | 'roundover' | 'matchover'
+let countdown = 0;
+let roundTimer = 0;
+let stepTimer = 0;
+let stepTime = 0.125;            // seconds between moves - lower is faster
+let ticks = 0;
+let particles = [];
+let shake = 0;
+let lastResult = null;           // what happened at the end of the round
+let touchMode = false;           // switches the thumb pads on
+</script>
+<script>
+// ---------------------------------------------------------------------
+// SOUND - all made out of maths, no files to download
+// ---------------------------------------------------------------------
+let audio = null;
+function ensureAudio() {
+  if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)();
+}
+function beep(freq, len, type, vol) {
+  if (!audio) return;
+  const o = audio.createOscillator(), g = audio.createGain();
+  o.type = type || 'square';
+  o.frequency.value = freq;
+  g.gain.setValueAtTime(vol === undefined ? 0.08 : vol, audio.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + len);
+  o.connect(g); g.connect(audio.destination);
+  o.start(); o.stop(audio.currentTime + len + 0.02);
+}
+function crashSound() {
+  if (!audio) return;
+  const o = audio.createOscillator(), g = audio.createGain();
+  o.type = 'sawtooth';
+  o.frequency.setValueAtTime(320, audio.currentTime);
+  o.frequency.exponentialRampToValueAtTime(40, audio.currentTime + 0.4);
+  g.gain.setValueAtTime(0.18, audio.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + 0.45);
+  o.connect(g); g.connect(audio.destination);
+  o.start(); o.stop(audio.currentTime + 0.5);
+}
+function winJingle() {
+  [523, 659, 784, 1047].forEach((n, i) => {
+    setTimeout(() => beep(n, 0.18, 'square', 0.1), i * 110);
+  });
+}
+
+// ---------------------------------------------------------------------
+// STARTING A ROUND
+// ---------------------------------------------------------------------
+function newSnake(p) {
+  // built facing the way it will travel, tail trailing behind the head
+  const body = [];
+  const [dx, dy] = STEPS[p.dir];
+  for (let i = 0; i < START_LEN; i++) {
+    body.push({ x: p.start.x - dx * i, y: p.start.y - dy * i });
+  }
+  return { p, body, dir: p.dir, next: p.dir, grow: 0, alive: true };
+}
+function placeFood() {
+  // somewhere empty - keep looking until we find a free square
+  for (let tries = 0; tries < 500; tries++) {
+    const x = 1 + Math.floor(Math.random() * (COLS - 2));
+    const y = 1 + Math.floor(Math.random() * (ROWS - 2));
+    if (!snakes.some(s => s.body.some(b => b.x === x && b.y === y))) {
+      food = { x, y, pop: 0 };
+      return;
+    }
+  }
+  food = null;
+}
+function startRound() {
+  snakes = PLAYERS.map(newSnake);
+  placeFood();
+  ticks = 0;
+  stepTimer = 0;
+  particles = [];
+  lastResult = null;
+  countdown = 3.0;
+  screen = 'countdown';
+}
+function startMatch() {
+  scores = [0, 0];
+  stepTime = 0.125;
+  startRound();
+}
+
+// ---------------------------------------------------------------------
+// ONE MOVE OF THE GAME
+//
+// Both snakes move at the SAME MOMENT. That matters: it means we work
+// out both new heads first, and only then ask who crashed. Do it one
+// snake at a time and whoever moves first would win every head-on.
+// ---------------------------------------------------------------------
+function occupied(cell, ignoreTails) {
+  for (const s of snakes) {
+    // the last segment is about to move away, so it does not count
+    // (unless that snake is growing this move and keeps it)
+    const end = ignoreTails && !s.grow ? s.body.length - 1 : s.body.length;
+    for (let i = 0; i < end; i++) {
+      if (s.body[i].x === cell.x && s.body[i].y === cell.y) return true;
+    }
+  }
+  return false;
+}
+function step() {
+  ticks++;
+  // 1. everybody turns
+  for (const s of snakes) {
+    if (OPPOSITE[s.next] !== s.dir) s.dir = s.next;   // no turning back on yourself
+  }
+  // 2. work out where every head is going, before judging anyone
+  const heads = snakes.map(s => {
+    const [dx, dy] = STEPS[s.dir];
+    return { x: s.body[0].x + dx, y: s.body[0].y + dy };
+  });
+  // 3. everyone about to eat keeps their tail this move
+  heads.forEach((h, i) => {
+    if (food && h.x === food.x && h.y === food.y) snakes[i].grow += 4;
+  });
+  if (ticks % GROW_EVERY === 0) snakes.forEach(s => { s.grow += 1; });
+  // 4. NOW judge the crashes
+  const doomed = [false, false];
+  heads.forEach((h, i) => {
+    if (h.x < 0 || h.y < 0 || h.x >= COLS || h.y >= ROWS) doomed[i] = true;
+    else if (occupied(h, true)) doomed[i] = true;
+  });
+  if (heads[0].x === heads[1].x && heads[0].y === heads[1].y) {
+    doomed[0] = doomed[1] = true;                      // nose to nose: both lose
+  }
+  // 5. move everyone who survived
+  heads.forEach((h, i) => {
+    const s = snakes[i];
+    if (doomed[i]) return;
+    s.body.unshift(h);
+    if (s.grow > 0) s.grow--; else s.body.pop();
+    if (food && h.x === food.x && h.y === food.y) {
+      placeFood();
+      beep(880, 0.07, 'square', 0.09);
+      beep(1320, 0.05, 'square', 0.05);
+    }
+  });
+  if (doomed[0] || doomed[1]) endRound(doomed);
+}
+</script>
+<script>
+// ---------------------------------------------------------------------
+// ENDING A ROUND
+// ---------------------------------------------------------------------
+function boom(cell, color) {
+  for (let i = 0; i < 26; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const sp = 40 + Math.random() * 260;
+    particles.push({
+      x: cell.x + 0.5, y: cell.y + 0.5,
+      vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+      life: 0.5 + Math.random() * 0.5, color,
+    });
+  }
+}
+function endRound(doomed) {
+  doomed.forEach((d, i) => {
+    if (!d) return;
+    snakes[i].alive = false;
+    boom(snakes[i].body[0], PLAYERS[i].head);
+  });
+  crashSound();
+  shake = 16;
+  if (doomed[0] && doomed[1]) {
+    lastResult = { draw: true, text: 'BOTH OF YOU! nobody scores.' };
+  } else {
+    const winner = doomed[0] ? 1 : 0;
+    scores[winner]++;
+    lastResult = { winner, text: PLAYERS[winner].name + ' WINS THE ROUND' };
+  }
+  roundTimer = 1.8;
+  screen = 'roundover';
+}
+function afterRound() {
+  if (scores[0] >= WIN_SCORE || scores[1] >= WIN_SCORE) {
+    screen = 'matchover';
+    winJingle();
+    // confetti in the winner's colour
+    const w = scores[0] > scores[1] ? 0 : 1;
+    for (let i = 0; i < 90; i++) {
+      particles.push({
+        x: Math.random() * COLS, y: -1 - Math.random() * 6,
+        vx: (Math.random() - 0.5) * 60, vy: 60 + Math.random() * 140,
+        life: 3, color: Math.random() < 0.5 ? PLAYERS[w].head : PLAYERS[w].body,
+      });
+    }
+    return;
+  }
+  // rounds speed up a little as the match goes on
+  stepTime = Math.max(0.075, stepTime - 0.004);
+  startRound();
+}
+
+// ---------------------------------------------------------------------
+// UPDATING
+// ---------------------------------------------------------------------
+function update(dt) {
+  if (shake > 0) shake = Math.max(0, shake - dt * 60);
+  for (const pt of particles) {
+    pt.x += pt.vx * dt / 24;
+    pt.y += pt.vy * dt / 24;
+    pt.vy += dt * 9;
+    pt.life -= dt;
+  }
+  particles = particles.filter(pt => pt.life > 0);
+  if (food) food.pop += dt;
+
+  if (screen === 'countdown') {
+    const was = Math.ceil(countdown);
+    countdown -= dt;
+    const now = Math.ceil(countdown);
+    if (now !== was && now > 0) beep(440, 0.12, 'square', 0.08);
+    if (countdown <= 0) { beep(880, 0.2, 'square', 0.1); screen = 'play'; }
+    return;
+  }
+  if (screen === 'roundover') {
+    roundTimer -= dt;
+    if (roundTimer <= 0) afterRound();
+    return;
+  }
+  if (screen !== 'play') return;
+  stepTimer += dt;
+  while (stepTimer >= stepTime) {
+    stepTimer -= stepTime;
+    if (screen === 'play') step();
+  }
+}
+
+// ---------------------------------------------------------------------
+// DRAWING
+// ---------------------------------------------------------------------
+function layout() {
+  const W = canvas.width, H = canvas.height;
+  const hud = Math.min(74, H * 0.11);
+  const pad = 10;
+  const cell = Math.floor(Math.min((W - pad * 2) / COLS, (H - hud - pad * 2) / ROWS));
+  const gw = cell * COLS, gh = cell * ROWS;
+  return { W, H, hud, cell, ox: Math.floor((W - gw) / 2), oy: hud + Math.floor((H - hud - gh) / 2), gw, gh };
+}
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+</script>
+<script>
+function draw() {
+  const L = layout();
+  const { W, H, cell, ox, oy, gw, gh } = L;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = '#0b1410';
+  ctx.fillRect(0, 0, W, H);
+  // the whole arena wobbles when somebody crashes
+  if (shake > 0) {
+    ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+  }
+
+  // ---- the box they fight in ----
+  ctx.fillStyle = '#101d17';
+  ctx.fillRect(ox, oy, gw, gh);
+  ctx.strokeStyle = '#2b4a38';
+  ctx.lineWidth = 1;
+  for (let x = 1; x < COLS; x++) {
+    ctx.beginPath(); ctx.moveTo(ox + x * cell, oy); ctx.lineTo(ox + x * cell, oy + gh); ctx.stroke();
+  }
+  for (let y = 1; y < ROWS; y++) {
+    ctx.beginPath(); ctx.moveTo(ox, oy + y * cell); ctx.lineTo(ox + gw, oy + y * cell); ctx.stroke();
+  }
+  ctx.strokeStyle = '#7fdf8f';
+  ctx.lineWidth = 3;
+  ctx.strokeRect(ox - 1.5, oy - 1.5, gw + 3, gh + 3);
+
+  // ---- the apple ----
+  if (food) {
+    const pulse = 1 + Math.sin(food.pop * 6) * 0.12;
+    const s = cell * 0.72 * pulse;
+    const cx = ox + food.x * cell + cell / 2, cy = oy + food.y * cell + cell / 2;
+    ctx.fillStyle = '#ff3b30';
+    ctx.beginPath(); ctx.arc(cx, cy, s / 2, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#7fdf3f';
+    ctx.fillRect(cx - 1.5, cy - s / 2 - cell * 0.16, 3, cell * 0.18);
+  }
+
+  // ---- the snakes ----
+  snakes.forEach((s, i) => {
+    const p = PLAYERS[i];
+    s.body.forEach((b, j) => {
+      const x = ox + b.x * cell, y = oy + b.y * cell;
+      const inset = j === 0 ? 1 : 2;
+      ctx.fillStyle = !s.alive ? p.dead : (j === 0 ? p.head : p.body);
+      roundRect(x + inset, y + inset, cell - inset * 2, cell - inset * 2, Math.max(2, cell * 0.28));
+      ctx.fill();
+      if (j === 0 && s.alive) {
+        // eyes, looking where it is going
+        const [dx, dy] = STEPS[s.dir];
+        const ex = x + cell / 2 + dx * cell * 0.18, ey = y + cell / 2 + dy * cell * 0.18;
+        const sx = Math.abs(dx) ? 0 : cell * 0.18, sy = Math.abs(dy) ? 0 : cell * 0.18;
+        ctx.fillStyle = '#0b1410';
+        ctx.beginPath();
+        ctx.arc(ex - sx, ey - sy, Math.max(1.4, cell * 0.1), 0, Math.PI * 2);
+        ctx.arc(ex + sx, ey + sy, Math.max(1.4, cell * 0.1), 0, Math.PI * 2);
+        ctx.fill();
+      }
+    });
+  });
+
+  // ---- sparks ----
+  for (const pt of particles) {
+    ctx.globalAlpha = Math.max(0, Math.min(1, pt.life));
+    ctx.fillStyle = pt.color;
+    ctx.fillRect(ox + pt.x * cell - 2, oy + pt.y * cell - 2, 5, 5);
+  }
+  ctx.globalAlpha = 1;
+
+  // ---- the scoreboard ----
+  ctx.textAlign = 'center';
+  const midY = L.hud * 0.52;
+  PLAYERS.forEach((p, i) => {
+    const x = i === 0 ? W * 0.26 : W * 0.74;
+    ctx.fillStyle = p.head;
+    ctx.font = 'bold ' + Math.min(20, W / 26) + 'px monospace';
+    ctx.fillText(p.name, x, midY - 6);
+    // one pip per round won
+    const pips = WIN_SCORE, size = Math.min(13, W / 44), gap = size * 1.7;
+    for (let k = 0; k < pips; k++) {
+      const px = x - (pips - 1) * gap / 2 + k * gap;
+      ctx.fillStyle = k < scores[i] ? p.body : 'rgba(255,255,255,0.14)';
+      ctx.beginPath(); ctx.arc(px, midY + 14, size / 2, 0, Math.PI * 2); ctx.fill();
+    }
+  });
+  ctx.fillStyle = 'rgba(255,255,255,0.35)';
+  ctx.font = 'bold ' + Math.min(15, W / 34) + 'px monospace';
+  ctx.fillText('FIRST TO ' + WIN_SCORE, W / 2, midY + 6);
+
+  drawScreens(L);
+  if (touchMode && (screen === 'play' || screen === 'countdown')) drawPads(L);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+}
+</script>
+<script>
+// ---- the title, countdown, and end-of-round messages ----
+function drawScreens(L) {
+  const { W, H } = L;
+  ctx.textAlign = 'center';
+  if (screen === 'title') {
+    ctx.fillStyle = 'rgba(6, 12, 9, 0.86)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#7fdf3f';
+    ctx.font = 'bold ' + Math.min(64, W / 9) + 'px monospace';
+    ctx.fillText('SNAKE', W / 2, H * 0.3);
+    ctx.fillStyle = '#ff5fa8';
+    ctx.fillText('FIGHT', W / 2, H * 0.3 + Math.min(66, W / 8.6));
+    ctx.font = 'bold ' + Math.min(19, W / 30) + 'px monospace';
+    ctx.fillStyle = '#7fdf3f';
+    ctx.fillText('GREEN:  W  A  S  D', W / 2, H * 0.56);
+    ctx.fillStyle = '#ff5fa8';
+    ctx.fillText('PINK:  ARROW KEYS', W / 2, H * 0.56 + 30);
+    ctx.fillStyle = 'rgba(255,255,255,0.65)';
+    ctx.font = Math.min(15, W / 36) + 'px monospace';
+    ctx.fillText('crash into a wall, your own tail, or theirs - and you lose the round',
+                 W / 2, H * 0.56 + 66);
+    ctx.fillText('on a phone: one thumb pad each, bottom corners', W / 2, H * 0.56 + 88);
+    ctx.fillStyle = 'rgba(255,255,255,' + (0.55 + Math.sin(Date.now() / 300) * 0.35) + ')';
+    ctx.font = 'bold ' + Math.min(24, W / 24) + 'px monospace';
+    ctx.fillText('PRESS ANY KEY  /  TAP TO START', W / 2, H * 0.82);
+  } else if (screen === 'countdown') {
+    const n = Math.ceil(countdown);
+    const grow = 1 + (Math.ceil(countdown) - countdown) * 0.5;
+    ctx.save();
+    ctx.translate(W / 2, H * 0.5);
+    ctx.scale(grow, grow);
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold ' + Math.min(96, W / 6) + 'px monospace';
+    ctx.fillText(n > 0 ? String(n) : 'GO!', 0, 0);
+    ctx.restore();
+  } else if (screen === 'roundover' && lastResult) {
+    ctx.fillStyle = 'rgba(6, 12, 9, 0.55)';
+    ctx.fillRect(0, H * 0.38, W, H * 0.16);
+    ctx.fillStyle = lastResult.draw ? '#ffd83d' : PLAYERS[lastResult.winner].head;
+    ctx.font = 'bold ' + Math.min(40, W / 15) + 'px monospace';
+    ctx.fillText(lastResult.text, W / 2, H * 0.49);
+  } else if (screen === 'matchover') {
+    const w = scores[0] > scores[1] ? 0 : 1;
+    ctx.fillStyle = 'rgba(6, 12, 9, 0.86)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = PLAYERS[w].head;
+    ctx.font = 'bold ' + Math.min(56, W / 11) + 'px monospace';
+    ctx.fillText(PLAYERS[w].name + ' WINS!', W / 2, H * 0.42);
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold ' + Math.min(30, W / 20) + 'px monospace';
+    ctx.fillText(scores[0] + '  -  ' + scores[1], W / 2, H * 0.53);
+    ctx.fillStyle = 'rgba(255,255,255,' + (0.55 + Math.sin(Date.now() / 300) * 0.35) + ')';
+    ctx.font = 'bold ' + Math.min(22, W / 26) + 'px monospace';
+    ctx.fillText('PRESS ANY KEY  /  TAP FOR A REMATCH', W / 2, H * 0.72);
+  }
+  ctx.textAlign = 'left';
+}
+
+// ---- thumb pads, one per player, so two people can play on a phone ----
+let padRects = [];
+function drawPads(L) {
+  const { W, H } = L;
+  const r = Math.min(38, W / 11);
+  padRects = [];
+  PLAYERS.forEach((p, i) => {
+    const cx = i === 0 ? r * 2.9 : W - r * 2.9;
+    const cy = H - r * 2.6;
+    [['up', 0, -1], ['down', 0, 1], ['left', -1, 0], ['right', 1, 0]].forEach(([dir, dx, dy]) => {
+      const x = cx + dx * r * 1.5, y = cy + dy * r * 1.5;
+      ctx.fillStyle = 'rgba(255,255,255,0.07)';
+      ctx.strokeStyle = p.body;
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(x, y, r * 0.62, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = p.head;
+      ctx.font = 'bold ' + r * 0.6 + 'px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText({ up: '▲', down: '▼', left: '◀', right: '▶' }[dir], x, y + r * 0.2);
+      padRects.push({ x, y, r: r * 0.78, player: i, dir });
+    });
+  });
+  ctx.textAlign = 'left';
+}
+</script>
+<script>
+// ---------------------------------------------------------------------
+// CONTROLS
+//
+// Each player has their own set of keys, written down in PLAYERS above.
+// We just look the pressed key up in both lists - so adding a third
+// player later would need no new code down here at all.
+// ---------------------------------------------------------------------
+function turn(playerIndex, dir) {
+  const s = snakes[playerIndex];
+  if (!s || !s.alive) return;
+  // You may not turn back on yourself. We compare against the direction
+  // actually MOVED, not the one queued, or a quick double-tap could spin
+  // you into your own neck.
+  if (OPPOSITE[dir] === s.dir) return;
+  s.next = dir;
+}
+function anyKeyScreens() {
+  if (screen === 'title') { startMatch(); return true; }
+  if (screen === 'matchover') { startMatch(); return true; }
+  return false;
+}
+addEventListener('keydown', e => {
+  ensureAudio();
+  if (e.key === ' ' || e.key.length === 1 || e.key.startsWith('Arrow')) {
+    if (anyKeyScreens()) { e.preventDefault(); return; }
+  }
+  PLAYERS.forEach((p, i) => {
+    const dir = p.keys[e.key] || p.keys[e.key.toLowerCase()];
+    if (dir) { turn(i, dir); e.preventDefault(); }
+  });
+});
+
+// ---- touch: thumb pads, plus swipe anywhere on your half ----
+const swipes = new Map();
+canvas.addEventListener('pointerdown', e => {
+  ensureAudio();
+  touchMode = touchMode || e.pointerType === 'touch';
+  if (anyKeyScreens()) return;
+  // did they hit one of the pad buttons?
+  for (const b of padRects) {
+    if (Math.hypot(e.clientX - b.x, e.clientY - b.y) < b.r) {
+      turn(b.player, b.dir);
+      return;
+    }
+  }
+  // otherwise start tracking a swipe, on whichever half they touched
+  swipes.set(e.pointerId, { x: e.clientX, y: e.clientY,
+                            player: e.clientX < canvas.width / 2 ? 0 : 1 });
+});
+canvas.addEventListener('pointermove', e => {
+  const sw = swipes.get(e.pointerId);
+  if (!sw) return;
+  const dx = e.clientX - sw.x, dy = e.clientY - sw.y;
+  if (Math.abs(dx) < 26 && Math.abs(dy) < 26) return;      // not a swipe yet
+  turn(sw.player, Math.abs(dx) > Math.abs(dy)
+    ? (dx > 0 ? 'right' : 'left')
+    : (dy > 0 ? 'down' : 'up'));
+  swipes.delete(e.pointerId);
+});
+canvas.addEventListener('pointerup', e => swipes.delete(e.pointerId));
+canvas.addEventListener('pointercancel', e => swipes.delete(e.pointerId));
+addEventListener('touchstart', () => { touchMode = true; }, { passive: true });
+
+// ---------------------------------------------------------------------
+// THE GAME LOOP
+// ---------------------------------------------------------------------
+let last = 0;
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  update(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+snakes = PLAYERS.map(newSnake);      // something to look at behind the title
+placeFood();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
