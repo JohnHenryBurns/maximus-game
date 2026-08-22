@@ -139,6 +139,14 @@ const GRAVITIES = [
   { name: 'MOON', g: 0.35, desc: 'everything floats' },
   { name: 'HEAVY', g: 1.9, desc: 'the ball is made of lead' },
 ];
+// How many things are on the pitch. Separate from WHAT they are, so you
+// can have one pizza or eight of them. The kinds simply repeat: pick THE
+// LOT and eight balls, and you get football, rugby, pizza, football...
+const BALL_COUNTS = [1, 2, 3, 5, 8, 12];
+let ballCountIx = parseInt(localStorage.getItem('boot_count') || '2');
+if (!(ballCountIx >= 0 && ballCountIx < BALL_COUNTS.length)) ballCountIx = 2;
+function ballTotal() { return BALL_COUNTS[ballCountIx]; }
+
 let ballSize = parseInt(localStorage.getItem('boot_ball') || '0');
 let gravLevel = parseInt(localStorage.getItem('boot_grav') || '0');
 if (!(ballSize >= 0 && ballSize < BALL_MODES.length)) ballSize = 0;
@@ -296,11 +304,26 @@ function newBall(kind, x, y, towards) {
 function makeBalls(towards) {
   const P = pitch();
   const list = ballMode().list;
-  // spread them out so they do not all start inside each other
-  return list.map((kind, i) => {
-    const spread = (i - (list.length - 1) / 2) * Math.min(150, P.W * 0.14);
-    return newBall(kind, P.W / 2 + spread, P.goalTop - 60 - i * 70, towards);
-  });
+  const total = ballTotal();
+  const scale = ballMode().scale || 1;
+  let maxR = 0;
+  for (const k of list) maxR = Math.max(maxR, BALL_KINDS[k].r * scale);
+  // Work out how many fit across before stacking a second row, using the
+  // BIGGEST one - eight beach balls need more elbow room than eight peas.
+  const needed = maxR * 2.5;
+  const cols = Math.max(1, Math.min(total, 5, Math.floor((P.W * 0.8) / needed)));
+  const rows = Math.ceil(total / cols);
+  const spanW = Math.min(P.W * 0.78, (cols - 1) * Math.max(130, needed));
+  const stepX = cols > 1 ? spanW / (cols - 1) : 0;
+  const stepY = Math.max(86, needed);
+  const out = [];
+  for (let i = 0; i < total; i++) {
+    const col = i % cols, row = Math.floor(i / cols);
+    const x = P.W / 2 + (col - (cols - 1) / 2) * stepX;
+    const y = Math.max(P.hud + maxR + 8, P.goalTop - 70 - row * stepY);
+    out.push(newBall(list[i % list.length], x, y, towards));
+  }
+  return out;
 }
 function kickOff(towards) {
   players = TEAMS.map((t, i) => newPlayer(i));
@@ -1111,20 +1134,25 @@ function drawScreens(P) {
     });
 
     const dy = dialTop + dialH * 0.5;
+    const howMany = ballTotal() + (ballTotal() === 1 ? ' ball' : ' balls');
     if (ai[0] || ai[1]) {
+      const gap = W * 0.235;
+      drawDial(W * 0.135, dy, W, 'BALLS  (1)', ballMode().name,
+               ballMode().desc, '#ffd83d', 'ball', dialH, gap);
+      drawDial(W * 0.375, dy, W, 'GRAVITY  (2)', GRAVITIES[gravLevel].name,
+               GRAVITIES[gravLevel].desc, '#9ad4ff', 'grav', dialH, gap);
+      drawDial(W * 0.625, dy, W, 'HOW MANY  (3)', howMany,
+               ballTotal() > 5 ? 'utter chaos' : 'on the pitch at once', '#b6ff7a', 'count', dialH, gap);
+      drawDial(W * 0.865, dy, W, 'ROBOT  (4)', AI_LEVELS[aiLevel].name,
+               AI_LEVELS[aiLevel].desc, '#a8e4ff', 'skill', dialH, gap);
+    } else {
       const gap = W * 0.3;
-      drawDial(W * 0.2, dy, W, 'BALLS  (1)', ballMode().name,
+      drawDial(W * 0.18, dy, W, 'BALLS  (1)', ballMode().name,
                ballMode().desc, '#ffd83d', 'ball', dialH, gap);
       drawDial(W * 0.5, dy, W, 'GRAVITY  (2)', GRAVITIES[gravLevel].name,
                GRAVITIES[gravLevel].desc, '#9ad4ff', 'grav', dialH, gap);
-      drawDial(W * 0.8, dy, W, 'ROBOT  (3)', AI_LEVELS[aiLevel].name,
-               AI_LEVELS[aiLevel].desc, '#a8e4ff', 'skill', dialH, gap);
-    } else {
-      const gap = W * 0.4;
-      drawDial(W * 0.3, dy, W, 'BALLS  (1)', ballMode().name,
-               ballMode().desc, '#ffd83d', 'ball', dialH, gap);
-      drawDial(W * 0.7, dy, W, 'GRAVITY  (2)', GRAVITIES[gravLevel].name,
-               GRAVITIES[gravLevel].desc, '#9ad4ff', 'grav', dialH, gap);
+      drawDial(W * 0.82, dy, W, 'HOW MANY  (3)', howMany,
+               ballTotal() > 5 ? 'utter chaos' : 'on the pitch at once', '#b6ff7a', 'count', dialH, gap);
     }
     ctx.fillStyle = 'rgba(255,255,255,' + (0.55 + Math.sin(Date.now() / 300) * 0.35) + ')';
     ctx.font = 'bold ' + Math.min(24, W / 24, kickH * 0.52) + 'px monospace';
@@ -1203,6 +1231,12 @@ function cycleBall(step) {
   localStorage.setItem('boot_ball', String(ballSize));
   tone(600, 0.06, 'square', 0.06);
 }
+function cycleCount(step) {
+  ballCountIx = (ballCountIx + step + BALL_COUNTS.length) % BALL_COUNTS.length;
+  localStorage.setItem('boot_count', String(ballCountIx));
+  tone(500 + ballCountIx * 70, 0.06, 'square', 0.06);
+}
+
 function cycleGrav(step) {
   gravLevel = (gravLevel + step + GRAVITIES.length) % GRAVITIES.length;
   localStorage.setItem('boot_grav', String(gravLevel));
@@ -1227,7 +1261,8 @@ addEventListener('keydown', e => {
     if (e.key === 'Escape') { screen = 'title'; return; }
     if (e.key === '1') { cycleBall(1); return; }
     if (e.key === '2') { cycleGrav(1); return; }
-    if (e.key === '3') { cycleSkill(1); return; }
+    if (e.key === '3') { cycleCount(1); return; }
+    if (e.key === '4') { cycleSkill(1); return; }
     if (e.key.toLowerCase() === 'q') { toggleAI(0); return; }
     if (e.key.toLowerCase() === 'p') { toggleAI(1); return; }
   }
@@ -1256,6 +1291,7 @@ canvas.addEventListener('pointerdown', e => {
       if (b.aiToggle !== undefined) toggleAI(b.aiToggle);
       else if (b.ball) cycleBall(b.ball);
       else if (b.grav) cycleGrav(b.grav);
+      else if (b.count) cycleCount(b.count);
       else if (b.skill) cycleSkill(b.skill);
       return;
     }
