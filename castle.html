@@ -177,10 +177,14 @@ function stage() {
 function depthScale(depth) { return 1.15 + depth * 0.62; }
 // where does it sit on the screen?
 function toScreen(a, S, camX) {
-  const sc = depthScale(a.depth);
+  // Anything missing a number would give NaN here, and canvas draws
+  // NOTHING at NaN without complaining - so treat a missing z as zero
+  // rather than letting it poison the sum.
+  const depth = a.depth || 0;
+  const sc = depthScale(depth);
   return {
-    x: a.x - camX,
-    y: S.backY + a.depth * S.floorH - a.z,          // z is how high it has jumped
+    x: (a.x || 0) - camX,
+    y: S.backY + depth * S.floorH - (a.z || 0),     // z is how high it is off the floor
     sc,
   };
 }
@@ -314,7 +318,7 @@ function fillLevel(lv) {
   }
   if (lv.boss) foes.push(newFoe('boss', STAGE_W - 180, 0.55));
   if (lv.chest) {
-    chest = { x: STAGE_W - 170, depth: 0.62, bob: 0, taken: false, lift: 0 };
+    chest = { x: STAGE_W - 170, depth: 0.62, z: 0, bob: 0, taken: false, lift: 0 };
   }
 }
 
