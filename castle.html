@@ -115,11 +115,11 @@ const KNIGHTS = [
 // near, so a level is a march you can see coming rather than things
 // appearing out of nowhere behind you.
 const LEVELS = [
-  { id: 0, name: 'THE MEADOW', x: 0.12, y: 0.74, needs: -1, count: 10, enemy: 'goblin',
-    scene: 'grass', blurb: 'ten of them, and a chest of gold',
+  { id: 0, name: 'THE CASTLE', x: 0.12, y: 0.74, needs: -1, count: 10, enemy: 'goblin',
+    scene: 'castle', blurb: 'ten of them are in YOUR hall, after the gold',
     chest: true, cutscene: true },
-  { id: 1, name: 'OLD BRIDGE', x: 0.25, y: 0.55, needs: 0, count: 8, enemy: 'goblin',
-    scene: 'grass', blurb: 'they have taken the bridge' },
+  { id: 1, name: 'THE MEADOW', x: 0.25, y: 0.55, needs: 0, count: 8, enemy: 'goblin',
+    scene: 'grass', blurb: 'out of the gates, after him' },
   { id: 2, name: 'DARK WOOD', x: 0.37, y: 0.74, needs: 1, count: 10, enemy: 'bat',
     scene: 'wood', blurb: 'something in the trees' },
   { id: 3, name: 'THE CAVES', x: 0.49, y: 0.5, needs: 2, count: 11, enemy: 'slime',
@@ -903,27 +903,81 @@ const SCENES = {
   wood:  { sky1: '#1f3524', sky2: '#33543a', floor: '#3e6b38', floor2: '#2f5a2c', far: '#16311d' },
   cave:  { sky1: '#161122', sky2: '#2a2140', floor: '#4a4058', floor2: '#3a3246', far: '#0f0b18' },
   snow:  { sky1: '#93b8e0', sky2: '#dbeaf6', floor: '#e6eff7', floor2: '#cfdcea', far: '#a9c2d8' },
-  castle:{ sky1: '#2a1c3a', sky2: '#4a3560', floor: '#6a6070', floor2: '#544b5c', far: '#1d1428' },
+  castle:{ sky1: '#2a1c3a', sky2: '#4a3560', floor: '#6a6070', floor2: '#544b5c',
+           far: '#241a33', hall: true },
   lava:  { sky1: '#3a0f10', sky2: '#7a2410', floor: '#4a2820', floor2: '#3a1e18', far: '#220a0a' },
 };
+// The inside of a castle: a stone wall with arches, pillars between
+// them and a banner hanging on each pillar. It scrolls with you, so it
+// reads as a long hall you are fighting your way down.
+function drawHall(S, sc) {
+  const h = S.backY;
+  ctx.fillStyle = sc.far;
+  ctx.fillRect(0, 0, S.W, h);
+  const step = 260;
+  const start = -((camX * 0.55) % step) - step;
+  for (let x = start; x < S.W + step; x += step) {
+    // the dark arch
+    ctx.fillStyle = 'rgba(0,0,0,0.34)';
+    const aw = 96, ah = h * 0.44;
+    roundRect(x + step / 2 - aw / 2, h - ah, aw, ah, aw * 0.45);
+    ctx.fill();
+    // the pillar
+    ctx.fillStyle = sc.floor2;
+    ctx.fillRect(x - 26, h - h * 0.62, 52, h * 0.62);
+    ctx.fillStyle = 'rgba(255,255,255,0.07)';
+    ctx.fillRect(x - 26, h - h * 0.62, 16, h * 0.62);
+    // the banner
+    ctx.fillStyle = '#7a2338';
+    ctx.beginPath();
+    ctx.moveTo(x - 20, h - h * 0.58);
+    ctx.lineTo(x + 20, h - h * 0.58);
+    ctx.lineTo(x + 20, h - h * 0.24);
+    ctx.lineTo(x, h - h * 0.18);
+    ctx.lineTo(x - 20, h - h * 0.24);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#ffd83d';
+    ctx.beginPath();
+    ctx.arc(x, h - h * 0.42, 9, 0, Math.PI * 2);
+    ctx.fill();
+    // a torch, flickering
+    const flick = 0.75 + Math.sin(Date.now() / 90 + x) * 0.25;
+    ctx.fillStyle = 'rgba(255,170,60,' + flick * 0.8 + ')';
+    ctx.beginPath();
+    ctx.arc(x + step / 2, h - h * 0.66, 13 * flick, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,232,150,' + flick + ')';
+    ctx.beginPath();
+    ctx.arc(x + step / 2, h - h * 0.66, 6 * flick, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // the top of the wall
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.fillRect(0, 0, S.W, h * 0.12);
+}
+
 function drawStage(S, sc) {
   const sky = ctx.createLinearGradient(0, 0, 0, S.backY);
   sky.addColorStop(0, sc.sky1);
   sky.addColorStop(1, sc.sky2);
   ctx.fillStyle = sky;
   ctx.fillRect(0, 0, S.W, S.backY);
-  // a bumpy line of hills or walls in the distance, drifting slowly
-  ctx.fillStyle = sc.far;
-  ctx.beginPath();
-  ctx.moveTo(0, S.backY);
-  for (let i = 0; i <= 22; i++) {
-    const x = (i / 22) * S.W;
-    const h = 40 + Math.sin(i * 1.7 + camX * 0.0015) * 26 + Math.sin(i * 0.6) * 18;
-    ctx.lineTo(x, S.backY - h);
+  if (sc.hall) drawHall(S, sc);
+  else {
+    // a bumpy line of hills in the distance
+    ctx.fillStyle = sc.far;
+    ctx.beginPath();
+    ctx.moveTo(0, S.backY);
+    for (let i = 0; i <= 22; i++) {
+      const x = (i / 22) * S.W;
+      const h = 40 + Math.sin(i * 1.7 + camX * 0.0015) * 26 + Math.sin(i * 0.6) * 18;
+      ctx.lineTo(x, S.backY - h);
+    }
+    ctx.lineTo(S.W, S.backY);
+    ctx.closePath();
+    ctx.fill();
   }
-  ctx.lineTo(S.W, S.backY);
-  ctx.closePath();
-  ctx.fill();
   // the floor, in bands so the depth reads
   const g = ctx.createLinearGradient(0, S.backY, 0, S.frontY);
   g.addColorStop(0, sc.floor2);
