@@ -839,18 +839,29 @@ function drawGoblin(f, r) {
     ctx.ellipse(side * r * 0.62, hy + r * 0.75, r * 0.17, r * 0.3, side * 0.25, 0, Math.PI * 2);
     ctx.fill();
   }
-  // the horns, drawn BEFORE the head so the head covers their roots and
-  // they look like they grow out of it rather than sit on top
-  ctx.strokeStyle = '#e6dcc0';
-  ctx.lineWidth = Math.max(2.5, r * 0.16);
-  ctx.lineCap = 'round';
+  // SHARP HORNS. Filled shapes that taper to a point rather than a
+  // stroked line, because a line has the same width all the way along
+  // and can never actually be sharp.
   for (const side of [-1, 1]) {
+    ctx.fillStyle = '#d8cfb4';
     ctx.beginPath();
-    ctx.moveTo(side * r * 0.36, hy - r * 0.2);
-    ctx.quadraticCurveTo(side * r * 0.96, hy - r * 0.4, side * r * 0.8, hy - r * 1.02);
-    ctx.stroke();
+    ctx.moveTo(side * r * 0.26, hy - r * 0.16);              // thick at the skull
+    ctx.quadraticCurveTo(side * r * 1.02, hy - r * 0.44,
+                         side * r * 0.86, hy - r * 1.24);    // the point
+    ctx.quadraticCurveTo(side * r * 0.86, hy - r * 0.5,
+                         side * r * 0.5, hy - r * 0.06);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = 'rgba(0,0,0,0.22)';                      // a shaded underside
+    ctx.beginPath();
+    ctx.moveTo(side * r * 0.42, hy - r * 0.12);
+    ctx.quadraticCurveTo(side * r * 0.9, hy - r * 0.5,
+                         side * r * 0.86, hy - r * 1.24);
+    ctx.quadraticCurveTo(side * r * 0.8, hy - r * 0.52,
+                         side * r * 0.52, hy - r * 0.08);
+    ctx.closePath();
+    ctx.fill();
   }
-  ctx.lineCap = 'butt';
   // THE HEAD: green, out in the open, no hood
   ctx.fillStyle = E.skin;
   ctx.beginPath();
@@ -860,47 +871,84 @@ function drawGoblin(f, r) {
   ctx.beginPath();
   ctx.ellipse(0, hy + r * 0.3, r * 0.55, r * 0.22, 0, 0, Math.PI);
   ctx.fill();
-  // No ears and no mouth - nothing on that face but six eyes. A head
-  // with things missing is stranger than a head with things added.
-  // SIX EYES on the green face, in two rows of three
+  // THE IRON MASK. A slab of dark metal bolted over the face, with six
+  // holes punched in it. No mouth, no ears - just the eyes burning
+  // through, which is why they had to be drawn before the mask goes on.
   const ex = f.face * r * 0.05;
+  const eyeAt = (row, col) => ({
+    x: ex + (col - 1) * r * 0.3,
+    y: hy - r * 0.18 + row * r * 0.3,
+  });
+  // the glow behind the holes, so the light looks like it comes from
+  // inside the head rather than being painted on the front
   for (let row = 0; row < 2; row++) {
     for (let col = 0; col < 3; col++) {
-      const bx = ex + (col - 1) * r * 0.27;
-      const by = hy - r * 0.16 + row * r * 0.24;
-      // each blinks on its own clock, so they are never all in time
+      const p = eyeAt(row, col);
       const blink = Math.sin(f.bob * 1.3 + (row * 3 + col) * 2.1);
       const open = blink > -0.86 ? 1 : 0.1;
+      // dark first, so a blinking eye shows the shadow INSIDE the head
+      // rather than a green hole through to its skin
+      ctx.fillStyle = '#120c06';
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r * 0.125, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(255,220,60,0.35)';
+      ctx.beginPath();
+      ctx.ellipse(p.x, p.y, r * 0.13, r * 0.13 * open, 0, 0, Math.PI * 2);
+      ctx.fill();
       ctx.fillStyle = E.eyes;
       ctx.beginPath();
-      ctx.ellipse(bx, by, r * 0.11, r * 0.11 * open, 0, 0, Math.PI * 2);
+      ctx.ellipse(p.x, p.y, r * 0.085, r * 0.085 * open, 0, 0, Math.PI * 2);
       ctx.fill();
-      if (open > 0.5) {
-        ctx.fillStyle = '#20140a';
-        ctx.beginPath();
-        ctx.arc(bx + f.face * r * 0.035, by, r * 0.045, 0, Math.PI * 2);
-        ctx.fill();
-      }
     }
   }
-  // a heavy brow over the top row, which is what makes it look cross
-  ctx.strokeStyle = E.skinDark;
-  ctx.lineWidth = Math.max(2, r * 0.1);
+  // the mask itself, with the eye holes cut out of it
+  ctx.save();
   ctx.beginPath();
-  ctx.moveTo(-r * 0.42, hy - r * 0.34);
-  ctx.lineTo(r * 0.42, hy - r * 0.3);
-  ctx.stroke();
+  ctx.rect(-r, hy - r, r * 2, r * 2);                        // the mask area
+  for (let row = 0; row < 2; row++) {
+    for (let col = 0; col < 3; col++) {
+      const p = eyeAt(row, col);
+      ctx.moveTo(p.x + r * 0.115, p.y);
+      ctx.arc(p.x, p.y, r * 0.115, 0, Math.PI * 2, true);    // punched out
+    }
+  }
+  ctx.clip('evenodd');
+  ctx.fillStyle = '#4a525a';                                 // dark iron
+  ctx.beginPath();
+  ctx.ellipse(0, hy + r * 0.04, r * 0.68, r * 0.62, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#333a41';                                 // shadowed lower half
+  ctx.beginPath();
+  ctx.ellipse(0, hy + r * 0.32, r * 0.66, r * 0.36, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#5e6870';                                 // a ridge down the middle
+  ctx.fillRect(-r * 0.055, hy - r * 0.58, r * 0.11, r * 1.18);
+  ctx.fillStyle = 'rgba(255,255,255,0.09)';                  // a highlight along the top
+  ctx.beginPath();
+  ctx.ellipse(-r * 0.16, hy - r * 0.3, r * 0.36, r * 0.14, -0.3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  // rivets, right round the rim
+  ctx.fillStyle = '#7d868e';
+  for (let i = 0; i < 10; i++) {
+    const a = (i / 10) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.arc(Math.cos(a) * r * 0.58, hy + r * 0.04 + Math.sin(a) * r * 0.53, r * 0.045, 0, Math.PI * 2);
+    ctx.fill();
+  }
   // a crooked club, swung when attacking
   const sw = f.attack > 0 ? 1 - f.attack / 0.42 : 0;
   ctx.save();
-  ctx.translate(f.face * r * 0.66, -r * 0.85 + wob);
-  ctx.rotate(f.face * (-0.5 + sw * 1.7));
+  // held out to the side and pointing away, so it never crosses the face
+  ctx.translate(f.face * r * 0.72, -r * 0.78 + wob);
+  ctx.rotate(f.face * (0.5 + sw * 1.6));
   ctx.fillStyle = '#8a6a3a';
-  roundRect(-r * 0.09, -r * 1.05, r * 0.18, r * 1.05, r * 0.07);
+  roundRect(-r * 0.08, -r * 0.84, r * 0.16, r * 0.84, r * 0.06);
   ctx.fill();
   ctx.fillStyle = '#6b4f26';
   ctx.beginPath();
-  ctx.arc(0, -r * 1.05, r * 0.2, 0, Math.PI * 2);
+  ctx.arc(0, -r * 0.84, r * 0.17, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
 }
