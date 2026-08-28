@@ -194,7 +194,8 @@ function toScreen(a, S, camX) {
 // ---------------------------------------------------------------------
 const ENEMY_KINDS = {
   goblin: { name: 'GOBLIN', body: '#6b4a2a', dark: '#3d2916', health: 22, power: 6,
-            speed: 78, r: 20, xp: 8, eyes: '#ffd83d' },
+            speed: 78, r: 20, xp: 8, eyes: '#ffe94a',
+            skin: '#78b043', skinDark: '#4c7526' },
   bat:    { name: 'BAT', body: '#6a4a8f', dark: '#3c2757', health: 16, power: 5,
             speed: 118, r: 17, xp: 9, flies: true },
   slime:  { name: 'SLIME', body: '#3fbf8f', dark: '#1f6f52', health: 30, power: 7,
@@ -803,85 +804,120 @@ function drawBaron(sx, sy, sc, phase, t) {
 function drawGoblin(f, r) {
   const E = f.E;
   const wob = Math.sin(f.walkT) * r * 0.09;
-  const hy = -r * 1.55 + wob;                      // where the head sits
-  // little bare feet poking out under the cloak
-  ctx.fillStyle = '#4a3a2a';
+  const hy = -r * 1.62 + wob;                      // where the head sits
+  // bare green feet under the cloak
+  ctx.fillStyle = E.skinDark;
   for (const side of [-1, 1]) {
     const lift = Math.sin(f.walkT + (side > 0 ? Math.PI : 0)) * r * 0.16;
     roundRect(side * r * 0.28 - r * 0.13, -r * 0.24 + lift, r * 0.26, r * 0.26, r * 0.08);
     ctx.fill();
   }
-  // the cloak: a bell, wider at the bottom, with a ragged hem
+  // the cloak: a bell with a torn hem, worn on the body only
   ctx.fillStyle = E.body;
   ctx.beginPath();
-  ctx.moveTo(-r * 0.42, hy + r * 0.3);
+  ctx.moveTo(-r * 0.44, hy + r * 0.5);
   ctx.quadraticCurveTo(-r * 0.95, -r * 0.5, -r * 0.86, 0);
-  for (let i = 0; i <= 6; i++) {                   // the torn bottom edge
+  for (let i = 0; i <= 6; i++) {                   // the ragged bottom edge
     const t = i / 6;
-    const x = -r * 0.86 + t * r * 1.72;
-    ctx.lineTo(x, (i % 2 ? r * 0.06 : -r * 0.08));
+    ctx.lineTo(-r * 0.86 + t * r * 1.72, (i % 2 ? r * 0.06 : -r * 0.08));
   }
-  ctx.quadraticCurveTo(r * 0.95, -r * 0.5, r * 0.42, hy + r * 0.3);
+  ctx.quadraticCurveTo(r * 0.95, -r * 0.5, r * 0.44, hy + r * 0.5);
   ctx.closePath();
   ctx.fill();
   ctx.fillStyle = E.dark;                          // a shadowed fold down the middle
   ctx.beginPath();
-  ctx.moveTo(-r * 0.1, hy + r * 0.35);
-  ctx.lineTo(r * 0.1, hy + r * 0.35);
+  ctx.moveTo(-r * 0.1, hy + r * 0.55);
+  ctx.lineTo(r * 0.1, hy + r * 0.55);
   ctx.lineTo(r * 0.16, 0);
   ctx.lineTo(-r * 0.16, 0);
   ctx.closePath();
   ctx.fill();
-  // the horns, curving up and out of the hood
-  ctx.strokeStyle = '#d8cbb0';
-  ctx.lineWidth = Math.max(2.5, r * 0.15);
+  // green arms coming out of the cloak
+  ctx.fillStyle = E.skin;
+  for (const side of [-1, 1]) {
+    ctx.beginPath();
+    ctx.ellipse(side * r * 0.62, hy + r * 0.75, r * 0.17, r * 0.3, side * 0.25, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // the horns, drawn BEFORE the head so the head covers their roots and
+  // they look like they grow out of it rather than sit on top
+  ctx.strokeStyle = '#e6dcc0';
+  ctx.lineWidth = Math.max(2.5, r * 0.16);
   ctx.lineCap = 'round';
   for (const side of [-1, 1]) {
     ctx.beginPath();
-    ctx.moveTo(side * r * 0.42, hy - r * 0.1);
-    ctx.quadraticCurveTo(side * r * 0.92, hy - r * 0.42, side * r * 0.74, hy - r * 0.98);
+    ctx.moveTo(side * r * 0.36, hy - r * 0.2);
+    ctx.quadraticCurveTo(side * r * 0.96, hy - r * 0.4, side * r * 0.8, hy - r * 1.02);
     ctx.stroke();
   }
   ctx.lineCap = 'butt';
-  // the hood, drawn over the horn roots so they look like they come through
-  ctx.fillStyle = E.body;
+  // THE HEAD: green, out in the open, no hood
+  ctx.fillStyle = E.skin;
   ctx.beginPath();
-  ctx.arc(0, hy, r * 0.66, Math.PI * 1.05, Math.PI * 1.95);
-  ctx.quadraticCurveTo(r * 0.5, hy + r * 0.5, 0, hy + r * 0.42);
-  ctx.quadraticCurveTo(-r * 0.5, hy + r * 0.5, -r * 0.64, hy - r * 0.16);
-  ctx.closePath();
+  ctx.ellipse(0, hy, r * 0.66, r * 0.6, 0, 0, Math.PI * 2);
   ctx.fill();
-  // the dark inside the hood
-  ctx.fillStyle = '#150e08';
+  ctx.fillStyle = E.skinDark;                      // the underside, in shadow
   ctx.beginPath();
-  ctx.ellipse(f.face * r * 0.06, hy + r * 0.02, r * 0.44, r * 0.42, 0, 0, Math.PI * 2);
+  ctx.ellipse(0, hy + r * 0.3, r * 0.55, r * 0.22, 0, 0, Math.PI);
   ctx.fill();
-  // SIX EYES: two rows of three, glowing out of the dark
-  const ex = f.face * r * 0.06;
+  // pointed ears
+  ctx.fillStyle = E.skin;
+  for (const side of [-1, 1]) {
+    ctx.beginPath();
+    ctx.moveTo(side * r * 0.58, hy - r * 0.02);
+    ctx.lineTo(side * r * 1.0, hy - r * 0.3);
+    ctx.lineTo(side * r * 0.6, hy + r * 0.22);
+    ctx.closePath();
+    ctx.fill();
+  }
+  // SIX EYES on the green face, in two rows of three
+  const ex = f.face * r * 0.05;
   for (let row = 0; row < 2; row++) {
     for (let col = 0; col < 3; col++) {
-      const bx = ex + (col - 1) * r * 0.26;
-      const by = hy - r * 0.12 + row * r * 0.24;
-      // each eye blinks on its own clock, so they are never all in time
-      const which = row * 3 + col;
-      const blink = Math.sin(f.bob * 1.3 + which * 2.1);
-      const open = blink > -0.86 ? 1 : 0.12;
+      const bx = ex + (col - 1) * r * 0.27;
+      const by = hy - r * 0.16 + row * r * 0.24;
+      // each blinks on its own clock, so they are never all in time
+      const blink = Math.sin(f.bob * 1.3 + (row * 3 + col) * 2.1);
+      const open = blink > -0.86 ? 1 : 0.1;
       ctx.fillStyle = E.eyes;
       ctx.beginPath();
-      ctx.ellipse(bx, by, r * 0.1, r * 0.1 * open, 0, 0, Math.PI * 2);
+      ctx.ellipse(bx, by, r * 0.11, r * 0.11 * open, 0, 0, Math.PI * 2);
       ctx.fill();
-      if (open > 0.5) {                            // a tiny dark pupil
-        ctx.fillStyle = '#2a1a06';
+      if (open > 0.5) {
+        ctx.fillStyle = '#20140a';
         ctx.beginPath();
-        ctx.arc(bx + f.face * r * 0.03, by, r * 0.04, 0, Math.PI * 2);
+        ctx.arc(bx + f.face * r * 0.035, by, r * 0.045, 0, Math.PI * 2);
         ctx.fill();
       }
     }
   }
-  // a crooked little club, held out when swinging
+  // a heavy brow over the top row, which is what makes it look cross
+  ctx.strokeStyle = E.skinDark;
+  ctx.lineWidth = Math.max(2, r * 0.1);
+  ctx.beginPath();
+  ctx.moveTo(-r * 0.42, hy - r * 0.34);
+  ctx.lineTo(r * 0.42, hy - r * 0.3);
+  ctx.stroke();
+  // a mouth with two little tusks poking up
+  ctx.strokeStyle = '#20140a';
+  ctx.lineWidth = Math.max(1.5, r * 0.07);
+  ctx.beginPath();
+  ctx.moveTo(-r * 0.2, hy + r * 0.42);
+  ctx.lineTo(r * 0.2, hy + r * 0.42);
+  ctx.stroke();
+  ctx.fillStyle = '#f4efdc';
+  for (const side of [-1, 1]) {
+    ctx.beginPath();
+    ctx.moveTo(side * r * 0.14, hy + r * 0.42);
+    ctx.lineTo(side * r * 0.2, hy + r * 0.24);
+    ctx.lineTo(side * r * 0.06, hy + r * 0.42);
+    ctx.closePath();
+    ctx.fill();
+  }
+  // a crooked club, swung when attacking
   const sw = f.attack > 0 ? 1 - f.attack / 0.42 : 0;
   ctx.save();
-  ctx.translate(f.face * r * 0.62, -r * 0.85 + wob);
+  ctx.translate(f.face * r * 0.66, -r * 0.85 + wob);
   ctx.rotate(f.face * (-0.5 + sw * 1.7));
   ctx.fillStyle = '#8a6a3a';
   roundRect(-r * 0.09, -r * 1.05, r * 0.18, r * 1.05, r * 0.07);
