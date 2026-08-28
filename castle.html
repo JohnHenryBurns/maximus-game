@@ -1,0 +1,1358 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover">
+<title>KNIGHTS OF THE FOUR</title>
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #0e0b16; }
+  canvas { display: block; touch-action: none; }
+  input.nameBox {
+    position: fixed; display: none; z-index: 50;
+    font-family: monospace; font-weight: bold; text-align: center;
+    background: rgba(0,0,0,0.5); color: #fff;
+    border: 3px solid #fff; border-radius: 8px;
+    outline: none; padding: 0 8px; text-transform: uppercase;
+  }
+  input.nameBox::placeholder { color: rgba(255,255,255,0.3); }
+</style>
+<style>
+a.arcade-pill {
+  display: inline-flex !important; align-items: center !important; gap: 6px !important;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif !important;
+  font-size: 13px !important; font-weight: 600 !important; letter-spacing: 0.3px !important;
+  line-height: 1 !important; text-decoration: none !important; text-transform: none !important;
+  color: #ffe0c4 !important;
+  background: rgba(24, 14, 28, 0.62) !important;
+  border: 1px solid rgba(255, 200, 150, 0.42) !important;
+  padding: 7px 13px !important; border-radius: 999px !important;
+  cursor: pointer !important; white-space: nowrap !important;
+  -webkit-backdrop-filter: blur(5px) !important; backdrop-filter: blur(5px) !important;
+  -webkit-tap-highlight-color: transparent !important;
+  transition: transform 0.12s, border-color 0.12s, background 0.12s !important;
+}
+a.arcade-pill:hover, a.arcade-pill:active, a.arcade-pill:focus-visible {
+  transform: scale(1.05) !important;
+  border-color: rgba(255, 200, 150, 0.9) !important;
+  background: rgba(40, 22, 44, 0.78) !important;
+  color: #fff5e8 !important;
+}
+a.arcade-pill .ah-arrow { font-size: 14px !important; opacity: 0.9 !important; }
+a.arcade-pill.arcade-float {
+  position: fixed !important;
+  top: calc(8px + env(safe-area-inset-top, 0px)) !important;
+  left: calc(10px + env(safe-area-inset-left, 0px)) !important;
+  z-index: 2147483000 !important;
+}
+</style>
+</head>
+<body>
+<a id="back" class="arcade-pill arcade-float" href="index.html"
+   aria-label="Back to Max's Arcade"><span class="ah-arrow">&larr;</span>Arcade</a>
+<input class="nameBox" id="nameBox" maxlength="12" placeholder="YOUR NAME" autocomplete="off" spellcheck="false">
+<script>
+(function () {
+  var pill = document.getElementById('back');
+  if (!pill) return;
+  var go = function (e) { e.stopPropagation(); e.preventDefault(); location.href = 'index.html'; };
+  ['click', 'touchend'].forEach(function (t) { pill.addEventListener(t, go, { passive: false }); });
+  ['mousedown', 'touchstart', 'pointerdown'].forEach(function (t) {
+    pill.addEventListener(t, function (e) { e.stopPropagation(); }, { passive: false });
+  });
+})();
+</script>
+<canvas id="game"></canvas>
+<script>
+// =====================================================================
+// KNIGHTS OF THE FOUR
+//
+// Pick a knight, take a name, and fight your way across the map.
+//
+// THE VIEW is the Castle Crashers one: side on, but the floor has
+// DEPTH. Walk up and you go further away and get smaller; walk down and
+// you come towards the camera and get bigger. Everything is sorted by
+// how far up the floor it stands, so whoever is nearer is drawn on top.
+// That one idea turns a flat side view into a stage.
+// =====================================================================
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+function fit() { canvas.width = innerWidth; canvas.height = innerHeight; }
+addEventListener('resize', fit);
+fit();
+
+window.onerror = (msg, src, line) => {
+  const d = document.createElement('div');
+  d.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#c0392b;' +
+    'color:#fff;font:14px monospace;padding:8px;z-index:9';
+  d.textContent = 'BUG on line ' + line + ': ' + msg;
+  document.body.appendChild(d);
+};
+
+// ---------------------------------------------------------------------
+// THE FOUR KNIGHTS. Same shape, four very different magics.
+// ---------------------------------------------------------------------
+const KNIGHTS = [
+  { id: 'red', name: 'RED', body: '#e0392b', dark: '#8f1e15', trim: '#ffd06a',
+    magic: 'FIRE', magicColor: '#ff8b1f',
+    blurb: 'sets them alight - they keep burning', power: 3, health: 100 },
+  { id: 'blue', name: 'BLUE', body: '#2f7ad6', dark: '#17457f', trim: '#bfe8ff',
+    magic: 'ICE', magicColor: '#7fe4ff',
+    blurb: 'freezes them solid so they cannot move', power: 3, health: 105 },
+  { id: 'green', name: 'GREEN', body: '#3aa843', dark: '#1d6023', trim: '#c8ff9a',
+    magic: 'POISON', magicColor: '#a6ff5c',
+    blurb: 'a cloud that eats anything standing in it', power: 2, health: 95 },
+  { id: 'orange', name: 'ORANGE', body: '#f0821f', dark: '#a34f08', trim: '#ffe0a8',
+    magic: 'LIGHTNING', magicColor: '#ffe94a',
+    blurb: 'jumps between them and hits the lot', power: 3, health: 110 },
+];
+
+// ---------------------------------------------------------------------
+// THE MAP. Each level knows where it sits, and which one must be beaten
+// before it opens.
+// ---------------------------------------------------------------------
+const LEVELS = [
+  { id: 0, name: 'THE MEADOW', x: 0.12, y: 0.74, needs: -1, waves: 2, enemy: 'goblin',
+    scene: 'grass', blurb: 'a gentle start. mostly.' },
+  { id: 1, name: 'OLD BRIDGE', x: 0.25, y: 0.55, needs: 0, waves: 3, enemy: 'goblin',
+    scene: 'grass', blurb: 'they have taken the bridge' },
+  { id: 2, name: 'DARK WOOD', x: 0.37, y: 0.74, needs: 1, waves: 3, enemy: 'bat',
+    scene: 'wood', blurb: 'something in the trees' },
+  { id: 3, name: 'THE CAVES', x: 0.49, y: 0.5, needs: 2, waves: 4, enemy: 'slime',
+    scene: 'cave', blurb: 'dripping, and full of slime' },
+  { id: 4, name: 'SNOW PASS', x: 0.61, y: 0.72, needs: 3, waves: 4, enemy: 'goblin',
+    scene: 'snow', blurb: 'cold, and they are waiting' },
+  { id: 5, name: 'THE KEEP', x: 0.73, y: 0.46, needs: 4, waves: 4, enemy: 'knight',
+    scene: 'castle', blurb: 'proper soldiers now' },
+  { id: 6, name: 'LAVA GATE', x: 0.84, y: 0.68, needs: 5, waves: 5, enemy: 'slime',
+    scene: 'lava', blurb: 'hot. very hot.' },
+  { id: 7, name: 'TOP TOWER', x: 0.93, y: 0.3, needs: 6, waves: 5, enemy: 'boss',
+    scene: 'castle', blurb: 'whatever has been behind all this', boss: true },
+];
+
+// ---------------------------------------------------------------------
+// WHAT YOU HAVE DONE SO FAR - kept between visits
+// ---------------------------------------------------------------------
+let save = { name: '', knight: 0, beaten: [], xp: 0 };
+try {
+  const raw = JSON.parse(localStorage.getItem('castle_save'));
+  if (raw && typeof raw === 'object') save = Object.assign(save, raw);
+} catch (e) {}
+if (!Array.isArray(save.beaten)) save.beaten = [];
+function saveGame() { localStorage.setItem('castle_save', JSON.stringify(save)); }
+function isBeaten(id) { return save.beaten.includes(id); }
+function isOpen(lv) { return lv.needs < 0 || isBeaten(lv.needs); }
+function heroLevel() { return 1 + Math.floor(save.xp / 60); }
+function maxHealth() { return KNIGHTS[save.knight].health + (heroLevel() - 1) * 12; }
+function myPower() { return KNIGHTS[save.knight].power + Math.floor((heroLevel() - 1) * 0.7); }
+function playerName() { return (save.name || '').trim() || 'KNIGHT'; }
+
+let screen = 'title';            // title | select | map | fight | cleared | dead
+let held = {}, touchMode = false, uiRects = [], shake = 0;
+let particles = [], floaters = [];
+let mapPick = 0;
+</script>
+<script>
+// =====================================================================
+// THE STAGE
+//
+// The floor is a band across the screen. depth 0 is the BACK of it and
+// depth 1 is the FRONT, nearest the camera. Everything standing on the
+// floor gets its screen position and its size from its depth, which is
+// the whole trick of this view.
+// =====================================================================
+const STAGE_W = 2100;            // how long a level is, in world units
+function stage() {
+  const W = canvas.width, H = canvas.height;
+  const hud = Math.min(76, H * 0.13);
+  const backY = hud + (H - hud) * 0.42;             // the far edge of the floor
+  const frontY = H - (H - hud) * 0.08;              // the near edge
+  return { W, H, hud, backY, frontY, floorH: frontY - backY };
+}
+// how big is something stood at this depth? nearer = bigger
+function depthScale(depth) { return 1.15 + depth * 0.62; }
+// where does it sit on the screen?
+function toScreen(a, S, camX) {
+  const sc = depthScale(a.depth);
+  return {
+    x: a.x - camX,
+    y: S.backY + a.depth * S.floorH - a.z,          // z is how high it has jumped
+    sc,
+  };
+}
+
+// ---------------------------------------------------------------------
+// EVERYBODY IN A FIGHT
+// ---------------------------------------------------------------------
+const ENEMY_KINDS = {
+  goblin: { name: 'GOBLIN', body: '#6d9e3f', dark: '#3f6222', health: 22, power: 6,
+            speed: 78, r: 20, xp: 8 },
+  bat:    { name: 'BAT', body: '#6a4a8f', dark: '#3c2757', health: 16, power: 5,
+            speed: 118, r: 17, xp: 9, flies: true },
+  slime:  { name: 'SLIME', body: '#3fbf8f', dark: '#1f6f52', health: 30, power: 7,
+            speed: 58, r: 22, xp: 11 },
+  knight: { name: 'SOLDIER', body: '#9aa4b4', dark: '#4d5666', health: 40, power: 9,
+            speed: 84, r: 21, xp: 15 },
+  boss:   { name: 'THE BARON', body: '#b02a6a', dark: '#61143a', health: 260, power: 13,
+            speed: 66, r: 40, xp: 90, boss: true },
+};
+
+let hero = null, foes = [], magics = [], camX = 0;
+let fightLevel = null, wave = 0, waveTimer = 0, cleared = false, resultTimer = 0;
+let gainedXP = 0;
+
+function newHero() {
+  const K = KNIGHTS[save.knight];
+  return {
+    kind: 'hero', K,
+    x: 140, depth: 0.55, z: 0, vz: 0,
+    vx: 0, vdepth: 0,
+    face: 1, r: 20,
+    health: maxHealth(), maxHealth: maxHealth(),
+    attack: 0, cool: 0, combo: 0, comboTimer: 0,
+    magic: 0, magicCool: 0, hurt: 0, dead: false,
+    walkT: 0,
+  };
+}
+function newFoe(kind, x, depth) {
+  const E = ENEMY_KINDS[kind];
+  return {
+    kind, E,
+    x, depth, z: E.flies ? 42 : 0, vz: 0,
+    vx: 0, vdepth: 0, face: -1, r: E.r,
+    health: E.health, maxHealth: E.health,
+    attack: 0, cool: 0.6 + Math.random() * 0.7, hurt: 0, dead: false,
+    frozen: 0, burning: 0, poisoned: 0, walkT: Math.random() * 6,
+    bob: Math.random() * 6,
+  };
+}
+
+// ---------------------------------------------------------------------
+// SOUND, made of maths
+// ---------------------------------------------------------------------
+let audio = null;
+function ensureAudio() {
+  if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)();
+}
+function tone(freq, len, type, vol, slideTo) {
+  if (!audio) return;
+  const o = audio.createOscillator(), g = audio.createGain();
+  o.type = type || 'square';
+  o.frequency.setValueAtTime(freq, audio.currentTime);
+  if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, audio.currentTime + len);
+  g.gain.setValueAtTime(vol === undefined ? 0.07 : vol, audio.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + len);
+  o.connect(g); g.connect(audio.destination);
+  o.start(); o.stop(audio.currentTime + len + 0.02);
+}
+function hitSound() { tone(220, 0.09, 'square', 0.09, 90); }
+function swingSound() { tone(600, 0.05, 'sine', 0.04, 900); }
+function popSound() { tone(320, 0.14, 'square', 0.07, 120); }
+function fanfare() {
+  [523, 659, 784, 1047].forEach((n, i) => setTimeout(() => tone(n, 0.2, 'square', 0.09), i * 110));
+}
+function sadTune() {
+  [400, 340, 280, 200].forEach((n, i) => setTimeout(() => tone(n, 0.3, 'sine', 0.09), i * 160));
+}
+
+function boom(x, depth, z, color, count) {
+  for (let i = 0; i < (count || 12); i++) {
+    const a = Math.random() * Math.PI * 2, sp = 40 + Math.random() * 170;
+    particles.push({ x, depth, z, vx: Math.cos(a) * sp, vz: Math.sin(a) * sp + 60,
+                     life: 0.45 + Math.random() * 0.4, color });
+  }
+}
+function floatText(x, depth, z, text, color) {
+  floaters.push({ x, depth, z, text, color, life: 0.85 });
+}
+</script>
+<script>
+// =====================================================================
+// FIGHTING
+// =====================================================================
+const HERO_SPEED = 190;          // left and right
+const DEPTH_SPEED = 0.55;        // up and down the floor, per second
+const GRAVITY = 1500;
+const JUMP_V = 520;
+const SWING_TIME = 0.22;
+const SWING_COOL = 0.1;
+const MAGIC_COOL = 3.2;
+
+function startLevel(lv) {
+  fightLevel = lv;
+  hero = newHero();
+  foes = [];
+  magics = [];
+  particles = [];
+  floaters = [];
+  camX = 0;
+  wave = 0;
+  waveTimer = 0.9;
+  cleared = false;
+  gainedXP = 0;
+  screen = 'fight';
+}
+function spawnWave() {
+  const lv = fightLevel;
+  const last = wave >= lv.waves - 1;
+  // The boss turns up on his own, at the end. Everyone else comes in a
+  // group that grows as the level goes on.
+  if (lv.boss && last) {
+    foes.push(newFoe('boss', camX + canvas.width + 120, 0.55));
+    tone(90, 0.6, 'sawtooth', 0.12, 60);
+    return;
+  }
+  const many = Math.min(5, 2 + Math.floor(wave * 0.8));
+  for (let i = 0; i < many; i++) {
+    const fromRight = Math.random() < 0.72;
+    const x = fromRight ? camX + canvas.width + 80 + i * 90 : camX - 100 - i * 90;
+    foes.push(newFoe(lv.enemy, x, 0.2 + Math.random() * 0.7));
+  }
+}
+
+// two things can hit each other if they are close along the floor AND
+// standing at about the same depth. Being further up the floor than
+// somebody is exactly how you dodge in this view.
+function inRange(a, b, reach) {
+  const dx = Math.abs(a.x - b.x);
+  const dd = Math.abs(a.depth - b.depth);
+  const dz = Math.abs((a.z || 0) - (b.z || 0));
+  return dx < reach && dd < 0.16 && dz < 60;
+}
+function faceToward(a, b) { a.face = b.x > a.x ? 1 : -1; }
+
+function hurtFoe(f, dmg, knock, from) {
+  if (f.dead) return;
+  f.health -= dmg;
+  f.hurt = 0.18;
+  f.x += knock * (from ? (f.x > from.x ? 1 : -1) : 1);
+  floatText(f.x, f.depth, f.z + 40, String(Math.round(dmg)), '#fff');
+  boom(f.x, f.depth, f.z + 20, f.E.body, 6);
+  hitSound();
+  if (f.health <= 0) {
+    f.dead = true;
+    gainedXP += f.E.xp;
+    boom(f.x, f.depth, f.z + 20, f.E.body, 20);
+    popSound();
+    floatText(f.x, f.depth, f.z + 56, '+' + f.E.xp + ' XP', '#ffd83d');
+  }
+}
+function hurtHero(dmg) {
+  if (hero.dead || hero.hurt > 0.3) return;         // a moment of mercy after a hit
+  hero.health -= dmg;
+  hero.hurt = 0.55;
+  shake = Math.max(shake, 10);
+  boom(hero.x, hero.depth, hero.z + 20, '#ff5a5a', 8);
+  tone(180, 0.16, 'sawtooth', 0.1, 70);
+  if (hero.health <= 0) {
+    hero.health = 0;
+    hero.dead = true;
+    screen = 'dead';
+    resultTimer = 0;
+    sadTune();
+  }
+}
+
+// ---- the four magics ----
+function castMagic() {
+  if (hero.magicCool > 0 || hero.dead) return;
+  hero.magicCool = MAGIC_COOL;
+  const K = hero.K;
+  tone(500, 0.3, 'sine', 0.09, 1200);
+  shake = Math.max(shake, 8);
+  if (K.id === 'red') {
+    // FIRE: a wave of flame straight ahead that sets them alight
+    magics.push({ type: 'fire', x: hero.x, depth: hero.depth, z: 10,
+                  vx: hero.face * 420, life: 0.9, hits: [] });
+  } else if (K.id === 'blue') {
+    // ICE: everything near you freezes where it stands
+    for (const f of foes) {
+      if (f.dead || Math.abs(f.x - hero.x) > 240) continue;
+      f.frozen = 2.6;
+      hurtFoe(f, 4 + myPower(), 0, hero);
+      boom(f.x, f.depth, f.z + 20, '#7fe4ff', 10);
+    }
+    magics.push({ type: 'ice', x: hero.x, depth: hero.depth, z: 0, life: 0.5 });
+  } else if (K.id === 'green') {
+    // POISON: a cloud that sits there eating anything inside it
+    magics.push({ type: 'poison', x: hero.x + hero.face * 90, depth: hero.depth, z: 0,
+                  life: 4.0, tick: 0 });
+  } else {
+    // LIGHTNING: jumps to the nearest few and hits them all
+    const near = foes.filter(f => !f.dead && Math.abs(f.x - hero.x) < 420)
+                     .sort((a, b) => Math.abs(a.x - hero.x) - Math.abs(b.x - hero.x))
+                     .slice(0, 4);
+    let from = hero;
+    for (const f of near) {
+      magics.push({ type: 'bolt', x1: from.x, d1: from.depth, z1: from.z + 30,
+                    x2: f.x, d2: f.depth, z2: f.z + 30, life: 0.35 });
+      hurtFoe(f, 10 + myPower() * 2, 6, from);
+      from = f;
+    }
+    if (!near.length) magics.push({ type: 'bolt', x1: hero.x, d1: hero.depth, z1: hero.z + 30,
+                                    x2: hero.x + hero.face * 200, d2: hero.depth, z2: 0, life: 0.3 });
+  }
+}
+</script>
+<script>
+// =====================================================================
+// ONE STEP OF A FIGHT
+// =====================================================================
+function keyDown(names) { return names.some(k => held[k]); }
+
+function updateFight(dt) {
+  const S = stage();
+  const K = hero.K;
+
+  // ---- you ----
+  if (!hero.dead) {
+    let mx = 0, md = 0;
+    if (keyDown(['a', 'ArrowLeft'])) mx -= 1;
+    if (keyDown(['d', 'ArrowRight'])) mx += 1;
+    if (keyDown(['w', 'ArrowUp'])) md -= 1;
+    if (keyDown(['s', 'ArrowDown'])) md += 1;
+    const busy = hero.attack > 0;
+    const spd = busy ? 0.25 : 1;
+    hero.x += mx * HERO_SPEED * spd * dt;
+    hero.depth += md * DEPTH_SPEED * spd * dt;
+    hero.depth = Math.max(0, Math.min(1, hero.depth));
+    hero.x = Math.max(30, Math.min(STAGE_W - 30, hero.x));
+    if (mx !== 0 && !busy) hero.face = mx;
+    if (mx !== 0 || md !== 0) hero.walkT += dt * 9; else hero.walkT = 0;
+
+    // jumping
+    hero.z += hero.vz * dt;
+    if (hero.z > 0) hero.vz -= GRAVITY * dt;
+    if (hero.z <= 0) { hero.z = 0; hero.vz = 0; }
+
+    hero.attack = Math.max(0, hero.attack - dt);
+    hero.cool = Math.max(0, hero.cool - dt);
+    hero.magicCool = Math.max(0, hero.magicCool - dt);
+    hero.hurt = Math.max(0, hero.hurt - dt);
+    hero.comboTimer = Math.max(0, hero.comboTimer - dt);
+    if (hero.comboTimer <= 0) hero.combo = 0;
+
+    // the swing lands halfway through, not the moment you press
+    if (hero.attack > 0 && !hero.swung && hero.attack < SWING_TIME * 0.62) {
+      hero.swung = true;
+      const reach = 62 + hero.combo * 6;
+      let landed = false;
+      for (const f of foes) {
+        if (f.dead) continue;
+        if ((f.x - hero.x) * hero.face < -12) continue;   // must be in front
+        if (!inRange(hero, f, reach)) continue;
+        const dmg = 7 + myPower() * 2 + hero.combo * 2;
+        hurtFoe(f, dmg, 14 + hero.combo * 3, hero);
+        landed = true;
+      }
+      if (landed) {
+        hero.combo = Math.min(4, hero.combo + 1);
+        hero.comboTimer = 1.1;
+        shake = Math.max(shake, 5);
+      }
+    }
+  }
+
+  // ---- them ----
+  for (const f of foes) {
+    if (f.dead) continue;
+    f.hurt = Math.max(0, f.hurt - dt);
+    f.frozen = Math.max(0, f.frozen - dt);
+    f.bob += dt * 4;
+    if (f.burning > 0) {
+      f.burning -= dt;
+      f.burnTick = (f.burnTick || 0) + dt;
+      if (f.burnTick > 0.45) { f.burnTick = 0; hurtFoe(f, 4 + myPower(), 0, null); }
+      if (Math.random() < 0.4) {
+        particles.push({ x: f.x + (Math.random() - 0.5) * 20, depth: f.depth, z: f.z + 20,
+                         vx: 0, vz: 60, life: 0.4, color: '#ff8b1f' });
+      }
+    }
+    if (f.poisoned > 0) {
+      f.poisoned -= dt;
+      f.poisonTick = (f.poisonTick || 0) + dt;
+      if (f.poisonTick > 0.5) { f.poisonTick = 0; hurtFoe(f, 3 + myPower(), 0, null); }
+    }
+    if (f.frozen > 0) continue;                     // frozen solid, cannot act
+
+    f.cool = Math.max(0, f.cool - dt);
+    f.attack = Math.max(0, f.attack - dt);
+    if (hero.dead) continue;
+    const dx = hero.x - f.x, dd = hero.depth - f.depth;
+    faceToward(f, hero);
+    const close = inRange(f, hero, 46);
+    if (!close && f.attack <= 0) {
+      // walk towards you, along the floor and up or down it
+      const sp = f.E.speed * (f.E.boss ? 1 : 1) * dt;
+      if (Math.abs(dx) > 34) f.x += Math.sign(dx) * sp;
+      if (Math.abs(dd) > 0.03) f.depth += Math.sign(dd) * DEPTH_SPEED * 0.75 * dt;
+      f.depth = Math.max(0, Math.min(1, f.depth));
+      f.walkT += dt * 8;
+      if (f.E.flies) f.z = 40 + Math.sin(f.bob) * 14;
+    } else if (close && f.cool <= 0) {
+      f.attack = 0.42;
+      f.cool = 1.0 + Math.random() * 0.8;
+      f.swung = false;
+    }
+    if (f.attack > 0 && !f.swung && f.attack < 0.2) {
+      f.swung = true;
+      if (inRange(f, hero, 52)) hurtHero(f.E.power);
+    }
+  }
+  foes = foes.filter(f => !f.dead || (f.deadT = (f.deadT || 0) + dt) < 0.3);
+
+  // ---- magic that is still going ----
+  for (const m of magics) {
+    m.life -= dt;
+    if (m.type === 'fire') {
+      m.x += m.vx * dt;
+      for (const f of foes) {
+        if (f.dead || m.hits.includes(f)) continue;
+        if (Math.abs(f.x - m.x) < 40 && Math.abs(f.depth - m.depth) < 0.2) {
+          m.hits.push(f);
+          f.burning = 2.4;
+          hurtFoe(f, 8 + myPower(), 8, { x: m.x - m.vx });
+        }
+      }
+      if (Math.random() < 0.8) {
+        particles.push({ x: m.x, depth: m.depth, z: 10 + Math.random() * 30,
+                         vx: -m.vx * 0.15, vz: 40, life: 0.35, color: '#ff8b1f' });
+      }
+    } else if (m.type === 'poison') {
+      m.tick += dt;
+      if (m.tick > 0.5) {
+        m.tick = 0;
+        for (const f of foes) {
+          if (f.dead) continue;
+          if (Math.abs(f.x - m.x) < 90 && Math.abs(f.depth - m.depth) < 0.3) {
+            f.poisoned = 1.2;
+            hurtFoe(f, 3 + myPower(), 0, null);
+          }
+        }
+      }
+      if (Math.random() < 0.7) {
+        particles.push({ x: m.x + (Math.random() - 0.5) * 150, depth: m.depth,
+                         z: Math.random() * 40, vx: 0, vz: 20, life: 0.6, color: '#a6ff5c' });
+      }
+    }
+  }
+  magics = magics.filter(m => m.life > 0);
+
+  // ---- waves ----
+  const alive = foes.filter(f => !f.dead).length;
+  if (!cleared) {
+    if (alive === 0) {
+      waveTimer -= dt;
+      if (waveTimer <= 0) {
+        if (wave >= fightLevel.waves) {
+          cleared = true;
+          resultTimer = 0;
+          screen = 'cleared';
+          if (!isBeaten(fightLevel.id)) save.beaten.push(fightLevel.id);
+          save.xp += gainedXP;
+          saveGame();
+          fanfare();
+        } else {
+          wave++;
+          spawnWave();
+          waveTimer = 1.1;
+        }
+      }
+    }
+  }
+
+  // ---- the camera follows you, but never past the ends ----
+  const want = hero.x - S.W * 0.42;
+  camX += (Math.max(0, Math.min(STAGE_W - S.W, want)) - camX) * Math.min(1, dt * 4);
+  if (shake > 0) shake = Math.max(0, shake - dt * 60);
+
+  for (const p of particles) {
+    p.x += p.vx * dt; p.z += p.vz * dt; p.vz -= 340 * dt; p.life -= dt;
+  }
+  particles = particles.filter(p => p.life > 0);
+  for (const f of floaters) { f.z += 46 * dt; f.life -= dt; }
+  floaters = floaters.filter(f => f.life > 0);
+}
+</script>
+<script>
+// =====================================================================
+// DRAWING PEOPLE
+// =====================================================================
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+// a shadow on the floor, right under whoever it belongs to. This is what
+// tells you where somebody really IS when they have jumped.
+function drawShadow(sx, floorY, sc, r) {
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.beginPath();
+  ctx.ellipse(sx, floorY, r * sc * 1.05, r * sc * 0.36, 0, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawKnight(a, sx, sy, sc) {
+  const K = a.K, r = 20 * sc;
+  const wob = Math.sin(a.walkT) * r * 0.12;
+  ctx.save();
+  ctx.translate(sx, sy);
+  if (a.hurt > 0 && Math.floor(a.hurt * 22) % 2) ctx.globalAlpha = 0.5;
+  // the sword, swung in an arc
+  const swing = a.attack > 0 ? (1 - a.attack / SWING_TIME) : 0;
+  if (a.attack > 0) {
+    ctx.save();
+    ctx.translate(a.face * r * 0.7, -r * 0.9);
+    ctx.rotate(a.face * (-1.1 + swing * 2.4));
+    ctx.fillStyle = '#d8dde6';
+    roundRect(-r * 0.12, -r * 1.9, r * 0.24, r * 1.9, r * 0.1);
+    ctx.fill();
+    ctx.fillStyle = K.trim;
+    roundRect(-r * 0.3, -r * 0.16, r * 0.6, r * 0.24, r * 0.08);
+    ctx.fill();
+    ctx.restore();
+  }
+  // legs
+  ctx.fillStyle = K.dark;
+  for (const side of [-1, 1]) {
+    const lift = Math.sin(a.walkT + (side > 0 ? Math.PI : 0)) * r * 0.22;
+    roundRect(side * r * 0.34 - r * 0.16, -r * 0.5, r * 0.32, r * 0.62 + lift, r * 0.1);
+    ctx.fill();
+  }
+  // body
+  ctx.fillStyle = K.body;
+  roundRect(-r * 0.55, -r * 1.6 + wob, r * 1.1, r * 1.15, r * 0.28);
+  ctx.fill();
+  ctx.fillStyle = K.trim;                            // the belt
+  ctx.fillRect(-r * 0.55, -r * 0.66 + wob, r * 1.1, r * 0.16);
+  // helmet
+  ctx.fillStyle = K.body;
+  ctx.beginPath();
+  ctx.arc(0, -r * 1.95 + wob, r * 0.62, Math.PI, 0);
+  ctx.fill();
+  ctx.fillRect(-r * 0.62, -r * 1.95 + wob, r * 1.24, r * 0.5);
+  ctx.fillStyle = '#1a1220';                          // the visor slit
+  ctx.fillRect(-r * 0.42 + a.face * r * 0.08, -r * 1.85 + wob, r * 0.84, r * 0.2);
+  ctx.fillStyle = K.trim;                             // the plume
+  ctx.beginPath();
+  ctx.moveTo(0, -r * 2.55 + wob);
+  ctx.lineTo(-a.face * r * 0.5, -r * 2.1 + wob);
+  ctx.lineTo(0, -r * 2.15 + wob);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+  ctx.globalAlpha = 1;
+}
+
+function drawFoe(f, sx, sy, sc) {
+  const E = f.E, r = f.r * sc;
+  ctx.save();
+  ctx.translate(sx, sy);
+  if (f.hurt > 0) ctx.globalAlpha = 0.65;
+  const wob = Math.sin(f.walkT) * r * 0.1;
+  if (f.kind === 'bat') {
+    const flap = Math.sin(f.bob * 3) * r * 0.5;
+    ctx.fillStyle = E.dark;
+    for (const side of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(0, -r * 0.4);
+      ctx.quadraticCurveTo(side * r * 1.5, -r * 0.6 - flap, side * r * 1.7, -r * 0.1 + flap);
+      ctx.quadraticCurveTo(side * r * 1.1, -r * 0.1, 0, -r * 0.1);
+      ctx.closePath(); ctx.fill();
+    }
+    ctx.fillStyle = E.body;
+    ctx.beginPath(); ctx.arc(0, -r * 0.4, r * 0.62, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#ffe94a';
+    ctx.beginPath();
+    ctx.arc(-r * 0.22, -r * 0.5, r * 0.13, 0, Math.PI * 2);
+    ctx.arc(r * 0.22, -r * 0.5, r * 0.13, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (f.kind === 'slime') {
+    const squash = 1 + Math.sin(f.bob) * 0.12;
+    ctx.fillStyle = E.body;
+    ctx.beginPath();
+    ctx.ellipse(0, -r * 0.6 / squash, r * 0.95 * squash, r * 0.75 / squash, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.beginPath();
+    ctx.ellipse(-r * 0.3, -r * 0.85, r * 0.22, r * 0.15, -0.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#12331f';
+    ctx.beginPath();
+    ctx.arc(-r * 0.25, -r * 0.65, r * 0.12, 0, Math.PI * 2);
+    ctx.arc(r * 0.25, -r * 0.65, r * 0.12, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    // goblin, soldier and the boss: same build, different sizes
+    ctx.fillStyle = E.dark;
+    for (const side of [-1, 1]) {
+      const lift = Math.sin(f.walkT + (side > 0 ? Math.PI : 0)) * r * 0.2;
+      roundRect(side * r * 0.3 - r * 0.14, -r * 0.45, r * 0.28, r * 0.55 + lift, r * 0.1);
+      ctx.fill();
+    }
+    ctx.fillStyle = E.body;
+    roundRect(-r * 0.5, -r * 1.45 + wob, r, r * 1.05, r * 0.25);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(0, -r * 1.7 + wob, r * 0.52, 0, Math.PI * 2);
+    ctx.fill();
+    if (f.E.boss) {                                   // a crown for the baron
+      ctx.fillStyle = '#ffd83d';
+      ctx.beginPath();
+      ctx.moveTo(-r * 0.5, -r * 2.05 + wob);
+      for (let i = 0; i < 4; i++) {
+        ctx.lineTo(-r * 0.5 + (i + 0.5) * r * 0.33, -r * 2.45 + wob);
+        ctx.lineTo(-r * 0.5 + (i + 1) * r * 0.33, -r * 2.05 + wob);
+      }
+      ctx.closePath(); ctx.fill();
+    }
+    ctx.fillStyle = '#1a1220';
+    ctx.beginPath();
+    ctx.arc(-r * 0.2 + f.face * r * 0.06, -r * 1.75 + wob, r * 0.1, 0, Math.PI * 2);
+    ctx.arc(r * 0.2 + f.face * r * 0.06, -r * 1.75 + wob, r * 0.1, 0, Math.PI * 2);
+    ctx.fill();
+    // a weapon, held out when swinging
+    const sw = f.attack > 0 ? 1 - f.attack / 0.42 : 0;
+    ctx.save();
+    ctx.translate(f.face * r * 0.6, -r * 0.95 + wob);
+    ctx.rotate(f.face * (-0.6 + sw * 1.8));
+    ctx.fillStyle = '#b9a06a';
+    roundRect(-r * 0.1, -r * 1.2, r * 0.2, r * 1.2, r * 0.08);
+    ctx.fill();
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+  // frozen solid: a block of ice over the top
+  if (f.frozen > 0) {
+    ctx.fillStyle = 'rgba(127, 228, 255, 0.45)';
+    roundRect(-r * 0.9, -r * 2.2, r * 1.8, r * 2.3, r * 0.2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(220, 250, 255, 0.9)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+  ctx.restore();
+  // a little health bar over anybody who has been hit
+  if (f.health < f.maxHealth) {
+    const w = r * 2;
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(sx - w / 2, sy - r * 2.9, w, 5);
+    ctx.fillStyle = f.E.boss ? '#ff4d6a' : '#7fdf3f';
+    ctx.fillRect(sx - w / 2 + 1, sy - r * 2.9 + 1, (w - 2) * Math.max(0, f.health / f.maxHealth), 3);
+  }
+}
+</script>
+<script>
+// =====================================================================
+// DRAWING THE STAGE
+// =====================================================================
+const SCENES = {
+  grass: { sky1: '#6fc3f0', sky2: '#bfe9c8', floor: '#4f9a45', floor2: '#3f7d38', far: '#2f6f4a' },
+  wood:  { sky1: '#1f3524', sky2: '#33543a', floor: '#3e6b38', floor2: '#2f5a2c', far: '#16311d' },
+  cave:  { sky1: '#161122', sky2: '#2a2140', floor: '#4a4058', floor2: '#3a3246', far: '#0f0b18' },
+  snow:  { sky1: '#93b8e0', sky2: '#dbeaf6', floor: '#e6eff7', floor2: '#cfdcea', far: '#a9c2d8' },
+  castle:{ sky1: '#2a1c3a', sky2: '#4a3560', floor: '#6a6070', floor2: '#544b5c', far: '#1d1428' },
+  lava:  { sky1: '#3a0f10', sky2: '#7a2410', floor: '#4a2820', floor2: '#3a1e18', far: '#220a0a' },
+};
+function drawStage(S, sc) {
+  const sky = ctx.createLinearGradient(0, 0, 0, S.backY);
+  sky.addColorStop(0, sc.sky1);
+  sky.addColorStop(1, sc.sky2);
+  ctx.fillStyle = sky;
+  ctx.fillRect(0, 0, S.W, S.backY);
+  // a bumpy line of hills or walls in the distance, drifting slowly
+  ctx.fillStyle = sc.far;
+  ctx.beginPath();
+  ctx.moveTo(0, S.backY);
+  for (let i = 0; i <= 22; i++) {
+    const x = (i / 22) * S.W;
+    const h = 40 + Math.sin(i * 1.7 + camX * 0.0015) * 26 + Math.sin(i * 0.6) * 18;
+    ctx.lineTo(x, S.backY - h);
+  }
+  ctx.lineTo(S.W, S.backY);
+  ctx.closePath();
+  ctx.fill();
+  // the floor, in bands so the depth reads
+  const g = ctx.createLinearGradient(0, S.backY, 0, S.frontY);
+  g.addColorStop(0, sc.floor2);
+  g.addColorStop(1, sc.floor);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, S.backY, S.W, S.H - S.backY);
+  // stripes running away from you, to sell the depth
+  ctx.strokeStyle = 'rgba(0,0,0,0.09)';
+  ctx.lineWidth = 2;
+  for (let i = -2; i < 26; i++) {
+    const wx = (i * 160) - (camX % 160);
+    ctx.beginPath();
+    ctx.moveTo(wx + 40, S.backY);
+    ctx.lineTo(wx - 40, S.frontY);
+    ctx.stroke();
+  }
+  ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+  ctx.beginPath();
+  ctx.moveTo(0, S.backY); ctx.lineTo(S.W, S.backY);
+  ctx.stroke();
+}
+
+function drawFight() {
+  const S = stage();
+  const sc = SCENES[fightLevel.scene] || SCENES.grass;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  if (shake > 0) ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+  drawStage(S, sc);
+
+  // EVERYTHING gets sorted by depth, so whoever is nearer the camera is
+  // drawn on top of whoever is further back. This is the whole reason
+  // the view reads as a stage and not a flat line.
+  const cast = [];
+  if (!hero.dead || hero.z > 0) cast.push({ a: hero, hero: true });
+  for (const f of foes) cast.push({ a: f, hero: false });
+  cast.sort((p, q) => p.a.depth - q.a.depth);
+
+  // magic that sits on the floor goes underneath everyone
+  for (const m of magics) {
+    if (m.type === 'poison') {
+      const p = toScreen({ x: m.x, depth: m.depth, z: 0 }, S, camX);
+      ctx.fillStyle = 'rgba(166, 255, 92, ' + Math.min(0.35, m.life * 0.12) + ')';
+      ctx.beginPath();
+      ctx.ellipse(p.x, p.y, 95 * p.sc, 34 * p.sc, 0, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (m.type === 'ice') {
+      const p = toScreen({ x: m.x, depth: m.depth, z: 0 }, S, camX);
+      ctx.strokeStyle = 'rgba(127,228,255,' + m.life * 1.4 + ')';
+      ctx.lineWidth = 5;
+      ctx.beginPath();
+      ctx.ellipse(p.x, p.y, (1 - m.life) * 260, (1 - m.life) * 90, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+
+  for (const c of cast) {
+    const a = c.a;
+    const p = toScreen(a, S, camX);
+    const floorY = S.backY + a.depth * S.floorH;
+    if (p.x < -160 || p.x > S.W + 160) continue;
+    drawShadow(p.x, floorY, p.sc, a.r);
+    if (c.hero) drawKnight(a, p.x, p.y, p.sc);
+    else drawFoe(a, p.x, p.y, p.sc);
+  }
+
+  // fire and lightning go over the top
+  for (const m of magics) {
+    if (m.type === 'fire') {
+      const p = toScreen({ x: m.x, depth: m.depth, z: 20 }, S, camX);
+      ctx.fillStyle = 'rgba(255,139,31,0.8)';
+      ctx.beginPath();
+      ctx.ellipse(p.x, p.y, 44 * p.sc, 34 * p.sc, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(255,232,120,0.9)';
+      ctx.beginPath();
+      ctx.ellipse(p.x, p.y, 24 * p.sc, 18 * p.sc, 0, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (m.type === 'bolt') {
+      const a = toScreen({ x: m.x1, depth: m.d1, z: m.z1 }, S, camX);
+      const b = toScreen({ x: m.x2, depth: m.d2, z: m.z2 }, S, camX);
+      ctx.strokeStyle = 'rgba(255,233,74,' + Math.min(1, m.life * 3) + ')';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      const steps = 5;
+      for (let i = 1; i < steps; i++) {
+        const t = i / steps;
+        ctx.lineTo(a.x + (b.x - a.x) * t + (Math.random() - 0.5) * 26,
+                   a.y + (b.y - a.y) * t + (Math.random() - 0.5) * 26);
+      }
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+    }
+  }
+
+  for (const p of particles) {
+    const s = toScreen(p, S, camX);
+    ctx.globalAlpha = Math.max(0, Math.min(1, p.life * 2));
+    ctx.fillStyle = p.color;
+    ctx.fillRect(s.x - 3 * s.sc, s.y - 3 * s.sc, 6 * s.sc, 6 * s.sc);
+  }
+  ctx.globalAlpha = 1;
+  ctx.textAlign = 'center';
+  for (const f of floaters) {
+    const s = toScreen(f, S, camX);
+    ctx.globalAlpha = Math.min(1, f.life * 1.6);
+    ctx.fillStyle = f.color;
+    ctx.font = 'bold ' + Math.round(15 * s.sc) + 'px monospace';
+    ctx.fillText(f.text, s.x, s.y);
+  }
+  ctx.globalAlpha = 1;
+  ctx.textAlign = 'left';
+  drawFightHUD(S);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+}
+</script>
+<script>
+// =====================================================================
+// THE HUD AND THE OTHER SCREENS
+// =====================================================================
+const nameBox = document.getElementById('nameBox');
+nameBox.value = save.name;
+nameBox.addEventListener('input', () => {
+  save.name = nameBox.value.toUpperCase().slice(0, 12);
+  saveGame();
+});
+nameBox.addEventListener('keydown', e => {
+  if (e.key === 'Enter') nameBox.blur();
+  e.stopPropagation();                 // typing must never steer or attack
+});
+function typing() { return document.activeElement === nameBox; }
+
+function drawFightHUD(S) {
+  const K = hero.K;
+  ctx.fillStyle = 'rgba(10,8,18,0.7)';
+  ctx.fillRect(0, 0, S.W, S.hud);
+  ctx.textAlign = 'left';
+  // start clear of the Arcade pill in the top corner
+  const hx = Math.min(150, S.W * 0.17);
+  ctx.fillStyle = K.body;
+  ctx.font = 'bold ' + Math.min(17, S.W / 34) + 'px monospace';
+  ctx.fillText(playerName() + '  Lv' + heroLevel(), hx, S.hud * 0.42);
+  // health
+  const bw = Math.min(230, S.W * 0.26);
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillRect(hx, S.hud * 0.55, bw, 14);
+  ctx.fillStyle = hero.health / hero.maxHealth < 0.3 ? '#ff4d4d' : '#5ddf5d';
+  ctx.fillRect(hx + 1, S.hud * 0.55 + 1, (bw - 2) * Math.max(0, hero.health / hero.maxHealth), 12);
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(hx, S.hud * 0.55, bw, 14);
+  // magic, ready or charging
+  const mx = hx + bw + 14, mw = Math.min(120, S.W * 0.14);
+  const ready = hero.magicCool <= 0;
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillRect(mx, S.hud * 0.55, mw, 14);
+  ctx.fillStyle = ready ? K.magicColor : 'rgba(255,255,255,0.25)';
+  ctx.fillRect(mx + 1, S.hud * 0.55 + 1, (mw - 2) * (1 - hero.magicCool / MAGIC_COOL), 12);
+  ctx.fillStyle = ready ? K.magicColor : 'rgba(255,255,255,0.45)';
+  ctx.font = 'bold ' + Math.min(12, S.W / 48) + 'px monospace';
+  ctx.fillText(ready ? K.magic + ' READY' : K.magic, mx, S.hud * 0.42);
+  // where you are
+  ctx.textAlign = 'right';
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold ' + Math.min(16, S.W / 36) + 'px monospace';
+  ctx.fillText(fightLevel.name, S.W - 14, S.hud * 0.42);
+  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  ctx.font = 'bold ' + Math.min(13, S.W / 44) + 'px monospace';
+  const left = foes.filter(f => !f.dead).length;
+  ctx.fillText('WAVE ' + Math.min(wave + 1, fightLevel.waves) + ' / ' + fightLevel.waves +
+               (left ? '   -   ' + left + ' left' : ''), S.W - 14, S.hud * 0.75);
+  ctx.textAlign = 'left';
+  if (hero.combo > 1) {
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#ffd83d';
+    ctx.font = 'bold ' + Math.min(30, S.W / 20) + 'px monospace';
+    ctx.fillText('x' + hero.combo, S.W / 2, S.hud * 0.72);
+    ctx.textAlign = 'left';
+  }
+}
+
+// ---- the title ----
+function drawTitle(S) {
+  const g = ctx.createLinearGradient(0, 0, 0, S.H);
+  g.addColorStop(0, '#1b1030');
+  g.addColorStop(1, '#3a1c2a');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, S.W, S.H);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffd83d';
+  ctx.font = 'bold ' + Math.min(58, S.W / 11) + 'px monospace';
+  ctx.fillText('KNIGHTS', S.W / 2, S.H * 0.3);
+  ctx.fillStyle = '#fff';
+  ctx.fillText('OF THE FOUR', S.W / 2, S.H * 0.3 + Math.min(58, S.W / 11));
+  // the four of them standing about
+  KNIGHTS.forEach((K, i) => {
+    const x = S.W * (0.26 + i * 0.16);
+    const y = S.H * 0.68;
+    const a = { K, face: 1, walkT: Date.now() / 260 + i, attack: 0, hurt: 0 };
+    drawKnight(a, x, y, Math.min(1.5, S.W / 700));
+  });
+  ctx.fillStyle = 'rgba(255,255,255,' + (0.55 + Math.sin(Date.now() / 300) * 0.35) + ')';
+  ctx.font = 'bold ' + Math.min(22, S.W / 26) + 'px monospace';
+  ctx.fillText('SPACE  /  TAP  =  BEGIN', S.W / 2, S.H * 0.88);
+  if (save.beaten.length) {
+    ctx.fillStyle = 'rgba(255,255,255,0.45)';
+    ctx.font = Math.min(14, S.W / 42) + 'px monospace';
+    ctx.fillText(playerName() + '  -  Lv' + heroLevel() + '  -  ' +
+                 save.beaten.length + ' of ' + LEVELS.length + ' beaten', S.W / 2, S.H * 0.94);
+  }
+  ctx.textAlign = 'left';
+}
+</script>
+<script>
+// ---- choosing your knight, and your name ----
+function drawSelect(S) {
+  const g = ctx.createLinearGradient(0, 0, 0, S.H);
+  g.addColorStop(0, '#1b1030'); g.addColorStop(1, '#2a1830');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, S.W, S.H);
+  uiRects = [];
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffd83d';
+  ctx.font = 'bold ' + Math.min(30, S.W / 22) + 'px monospace';
+  ctx.fillText('WHO ARE YOU?', S.W / 2, S.H * 0.13);
+
+  // the name box floats over the canvas, positioned from the same maths
+  const bw = Math.min(S.W * 0.5, 340), bh = Math.min(44, S.H * 0.075);
+  nameBox.style.display = 'block';
+  nameBox.style.left = (S.W / 2 - bw / 2) + 'px';
+  nameBox.style.top = (S.H * 0.17) + 'px';
+  nameBox.style.width = bw + 'px';
+  nameBox.style.height = bh + 'px';
+  nameBox.style.fontSize = Math.min(22, bw / 11) + 'px';
+  nameBox.style.borderColor = KNIGHTS[save.knight].body;
+  nameBox.style.color = KNIGHTS[save.knight].trim;
+
+  const top = S.H * 0.32, cardH = S.H * 0.4;
+  KNIGHTS.forEach((K, i) => {
+    const cw = Math.min(S.W * 0.22, 210);
+    const cx = S.W * (0.5 + (i - 1.5) * 0.23);
+    const chosen = save.knight === i;
+    ctx.fillStyle = chosen ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.04)';
+    roundRect(cx - cw / 2, top, cw, cardH, 12); ctx.fill();
+    ctx.strokeStyle = chosen ? K.trim : 'rgba(255,255,255,0.2)';
+    ctx.lineWidth = chosen ? 4 : 2;
+    roundRect(cx - cw / 2, top, cw, cardH, 12); ctx.stroke();
+    const a = { K, face: 1, walkT: chosen ? Date.now() / 200 : 0, attack: 0, hurt: 0 };
+    drawKnight(a, cx, top + cardH * 0.56, Math.min(1.35, cw / 150));
+    ctx.fillStyle = K.body;
+    ctx.font = 'bold ' + Math.min(20, cw / 9) + 'px monospace';
+    ctx.fillText(K.name, cx, top + cardH * 0.72);
+    ctx.fillStyle = K.magicColor;
+    ctx.font = 'bold ' + Math.min(15, cw / 12) + 'px monospace';
+    ctx.fillText(K.magic, cx, top + cardH * 0.83);
+    uiRects.push({ x: cx, y: top + cardH / 2, w: cw / 2, h: cardH / 2, knight: i });
+  });
+  ctx.fillStyle = 'rgba(255,255,255,0.65)';
+  ctx.font = Math.min(15, S.W / 40) + 'px monospace';
+  ctx.fillText(KNIGHTS[save.knight].magic + ': ' + KNIGHTS[save.knight].blurb, S.W / 2, S.H * 0.78);
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.font = Math.min(13, S.W / 46) + 'px monospace';
+  ctx.fillText('left / right to choose', S.W / 2, S.H * 0.83);
+  ctx.fillStyle = 'rgba(255,255,255,' + (0.55 + Math.sin(Date.now() / 300) * 0.35) + ')';
+  ctx.font = 'bold ' + Math.min(22, S.W / 26) + 'px monospace';
+  ctx.fillText('SPACE  /  TAP HERE  =  TO THE MAP', S.W / 2, S.H * 0.92);
+  uiRects.push({ x: S.W / 2, y: S.H * 0.915, w: S.W * 0.35, h: 26, go: true });
+  ctx.textAlign = 'left';
+}
+
+// ---- the world map ----
+function drawMap(S) {
+  const g = ctx.createLinearGradient(0, 0, 0, S.H);
+  g.addColorStop(0, '#243a52'); g.addColorStop(1, '#3f5a3a');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, S.W, S.H);
+  uiRects = [];
+  nameBox.style.display = 'none';
+
+  // the paths between levels, drawn first so the pins sit on top
+  LEVELS.forEach(lv => {
+    if (lv.needs < 0) return;
+    const from = LEVELS[lv.needs];
+    const open = isOpen(lv);
+    ctx.strokeStyle = open ? 'rgba(255,216,61,0.8)' : 'rgba(255,255,255,0.15)';
+    ctx.lineWidth = 5;
+    ctx.setLineDash(open ? [] : [8, 10]);
+    ctx.beginPath();
+    ctx.moveTo(from.x * S.W, from.y * S.H);
+    ctx.quadraticCurveTo((from.x + lv.x) / 2 * S.W, (from.y + lv.y) / 2 * S.H - 40,
+                         lv.x * S.W, lv.y * S.H);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  });
+
+  LEVELS.forEach((lv, i) => {
+    const x = lv.x * S.W, y = lv.y * S.H;
+    const open = isOpen(lv), done = isBeaten(lv.id);
+    const here = mapPick === i;
+    const r = Math.min(30, S.W / 30) * (here ? 1.18 : 1);
+    ctx.fillStyle = done ? '#5ddf5d' : open ? '#ffd83d' : 'rgba(120,120,140,0.7)';
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = here ? '#fff' : 'rgba(0,0,0,0.4)';
+    ctx.lineWidth = here ? 4 : 2;
+    ctx.stroke();
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#1a1220';
+    ctx.font = 'bold ' + r * 0.9 + 'px monospace';
+    ctx.fillText(done ? '✓' : open ? String(i + 1) : '🔒', x, y + r * 0.32);
+    ctx.fillStyle = open ? '#fff' : 'rgba(255,255,255,0.4)';
+    ctx.font = 'bold ' + Math.min(14, S.W / 44) + 'px monospace';
+    ctx.fillText(lv.name, x, y + r + 18);
+    uiRects.push({ x, y, w: r * 1.6, h: r * 1.6, mapNode: i });
+    ctx.textAlign = 'left';
+  });
+
+  // the panel telling you about whichever one you are on
+  const lv = LEVELS[mapPick];
+  const open = isOpen(lv);
+  ctx.fillStyle = 'rgba(10,8,18,0.8)';
+  ctx.fillRect(0, S.H - Math.min(112, S.H * 0.2), S.W, Math.min(112, S.H * 0.2));
+  const py = S.H - Math.min(112, S.H * 0.2);
+  ctx.textAlign = 'left';
+  ctx.fillStyle = KNIGHTS[save.knight].body;
+  ctx.font = 'bold ' + Math.min(16, S.W / 36) + 'px monospace';
+  ctx.fillText(playerName() + '   Lv' + heroLevel() + '   ' + save.xp + ' XP', 16, py + 26);
+  ctx.fillStyle = open ? '#ffd83d' : 'rgba(255,255,255,0.5)';
+  ctx.font = 'bold ' + Math.min(22, S.W / 26) + 'px monospace';
+  ctx.fillText(lv.name, 16, py + 54);
+  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  ctx.font = Math.min(14, S.W / 44) + 'px monospace';
+  ctx.fillText(open ? lv.blurb : 'beat ' + LEVELS[lv.needs].name + ' first', 16, py + 76);
+  ctx.textAlign = 'right';
+  if (open) {
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold ' + Math.min(19, S.W / 30) + 'px monospace';
+    ctx.fillText(isBeaten(lv.id) ? 'SPACE / TAP  =  PLAY AGAIN' : 'SPACE / TAP  =  FIGHT',
+                 S.W - 16, py + 54);
+  }
+  ctx.fillStyle = 'rgba(255,255,255,0.35)';
+  ctx.font = Math.min(12, S.W / 50) + 'px monospace';
+  ctx.fillText('arrows pick a level   -   C changes knight', S.W - 16, py + 78);
+  ctx.textAlign = 'left';
+}
+</script>
+<script>
+// ---- level cleared, and dying ----
+function drawResult(S, won) {
+  drawFight();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = 'rgba(8,6,16,0.78)';
+  ctx.fillRect(0, 0, S.W, S.H);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = won ? '#5ddf5d' : '#ff5a5a';
+  ctx.font = 'bold ' + Math.min(56, S.W / 12) + 'px monospace';
+  ctx.fillText(won ? 'CLEARED!' : 'YOU FELL', S.W / 2, S.H * 0.36);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold ' + Math.min(22, S.W / 28) + 'px monospace';
+  ctx.fillText(fightLevel.name, S.W / 2, S.H * 0.45);
+  if (won) {
+    ctx.fillStyle = '#ffd83d';
+    ctx.fillText('+' + gainedXP + ' XP', S.W / 2, S.H * 0.53);
+    const next = LEVELS.find(l => l.needs === fightLevel.id);
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.font = Math.min(16, S.W / 36) + 'px monospace';
+    ctx.fillText(next ? next.name + ' is now open' : 'you have beaten the lot!', S.W / 2, S.H * 0.61);
+  } else {
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.font = Math.min(16, S.W / 36) + 'px monospace';
+    ctx.fillText('have another go - you keep your XP', S.W / 2, S.H * 0.55);
+  }
+  ctx.fillStyle = 'rgba(255,255,255,' + (0.55 + Math.sin(Date.now() / 300) * 0.35) + ')';
+  ctx.font = 'bold ' + Math.min(22, S.W / 26) + 'px monospace';
+  ctx.fillText('SPACE  /  TAP  =  BACK TO THE MAP', S.W / 2, S.H * 0.76);
+  ctx.textAlign = 'left';
+}
+
+// =====================================================================
+// CONTROLS
+// =====================================================================
+function attack() {
+  if (hero.dead || hero.attack > 0 || hero.cool > 0) return;
+  hero.attack = SWING_TIME;
+  hero.cool = SWING_TIME + SWING_COOL;
+  hero.swung = false;
+  swingSound();
+}
+function jump() {
+  if (hero.dead || hero.z > 0) return;
+  hero.vz = JUMP_V;
+  hero.z = 1;
+  tone(300, 0.1, 'sine', 0.05, 520);
+}
+function pickMapNode(dir) {
+  // step to the next level along, skipping any still locked
+  for (let tries = 0; tries < LEVELS.length; tries++) {
+    mapPick = (mapPick + dir + LEVELS.length) % LEVELS.length;
+    if (isOpen(LEVELS[mapPick])) return;
+  }
+}
+function goFromMap() {
+  const lv = LEVELS[mapPick];
+  if (!isOpen(lv)) { tone(160, 0.16, 'square', 0.07, 90); return; }
+  startLevel(lv);
+}
+function advance() {
+  ensureAudio();
+  if (screen === 'title') { screen = 'select'; return; }
+  if (screen === 'select') {
+    nameBox.blur();
+    nameBox.style.display = 'none';
+    saveGame();
+    // start on the furthest level you have unlocked
+    mapPick = 0;
+    LEVELS.forEach((l, i) => { if (isOpen(l)) mapPick = i; });
+    screen = 'map';
+    return;
+  }
+  if (screen === 'map') { goFromMap(); return; }
+  if (screen === 'cleared' || screen === 'dead') { screen = 'map'; return; }
+}
+
+addEventListener('keydown', e => {
+  if (typing()) return;
+  ensureAudio();
+  const k = e.key;
+  held[k] = true;
+  if (k.length === 1) held[k.toLowerCase()] = true;
+  if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(k)) e.preventDefault();
+
+  if (screen === 'select') {
+    if (k === 'ArrowLeft') save.knight = (save.knight + 3) % 4;
+    if (k === 'ArrowRight') save.knight = (save.knight + 1) % 4;
+    if (k === 'ArrowLeft' || k === 'ArrowRight') { saveGame(); tone(600, 0.05, 'square', 0.05); }
+    if (k === ' ') advance();
+    return;
+  }
+  if (screen === 'map') {
+    if (k === 'ArrowRight' || k === 'ArrowUp') pickMapNode(1);
+    if (k === 'ArrowLeft' || k === 'ArrowDown') pickMapNode(-1);
+    if (k === ' ') advance();
+    if (k.toLowerCase() === 'c') { screen = 'select'; }
+    return;
+  }
+  if (screen === 'fight') {
+    if (k === ' ' || k.toLowerCase() === 'j') attack();
+    if (k.toLowerCase() === 'k') jump();
+    if (k.toLowerCase() === 'l') castMagic();
+    if (k === 'Escape') screen = 'map';
+    return;
+  }
+  if (k === ' ') advance();
+});
+addEventListener('keyup', e => {
+  held[e.key] = false;
+  if (e.key.length === 1) held[e.key.toLowerCase()] = false;
+});
+addEventListener('blur', () => { held = {}; });
+</script>
+<script>
+// ---- touch: a thumbstick on the left, buttons on the right ----
+let padRects = [], stick = null;
+function drawPads(S) {
+  const r = Math.min(52, S.W / 11);
+  const cx = r * 1.7, cy = S.H - r * 1.7;
+  ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+  ctx.fillStyle = 'rgba(255,255,255,0.06)';
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  const kx = stick ? cx + stick.dx * r * 0.5 : cx;
+  const ky = stick ? cy + stick.dy * r * 0.5 : cy;
+  ctx.fillStyle = 'rgba(255,255,255,0.22)';
+  ctx.beginPath(); ctx.arc(kx, ky, r * 0.42, 0, Math.PI * 2); ctx.fill();
+  padRects = [{ x: cx, y: cy, r: r * 1.5, stick: true }];
+  const K = hero ? hero.K : KNIGHTS[save.knight];
+  const buttons = [
+    { act: 'hit', label: 'HIT', dx: -1.3, dy: 0, color: '#ffd83d' },
+    { act: 'jump', label: 'JUMP', dx: -0.35, dy: -1.15, color: '#9ad4ff' },
+    { act: 'magic', label: K.magic, dx: 0.55, dy: -0.3, color: K.magicColor },
+  ];
+  for (const b of buttons) {
+    const bx = S.W - r * 2.2 + b.dx * r * 1.25, by = S.H - r * 1.9 + b.dy * r * 1.25;
+    const ready = b.act !== 'magic' || (hero && hero.magicCool <= 0);
+    ctx.fillStyle = ready ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.03)';
+    ctx.strokeStyle = ready ? b.color : 'rgba(255,255,255,0.2)';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(bx, by, r * 0.66, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = ready ? b.color : 'rgba(255,255,255,0.3)';
+    ctx.font = 'bold ' + r * 0.26 + 'px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(b.label, bx, by + r * 0.1);
+    padRects.push({ x: bx, y: by, r: r * 0.85, act: b.act });
+  }
+  ctx.textAlign = 'left';
+}
+const touches = new Map();
+canvas.addEventListener('pointerdown', e => {
+  ensureAudio();
+  touchMode = touchMode || e.pointerType === 'touch';
+  if (screen === 'fight') {
+    for (const b of padRects) {
+      if (Math.hypot(e.clientX - b.x, e.clientY - b.y) > b.r) continue;
+      if (b.stick) {
+        stick = { id: e.pointerId, ox: b.x, oy: b.y, dx: 0, dy: 0 };
+        touches.set(e.pointerId, 'stick');
+      } else {
+        if (b.act === 'hit') attack();
+        if (b.act === 'jump') jump();
+        if (b.act === 'magic') castMagic();
+        touches.set(e.pointerId, b.act);
+      }
+      return;
+    }
+    return;
+  }
+  // menus: tap a card, a map pin, or anywhere to carry on
+  for (const b of uiRects) {
+    if (Math.abs(e.clientX - b.x) > b.w || Math.abs(e.clientY - b.y) > b.h) continue;
+    if (b.knight !== undefined) { save.knight = b.knight; saveGame(); tone(600, 0.05, 'square', 0.05); return; }
+    if (b.mapNode !== undefined) {
+      if (mapPick === b.mapNode) goFromMap(); else mapPick = b.mapNode;
+      return;
+    }
+    if (b.go) { advance(); return; }
+  }
+  if (screen !== 'select') advance();
+});
+canvas.addEventListener('pointermove', e => {
+  if (!stick || stick.id !== e.pointerId) return;
+  const dx = e.clientX - stick.ox, dy = e.clientY - stick.oy;
+  const d = Math.hypot(dx, dy) || 1;
+  const cl = Math.min(1, d / 46);
+  stick.dx = dx / d * cl; stick.dy = dy / d * cl;
+  // the stick presses the same keys the keyboard does, so both routes
+  // run through exactly the same code
+  held.a = stick.dx < -0.3; held.d = stick.dx > 0.3;
+  held.w = stick.dy < -0.3; held.s = stick.dy > 0.3;
+});
+function endTouch(e) {
+  const t = touches.get(e.pointerId);
+  if (t === 'stick') {
+    stick = null;
+    held.a = held.d = held.w = held.s = false;
+  }
+  touches.delete(e.pointerId);
+}
+canvas.addEventListener('pointerup', endTouch);
+canvas.addEventListener('pointercancel', endTouch);
+addEventListener('touchstart', () => { touchMode = true; }, { passive: true });
+
+// =====================================================================
+// THE GAME LOOP
+// =====================================================================
+function draw() {
+  const S = stage();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  if (screen !== 'select') nameBox.style.display = 'none';
+  if (screen === 'title') drawTitle(S);
+  else if (screen === 'select') drawSelect(S);
+  else if (screen === 'map') drawMap(S);
+  else if (screen === 'fight') { drawFight(); if (touchMode) drawPads(S); }
+  else if (screen === 'cleared') drawResult(S, true);
+  else if (screen === 'dead') drawResult(S, false);
+}
+let last = 0;
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  if (screen === 'fight') updateFight(dt);
+  if (screen === 'cleared' || screen === 'dead') {
+    resultTimer += dt;
+    for (const p of particles) { p.x += p.vx * dt; p.z += p.vz * dt; p.vz -= 340 * dt; p.life -= dt; }
+    particles = particles.filter(p => p.life > 0);
+  }
+  draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
