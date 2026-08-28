@@ -192,6 +192,16 @@ function toScreen(a, S, camX) {
 // ---------------------------------------------------------------------
 // EVERYBODY IN A FIGHT
 // ---------------------------------------------------------------------
+// What a goblin is carrying. It changes how hard it hits, how far it
+// reaches and how long it takes to swing again - so a room of them
+// fights differently depending on what they picked up.
+const WEAPONS = {
+  club:  { name: 'club',  power: 1.0, reach: 1.0, cool: 1.0 },
+  axe:   { name: 'axe',   power: 1.6, reach: 0.95, cool: 1.5 },   // heavy and slow
+  sword: { name: 'sword', power: 0.85, reach: 1.25, cool: 0.75 }, // quick, long
+};
+const WEAPON_LIST = ['club', 'axe', 'sword'];
+
 const ENEMY_KINDS = {
   goblin: { name: 'GOBLIN', body: '#6b4a2a', dark: '#3d2916', health: 22, power: 6,
             speed: 78, r: 20, xp: 8, eyes: '#ffe94a',
@@ -232,6 +242,7 @@ function newFoe(kind, x, depth) {
     x, depth, z: E.flies ? 42 : 0, vz: 0,
     vx: 0, vdepth: 0, face: -1, r: E.r,
     health: E.health, maxHealth: E.health,
+    weapon: WEAPON_LIST[Math.floor(Math.random() * WEAPON_LIST.length)],
     attack: 0, cool: 0.6 + Math.random() * 0.7, hurt: 0, dead: false,
     frozen: 0, burning: 0, poisoned: 0, walkT: Math.random() * 6,
     bob: Math.random() * 6,
@@ -333,6 +344,8 @@ function inRange(a, b, reach) {
   return dx < reach && dd < 0.16 && dz < 60;
 }
 function faceToward(a, b) { a.face = b.x > a.x ? 1 : -1; }
+// anything without a weapon just swings its fists, so this never breaks
+function weaponOf(f) { return WEAPONS[f.weapon] || WEAPONS.club; }
 
 function hurtFoe(f, dmg, knock, from) {
   if (f.dead) return;
@@ -547,7 +560,7 @@ function updateFight(dt) {
       }
     }
     faceToward(f, hero);
-    const close = inRange(f, hero, 46);
+    const close = inRange(f, hero, 46 * weaponOf(f).reach);
     if (!close && f.attack <= 0) {
       // walk towards you, along the floor and up or down it
       const sp = f.E.speed * (f.E.boss ? 1 : 1) * dt;
@@ -558,12 +571,13 @@ function updateFight(dt) {
       if (f.E.flies) f.z = 40 + Math.sin(f.bob) * 14;
     } else if (close && f.cool <= 0) {
       f.attack = 0.42;
-      f.cool = 1.0 + Math.random() * 0.8;
+      f.cool = (1.0 + Math.random() * 0.8) * weaponOf(f).cool;
       f.swung = false;
     }
     if (f.attack > 0 && !f.swung && f.attack < 0.2) {
       f.swung = true;
-      if (inRange(f, hero, 52)) hurtHero(f.E.power);
+      const W = weaponOf(f);
+      if (inRange(f, hero, 52 * W.reach)) hurtHero(Math.round(f.E.power * W.power));
     }
   }
   foes = foes.filter(f => !f.dead || (f.deadT = (f.deadT || 0) + dt) < 0.3);
@@ -937,20 +951,87 @@ function drawGoblin(f, r) {
     ctx.arc(Math.cos(a) * r * 0.58, hy + r * 0.04 + Math.sin(a) * r * 0.53, r * 0.045, 0, Math.PI * 2);
     ctx.fill();
   }
-  // a crooked club, swung when attacking
+  // whatever it is carrying, held out to the side and pointing away so
+  // it never swings across its own face
   const sw = f.attack > 0 ? 1 - f.attack / 0.42 : 0;
   ctx.save();
-  // held out to the side and pointing away, so it never crosses the face
   ctx.translate(f.face * r * 0.72, -r * 0.78 + wob);
   ctx.rotate(f.face * (0.5 + sw * 1.6));
-  ctx.fillStyle = '#8a6a3a';
-  roundRect(-r * 0.08, -r * 0.84, r * 0.16, r * 0.84, r * 0.06);
-  ctx.fill();
-  ctx.fillStyle = '#6b4f26';
-  ctx.beginPath();
-  ctx.arc(0, -r * 0.84, r * 0.17, 0, Math.PI * 2);
-  ctx.fill();
+  drawWeapon(f.weapon, r);
   ctx.restore();
+}
+
+// Each weapon draws itself, standing at the handle and pointing up. So
+// the goblin only has to say where its hand is and which way it is
+// swinging, and this does the rest.
+function drawWeapon(kind, r) {
+  if (kind === 'axe') {
+    // a heavy wooden haft with a big curved iron head
+    ctx.fillStyle = '#6b4f26';
+    roundRect(-r * 0.07, -r * 0.86, r * 0.14, r * 0.86, r * 0.05);
+    ctx.fill();
+    ctx.fillStyle = '#9aa3ac';
+    ctx.beginPath();
+    ctx.moveTo(0, -r * 0.86);
+    ctx.quadraticCurveTo(r * 0.52, -r * 0.92, r * 0.44, -r * 0.44);
+    ctx.lineTo(0, -r * 0.52);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#c8d0d8';                       // the sharpened edge
+    ctx.beginPath();
+    ctx.moveTo(r * 0.02, -r * 0.86);
+    ctx.quadraticCurveTo(r * 0.52, -r * 0.92, r * 0.44, -r * 0.44);
+    ctx.quadraticCurveTo(r * 0.4, -r * 0.62, r * 0.05, -r * 0.74);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#4a4f55';                       // the binding
+    ctx.fillRect(-r * 0.09, -r * 0.6, r * 0.18, r * 0.1);
+  } else if (kind === 'sword') {
+    // a long thin blade, longest reach of the three
+    ctx.fillStyle = '#3a2c1c';                       // the grip
+    roundRect(-r * 0.05, -r * 0.22, r * 0.1, r * 0.28, r * 0.04);
+    ctx.fill();
+    ctx.fillStyle = '#8a6a3a';                       // the crossguard
+    roundRect(-r * 0.24, -r * 0.28, r * 0.48, r * 0.09, r * 0.03);
+    ctx.fill();
+    ctx.fillStyle = '#b9c2cb';                       // the blade
+    ctx.beginPath();
+    ctx.moveTo(-r * 0.09, -r * 0.28);
+    ctx.lineTo(r * 0.09, -r * 0.28);
+    ctx.lineTo(r * 0.05, -r * 1.12);
+    ctx.lineTo(0, -r * 1.24);                        // the point
+    ctx.lineTo(-r * 0.05, -r * 1.12);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#e2e8ee';                       // a shine down one side
+    ctx.beginPath();
+    ctx.moveTo(-r * 0.07, -r * 0.3);
+    ctx.lineTo(-r * 0.02, -r * 0.3);
+    ctx.lineTo(-r * 0.02, -r * 1.1);
+    ctx.lineTo(-r * 0.05, -r * 1.06);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#ffd83d';                       // a little pommel
+    ctx.beginPath();
+    ctx.arc(0, r * 0.06, r * 0.07, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    // the club: a lump of wood with studs hammered into it
+    ctx.fillStyle = '#8a6a3a';
+    roundRect(-r * 0.08, -r * 0.84, r * 0.16, r * 0.84, r * 0.06);
+    ctx.fill();
+    ctx.fillStyle = '#6b4f26';
+    ctx.beginPath();
+    ctx.arc(0, -r * 0.86, r * 0.19, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#a8aeb4';
+    for (let i = 0; i < 4; i++) {
+      const a2 = (i / 4) * Math.PI * 2 + 0.5;
+      ctx.beginPath();
+      ctx.arc(Math.cos(a2) * r * 0.11, -r * 0.86 + Math.sin(a2) * r * 0.11, r * 0.045, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
 }
 
 function drawFoe(f, sx, sy, sc) {
