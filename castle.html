@@ -110,23 +110,28 @@ const KNIGHTS = [
 // THE MAP. Each level knows where it sits, and which one must be beaten
 // before it opens.
 // ---------------------------------------------------------------------
+// Everybody is on the level from the moment it starts - no waves. They
+// are spread out along it and wait where they stand until you come
+// near, so a level is a march you can see coming rather than things
+// appearing out of nowhere behind you.
 const LEVELS = [
-  { id: 0, name: 'THE MEADOW', x: 0.12, y: 0.74, needs: -1, waves: 2, enemy: 'goblin',
-    scene: 'grass', blurb: 'a gentle start. mostly.' },
-  { id: 1, name: 'OLD BRIDGE', x: 0.25, y: 0.55, needs: 0, waves: 3, enemy: 'goblin',
+  { id: 0, name: 'THE MEADOW', x: 0.12, y: 0.74, needs: -1, count: 10, enemy: 'goblin',
+    scene: 'grass', blurb: 'ten of them, and a chest of gold',
+    chest: true, cutscene: true },
+  { id: 1, name: 'OLD BRIDGE', x: 0.25, y: 0.55, needs: 0, count: 8, enemy: 'goblin',
     scene: 'grass', blurb: 'they have taken the bridge' },
-  { id: 2, name: 'DARK WOOD', x: 0.37, y: 0.74, needs: 1, waves: 3, enemy: 'bat',
+  { id: 2, name: 'DARK WOOD', x: 0.37, y: 0.74, needs: 1, count: 10, enemy: 'bat',
     scene: 'wood', blurb: 'something in the trees' },
-  { id: 3, name: 'THE CAVES', x: 0.49, y: 0.5, needs: 2, waves: 4, enemy: 'slime',
+  { id: 3, name: 'THE CAVES', x: 0.49, y: 0.5, needs: 2, count: 11, enemy: 'slime',
     scene: 'cave', blurb: 'dripping, and full of slime' },
-  { id: 4, name: 'SNOW PASS', x: 0.61, y: 0.72, needs: 3, waves: 4, enemy: 'goblin',
+  { id: 4, name: 'SNOW PASS', x: 0.61, y: 0.72, needs: 3, count: 12, enemy: 'goblin',
     scene: 'snow', blurb: 'cold, and they are waiting' },
-  { id: 5, name: 'THE KEEP', x: 0.73, y: 0.46, needs: 4, waves: 4, enemy: 'knight',
+  { id: 5, name: 'THE KEEP', x: 0.73, y: 0.46, needs: 4, count: 12, enemy: 'knight',
     scene: 'castle', blurb: 'proper soldiers now' },
-  { id: 6, name: 'LAVA GATE', x: 0.84, y: 0.68, needs: 5, waves: 5, enemy: 'slime',
+  { id: 6, name: 'LAVA GATE', x: 0.84, y: 0.68, needs: 5, count: 14, enemy: 'slime',
     scene: 'lava', blurb: 'hot. very hot.' },
-  { id: 7, name: 'TOP TOWER', x: 0.93, y: 0.3, needs: 6, waves: 5, enemy: 'boss',
-    scene: 'castle', blurb: 'whatever has been behind all this', boss: true },
+  { id: 7, name: 'TOP TOWER', x: 0.93, y: 0.3, needs: 6, count: 8, enemy: 'knight',
+    scene: 'castle', blurb: 'the one who took the gold', boss: true },
 ];
 
 // ---------------------------------------------------------------------
@@ -197,7 +202,9 @@ const ENEMY_KINDS = {
 };
 
 let hero = null, foes = [], magics = [], camX = 0;
-let fightLevel = null, wave = 0, waveTimer = 0, cleared = false, resultTimer = 0;
+let fightLevel = null, cleared = false, resultTimer = 0, clearTimer = 0;
+let chest = null;                // the chest of gold, on levels that have one
+let cut = null;                  // a cutscene playing, if there is one
 let gainedXP = 0;
 
 function newHero() {
@@ -223,6 +230,7 @@ function newFoe(kind, x, depth) {
     attack: 0, cool: 0.6 + Math.random() * 0.7, hurt: 0, dead: false,
     frozen: 0, burning: 0, poisoned: 0, walkT: Math.random() * 6,
     bob: Math.random() * 6,
+    awake: false,                  // stands about until you come near
   };
 }
 
@@ -284,28 +292,29 @@ function startLevel(lv) {
   magics = [];
   particles = [];
   floaters = [];
+  chest = null;
+  cut = null;
   camX = 0;
-  wave = 0;
-  waveTimer = 0.9;
   cleared = false;
   gainedXP = 0;
+  fillLevel(lv);
   screen = 'fight';
 }
-function spawnWave() {
-  const lv = fightLevel;
-  const last = wave >= lv.waves - 1;
-  // The boss turns up on his own, at the end. Everyone else comes in a
-  // group that grows as the level goes on.
-  if (lv.boss && last) {
-    foes.push(newFoe('boss', camX + canvas.width + 120, 0.55));
-    tone(90, 0.6, 'sawtooth', 0.12, 60);
-    return;
+
+// Everybody gets put out along the level at the start, spread from one
+// end to the other. They wait where they stand until you come near, so
+// you meet them a few at a time as you walk.
+function fillLevel(lv) {
+  const first = 460;                              // room to get going
+  const last = STAGE_W - 300;
+  for (let i = 0; i < lv.count; i++) {
+    const t = lv.count === 1 ? 0.5 : i / (lv.count - 1);
+    const x = first + t * (last - first) + (Math.random() - 0.5) * 130;
+    foes.push(newFoe(lv.enemy, x, 0.15 + Math.random() * 0.75));
   }
-  const many = Math.min(5, 2 + Math.floor(wave * 0.8));
-  for (let i = 0; i < many; i++) {
-    const fromRight = Math.random() < 0.72;
-    const x = fromRight ? camX + canvas.width + 80 + i * 90 : camX - 100 - i * 90;
-    foes.push(newFoe(lv.enemy, x, 0.2 + Math.random() * 0.7));
+  if (lv.boss) foes.push(newFoe('boss', STAGE_W - 180, 0.55));
+  if (lv.chest) {
+    chest = { x: STAGE_W - 170, depth: 0.62, bob: 0, taken: false, lift: 0 };
   }
 }
 
@@ -395,6 +404,49 @@ function castMagic() {
 </script>
 <script>
 // =====================================================================
+// THE CUTSCENE.
+//
+// It runs on its own clock and takes the controls off you for a moment.
+// An enormous knight in rust-and-crimson stained armour walks in, picks
+// up the gold, and walks off with it. That is WHY there is a map to
+// fight across - you are going after him.
+// =====================================================================
+function startCutscene() {
+  cut = { t: 0, x: STAGE_W + 240, depth: 0.62, phase: 'in', said: false };
+  screen = 'cutscene';
+  held = {};
+  tone(70, 1.2, 'sawtooth', 0.14, 45);            // one great doom-laden note
+}
+function updateCutscene(dt) {
+  cut.t += dt;
+  const stopAt = chest.x + 120;
+  const step = () => Math.floor(cut.t * 2.2) !== Math.floor((cut.t - dt) * 2.2);
+  if (cut.phase === 'in') {
+    cut.x -= 200 * dt;
+    if (step()) { tone(58, 0.17, 'sine', 0.13, 38); shake = Math.max(shake, 8); }
+    if (cut.x <= stopAt) { cut.x = stopAt; cut.phase = 'grab'; cut.t = 0; }
+  } else if (cut.phase === 'grab') {
+    if (cut.t > 0.6) {
+      chest.taken = true;
+      chest.lift = 0;
+      if (!cut.said) { cut.said = true; tone(430, 0.5, 'sawtooth', 0.1, 110); }
+    }
+    if (cut.t > 2.1) { cut.phase = 'out'; cut.t = 0; }
+  } else {
+    cut.x += 240 * dt;
+    if (step()) tone(58, 0.17, 'sine', 0.1, 38);
+    if (cut.x > STAGE_W + 280) { resultTimer = 0; screen = 'cleared'; fanfare(); }
+  }
+  // the camera watches HIM, not you
+  const want = cut.x - canvas.width * 0.55;
+  camX += (Math.max(0, Math.min(STAGE_W - canvas.width, want)) - camX) * Math.min(1, dt * 3);
+  if (shake > 0) shake = Math.max(0, shake - dt * 60);
+  for (const p of particles) { p.x += p.vx * dt; p.z += p.vz * dt; p.vz -= 340 * dt; p.life -= dt; }
+  particles = particles.filter(p => p.life > 0);
+}
+
+
+// =====================================================================
 // ONE STEP OF A FIGHT
 // =====================================================================
 function keyDown(names) { return names.some(k => held[k]); }
@@ -478,6 +530,17 @@ function updateFight(dt) {
     f.attack = Math.max(0, f.attack - dt);
     if (hero.dead) continue;
     const dx = hero.x - f.x, dd = hero.depth - f.depth;
+    // WAKING UP. Until you come near they just stand there, so you meet
+    // them a few at a time instead of the whole level charging at once.
+    if (!f.awake) {
+      if (Math.abs(dx) < canvas.width * 0.55) {
+        f.awake = true;
+        if (Math.random() < 0.3) tone(200 + Math.random() * 180, 0.07, 'square', 0.04);
+      } else {
+        f.walkT += dt * 1.2;                       // a bored little shuffle
+        continue;
+      }
+    }
     faceToward(f, hero);
     const close = inRange(f, hero, 46);
     if (!close && f.attack <= 0) {
@@ -537,28 +600,22 @@ function updateFight(dt) {
   }
   magics = magics.filter(m => m.life > 0);
 
-  // ---- waves ----
+  // ---- is the field clear? ----
   const alive = foes.filter(f => !f.dead).length;
-  if (!cleared) {
-    if (alive === 0) {
-      waveTimer -= dt;
-      if (waveTimer <= 0) {
-        if (wave >= fightLevel.waves) {
-          cleared = true;
-          resultTimer = 0;
-          screen = 'cleared';
-          if (!isBeaten(fightLevel.id)) save.beaten.push(fightLevel.id);
-          save.xp += gainedXP;
-          saveGame();
-          fanfare();
-        } else {
-          wave++;
-          spawnWave();
-          waveTimer = 1.1;
-        }
-      }
+  if (!cleared && alive === 0) {
+    clearTimer += dt;
+    if (clearTimer > 0.8) {
+      cleared = true;
+      if (!isBeaten(fightLevel.id)) save.beaten.push(fightLevel.id);
+      save.xp += gainedXP;
+      saveGame();
+      // a level with a cutscene plays it before the CLEARED screen
+      if (fightLevel.cutscene && chest && !chest.taken) startCutscene();
+      else { resultTimer = 0; screen = 'cleared'; fanfare(); }
     }
   }
+  // the chest bobs about, waiting
+  if (chest) chest.bob += dt * 2.4;
 
   // ---- the camera follows you, but never past the ends ----
   const want = hero.x - S.W * 0.42;
@@ -645,6 +702,94 @@ function drawKnight(a, sx, sy, sc) {
   ctx.fill();
   ctx.restore();
   ctx.globalAlpha = 1;
+}
+
+function drawChest(sx, sy, sc, c) {
+  const w = 78 * sc, h = 52 * sc;
+  const bob = Math.sin(c.bob) * 3 * sc;
+  ctx.save();
+  ctx.translate(sx, sy - c.lift * 90 * sc + bob);
+  // the pile of gold spilling out of it
+  ctx.fillStyle = '#ffd83d';
+  for (let i = 0; i < 9; i++) {
+    const a = (i / 9) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.arc(Math.cos(a) * w * 0.42, -h * 0.72 + Math.sin(a) * h * 0.18, w * 0.1, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.fillStyle = '#8a5a2a';                       // the box
+  roundRect(-w / 2, -h, w, h, w * 0.07); ctx.fill();
+  ctx.fillStyle = '#6b4420';
+  roundRect(-w / 2, -h * 0.42, w, h * 0.42, w * 0.05); ctx.fill();
+  ctx.fillStyle = '#c9a227';                       // the bands
+  ctx.fillRect(-w / 2, -h * 0.5, w, h * 0.12);
+  ctx.fillRect(-w * 0.09, -h, w * 0.18, h);
+  ctx.fillStyle = '#ffe07a';                       // the lock
+  roundRect(-w * 0.09, -h * 0.55, w * 0.18, h * 0.24, 3); ctx.fill();
+  ctx.restore();
+  // a glow, so you can see it from across the level
+  ctx.fillStyle = 'rgba(255,216,61,0.16)';
+  ctx.beginPath();
+  ctx.ellipse(sx, sy - c.lift * 90 * sc, w * 0.9, h * 0.4, 0, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+// The one who takes the gold. Enormous, dark, and his armour is stained
+// rust-red - it is the same trick every villain uses: make him the same
+// shape as you but far too big.
+function drawBaron(sx, sy, sc, phase, t) {
+  const r = 30 * sc;
+  const walk = phase === 'grab' ? 0 : t * 7;
+  const wob = Math.sin(walk) * r * 0.1;
+  ctx.save();
+  ctx.translate(sx, sy);
+  // legs
+  ctx.fillStyle = '#3a2028';
+  for (const side of [-1, 1]) {
+    const lift = Math.sin(walk + (side > 0 ? Math.PI : 0)) * r * 0.26;
+    roundRect(side * r * 0.38 - r * 0.2, -r * 0.6, r * 0.4, r * 0.75 + lift, r * 0.1);
+    ctx.fill();
+  }
+  // body, with the stains
+  ctx.fillStyle = '#4a3038';
+  roundRect(-r * 0.72, -r * 1.95 + wob, r * 1.44, r * 1.45, r * 0.3); ctx.fill();
+  ctx.fillStyle = '#7d1f28';
+  ctx.beginPath();
+  ctx.ellipse(-r * 0.2, -r * 1.35 + wob, r * 0.34, r * 0.5, 0.4, 0, Math.PI * 2);
+  ctx.ellipse(r * 0.34, -r * 1.7 + wob, r * 0.22, r * 0.3, -0.3, 0, Math.PI * 2);
+  ctx.fill();
+  // shoulders
+  ctx.fillStyle = '#5a3a44';
+  for (const side of [-1, 1]) {
+    ctx.beginPath();
+    ctx.arc(side * r * 0.82, -r * 1.75 + wob, r * 0.42, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // helmet, with a red glow where the eyes are
+  ctx.fillStyle = '#3a2028';
+  ctx.beginPath();
+  ctx.arc(0, -r * 2.4 + wob, r * 0.7, Math.PI, 0);
+  ctx.fill();
+  ctx.fillRect(-r * 0.7, -r * 2.4 + wob, r * 1.4, r * 0.62);
+  ctx.fillStyle = '#ff3b3b';
+  ctx.fillRect(-r * 0.44, -r * 2.28 + wob, r * 0.3, r * 0.16);
+  ctx.fillRect(r * 0.14, -r * 2.28 + wob, r * 0.3, r * 0.16);
+  ctx.fillStyle = '#7d1f28';                       // a torn plume
+  ctx.beginPath();
+  ctx.moveTo(0, -r * 3.15 + wob);
+  ctx.lineTo(r * 0.6, -r * 2.6 + wob);
+  ctx.lineTo(0, -r * 2.65 + wob);
+  ctx.closePath(); ctx.fill();
+  // an enormous sword, over the shoulder
+  ctx.save();
+  ctx.translate(-r * 0.95, -r * 1.7 + wob);
+  ctx.rotate(-0.5);
+  ctx.fillStyle = '#8c9099';
+  roundRect(-r * 0.17, -r * 2.5, r * 0.34, r * 2.5, r * 0.06); ctx.fill();
+  ctx.fillStyle = '#7d1f28';
+  roundRect(-r * 0.14, -r * 2.4, r * 0.1, r * 1.6, r * 0.04); ctx.fill();
+  ctx.restore();
+  ctx.restore();
 }
 
 function drawFoe(f, sx, sy, sc) {
@@ -830,11 +975,32 @@ function drawFight() {
     }
   }
 
+  // the chest sits on the floor with everybody else, sorted by depth
+  if (chest) cast.push({ a: chest, chest: true });
+  if (cut) cast.push({ a: { x: cut.x, depth: cut.depth, z: 0, r: 30 }, baron: true });
+  cast.sort((p, q) => p.a.depth - q.a.depth);
+
   for (const c of cast) {
     const a = c.a;
     const p = toScreen(a, S, camX);
     const floorY = S.backY + a.depth * S.floorH;
-    if (p.x < -160 || p.x > S.W + 160) continue;
+    if (p.x < -220 || p.x > S.W + 220) continue;
+    if (c.chest) {
+      if (chest.taken && cut) continue;            // he is carrying it now
+      drawShadow(p.x, floorY, p.sc, 32);
+      drawChest(p.x, p.y, p.sc, chest);
+      continue;
+    }
+    if (c.baron) {
+      drawShadow(p.x, floorY, p.sc * 1.5, 34);
+      drawBaron(p.x, p.y, p.sc, cut.phase, cut.t);
+      // the gold, tucked under his arm once he has picked it up
+      if (chest && chest.taken) {
+        drawChest(p.x - 40 * p.sc, p.y - 52 * p.sc, p.sc * 0.8,
+                  { bob: cut.t * 3, lift: 0 });
+      }
+      continue;
+    }
     drawShadow(p.x, floorY, p.sc, a.r);
     if (c.hero) drawKnight(a, p.x, p.y, p.sc);
     else drawFoe(a, p.x, p.y, p.sc);
@@ -944,8 +1110,8 @@ function drawFightHUD(S) {
   ctx.fillStyle = 'rgba(255,255,255,0.6)';
   ctx.font = 'bold ' + Math.min(13, S.W / 44) + 'px monospace';
   const left = foes.filter(f => !f.dead).length;
-  ctx.fillText('WAVE ' + Math.min(wave + 1, fightLevel.waves) + ' / ' + fightLevel.waves +
-               (left ? '   -   ' + left + ' left' : ''), S.W - 14, S.hud * 0.75);
+  ctx.fillText(left ? left + ' of ' + fightLevel.count + ' left' : 'ALL CLEAR',
+               S.W - 14, S.hud * 0.75);
   ctx.textAlign = 'left';
   if (hero.combo > 1) {
     ctx.textAlign = 'center';
@@ -1121,6 +1287,28 @@ function drawMap(S) {
 }
 </script>
 <script>
+// The cutscene is just the stage with the controls taken away, plus a
+// caption. Reusing drawFight means the world carries on looking exactly
+// as it did a second ago, which is what makes it feel like a moment in
+// the same place rather than a different screen.
+function drawCutscene(S) {
+  drawFight();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  const bandH = Math.min(70, S.H * 0.12);
+  ctx.fillStyle = 'rgba(6,4,10,0.92)';
+  ctx.fillRect(0, 0, S.W, bandH);
+  ctx.fillRect(0, S.H - bandH, S.W, bandH);
+  ctx.textAlign = 'center';
+  let line = '';
+  if (cut.phase === 'in') line = 'something enormous is coming...';
+  else if (cut.phase === 'grab') line = 'THE CRIMSON KNIGHT takes the gold';
+  else line = 'after him!';
+  ctx.fillStyle = cut.phase === 'grab' ? '#ff5a5a' : '#fff';
+  ctx.font = 'bold ' + Math.min(26, S.W / 24) + 'px monospace';
+  ctx.fillText(line, S.W / 2, S.H - bandH * 0.42);
+  ctx.textAlign = 'left';
+}
+
 // ---- level cleared, and dying ----
 function drawResult(S, won) {
   drawFight();
@@ -1141,6 +1329,10 @@ function drawResult(S, won) {
     ctx.fillStyle = 'rgba(255,255,255,0.7)';
     ctx.font = Math.min(16, S.W / 36) + 'px monospace';
     ctx.fillText(next ? next.name + ' is now open' : 'you have beaten the lot!', S.W / 2, S.H * 0.61);
+    if (fightLevel.cutscene) {
+      ctx.fillStyle = '#ff8b7f';
+      ctx.fillText('he went that way. go and get it back.', S.W / 2, S.H * 0.67);
+    }
   } else {
     ctx.fillStyle = 'rgba(255,255,255,0.7)';
     ctx.font = Math.min(16, S.W / 36) + 'px monospace';
@@ -1194,6 +1386,11 @@ function advance() {
     return;
   }
   if (screen === 'map') { goFromMap(); return; }
+  if (screen === 'cutscene') {                     // let people skip it
+    chest.taken = true; chest.lift = 1;
+    resultTimer = 0; screen = 'cleared'; fanfare();
+    return;
+  }
   if (screen === 'cleared' || screen === 'dead') { screen = 'map'; return; }
 }
 
@@ -1336,6 +1533,7 @@ function draw() {
   else if (screen === 'select') drawSelect(S);
   else if (screen === 'map') drawMap(S);
   else if (screen === 'fight') { drawFight(); if (touchMode) drawPads(S); }
+  else if (screen === 'cutscene') drawCutscene(S);
   else if (screen === 'cleared') drawResult(S, true);
   else if (screen === 'dead') drawResult(S, false);
 }
@@ -1344,6 +1542,7 @@ function loop(now) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   if (screen === 'fight') updateFight(dt);
+  if (screen === 'cutscene') updateCutscene(dt);
   if (screen === 'cleared' || screen === 'dead') {
     resultTimer += dt;
     for (const p of particles) { p.x += p.vx * dt; p.z += p.vz * dt; p.vz -= 340 * dt; p.life -= dt; }
