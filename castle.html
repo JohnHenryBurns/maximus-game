@@ -269,6 +269,7 @@ function newHero() {
     health: maxHealth(), maxHealth: maxHealth(),
     attack: 0, cool: 0, combo: 0, comboTimer: 0,
     magic: 0, magicCool: 0, hurt: 0, dead: false,
+    spin: 0, spinCool: 0, spinHit: false, spinAngle: 0,
     walkT: 0,
   };
 }
@@ -281,7 +282,8 @@ function newFoe(kind, x, depth) {
     health: E.health, maxHealth: E.health,
     weapon: WEAPON_LIST[Math.floor(Math.random() * WEAPON_LIST.length)],
     attack: 0, cool: 0.6 + Math.random() * 0.7, hurt: 0, dead: false,
-    down: 0, kvx: 0, rise: 0,      // knocked over, sliding back, getting up
+    down: 0, kvx: 0, kvz: 0, rise: 0, flying: false, tumble: 0, spinZ: 0,
+    // thrown through the air, then flat on the floor, then getting up
     frozen: 0, burning: 0, poisoned: 0, walkT: Math.random() * 6,
     bob: Math.random() * 6,
     awake: false,                  // stands about until you come near
@@ -474,13 +476,20 @@ function weaponOf(f) { return WEAPONS[f.weapon] || WEAPONS.club; }
 const DOWN_TIME = 0.55;          // how long they lie there
 const RISE_TIME = 0.35;          // and how long getting up takes
 function knockDown(f, away, force) {
-  if (f.E.boss) {                                  // too big to floor
+  if (f.E.boss) {                                  // too big to throw
     f.kvx = away * force * 0.25;
     return;
   }
-  f.down = DOWN_TIME;
+  // THROWN THROUGH THE AIR. It leaves the floor, arcs backwards, and
+  // only starts lying there once it lands - so the half second on the
+  // ground begins when it hits, not when you hit it.
+  f.down = 0;
   f.rise = 0;
-  f.kvx = away * force;
+  f.flying = true;
+  f.kvx = away * force * 1.5;
+  f.kvz = 210 + force * 0.35;                      // up as well as back
+  f.spinZ = away * (4 + Math.random() * 4);        // tumbling as it goes
+  f.tumble = 0;
   f.attack = 0;                                    // whatever it was doing, it is not now
   f.fallDir = -away;
 }
@@ -652,6 +661,31 @@ function updateFight(dt) {
     if (hero.z > 0) hero.vz -= GRAVITY * dt;
     if (hero.z <= 0) { hero.z = 0; hero.vz = 0; }
 
+    hero.spinCool = Math.max(0, hero.spinCool - dt);
+    if (hero.spin > 0) {
+      hero.spin = Math.max(0, hero.spin - dt);
+      hero.spinAngle += dt * 26;
+      // it lands halfway through, all around you at once
+      if (!hero.spinHit && hero.spin < SPIN_TIME * 0.55) {
+        hero.spinHit = true;
+        let got = 0;
+        for (const f of foes) {
+          if (f.dead) continue;
+          const dx = Math.abs(f.x - hero.x), dd = Math.abs(f.depth - hero.depth);
+          if (dx > 96 || dd > 0.3) continue;         // no facing check - it goes round
+          const crit = rollCrit();
+          let dmg = 11 + myPower() * 3;
+          if (crit) dmg = Math.round(dmg * CRIT_DAMAGE);
+          hurtFoe(f, dmg, 34, hero, crit);
+          got++;
+        }
+        if (got) {
+          shake = Math.max(shake, 16);
+          tone(660, 0.14, 'square', 0.1, 220);
+          floatText(hero.x, hero.depth, 90, got > 1 ? 'SPIN x' + got : 'SPIN!', '#ffd83d');
+        }
+      }
+    }
     hero.attack = Math.max(0, hero.attack - dt);
     hero.cool = Math.max(0, hero.cool - dt);
     hero.magicCool = Math.max(0, hero.magicCool - dt);
@@ -710,7 +744,32 @@ function updateFight(dt) {
       f.poisonTick = (f.poisonTick || 0) + dt;
       if (f.poisonTick > 0.5) { f.poisonTick = 0; hurtFoe(f, 3 + myPower(), 0, null); }
     }
-    // sliding along the floor after a hit, however it happened
+    // IN THE AIR, having been thrown
+    if (f.flying) {
+      f.x += f.kvx * dt;
+      f.z += f.kvz * dt;
+      f.kvz -= 1500 * dt;
+      f.tumble += f.spinZ * dt;
+      f.kvx *= Math.pow(0.35, dt);                  // the air slows it a little
+      f.x = Math.max(20, Math.min(STAGE_W - 20, f.x));
+      if (f.z <= 0) {
+        // LANDED. A puff of dust, a thump, and now it lies there.
+        f.z = 0;
+        f.flying = false;
+        f.tumble = 0;
+        f.down = DOWN_TIME;
+        f.kvx *= 0.4;                               // it skids a bit on landing
+        tone(120, 0.12, 'sine', 0.07, 60);
+        shake = Math.max(shake, 5);
+        for (let i = 0; i < 7; i++) {
+          particles.push({ x: f.x, depth: f.depth, z: 4,
+                           vx: (Math.random() - 0.5) * 120, vz: 40 + Math.random() * 60,
+                           life: 0.45, color: '#8a8290' });
+        }
+      }
+      continue;                                     // it can do nothing mid-air
+    }
+    // and skidding along the floor once it is down
     if (f.kvx !== 0) {
       f.x += f.kvx * dt;
       f.kvx *= Math.pow(0.02, dt);                  // friction stops it quickly
@@ -895,12 +954,45 @@ function drawShadow(sx, floorY, sc, r) {
 function drawKnight(a, sx, sy, sc) {
   const K = a.K, r = 20 * sc;
   const wob = Math.sin(a.walkT) * r * 0.12;
+  // the arc of the spin, sweeping the ground all around
+  if (a.spin > 0) {
+    const t = 1 - a.spin / SPIN_TIME;
+    ctx.strokeStyle = 'rgba(255,216,61,' + (0.25 + (1 - t) * 0.5) + ')';
+    ctx.lineWidth = 7 * sc * (1 - t * 0.5);
+    ctx.beginPath();
+    ctx.ellipse(sx, sy - r * 0.5, r * 3.6 * (0.5 + t * 0.7), r * 1.3 * (0.5 + t * 0.7),
+                0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+    ctx.lineWidth = 3 * sc;
+    ctx.beginPath();
+    ctx.ellipse(sx, sy - r * 0.5, r * 3.2 * (0.5 + t * 0.7), r * 1.1 * (0.5 + t * 0.7),
+                0, a.spinAngle, a.spinAngle + 2.2);
+    ctx.stroke();
+  }
   ctx.save();
   ctx.translate(sx, sy);
+  if (a.spin > 0) {
+    // whirling on the spot: squashed side to side as he comes round
+    ctx.scale(Math.cos(a.spinAngle) < 0 ? -1 : 1, 1);
+    ctx.scale(Math.max(0.25, Math.abs(Math.cos(a.spinAngle))), 1);
+  }
   if (a.hurt > 0 && Math.floor(a.hurt * 22) % 2) ctx.globalAlpha = 0.5;
   // the sword, swung in an arc
   const swing = a.attack > 0 ? (1 - a.attack / SWING_TIME) : 0;
-  if (a.attack > 0) {
+  if (a.spin > 0) {
+    // held straight out, level, as he comes round
+    ctx.save();
+    ctx.translate(r * 0.7, -r * 1.0);
+    ctx.rotate(1.45);
+    ctx.fillStyle = '#d8dde6';
+    roundRect(-r * 0.12, -r * 2.1, r * 0.24, r * 2.1, r * 0.1);
+    ctx.fill();
+    ctx.fillStyle = K.trim;
+    roundRect(-r * 0.3, -r * 0.16, r * 0.6, r * 0.24, r * 0.08);
+    ctx.fill();
+    ctx.restore();
+  } else if (a.attack > 0) {
     ctx.save();
     ctx.translate(a.face * r * 0.7, -r * 0.9);
     ctx.rotate(a.face * (-1.1 + swing * 2.4));
@@ -1346,7 +1438,9 @@ function drawFoe(f, sx, sy, sc) {
       return;
     }
   }
-  if (f.down > 0 || f.rise > 0) {
+  if (f.flying) {
+    ctx.rotate(f.tumble || 0);                      // head over heels
+  } else if (f.down > 0 || f.rise > 0) {
     // flat on its back, then hauling itself upright again
     const tipped = f.down > 0 ? 1 : (f.rise / RISE_TIME);
     ctx.rotate((f.fallDir || 1) * tipped * Math.PI * 0.46);
@@ -2171,6 +2265,18 @@ function drawFightHUD(S) {
   ctx.fillStyle = ready ? K.magicColor : 'rgba(255,255,255,0.45)';
   ctx.font = 'bold ' + Math.min(12, S.W / 48) + 'px monospace';
   ctx.fillText(ready ? K.magic + ' READY' : K.magic, mx, S.hud * 0.42);
+  // the spin, once you have earned it
+  if (haveCombo()) {
+    const sx2 = mx + mw + 14, sw2 = Math.min(110, S.W * 0.13);
+    const sready = hero.spinCool <= 0;
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(sx2, S.hud * 0.55, sw2, 14);
+    ctx.fillStyle = sready ? '#ffd83d' : 'rgba(255,255,255,0.25)';
+    ctx.fillRect(sx2 + 1, S.hud * 0.55 + 1, (sw2 - 2) * (1 - hero.spinCool / SPIN_COOL), 12);
+    ctx.fillStyle = sready ? '#ffd83d' : 'rgba(255,255,255,0.45)';
+    ctx.font = 'bold ' + Math.min(12, S.W / 48) + 'px monospace';
+    ctx.fillText(sready ? 'SPIN - TAP TWICE' : 'SPIN', sx2, S.hud * 0.42);
+  }
   // where you are
   ctx.textAlign = 'right';
   ctx.fillStyle = '#fff';
@@ -2440,6 +2546,9 @@ function drawResult(S, won) {
     if (fightLevel.cutscene) {
       ctx.fillStyle = '#ff8b7f';
       ctx.fillText('he went that way. go and get it back.', S.W / 2, S.H * 0.67);
+      ctx.fillStyle = '#ffd83d';
+      ctx.font = 'bold ' + Math.min(19, S.W / 30) + 'px monospace';
+      ctx.fillText('NEW MOVE: tap ATTACK twice fast to SPIN', S.W / 2, S.H * 0.735);
     }
   } else {
     ctx.fillStyle = 'rgba(255,255,255,0.7)';
@@ -2455,8 +2564,41 @@ function drawResult(S, won) {
 // =====================================================================
 // CONTROLS
 // =====================================================================
+// =====================================================================
+// THE SPIN ATTACK.
+//
+// Two taps of the attack button, quickly, and you spin the whole way
+// round - hitting EVERYONE near you whichever way they are standing,
+// and throwing the lot of them. You earn it by taking your castle back,
+// so it is the reward for finishing level one.
+// =====================================================================
+const DOUBLE_TAP = 0.28;         // how quickly the second tap must come
+const SPIN_TIME = 0.5;
+const SPIN_COOL = 2.2;
+function haveCombo() { return isBeaten(0); }
+let lastTap = -99;
+
+function spinAttack() {
+  if (hero.spin > 0 || hero.spinCool > 0 || hero.dead) return;
+  hero.spin = SPIN_TIME;
+  hero.spinCool = SPIN_COOL;
+  hero.spinHit = false;
+  hero.attack = 0;
+  tone(300, 0.28, 'sawtooth', 0.09, 900);
+  shake = Math.max(shake, 12);
+}
+
 function attack() {
-  if (hero.dead || hero.attack > 0 || hero.cool > 0) return;
+  if (hero.dead) return;
+  // two taps in a quarter of a second and you spin instead of swinging
+  const now = performance.now() / 1000;
+  if (haveCombo() && now - lastTap < DOUBLE_TAP && hero.spinCool <= 0) {
+    lastTap = -99;
+    spinAttack();
+    return;
+  }
+  lastTap = now;
+  if (hero.attack > 0 || hero.cool > 0 || hero.spin > 0) return;
   hero.attack = SWING_TIME;
   hero.cool = SWING_TIME + SWING_COOL;
   hero.swung = false;
