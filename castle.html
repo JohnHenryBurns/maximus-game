@@ -137,12 +137,52 @@ const LEVELS = [
 // ---------------------------------------------------------------------
 // WHAT YOU HAVE DONE SO FAR - kept between visits
 // ---------------------------------------------------------------------
-let save = { name: '', knight: 0, beaten: [], xp: 0 };
+// =====================================================================
+// THE WEAPON SHOP.
+//
+// It opens once you have taken your castle back. What you are allowed
+// to buy depends on how strong YOU are: the 5 damage blades are for
+// levels 1 to 10, and the 10 damage ones only unlock at level 10. So
+// gold alone is not enough - you have to earn the right to carry it.
+// =====================================================================
+const SHOP = [
+  // ---- 5 damage: levels 1 to 10 ----
+  { id: 'iron', name: 'IRON SWORD', dmg: 5, cost: 60, need: 1, blade: '#b9c2cb',
+    blurb: 'honest, sharp, does the job' },
+  { id: 'oak', name: 'OAK CLUB', dmg: 5, cost: 55, need: 1, blade: '#8a6a3a',
+    blurb: 'heavy lump of tree. surprisingly good' },
+  { id: 'hatchet', name: 'HATCHET', dmg: 5, cost: 75, need: 3, blade: '#9aa3ac',
+    blurb: 'short, mean and quick' },
+  { id: 'bronze', name: 'BRONZE BLADE', dmg: 5, cost: 110, need: 5, blade: '#d09b3f',
+    blurb: 'older than the castle' },
+  // ---- 10 damage: level 10 and up ----
+  { id: 'steel', name: 'STEEL LONGSWORD', dmg: 10, cost: 220, need: 10, blade: '#dce4ec',
+    blurb: 'a proper knight of the castle' },
+  { id: 'warhammer', name: 'WAR HAMMER', dmg: 10, cost: 260, need: 12, blade: '#7d868e',
+    blurb: 'flattens things' },
+  { id: 'frost', name: 'FROSTBRAND', dmg: 10, cost: 340, need: 15, blade: '#9fe8ff',
+    blurb: 'cold to hold' },
+  { id: 'gold', name: 'GOLDEN GREATSWORD', dmg: 10, cost: 500, need: 18, blade: '#ffd83d',
+    blurb: 'from the chest they stole' },
+];
+function shopItem(id) { return SHOP.find(w => w.id === id); }
+function haveShop() { return isBeaten(0); }
+function canBuy(w) { return heroLevel() >= w.need; }
+function owned(id) { return save.owned.includes(id); }
+function weaponDamage() {
+  const w = shopItem(save.weapon);
+  return w ? w.dmg : 0;
+}
+
+let save = { name: '', knight: 0, beaten: [], xp: 0, gold: 0, owned: [], weapon: null };
 try {
   const raw = JSON.parse(localStorage.getItem('castle_save'));
   if (raw && typeof raw === 'object') save = Object.assign(save, raw);
 } catch (e) {}
 if (!Array.isArray(save.beaten)) save.beaten = [];
+if (!Array.isArray(save.owned)) save.owned = [];
+if (typeof save.gold !== 'number') save.gold = 0;
+if (save.weapon && !shopItem(save.weapon)) save.weapon = null;
 function saveGame() { localStorage.setItem('castle_save', JSON.stringify(save)); }
 function isBeaten(id) { return save.beaten.includes(id); }
 function isOpen(lv) { return lv.needs < 0 || isBeaten(lv.needs); }
@@ -257,7 +297,7 @@ const MAX_SPLATS = 60;           // old ones fade away so this never grows forev
 let fightLevel = null, cleared = false, resultTimer = 0, clearTimer = 0;
 let chest = null;                // the chest of gold, on levels that have one
 let cut = null;                  // a cutscene playing, if there is one
-let gainedXP = 0;
+let gainedXP = 0, gainedGold = 0;
 
 function newHero() {
   const K = KNIGHTS[save.knight];
@@ -419,6 +459,7 @@ function startLevel(lv) {
   camX = 0;
   cleared = false;
   gainedXP = 0;
+  gainedGold = 0;
   fillLevel(lv);
   screen = 'fight';
 }
@@ -542,6 +583,11 @@ function hurtFoe(f, dmg, knock, from, crit) {
     f.dead = true;
     f.deadT = 0;
     gainedXP += f.E.xp;
+    // gold, straight into your purse - you keep it even if you die
+    const coins = Math.max(1, Math.round(f.E.xp * 0.7));
+    save.gold += coins;
+    gainedGold += coins;
+    floatText(f.x, f.depth, f.z + 74, '+' + coins + 'g', '#ffd83d');
     // Two ways to go, picked at random: topple over and lie there, or
     // the head comes clean off and bounces away. Roughly one in three.
     f.deathStyle = Math.random() < 0.34 ? 'pop' : 'topple';
@@ -716,7 +762,7 @@ function updateFight(dt) {
         if ((f.x - hero.x) * hero.face < -12) continue;   // must be in front
         if (!inRange(hero, f, reach)) continue;
         const crit = rollCrit();
-        let dmg = 7 + myPower() * 2 + hero.combo * 2;
+        let dmg = 7 + myPower() * 2 + hero.combo * 2 + weaponDamage();
         if (crit) dmg = Math.round(dmg * CRIT_DAMAGE);
         hurtFoe(f, dmg, (14 + hero.combo * 3) * (crit ? 2.2 : 1), hero, crit);
         if (crit) {
@@ -990,7 +1036,7 @@ function drawKnight(a, sx, sy, sc) {
     ctx.save();
     ctx.translate(a.face * r * 0.7, -r * 0.9);
     ctx.rotate(a.face * (-1.1 + swing * 2.4));
-    ctx.fillStyle = '#d8dde6';
+    ctx.fillStyle = (shopItem(save.weapon) || {}).blade || '#d8dde6';
     roundRect(-r * 0.12, -r * 1.9, r * 0.24, r * 1.9, r * 0.1);
     ctx.fill();
     ctx.fillStyle = K.trim;
@@ -2455,6 +2501,82 @@ function drawSelect(S) {
   ctx.textAlign = 'left';
 }
 
+// THE SHOP. Two shelves - what you can carry now, and what you will be
+// able to carry later. The locked ones are shown rather than hidden, so
+// you can see what you are working towards.
+function drawShop(S) {
+  const g = ctx.createLinearGradient(0, 0, 0, S.H);
+  g.addColorStop(0, '#2b1f16'); g.addColorStop(1, '#43301f');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, S.W, S.H);
+  uiRects = [];
+  nameBox.style.display = 'none';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffd83d';
+  ctx.font = 'bold ' + Math.min(34, S.W / 20) + 'px monospace';
+  ctx.fillText('THE ARMOURY', S.W / 2, S.H * 0.1);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold ' + Math.min(18, S.W / 32) + 'px monospace';
+  ctx.fillText(save.gold + ' GOLD   -   Lv' + heroLevel(), S.W / 2, S.H * 0.155);
+
+  const cols = 4;
+  const cw = Math.min(S.W * 0.21, 220), ch = Math.min(S.H * 0.3, 168);
+  SHOP.forEach((w, i) => {
+    const col = i % cols, row = Math.floor(i / cols);
+    const cx = S.W * 0.5 + (col - (cols - 1) / 2) * (cw + S.W * 0.015);
+    const cy = S.H * 0.22 + row * (ch + S.H * 0.045);
+    const have = owned(w.id), held = save.weapon === w.id;
+    const allowed = canBuy(w);
+    const afford = save.gold >= w.cost;
+    ctx.fillStyle = held ? 'rgba(255,216,61,0.16)'
+                  : have ? 'rgba(255,255,255,0.08)'
+                  : allowed ? 'rgba(255,255,255,0.045)' : 'rgba(0,0,0,0.3)';
+    roundRect(cx - cw / 2, cy, cw, ch, 10); ctx.fill();
+    ctx.strokeStyle = held ? '#ffd83d' : allowed ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.12)';
+    ctx.lineWidth = held ? 4 : 2;
+    roundRect(cx - cw / 2, cy, cw, ch, 10); ctx.stroke();
+
+    // the blade itself, drawn in its own colour
+    ctx.save();
+    ctx.translate(cx, cy + ch * 0.42);
+    ctx.globalAlpha = allowed ? 1 : 0.32;
+    ctx.fillStyle = w.blade;
+    roundRect(-cw * 0.035, -ch * 0.24, cw * 0.07, ch * 0.28, 4); ctx.fill();
+    ctx.fillStyle = '#8a6a3a';
+    roundRect(-cw * 0.11, ch * 0.03, cw * 0.22, ch * 0.035, 3); ctx.fill();
+    ctx.fillStyle = '#3a2c1c';
+    roundRect(-cw * 0.03, ch * 0.06, cw * 0.06, ch * 0.09, 3); ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.restore();
+
+    ctx.fillStyle = allowed ? '#fff' : 'rgba(255,255,255,0.4)';
+    ctx.font = 'bold ' + Math.min(14, cw / 13) + 'px monospace';
+    ctx.fillText(w.name, cx, cy + ch * 0.62);
+    ctx.fillStyle = w.dmg >= 10 ? '#ff8b4d' : '#7fdf3f';
+    ctx.font = 'bold ' + Math.min(16, cw / 11) + 'px monospace';
+    ctx.fillText('+' + w.dmg + ' DAMAGE', cx, cy + ch * 0.75);
+    ctx.font = Math.min(11, cw / 17) + 'px monospace';
+    ctx.fillStyle = 'rgba(255,255,255,0.45)';
+    ctx.fillText(w.blurb, cx, cy + ch * 0.85);
+    ctx.font = 'bold ' + Math.min(13, cw / 14) + 'px monospace';
+    if (held) { ctx.fillStyle = '#ffd83d'; ctx.fillText('IN YOUR HAND', cx, cy + ch * 0.96); }
+    else if (have) { ctx.fillStyle = '#7fdf3f'; ctx.fillText('OWNED - TAP TO HOLD', cx, cy + ch * 0.96); }
+    else if (!allowed) { ctx.fillStyle = '#ff6b6b'; ctx.fillText('LOCKED - Lv' + w.need, cx, cy + ch * 0.96); }
+    else { ctx.fillStyle = afford ? '#ffd83d' : 'rgba(255,255,255,0.35)';
+           ctx.fillText(w.cost + ' GOLD', cx, cy + ch * 0.96); }
+    uiRects.push({ x: cx, y: cy + ch / 2, w: cw / 2, h: ch / 2, buy: i });
+  });
+
+  ctx.fillStyle = '#ffd83d';
+  ctx.font = 'bold ' + Math.min(16, S.W / 36) + 'px monospace';
+  ctx.fillText(shopSaid, S.W / 2, S.H * 0.9);
+  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  ctx.font = 'bold ' + Math.min(17, S.W / 34) + 'px monospace';
+  ctx.fillText('SPACE  /  TAP HERE  =  BACK TO THE MAP', S.W / 2, S.H * 0.96);
+  uiRects.push({ x: S.W / 2, y: S.H * 0.955, w: S.W * 0.4, h: 22, leaveShop: true });
+  ctx.textAlign = 'left';
+}
+
 // ---- the world map ----
 function drawMap(S) {
   const g = ctx.createLinearGradient(0, 0, 0, S.H);
@@ -2511,6 +2633,13 @@ function drawMap(S) {
   ctx.fillStyle = KNIGHTS[save.knight].body;
   ctx.font = 'bold ' + Math.min(16, S.W / 36) + 'px monospace';
   ctx.fillText(playerName() + '   Lv' + heroLevel() + '   ' + save.xp + ' XP', 16, py + 26);
+  if (haveShop()) {
+    ctx.fillStyle = '#ffd83d';
+    ctx.font = 'bold ' + Math.min(14, S.W / 42) + 'px monospace';
+    const w = shopItem(save.weapon);
+    ctx.fillText(save.gold + ' GOLD' + (w ? '   -   ' + w.name + ' (+' + w.dmg + ')' : ''),
+                 16, py + 44);
+  }
   ctx.fillStyle = open ? '#ffd83d' : 'rgba(255,255,255,0.5)';
   ctx.font = 'bold ' + Math.min(22, S.W / 26) + 'px monospace';
   ctx.fillText(lv.name, 16, py + 54);
@@ -2528,6 +2657,26 @@ function drawMap(S) {
   ctx.font = Math.min(12, S.W / 50) + 'px monospace';
   ctx.fillText('arrows pick a level   -   C knight   -   M mode', S.W - 16, py + 78);
   ctx.textAlign = 'left';
+
+  // the door to the armoury, once you have earned it
+  if (haveShop()) {
+    const sw = Math.min(170, S.W * 0.21), sh = Math.min(40, S.H * 0.07);
+    const sx = S.W - sw - 14, sy = 14 + Math.min(46, S.H * 0.08) + 10;
+    ctx.fillStyle = 'rgba(60,40,16,0.75)';
+    roundRect(sx, sy, sw, sh, 8); ctx.fill();
+    ctx.strokeStyle = '#ffd83d';
+    ctx.lineWidth = 2;
+    roundRect(sx, sy, sw, sh, 8); ctx.stroke();
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#ffd83d';
+    ctx.font = 'bold ' + Math.min(15, S.W / 38) + 'px monospace';
+    ctx.fillText('THE ARMOURY', sx + sw / 2, sy + sh * 0.44);
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.font = Math.min(11, S.W / 54) + 'px monospace';
+    ctx.fillText('press B', sx + sw / 2, sy + sh * 0.78);
+    uiRects.push({ x: sx + sw / 2, y: sy + sh / 2, w: sw / 2, h: sh / 2, shopBtn: true });
+    ctx.textAlign = 'left';
+  }
 
   // START AGAIN. Tucked away, and it asks twice.
   const rw = Math.min(180, S.W * 0.22), rh = Math.min(34, S.H * 0.06);
@@ -2604,7 +2753,7 @@ function drawResult(S, won) {
   ctx.fillText(fightLevel.name, S.W / 2, S.H * 0.45);
   if (won) {
     ctx.fillStyle = '#ffd83d';
-    ctx.fillText('+' + gainedXP + ' XP', S.W / 2, S.H * 0.53);
+    ctx.fillText('+' + gainedXP + ' XP    +' + gainedGold + ' GOLD', S.W / 2, S.H * 0.53);
     const next = LEVELS.find(l => l.needs === fightLevel.id);
     ctx.fillStyle = 'rgba(255,255,255,0.7)';
     ctx.font = Math.min(16, S.W / 36) + 'px monospace';
@@ -2615,6 +2764,9 @@ function drawResult(S, won) {
       ctx.fillStyle = '#ffd83d';
       ctx.font = 'bold ' + Math.min(19, S.W / 30) + 'px monospace';
       ctx.fillText('NEW MOVE: tap ATTACK twice fast to SLAM', S.W / 2, S.H * 0.735);
+      ctx.fillStyle = '#ffd83d';
+      ctx.font = 'bold ' + Math.min(17, S.W / 34) + 'px monospace';
+      ctx.fillText('THE ARMOURY IS OPEN - spend your gold on the map', S.W / 2, S.H * 0.79);
     }
   } else {
     ctx.fillStyle = 'rgba(255,255,255,0.7)';
@@ -2682,7 +2834,7 @@ function slamImpact() {
     const crit = rollCrit();
     // the closer they were standing, the harder it hits them
     const near = 1 - (dx / SLAM_REACH) * 0.45;
-    let dmg = Math.round((12 + myPower() * 3) * near);
+    let dmg = Math.round((12 + myPower() * 3 + weaponDamage()) * near);
     if (crit) dmg = Math.round(dmg * CRIT_DAMAGE);
     hurtFoe(f, dmg, 30, hero, crit);
     got++;
@@ -2728,6 +2880,35 @@ function wipeSave() {
   mapPick = 0;
   saveGame();
   sadTune();
+}
+
+// One tap buys it if you can afford it and are strong enough. Tapping
+// one you already own puts it in your hand instead.
+let shopSaid = '';
+function tryBuy(w) {
+  if (owned(w.id)) {
+    save.weapon = save.weapon === w.id ? null : w.id;
+    saveGame();
+    shopSaid = save.weapon ? 'wielding the ' + w.name : 'put it away';
+    tone(700, 0.07, 'square', 0.06);
+    return;
+  }
+  if (!canBuy(w)) {
+    shopSaid = 'you must be level ' + w.need + ' to carry that';
+    tone(160, 0.16, 'square', 0.06, 90);
+    return;
+  }
+  if (save.gold < w.cost) {
+    shopSaid = 'that costs ' + w.cost + 'g - you have ' + save.gold;
+    tone(160, 0.16, 'square', 0.06, 90);
+    return;
+  }
+  save.gold -= w.cost;
+  save.owned.push(w.id);
+  save.weapon = w.id;
+  saveGame();
+  shopSaid = 'bought the ' + w.name + '!';
+  [660, 880, 1100].forEach((f, i) => setTimeout(() => tone(f, 0.14, 'square', 0.08), i * 80));
 }
 
 function cycleMode(step) {
@@ -2785,6 +2966,10 @@ addEventListener('keydown', e => {
     if (k === ' ') advance();
     return;
   }
+  if (screen === 'shop') {
+    if (k === ' ' || k === 'Escape') { screen = 'map'; shopSaid = ''; }
+    return;
+  }
   if (screen === 'map') {
     if (k === 'ArrowRight' || k === 'ArrowUp') pickMapNode(1);
     if (k === 'ArrowLeft' || k === 'ArrowDown') pickMapNode(-1);
@@ -2792,6 +2977,7 @@ addEventListener('keydown', e => {
     if (k.toLowerCase() === 'c') { screen = 'select'; }
     if (k.toLowerCase() === 'm') cycleMode(1);
     if (k.toLowerCase() === 'r') wipeSave();
+    if (k.toLowerCase() === 'b' && haveShop()) { screen = 'shop'; shopSaid = ''; }
     return;
   }
   if (screen === 'fight') {
@@ -2869,6 +3055,9 @@ canvas.addEventListener('pointerdown', e => {
   for (const b of uiRects) {
     if (Math.abs(e.clientX - b.x) > b.w || Math.abs(e.clientY - b.y) > b.h) continue;
     if (b.knight !== undefined) { save.knight = b.knight; saveGame(); tone(600, 0.05, 'square', 0.05); return; }
+    if (b.buy !== undefined) { tryBuy(SHOP[b.buy]); return; }
+    if (b.leaveShop) { screen = 'map'; shopSaid = ''; return; }
+    if (b.shopBtn) { screen = 'shop'; shopSaid = ''; return; }
     if (b.wipe) { wipeSave(); return; }
     if (b.modeBtn) { cycleMode(1); return; }
     if (b.mapNode !== undefined) {
@@ -2877,7 +3066,7 @@ canvas.addEventListener('pointerdown', e => {
     }
     if (b.go) { advance(); return; }
   }
-  if (screen !== 'select') advance();
+  if (screen !== 'select' && screen !== 'shop') advance();
 });
 canvas.addEventListener('pointermove', e => {
   if (!stick || stick.id !== e.pointerId) return;
@@ -2912,6 +3101,7 @@ function draw() {
   if (screen === 'title') drawTitle(S);
   else if (screen === 'select') drawSelect(S);
   else if (screen === 'map') drawMap(S);
+  else if (screen === 'shop') drawShop(S);
   else if (screen === 'fight') { drawFight(); if (touchMode) drawPads(S); }
   else if (screen === 'cutscene') drawCutscene(S);
   else if (screen === 'cleared') drawResult(S, true);
