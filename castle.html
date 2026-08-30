@@ -245,6 +245,8 @@ const ENEMY_KINDS = {
 let hero = null, foes = [], magics = [], camX = 0;
 let heads = [];                  // heads that have popped off and gone bouncing
 let props = [];                  // rubble, fires and broken stone on the floor
+let splats = [];                 // green goo left on the floor where things died
+const MAX_SPLATS = 60;           // old ones fade away so this never grows forever
 let fightLevel = null, cleared = false, resultTimer = 0, clearTimer = 0;
 let chest = null;                // the chest of gold, on levels that have one
 let cut = null;                  // a cutscene playing, if there is one
@@ -313,6 +315,21 @@ function boom(x, depth, z, color, count) {
                      life: 0.45 + Math.random() * 0.4, color });
   }
 }
+// A puddle of goo, left on the floor for good. Each one remembers its
+// own wobbly shape so it does not shimmer about from frame to frame.
+function addSplat(x, depth, size) {
+  splats.push({
+    x, depth, z: 0,
+    size: size || (0.8 + Math.random() * 0.7),
+    seed: Math.random() * 100,
+    born: 0,
+    r: 18,
+  });
+  // the oldest ones go once there are too many, so a long fight does not
+  // slowly bury the whole floor
+  if (splats.length > MAX_SPLATS) splats.shift();
+}
+
 // Green ooze. Definitely not blood - it is bright, it is bouncy, and it
 // belongs to something with six eyes and a metal face.
 function oozeBurst(x, depth, z, count) {
@@ -353,6 +370,7 @@ function startLevel(lv) {
   floaters = [];
   heads = [];
   props = [];
+  splats = [];
   chest = null;
   cut = null;
   camX = 0;
@@ -386,6 +404,25 @@ function litterLevel(lv) {
   for (let i = 0; i < 5; i++) {
     drop(i % 2 ? 'rubble' : 'fire', STAGE_W - 420 + i * 70, 0.15 + Math.random() * 0.3,
          0.8 + Math.random() * 0.6);
+  }
+  // KNIGHTS FROM YOUR OWN SIDE. They were holding the hall before you
+  // got here, and they did not manage it. Each one lies where it fell
+  // with its sword stuck in the floor beside it, and they wear the four
+  // colours - so you can see your own lot among them.
+  const fallen = 4;
+  for (let i = 0; i < fallen; i++) {
+    const p = props.length ? null : null;
+    props.push({
+      kind: 'fallen',
+      x: 620 + (i / (fallen - 1)) * (STAGE_W - 1100) + (Math.random() - 0.5) * 160,
+      depth: 0.12 + Math.random() * 0.8,
+      z: 0,
+      size: 1,
+      knight: (i + Math.floor(Math.random() * 4)) % 4,
+      lean: Math.random() < 0.5 ? -1 : 1,
+      seed: Math.random() * 100,
+      r: 18,
+    });
   }
 }
 
@@ -437,6 +474,7 @@ function hurtFoe(f, dmg, knock, from) {
     // the head comes clean off and bounces away. Roughly one in three.
     f.deathStyle = Math.random() < 0.34 ? 'pop' : 'topple';
     f.fallDir = f.face * -1;
+    addSplat(f.x, f.depth, f.deathStyle === 'pop' ? 1.3 : 0.9);
     if (f.deathStyle === 'pop') {
       heads.push({
         x: f.x, depth: f.depth, z: 34,
@@ -670,6 +708,7 @@ function updateFight(dt) {
       if (inRange(f, hero, 52 * W.reach)) hurtHero(Math.round(f.E.power * W.power));
     }
   }
+  for (const sp of splats) sp.born = Math.min(1, sp.born + dt * 4);
   // the fallen stay lying there for a few seconds before fading away
   for (const f of foes) if (f.dead) f.deadT = (f.deadT || 0) + dt;
   foes = foes.filter(f => !f.dead || f.deadT < 4.2);
@@ -688,6 +727,7 @@ function updateFight(dt) {
         h.vx *= 0.6;
         h.spin *= 0.5;
         oozeBurst(h.x, h.depth, 6, 3);
+        addSplat(h.x, h.depth, 0.55);              // it leaves a mark where it bounced
         tone(300, 0.05, 'square', 0.04);
       } else { h.vz = 0; h.vx *= 0.86; h.spin *= 0.7; }
     }
@@ -1270,8 +1310,85 @@ function drawFoe(f, sx, sy, sc) {
 // which case we leave a green stump where the neck was.
 // Broken stone and burning floor. Each one draws itself standing at its
 // own feet, so the stage code only has to say where it is.
+// A puddle of goo. Its wobbly outline comes from its own seed, so the
+// same puddle keeps the same shape rather than rippling every frame.
+function drawSplat(sp, sc) {
+  const r = 18 * sc * sp.size * sp.born;
+  ctx.fillStyle = 'rgba(63,140,30,0.75)';
+  ctx.beginPath();
+  for (let i = 0; i <= 12; i++) {
+    const a = (i / 12) * Math.PI * 2;
+    const wob = 0.72 + (Math.sin(sp.seed + i * 2.7) * 0.5 + 0.5) * 0.55;
+    const x = Math.cos(a) * r * 1.35 * wob;
+    const y = Math.sin(a) * r * 0.44 * wob;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = 'rgba(127,223,63,0.6)';                // a brighter middle
+  ctx.beginPath();
+  ctx.ellipse(-r * 0.15, -r * 0.06, r * 0.6, r * 0.2, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // a couple of drops flung off to one side
+  for (let i = 0; i < 3; i++) {
+    const a = sp.seed + i * 2.1;
+    ctx.fillStyle = 'rgba(63,140,30,0.65)';
+    ctx.beginPath();
+    ctx.ellipse(Math.cos(a) * r * 1.9, Math.sin(a) * r * 0.6,
+                r * 0.16, r * 0.09, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+// A knight who did not make it, lying on his back with his sword stuck
+// in the floor beside him. He is on YOUR side - that is the point of
+// him being there.
+function drawFallenKnight(p, sc) {
+  const K = KNIGHTS[p.knight];
+  const r = 17 * sc;
+  ctx.save();
+  ctx.rotate(p.lean * Math.PI * 0.5);              // lying flat
+  // legs
+  ctx.fillStyle = K.dark;
+  for (const side of [-1, 1]) {
+    roundRect(side * r * 0.34 - r * 0.16, -r * 0.5, r * 0.32, r * 0.66, r * 0.1);
+    ctx.fill();
+  }
+  // body
+  ctx.fillStyle = K.body;
+  roundRect(-r * 0.55, -r * 1.6, r * 1.1, r * 1.15, r * 0.28);
+  ctx.fill();
+  ctx.fillStyle = K.trim;
+  ctx.fillRect(-r * 0.55, -r * 0.66, r * 1.1, r * 0.16);
+  // helmet, with the visor dark and shut
+  ctx.fillStyle = K.body;
+  ctx.beginPath();
+  ctx.arc(0, -r * 1.95, r * 0.62, Math.PI, 0);
+  ctx.fill();
+  ctx.fillRect(-r * 0.62, -r * 1.95, r * 1.24, r * 0.5);
+  ctx.fillStyle = '#100a14';
+  ctx.fillRect(-r * 0.42, -r * 1.85, r * 0.84, r * 0.2);
+  ctx.restore();
+  // his sword, driven into the floor upright beside him
+  ctx.save();
+  ctx.translate(p.lean * r * 1.5, 0);
+  ctx.rotate(p.lean * 0.16);
+  ctx.fillStyle = '#8a9099';
+  roundRect(-r * 0.07, -r * 1.55, r * 0.14, r * 1.55, r * 0.05);
+  ctx.fill();
+  ctx.fillStyle = K.trim;
+  roundRect(-r * 0.3, -r * 1.62, r * 0.6, r * 0.14, r * 0.05);
+  ctx.fill();
+  ctx.fillStyle = K.body;
+  ctx.beginPath();
+  ctx.arc(0, -r * 1.78, r * 0.13, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
 function drawProp(p, sc, t) {
   const r = 16 * sc * p.size;
+  if (p.kind === 'fallen') { drawFallenKnight(p, sc); return; }
   if (p.kind === 'fire') {
     // a fire burning on the ground: three tongues of flame, each on its
     // own wobble, so it never looks like a repeating pattern
@@ -1678,6 +1795,16 @@ function drawFight() {
     }
   }
 
+  // goo goes on the floor first, flat, so everybody walks over the top
+  // of it rather than it sitting on their feet
+  for (const sp of splats) {
+    const q = toScreen(sp, S, camX);
+    if (q.x < -80 || q.x > S.W + 80) continue;
+    ctx.save();
+    ctx.translate(q.x, S.backY + sp.depth * S.floorH);
+    drawSplat(sp, q.sc);
+    ctx.restore();
+  }
   // rubble and fires stand on the floor like everybody else, so you can
   // walk in front of them or behind them
   for (const p of props) cast.push({ a: p, prop: true });
