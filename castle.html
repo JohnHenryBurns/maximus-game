@@ -269,7 +269,7 @@ function newHero() {
     health: maxHealth(), maxHealth: maxHealth(),
     attack: 0, cool: 0, combo: 0, comboTimer: 0,
     magic: 0, magicCool: 0, hurt: 0, dead: false,
-    spin: 0, spinCool: 0, spinHit: false, spinAngle: 0,
+    slam: false, slamCool: 0,
     walkT: 0,
   };
 }
@@ -372,12 +372,17 @@ const MAGIC_COOL = 3.2;
 
 function startLevel(lv) {
   fightLevel = lv;
+  // Forget any half-finished double tap. Without this, the press that
+  // finished the last level counts as the first tap of a new one, and
+  // your very first swing here fires an accidental slam.
+  lastTap = -99;
   STAGE_W = stageLengthFor(lv);                   // longer levels for more of them
   hero = newHero();
   foes = [];
   magics = [];
   particles = [];
   floaters = [];
+  wave = null;
   heads = [];
   props = [];
   splats = [];
@@ -656,36 +661,16 @@ function updateFight(dt) {
     if (mx !== 0 && !busy) hero.face = mx;
     if (mx !== 0 || md !== 0) hero.walkT += dt * 9; else hero.walkT = 0;
 
-    // jumping
+    // jumping - and coming down like a hammer if this is a slam
     hero.z += hero.vz * dt;
-    if (hero.z > 0) hero.vz -= GRAVITY * dt;
-    if (hero.z <= 0) { hero.z = 0; hero.vz = 0; }
-
-    hero.spinCool = Math.max(0, hero.spinCool - dt);
-    if (hero.spin > 0) {
-      hero.spin = Math.max(0, hero.spin - dt);
-      hero.spinAngle += dt * 26;
-      // it lands halfway through, all around you at once
-      if (!hero.spinHit && hero.spin < SPIN_TIME * 0.55) {
-        hero.spinHit = true;
-        let got = 0;
-        for (const f of foes) {
-          if (f.dead) continue;
-          const dx = Math.abs(f.x - hero.x), dd = Math.abs(f.depth - hero.depth);
-          if (dx > 96 || dd > 0.3) continue;         // no facing check - it goes round
-          const crit = rollCrit();
-          let dmg = 11 + myPower() * 3;
-          if (crit) dmg = Math.round(dmg * CRIT_DAMAGE);
-          hurtFoe(f, dmg, 34, hero, crit);
-          got++;
-        }
-        if (got) {
-          shake = Math.max(shake, 16);
-          tone(660, 0.14, 'square', 0.1, 220);
-          floatText(hero.x, hero.depth, 90, got > 1 ? 'SPIN x' + got : 'SPIN!', '#ffd83d');
-        }
-      }
+    if (hero.z > 0) hero.vz -= (hero.slam ? SLAM_DOWN : GRAVITY) * dt;
+    if (hero.z <= 0) {
+      hero.z = 0;
+      hero.vz = 0;
+      if (hero.slam) slamImpact();                  // the moment it lands
     }
+
+    hero.slamCool = Math.max(0, hero.slamCool - dt);
     hero.attack = Math.max(0, hero.attack - dt);
     hero.cool = Math.max(0, hero.cool - dt);
     hero.magicCool = Math.max(0, hero.magicCool - dt);
@@ -920,6 +905,7 @@ function updateFight(dt) {
   camX += (Math.max(0, Math.min(STAGE_W - S.W, want)) - camX) * Math.min(1, dt * 4);
   if (shake > 0) shake = Math.max(0, shake - dt * 60);
   if (critFlash > 0) critFlash = Math.max(0, critFlash - dt);
+  if (wave) { wave.t -= dt; if (wave.t <= 0) wave = null; }
 
   for (const p of particles) {
     p.x += p.vx * dt; p.z += p.vz * dt; p.vz -= 340 * dt; p.life -= dt;
@@ -954,42 +940,22 @@ function drawShadow(sx, floorY, sc, r) {
 function drawKnight(a, sx, sy, sc) {
   const K = a.K, r = 20 * sc;
   const wob = Math.sin(a.walkT) * r * 0.12;
-  // the arc of the spin, sweeping the ground all around
-  if (a.spin > 0) {
-    const t = 1 - a.spin / SPIN_TIME;
-    ctx.strokeStyle = 'rgba(255,216,61,' + (0.25 + (1 - t) * 0.5) + ')';
-    ctx.lineWidth = 7 * sc * (1 - t * 0.5);
-    ctx.beginPath();
-    ctx.ellipse(sx, sy - r * 0.5, r * 3.6 * (0.5 + t * 0.7), r * 1.3 * (0.5 + t * 0.7),
-                0, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
-    ctx.lineWidth = 3 * sc;
-    ctx.beginPath();
-    ctx.ellipse(sx, sy - r * 0.5, r * 3.2 * (0.5 + t * 0.7), r * 1.1 * (0.5 + t * 0.7),
-                0, a.spinAngle, a.spinAngle + 2.2);
-    ctx.stroke();
-  }
   ctx.save();
   ctx.translate(sx, sy);
-  if (a.spin > 0) {
-    // whirling on the spot: squashed side to side as he comes round
-    ctx.scale(Math.cos(a.spinAngle) < 0 ? -1 : 1, 1);
-    ctx.scale(Math.max(0.25, Math.abs(Math.cos(a.spinAngle))), 1);
-  }
+  // coming down out of a slam: stretched tall, like a falling hammer
+  if (a.slam && a.vz < 0) ctx.scale(0.86, 1.16);
   if (a.hurt > 0 && Math.floor(a.hurt * 22) % 2) ctx.globalAlpha = 0.5;
   // the sword, swung in an arc
   const swing = a.attack > 0 ? (1 - a.attack / SWING_TIME) : 0;
-  if (a.spin > 0) {
-    // held straight out, level, as he comes round
+  if (a.slam) {
+    // both hands on the hilt, sword raised straight over his head
     ctx.save();
-    ctx.translate(r * 0.7, -r * 1.0);
-    ctx.rotate(1.45);
+    ctx.translate(0, -r * 1.9);
     ctx.fillStyle = '#d8dde6';
-    roundRect(-r * 0.12, -r * 2.1, r * 0.24, r * 2.1, r * 0.1);
+    roundRect(-r * 0.14, -r * 2.0, r * 0.28, r * 2.0, r * 0.1);
     ctx.fill();
     ctx.fillStyle = K.trim;
-    roundRect(-r * 0.3, -r * 0.16, r * 0.6, r * 0.24, r * 0.08);
+    roundRect(-r * 0.34, -r * 0.18, r * 0.68, r * 0.26, r * 0.08);
     ctx.fill();
     ctx.restore();
   } else if (a.attack > 0) {
@@ -2206,6 +2172,38 @@ function drawFight() {
   }
   ctx.globalAlpha = 1;
   ctx.textAlign = 'left';
+  // THE SHOCKWAVE. A ring rushing outwards across the floor from where
+  // he landed, drawn at the same size the slam actually reaches - so
+  // what you see is exactly what got hit.
+  if (wave) {
+    const p = toScreen({ x: wave.x, depth: wave.depth, z: 0 }, S, camX);
+    const grow = 1 - wave.t / WAVE_TIME;
+    const fade = wave.t / WAVE_TIME;
+    ctx.strokeStyle = 'rgba(255,216,61,' + fade * 0.85 + ')';
+    ctx.lineWidth = 9 * (1 - grow * 0.7);
+    ctx.beginPath();
+    ctx.ellipse(p.x, p.y, SLAM_REACH * grow * p.sc, SLAM_REACH * 0.34 * grow * p.sc,
+                0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,255,255,' + fade * 0.6 + ')';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.ellipse(p.x, p.y, SLAM_REACH * grow * 0.72 * p.sc,
+                SLAM_REACH * 0.24 * grow * p.sc, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    // cracks running out from the middle
+    ctx.strokeStyle = 'rgba(60,50,40,' + fade * 0.5 + ')';
+    ctx.lineWidth = 2.5;
+    for (let i = 0; i < 6; i++) {
+      const a2 = (i / 6) * Math.PI * 2 + wave.x * 0.01;
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+      ctx.lineTo(p.x + Math.cos(a2) * SLAM_REACH * grow * 0.85 * p.sc,
+                 p.y + Math.sin(a2) * SLAM_REACH * 0.3 * grow * p.sc);
+      ctx.stroke();
+    }
+  }
+
   // the flash of a critical, snapping outwards from where you stand
   if (critFlash > 0) {
     const p = toScreen(hero, S, camX);
@@ -2265,17 +2263,17 @@ function drawFightHUD(S) {
   ctx.fillStyle = ready ? K.magicColor : 'rgba(255,255,255,0.45)';
   ctx.font = 'bold ' + Math.min(12, S.W / 48) + 'px monospace';
   ctx.fillText(ready ? K.magic + ' READY' : K.magic, mx, S.hud * 0.42);
-  // the spin, once you have earned it
+  // the slam, once you have earned it
   if (haveCombo()) {
     const sx2 = mx + mw + 14, sw2 = Math.min(110, S.W * 0.13);
-    const sready = hero.spinCool <= 0;
+    const sready = hero.slamCool <= 0;
     ctx.fillStyle = 'rgba(0,0,0,0.5)';
     ctx.fillRect(sx2, S.hud * 0.55, sw2, 14);
     ctx.fillStyle = sready ? '#ffd83d' : 'rgba(255,255,255,0.25)';
-    ctx.fillRect(sx2 + 1, S.hud * 0.55 + 1, (sw2 - 2) * (1 - hero.spinCool / SPIN_COOL), 12);
+    ctx.fillRect(sx2 + 1, S.hud * 0.55 + 1, (sw2 - 2) * (1 - hero.slamCool / SLAM_COOL), 12);
     ctx.fillStyle = sready ? '#ffd83d' : 'rgba(255,255,255,0.45)';
     ctx.font = 'bold ' + Math.min(12, S.W / 48) + 'px monospace';
-    ctx.fillText(sready ? 'SPIN - TAP TWICE' : 'SPIN', sx2, S.hud * 0.42);
+    ctx.fillText(sready ? 'SLAM - TAP TWICE' : 'SLAM', sx2, S.hud * 0.42);
   }
   // where you are
   ctx.textAlign = 'right';
@@ -2548,7 +2546,7 @@ function drawResult(S, won) {
       ctx.fillText('he went that way. go and get it back.', S.W / 2, S.H * 0.67);
       ctx.fillStyle = '#ffd83d';
       ctx.font = 'bold ' + Math.min(19, S.W / 30) + 'px monospace';
-      ctx.fillText('NEW MOVE: tap ATTACK twice fast to SPIN', S.W / 2, S.H * 0.735);
+      ctx.fillText('NEW MOVE: tap ATTACK twice fast to SLAM', S.W / 2, S.H * 0.735);
     }
   } else {
     ctx.fillStyle = 'rgba(255,255,255,0.7)';
@@ -2565,40 +2563,76 @@ function drawResult(S, won) {
 // CONTROLS
 // =====================================================================
 // =====================================================================
-// THE SPIN ATTACK.
+// THE SLAM.
 //
-// Two taps of the attack button, quickly, and you spin the whole way
-// round - hitting EVERYONE near you whichever way they are standing,
-// and throwing the lot of them. You earn it by taking your castle back,
-// so it is the reward for finishing level one.
+// Two taps of the attack button, quickly, and you leap up and come down
+// on the floor like a hammer. The shockwave goes out in a ring and
+// everything it reaches takes a hit and goes over - whichever side of
+// you it was standing on. You earn it by taking your castle back.
 // =====================================================================
 const DOUBLE_TAP = 0.28;         // how quickly the second tap must come
-const SPIN_TIME = 0.5;
-const SPIN_COOL = 2.2;
+const SLAM_UP = 700;             // how hard you launch yourself
+const SLAM_DOWN = 2600;          // and how fast you come back down
+const SLAM_REACH = 132;          // how far the shockwave carries
+const SLAM_COOL = 2.4;
+const WAVE_TIME = 0.45;
 function haveCombo() { return isBeaten(0); }
 let lastTap = -99;
+let wave = null;                 // the ring going out across the floor
 
-function spinAttack() {
-  if (hero.spin > 0 || hero.spinCool > 0 || hero.dead) return;
-  hero.spin = SPIN_TIME;
-  hero.spinCool = SPIN_COOL;
-  hero.spinHit = false;
+function slamAttack() {
+  if (hero.slam || hero.slamCool > 0 || hero.dead) return;
+  hero.slam = true;
+  hero.slamCool = SLAM_COOL;
   hero.attack = 0;
-  tone(300, 0.28, 'sawtooth', 0.09, 900);
-  shake = Math.max(shake, 12);
+  hero.vz = SLAM_UP;             // up first
+  hero.z = Math.max(hero.z, 1);
+  tone(320, 0.2, 'square', 0.07, 700);
+}
+
+// the moment it lands
+function slamImpact() {
+  hero.slam = false;
+  wave = { x: hero.x, depth: hero.depth, t: WAVE_TIME };
+  shake = Math.max(shake, 22);
+  tone(70, 0.35, 'sine', 0.16, 40);
+  tone(240, 0.16, 'square', 0.09, 90);
+  for (let i = 0; i < 26; i++) {
+    const a = Math.random() * Math.PI * 2;
+    particles.push({
+      x: hero.x, depth: hero.depth, z: 4,
+      vx: Math.cos(a) * (120 + Math.random() * 220),
+      vz: 30 + Math.random() * 110,
+      life: 0.5 + Math.random() * 0.3, color: '#a29aa8',
+    });
+  }
+  let got = 0;
+  for (const f of foes) {
+    if (f.dead) continue;
+    const dx = Math.abs(f.x - hero.x), dd = Math.abs(f.depth - hero.depth);
+    if (dx > SLAM_REACH || dd > 0.34) continue;    // no facing check - it is a ring
+    const crit = rollCrit();
+    // the closer they were standing, the harder it hits them
+    const near = 1 - (dx / SLAM_REACH) * 0.45;
+    let dmg = Math.round((12 + myPower() * 3) * near);
+    if (crit) dmg = Math.round(dmg * CRIT_DAMAGE);
+    hurtFoe(f, dmg, 30, hero, crit);
+    got++;
+  }
+  if (got) floatText(hero.x, hero.depth, 96, got > 1 ? 'SLAM x' + got : 'SLAM!', '#ffd83d');
 }
 
 function attack() {
   if (hero.dead) return;
-  // two taps in a quarter of a second and you spin instead of swinging
+  // two taps in a quarter of a second and you slam instead of swinging
   const now = performance.now() / 1000;
-  if (haveCombo() && now - lastTap < DOUBLE_TAP && hero.spinCool <= 0) {
+  if (haveCombo() && now - lastTap < DOUBLE_TAP && hero.slamCool <= 0) {
     lastTap = -99;
-    spinAttack();
+    slamAttack();
     return;
   }
   lastTap = now;
-  if (hero.attack > 0 || hero.cool > 0 || hero.spin > 0) return;
+  if (hero.attack > 0 || hero.cool > 0 || hero.slam) return;
   hero.attack = SWING_TIME;
   hero.cool = SWING_TIME + SWING_COOL;
   hero.swung = false;
