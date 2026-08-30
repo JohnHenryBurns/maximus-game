@@ -120,7 +120,7 @@ const LEVELS = [
     chest: true, cutscene: true, wrecked: true, brutes: 1 },
   { id: 1, name: 'THE MEADOW', x: 0.25, y: 0.55, needs: 0, count: 8, enemy: 'crawler',
     scene: 'grass', blurb: 'out of the gates, after him', brutes: 1 },
-  { id: 2, name: 'DARK WOOD', x: 0.37, y: 0.74, needs: 1, count: 10, enemy: 'bat',
+  { id: 2, name: 'DARK WOOD', x: 0.37, y: 0.74, needs: 1, count: 10, enemy: 'archer',
     scene: 'wood', blurb: 'something in the trees', brutes: 2 },
   { id: 3, name: 'THE CAVES', x: 0.49, y: 0.5, needs: 2, count: 11, enemy: 'slime',
     scene: 'cave', blurb: 'dripping, and full of slime', brutes: 2 },
@@ -287,6 +287,10 @@ const ENEMY_KINDS = {
   // up more hits than a goblin but it will never catch you in a footrace.
   crawler:{ name: 'EARTH CRAWLER', body: '#7d7970', dark: '#494740', health: 34, power: 7,
             speed: 52, r: 23, xp: 13 },
+  // The dark wood's own. It never closes in - it backs off and shoots,
+  // so you have to chase it down or eat the arrows.
+  archer: { name: 'HOODED ARCHER', body: '#3b3350', dark: '#221d33', health: 26, power: 8,
+            speed: 74, r: 19, xp: 17, ranged: true },
   knight: { name: 'SOLDIER', body: '#9aa4b4', dark: '#4d5666', health: 40, power: 9,
             speed: 84, r: 21, xp: 15 },
   boss:   { name: 'THE BARON', body: '#b02a6a', dark: '#61143a', health: 260, power: 13,
@@ -347,6 +351,10 @@ function rollLook() {
     cracked: Math.random() < 0.32,                 // a split across the mask
     rivets: 8 + Math.floor(Math.random() * 5),
     seed: Math.random() * 100,
+    // HOODED ARCHER colours. Deep and dim - they live in a dark wood.
+    robe: ['#3b3350', '#312b46', '#43395c', '#2c3348', '#3a2f42'][Math.floor(Math.random() * 5)],
+    robeDark: ['#221d33', '#1b172b', '#291f3a', '#191e2d', '#231b28'][Math.floor(Math.random() * 5)],
+    glowRGB: ['255,210,90', '150,240,255', '190,120,255', '120,255,170'][Math.floor(Math.random() * 4)],
     // EARTH CRAWLER parts. Rolled here, once, at spawn - if we rolled
     // these while drawing, the rock would change shape 60 times a second.
     rock: {
@@ -388,6 +396,7 @@ function newFoe(kind, x, depth) {
     })(),
     weapon: WEAPON_LIST[Math.floor(Math.random() * WEAPON_LIST.length)],
     attack: 0, cool: 0.6 + Math.random() * 0.7, hurt: 0, dead: false,
+    aim: 0, loosed: false,        // archers only: hauling the string back
     down: 0, kvx: 0, kvz: 0, rise: 0, flying: false, tumble: 0, spinZ: 0, guardFlash: 0,
     // thrown through the air, then flat on the floor, then getting up
     frozen: 0, burning: 0, poisoned: 0, walkT: Math.random() * 6,
@@ -486,6 +495,7 @@ function startLevel(lv) {
   hero = newHero();
   foes = [];
   magics = [];
+  arrows = [];
   particles = [];
   floaters = [];
   wave = null;
@@ -504,6 +514,49 @@ function startLevel(lv) {
 
 // How long a crawler takes to dig itself out of sight.
 const BURROW_TIME = 0.95;
+
+// ARROWS in the air. Kept in their own list like the magics are, so an
+// arrow carries on flying after the archer that loosed it is dead.
+let arrows = [];
+
+// Everything the archers do, in one place.
+const AIM_TIME = 0.7;        // how long it hauls the bowstring back
+const ARROW_SPEED = 620;     // how fast the arrow goes down the level
+const KEEP_AWAY = 210;       // it backs off if you get closer than this
+const BOW_RANGE = 470;       // and steps up if you are further than this
+
+// Loose one arrow from an archer towards where you are standing NOW.
+// It does not steer after that - walk sideways and it sails past you.
+function shootArrow(f) {
+  const dx = hero.x - f.x, dd = hero.depth - f.depth;
+  const dist = Math.max(1, Math.abs(dx));
+  arrows.push({
+    x: f.x + f.face * 22, depth: f.depth, z: 34,
+    vx: f.face * ARROW_SPEED,
+    vdepth: (dd / dist) * ARROW_SPEED * 0.9,
+    power: f.E.power, life: 1.6, spent: false,
+  });
+  tone(340, 0.07, 'triangle', 0.05, 620);
+}
+
+function updateArrows(dt) {
+  for (const a of arrows) {
+    a.x += a.vx * dt;
+    a.depth = Math.max(0, Math.min(1, a.depth + a.vdepth * dt));
+    a.z -= 26 * dt;                                  // it drops a little as it flies
+    a.life -= dt;
+    if (a.spent) continue;
+    // A hit needs to line up on the floor as well as along the level -
+    // an arrow flying past behind you must not count.
+    if (!hero.dead && Math.abs(a.x - hero.x) < 26 &&
+        Math.abs(a.depth - hero.depth) < 0.13 && Math.abs(a.z - hero.z - 24) < 46) {
+      a.spent = true; a.life = 0;
+      hurtHero(a.power);
+    }
+    if (a.x < 10 || a.x > STAGE_W - 10) a.life = 0;
+  }
+  arrows = arrows.filter(a => a.life > 0);
+}
 
 // Grow one twisted limb, and everything that forks off the end of it.
 // This calls ITSELF - a branch is just a smaller tree. That is called
@@ -747,7 +800,10 @@ function hurtFoe(f, dmg, knock, from, crit, ignoreShield) {
     // A rock has no neck, so a crawler always crumbles where it stands.
     // A rock has no neck, so a crawler never pops its head off. It digs
     // itself into the ground instead, and something grows back.
+    // The hood NEVER comes off, so an archer always topples - it is not
+    // allowed to be one of the ones whose head goes bouncing away.
     f.deathStyle = f.kind === 'crawler' ? 'burrow'
+                 : f.kind === 'archer' ? 'topple'
                  : (Math.random() < 0.34 ? 'pop' : 'topple');
     f.fallDir = f.face * -1;
     addSplat(f.x, f.depth, f.deathStyle === 'pop' ? 1.3 : 0.9);
@@ -1028,6 +1084,37 @@ function updateFight(dt) {
       }
     }
     faceToward(f, hero);
+    // AN ARCHER FIGHTS BACKWARDS. It wants a gap between you and it:
+    // too close and it retreats, too far and it steps up, and when the
+    // gap is right it stands still and hauls the bowstring back.
+    if (f.E.ranged) {
+      const gap = Math.abs(dx);
+      f.aim = Math.max(0, (f.aim || 0) - dt);
+      if (f.aim > 0) {
+        if (!f.loosed && f.aim < 0.08) { f.loosed = true; shootArrow(f); }
+        f.walkT += dt * 1.5;
+        continue;                                  // it stands still to shoot
+      }
+      if (gap < KEEP_AWAY) {                       // you are too close - back off
+        f.x -= Math.sign(dx) * f.E.speed * 1.15 * dt;
+        if (Math.abs(dd) > 0.03) f.depth -= Math.sign(dd) * DEPTH_SPEED * 0.5 * dt;
+        f.walkT += dt * 9;
+      } else if (gap > BOW_RANGE) {                // too far to bother - close up
+        f.x += Math.sign(dx) * f.E.speed * dt;
+        if (Math.abs(dd) > 0.03) f.depth += Math.sign(dd) * DEPTH_SPEED * 0.7 * dt;
+        f.walkT += dt * 8;
+      } else if (f.cool <= 0) {                    // the gap is right: shoot
+        f.aim = AIM_TIME;
+        f.loosed = false;
+        f.cool = 1.3 + Math.random() * 0.9;
+      } else {
+        if (Math.abs(dd) > 0.05) f.depth += Math.sign(dd) * DEPTH_SPEED * 0.5 * dt;
+        f.walkT += dt * 2.5;                       // shuffling, lining you up
+      }
+      f.depth = Math.max(0, Math.min(1, f.depth));
+      f.x = Math.max(20, Math.min(STAGE_W - 20, f.x));
+      continue;
+    }
     const close = inRange(f, hero, 46 * weaponOf(f).reach);
     if (!close && f.attack <= 0) {
       // walk towards you, along the floor and up or down it
@@ -1048,6 +1135,7 @@ function updateFight(dt) {
       if (inRange(f, hero, 52 * W.reach)) hurtHero(Math.round(f.E.power * W.power));
     }
   }
+  updateArrows(dt);
   for (const sp of splats) sp.born = Math.min(1, sp.born + dt * 4);
   // the fallen stay lying there for a few seconds before fading away
   for (const f of foes) if (f.dead) {
@@ -2306,6 +2394,154 @@ function drawCrawler(f, r, headless) {
   }
 }
 
+// A HOODED ARCHER out of the dark wood. You never see a face - the hood
+// stays up, and all that is under it is shadow and a pair of eyes. It
+// keeps its distance and shoots, which makes it a completely different
+// fight from anything that runs at you.
+//
+// Drawing ORDER matters here: cloak, then hood, then the bow LAST, so
+// the bow is held out in front of the figure. Drawn any earlier and the
+// hood covers half of it.
+function drawArcher(f, r, headless) {
+  const L = f.look || rollLook();
+  r = r * L.size;
+  const C = L.robe, CD = L.robeDark;
+  const wob = Math.sin(f.walkT) * r * 0.07;
+  const hy = -r * 1.7 + wob;                        // where the hood sits
+  const aim = f.aim ? 1 - f.aim / AIM_TIME : 0;     // 0 loose, 1 fully drawn
+
+  // the cloak: a long bell right down to the floor, so it has no legs
+  // you can see - it just glides
+  ctx.fillStyle = C;
+  ctx.beginPath();
+  ctx.moveTo(-r * 0.3, hy + r * 0.45);
+  ctx.quadraticCurveTo(-r * 1.05, -r * 0.6, -r * 0.9, 0);
+  for (let i = 0; i <= 7; i++) {                    // ragged hem, dragging
+    const t = i / 7;
+    ctx.lineTo(-r * 0.9 + t * r * 1.8, (i % 2 ? r * 0.07 : -r * 0.09));
+  }
+  ctx.quadraticCurveTo(r * 1.05, -r * 0.6, r * 0.3, hy + r * 0.45);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = CD;                               // a shadowed fold down it
+  ctx.beginPath();
+  ctx.moveTo(-r * 0.08, hy + r * 0.5);
+  ctx.quadraticCurveTo(-r * 0.3, -r * 0.5, -r * 0.16, 0);
+  ctx.lineTo(r * 0.2, 0);
+  ctx.quadraticCurveTo(r * 0.16, -r * 0.5, r * 0.1, hy + r * 0.5);
+  ctx.closePath();
+  ctx.fill();
+
+  // THE HOOD. It never comes off - not when it is hit, not when it dies.
+  ctx.fillStyle = C;
+  ctx.beginPath();
+  ctx.moveTo(-r * 0.62, hy + r * 0.5);
+  ctx.quadraticCurveTo(-r * 0.66, hy - r * 0.5, f.face * r * 0.1, hy - r * 0.62);
+  ctx.quadraticCurveTo(r * 0.66, hy - r * 0.5, r * 0.62, hy + r * 0.5);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = CD;                               // the peak, flopped forward
+  ctx.beginPath();
+  ctx.moveTo(f.face * r * 0.1, hy - r * 0.62);
+  ctx.quadraticCurveTo(f.face * r * 0.8, hy - r * 0.66, f.face * r * 0.5, hy - r * 0.16);
+  ctx.quadraticCurveTo(f.face * r * 0.3, hy - r * 0.4, 0, hy - r * 0.5);
+  ctx.closePath();
+  ctx.fill();
+  // NOTHING UNDER IT. A black opening where a face should be.
+  ctx.fillStyle = '#08060c';
+  ctx.beginPath();
+  ctx.ellipse(f.face * r * 0.08, hy + r * 0.06, r * 0.34, r * 0.4, 0, 0, Math.PI * 2);
+  ctx.fill();
+  if (!headless) {
+    // ...except two eyes, burning out of the dark. They brighten as it
+    // draws, so you get a warning a moment before it looses.
+    const glow = 0.55 + aim * 0.45 + Math.sin(f.bob * 2) * 0.08;
+    for (const side of [-1, 1]) {
+      ctx.fillStyle = 'rgba(' + L.glowRGB + ',' + (0.3 * glow) + ')';
+      ctx.beginPath();
+      ctx.arc(f.face * r * 0.08 + side * r * 0.14, hy + r * 0.02, r * 0.13, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(' + L.glowRGB + ',' + Math.min(1, glow) + ')';
+      ctx.beginPath();
+      ctx.ellipse(f.face * r * 0.08 + side * r * 0.14, hy + r * 0.02,
+                  r * 0.062, r * 0.05, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // THE BOW, held out in front of everything. It bends further the
+  // further back the string is hauled, which is what makes the shot
+  // readable - you can see it coming.
+  const bx = f.face * r * 0.78, by = hy + r * 1.15;
+  const bend = r * (0.16 + aim * 0.2);
+  ctx.strokeStyle = '#7a5326';
+  ctx.lineWidth = r * 0.11;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(bx - f.face * bend * 0.2, by - r * 0.8);
+  ctx.quadraticCurveTo(bx + f.face * bend * 1.5, by, bx - f.face * bend * 0.2, by + r * 0.8);
+  ctx.stroke();
+  ctx.strokeStyle = '#e6e0d0';                      // the string, hauled back
+  ctx.lineWidth = r * 0.038;
+  const pull = -f.face * r * (0.05 + aim * 0.45);
+  ctx.beginPath();
+  ctx.moveTo(bx - f.face * bend * 0.2, by - r * 0.8);
+  ctx.lineTo(bx + pull, by);
+  ctx.lineTo(bx - f.face * bend * 0.2, by + r * 0.8);
+  ctx.stroke();
+  if (f.aim > 0) {                                  // an arrow on the string
+    ctx.strokeStyle = '#d8c496';
+    ctx.lineWidth = r * 0.06;
+    ctx.beginPath();
+    ctx.moveTo(bx + pull, by);
+    ctx.lineTo(bx + f.face * r * 0.6, by);
+    ctx.stroke();
+  }
+  ctx.lineCap = 'butt';
+  ctx.fillStyle = CD;                               // the hand gripping the bow
+  ctx.beginPath();
+  ctx.ellipse(bx, by, r * 0.15, r * 0.19, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = C;                                // and the sleeve behind it
+  ctx.beginPath();
+  ctx.ellipse(f.face * r * 0.4, by - r * 0.06, r * 0.28, r * 0.16, 0, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+// AN ARROW in flight. The point has to read as the point at a glance -
+// the first version had a blob at each end and looked like a dumbbell,
+// so you could not tell which way it was going.
+function drawArrow(a, sc) {
+  const r = 17 * sc;
+  ctx.save();
+  ctx.rotate(Math.atan2(a.vdepth * 0.16, a.vx));
+  ctx.fillStyle = '#3f4a5c';                        // flights: thin, swept BACK
+  for (const side of [-1, 1]) {
+    ctx.beginPath();
+    ctx.moveTo(-r * 1.0, 0);
+    ctx.lineTo(-r * 0.55, side * r * 0.3);
+    ctx.lineTo(-r * 0.34, side * r * 0.24);
+    ctx.lineTo(-r * 0.72, 0);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.strokeStyle = '#c9b58a';                      // the shaft
+  ctx.lineWidth = r * 0.12;
+  ctx.beginPath();
+  ctx.moveTo(-r * 0.95, 0);
+  ctx.lineTo(r * 0.7, 0);
+  ctx.stroke();
+  ctx.fillStyle = '#e8eef7';                        // a long bright spike
+  ctx.beginPath();
+  ctx.moveTo(r * 1.15, 0);
+  ctx.lineTo(r * 0.45, -r * 0.155);
+  ctx.lineTo(r * 0.55, 0);
+  ctx.lineTo(r * 0.45, r * 0.155);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
 function drawFoeBody(f, r, headless) {
   const E = f.E;
   const wob = Math.sin(f.walkT) * r * 0.1;
@@ -2313,6 +2549,8 @@ function drawFoeBody(f, r, headless) {
   // they go through exactly the same drawing rather than a copy of it
   if (f.kind === 'goblin' || f.kind === 'brute') {
     drawGoblin(f, r, headless);
+  } else if (f.kind === 'archer') {
+    drawArcher(f, r, headless);
   } else if (f.kind === 'crawler') {
     drawCrawler(f, r, headless);
   } else if (f.kind === 'bat') {
@@ -2576,6 +2814,9 @@ function drawFight() {
   // rubble and fires stand on the floor like everybody else, so you can
   // walk in front of them or behind them
   for (const p of props) cast.push({ a: p, prop: true });
+  // arrows sort by depth too, so one loosed along the back of the level
+  // passes behind anyone standing at the front
+  for (const a of arrows) cast.push({ a, arrow: true });
   // the chest sits on the floor with everybody else, sorted by depth
   if (chest) cast.push({ a: chest, chest: true });
   if (cut) cast.push({ a: { x: cut.x, depth: cut.depth, z: 0, r: 30 }, baron: true });
@@ -2599,6 +2840,13 @@ function drawFight() {
                          vz: 70 + Math.random() * 60, life: 0.7,
                          color: Math.random() < 0.5 ? '#ffbe3d' : '#e0521f' });
       }
+      continue;
+    }
+    if (c.arrow) {
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      drawArrow(a, p.sc);
+      ctx.restore();
       continue;
     }
     if (c.chest) {
