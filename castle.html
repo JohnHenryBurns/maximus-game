@@ -505,25 +505,75 @@ function startLevel(lv) {
 // How long a crawler takes to dig itself out of sight.
 const BURROW_TIME = 0.95;
 
+// Grow one twisted limb, and everything that forks off the end of it.
+// This calls ITSELF - a branch is just a smaller tree. That is called
+// recursion, and it is why the tree comes out gnarled instead of tidy.
+//
+// It runs ONCE, when the tree is planted, and the shape is kept. If it
+// ran while drawing, the tree would rewrite itself 60 times a second.
+// Numbers are in multiples of r, so the same tree works at any size.
+function growLimb(x, y, angle, len, thick, depth, limbs, leaves) {
+  // Each limb kinks twice on the way up. Pick the DIRECTION first and
+  // the amount second, so the bend can never come out near zero - a
+  // plain (random - 0.5) roll gives you straight limbs now and then,
+  // and one ruler-straight branch makes the whole tree look wrong.
+  const bend = (Math.random() < 0.5 ? -1 : 1) * (0.26 + Math.random() * 0.5);
+  const midA = angle + bend * 0.5;
+  const mx = x + Math.cos(midA) * len * 0.55;
+  const my = y + Math.sin(midA) * len * 0.55;
+  const endA = angle + bend;
+  const ex = mx + Math.cos(endA) * len * 0.55;
+  const ey = my + Math.sin(endA) * len * 0.55;
+  limbs.push({ x, y, cx: mx, cy: my, ex, ey, thick, depth });
+
+  if (depth >= 3 || len < 0.3) {
+    // the end of the line: a clump of leaves hangs off this tip
+    leaves.push({ x: ex, y: ey, w: 0.34 + Math.random() * 0.3,
+                  a: Math.random() * Math.PI, dark: Math.random() < 0.45 });
+    return;
+  }
+  const forks = 2 + (depth < 2 && Math.random() < 0.5 ? 1 : 0);
+  for (let i = 0; i < forks; i++) {
+    // fan the forks out either side of wherever this limb ended up
+    const spread = (i - (forks - 1) / 2) * (0.6 + Math.random() * 0.5);
+    growLimb(ex, ey, endA + spread + (Math.random() - 0.5) * 0.35,
+             len * (0.58 + Math.random() * 0.24),
+             thick * 0.6, depth + 1, limbs, leaves);
+  }
+  // a bare dead-looking twig now and then, with nothing growing on it
+  if (Math.random() < 0.35) {
+    const t = { x: mx, y: my,
+                cx: mx + Math.cos(endA + 1.5) * len * 0.3,
+                cy: my + Math.sin(endA + 1.5) * len * 0.3,
+                ex: mx + Math.cos(endA + 2.1) * len * 0.45,
+                ey: my + Math.sin(endA + 2.1) * len * 0.45,
+                thick: thick * 0.3, depth: depth + 1 };
+    limbs.push(t);
+  }
+}
+
 // A TREE, planted where an earth crawler went down. Everything about
 // its shape is rolled here, once, and kept - same rule as the rock it
 // came out of. grow: 0 means it has not come up yet.
 function plantTree(x, depth, size) {
-  const lean = (Math.random() - 0.5) * 1.1;
+  const lean = (Math.random() - 0.5) * 1.3;
+  const limbs = [], leaves = [];
+  // -PI/2 is straight up on a canvas, because y counts downwards
+  // 0.82, not 1.15: the forks pile height on top of the trunk, so the
+  // finished tree reaches about three times as far as this first limb.
+  growLimb(0, 0, -Math.PI / 2 + lean * 0.45, 0.82, 0.3, 0, limbs, leaves);
   props.push({
     kind: 'tree', x, depth, z: 0,
-    size: (size || 1) * (1.5 + Math.random() * 0.5),
-    seed: Math.random() * 100, r: 16, grow: 0, lean,
-    branches: Array.from({ length: 2 + Math.floor(Math.random() * 2) }, (_, i) => ({
-      at: 0.42 + i * 0.2 + Math.random() * 0.1,
-      dir: i % 2 ? 1 : -1,
-    })),
-    leaves: Array.from({ length: 5 }, (_, i) => ({
-      x: Math.cos(i * 1.9 + lean) * (0.3 + Math.random() * 0.5),
-      y: Math.sin(i * 1.9) * 0.34 + 0.1,
-      w: 0.42 + Math.random() * 0.3,
-      a: Math.random() * Math.PI,
-      dark: i < 2,
+    // keep them a head or two above the knight - big enough to feel like
+    // a wood, small enough that a cleared meadow is still a level you can
+    // see across
+    size: (size || 1) * (0.72 + Math.random() * 0.3),
+    seed: Math.random() * 100, r: 16, grow: 0, lean, limbs, leaves,
+    bark: Math.random() < 0.5 ? '#4a3418' : '#5c4222',
+    // knuckly roots gripping the ground at the bottom
+    roots: Array.from({ length: 3 + Math.floor(Math.random() * 3) }, () => ({
+      out: (Math.random() - 0.5) * 1.5,
+      thick: 0.08 + Math.random() * 0.07,
     })),
   });
 }
@@ -1973,8 +2023,8 @@ function drawProp(p, sc, t) {
     ctx.fillRect(-r * 0.8, -r * 0.5, r * 1.6, r * 0.09);
     ctx.fillRect(-r * 0.1, -r * 1.1, r * 0.09, r * 0.6);
   } else if (p.kind === 'tree') {
-    // A TREE that came up where an earth crawler dug itself in. It grows
-    // out of nothing over about a second and overshoots a little at the
+    // A TWISTED TREE that came up where an earth crawler dug itself in.
+    // It grows out of nothing over about a second and overshoots at the
     // end, so it SPRINGS up instead of sliding up like a lift.
     const g = p.grow === undefined ? 1 : p.grow;
     const ease = g >= 1 ? 1 : 1 + 2.2 * Math.pow(g - 1, 3) + 1.2 * Math.pow(g - 1, 2);
@@ -1984,29 +2034,32 @@ function drawProp(p, sc, t) {
     const h = r * 2.7;
     ctx.fillStyle = '#5b4a2c';                          // soil pushed up round it
     ctx.beginPath();
-    ctx.ellipse(0, 0, r * 0.7, r * 0.22, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, 0, r * 0.75, r * 0.24, 0, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = '#5c4222';                        // the trunk, with its lean
     ctx.lineCap = 'round';
-    ctx.lineWidth = r * 0.26;
-    ctx.beginPath();
-    ctx.moveTo(0, -r * 0.05);
-    ctx.quadraticCurveTo(p.lean * r * 0.34, -h * 0.55, p.lean * r * 0.7, -h);
-    ctx.stroke();
-    ctx.lineWidth = r * 0.12;                           // a couple of branches
-    for (const b of p.branches) {
-      const bx = p.lean * r * 0.7 * b.at, by = -h * b.at;
+    ctx.strokeStyle = p.bark;
+    for (const t of p.roots) {                          // knuckly roots gripping on
+      ctx.lineWidth = r * t.thick;
       ctx.beginPath();
-      ctx.moveTo(bx, by);
-      ctx.lineTo(bx + b.dir * r * 0.6, by - r * 0.36);
+      ctx.moveTo(0, -r * 0.12);
+      ctx.quadraticCurveTo(t.out * r * 0.4, -r * 0.16, t.out * r * 0.75, r * 0.04);
+      ctx.stroke();
+    }
+    // THE LIMBS. Thickest first, so the thin twigs sit on top of the
+    // trunk where they join it instead of poking out through the side.
+    for (const b of p.limbs) {
+      ctx.lineWidth = Math.max(r * 0.035, r * b.thick);
+      ctx.strokeStyle = b.depth === 0 ? p.bark : (b.depth > 1 ? '#4a3418' : p.bark);
+      ctx.beginPath();
+      ctx.moveTo(b.x * h, b.y * h);
+      ctx.quadraticCurveTo(b.cx * h, b.cy * h, b.ex * h, b.ey * h);
       ctx.stroke();
     }
     ctx.lineCap = 'butt';
-    for (const l of p.leaves) {                         // dark leaves first, so
+    for (const l of p.leaves) {                         // dark clumps first, so
       ctx.fillStyle = l.dark ? '#2f6d24' : '#469932';   // the light ones sit on top
       ctx.beginPath();
-      ctx.ellipse(p.lean * r * 0.7 + l.x * r, -h + l.y * r,
-                  r * l.w, r * l.w * 0.84, l.a, 0, Math.PI * 2);
+      ctx.ellipse(l.x * h, l.y * h, r * l.w, r * l.w * 0.78, l.a, 0, Math.PI * 2);
       ctx.fill();
     }
     ctx.restore();
