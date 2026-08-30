@@ -117,21 +117,21 @@ const KNIGHTS = [
 const LEVELS = [
   { id: 0, name: 'THE CASTLE', x: 0.12, y: 0.74, needs: -1, count: 10, enemy: 'goblin',
     scene: 'castle', blurb: 'they have wrecked your hall and want the gold',
-    chest: true, cutscene: true, wrecked: true },
+    chest: true, cutscene: true, wrecked: true, brutes: 1 },
   { id: 1, name: 'THE MEADOW', x: 0.25, y: 0.55, needs: 0, count: 8, enemy: 'goblin',
-    scene: 'grass', blurb: 'out of the gates, after him' },
+    scene: 'grass', blurb: 'out of the gates, after him', brutes: 1 },
   { id: 2, name: 'DARK WOOD', x: 0.37, y: 0.74, needs: 1, count: 10, enemy: 'bat',
-    scene: 'wood', blurb: 'something in the trees' },
+    scene: 'wood', blurb: 'something in the trees', brutes: 2 },
   { id: 3, name: 'THE CAVES', x: 0.49, y: 0.5, needs: 2, count: 11, enemy: 'slime',
-    scene: 'cave', blurb: 'dripping, and full of slime' },
+    scene: 'cave', blurb: 'dripping, and full of slime', brutes: 2 },
   { id: 4, name: 'SNOW PASS', x: 0.61, y: 0.72, needs: 3, count: 12, enemy: 'goblin',
-    scene: 'snow', blurb: 'cold, and they are waiting' },
+    scene: 'snow', blurb: 'cold, and they are waiting', brutes: 3 },
   { id: 5, name: 'THE KEEP', x: 0.73, y: 0.46, needs: 4, count: 12, enemy: 'knight',
-    scene: 'castle', blurb: 'proper soldiers now' },
+    scene: 'castle', blurb: 'proper soldiers now', brutes: 3 },
   { id: 6, name: 'LAVA GATE', x: 0.84, y: 0.68, needs: 5, count: 14, enemy: 'slime',
-    scene: 'lava', blurb: 'hot. very hot.' },
+    scene: 'lava', blurb: 'hot. very hot.', brutes: 4 },
   { id: 7, name: 'TOP TOWER', x: 0.93, y: 0.3, needs: 6, count: 8, enemy: 'knight',
-    scene: 'castle', blurb: 'the one who took the gold', boss: true },
+    scene: 'castle', blurb: 'the one who took the gold', boss: true, brutes: 4 },
 ];
 
 // ---------------------------------------------------------------------
@@ -287,6 +287,12 @@ const ENEMY_KINDS = {
             speed: 84, r: 21, xp: 15 },
   boss:   { name: 'THE BARON', body: '#b02a6a', dark: '#61143a', health: 260, power: 13,
             speed: 66, r: 40, xp: 90, boss: true },
+  // TWICE THE SIZE, and carrying a shield. It guards while it is
+  // standing there, so hitting the front of it is nearly useless - you
+  // have to wait for it to swing, or slam it off its feet.
+  brute:  { name: 'BRUTE', body: '#6b4a2a', dark: '#3d2916', health: 85, power: 14,
+            speed: 52, r: 40, xp: 34, big: true, shield: true,
+            skin: '#78b043', skinDark: '#4c7526', eyes: '#ffe94a' },
 };
 
 let hero = null, foes = [], magics = [], camX = 0;
@@ -347,10 +353,17 @@ function newFoe(kind, x, depth) {
     x, depth, z: E.flies ? 42 : 0, vz: 0,
     vx: 0, vdepth: 0, face: -1, r: E.r,
     health: E.health, maxHealth: E.health,
-    look: rollLook(),
+    look: (function () {
+      const L = rollLook();
+      if (E.big) {                                 // twice the size of the rest
+        L.size *= 2;
+        L.skin = E.skin; L.skinDark = E.skinDark; L.eyes = E.eyes;
+      }
+      return L;
+    })(),
     weapon: WEAPON_LIST[Math.floor(Math.random() * WEAPON_LIST.length)],
     attack: 0, cool: 0.6 + Math.random() * 0.7, hurt: 0, dead: false,
-    down: 0, kvx: 0, kvz: 0, rise: 0, flying: false, tumble: 0, spinZ: 0,
+    down: 0, kvx: 0, kvz: 0, rise: 0, flying: false, tumble: 0, spinZ: 0, guardFlash: 0,
     // thrown through the air, then flat on the floor, then getting up
     frozen: 0, burning: 0, poisoned: 0, walkT: Math.random() * 6,
     bob: Math.random() * 6,
@@ -519,10 +532,18 @@ function fillLevel(lv) {
   const count = levelCount(lv);
   const first = 460;                              // room to get going
   const last = STAGE_W - 300;
+  // Some of them are BRUTES: twice the size, carrying a shield. They are
+  // spaced through the level rather than bunched, so you meet one every
+  // so often instead of walking into all of them at once.
+  const bigCount = Math.min(count, Math.round((lv.brutes || 0) * (mode().count / 25)));
+  const bigAt = new Set();
+  for (let i = 0; i < bigCount; i++) {
+    bigAt.add(Math.floor(((i + 0.7) / bigCount) * count));
+  }
   for (let i = 0; i < count; i++) {
     const t = count === 1 ? 0.5 : i / (count - 1);
     const x = first + t * (last - first) + (Math.random() - 0.5) * 130;
-    foes.push(newFoe(lv.enemy, x, 0.15 + Math.random() * 0.75));
+    foes.push(newFoe(bigAt.has(i) ? 'brute' : lv.enemy, x, 0.15 + Math.random() * 0.75));
   }
   if (lv.boss) foes.push(newFoe('boss', STAGE_W - 180, 0.55));
   if (lv.chest) {
@@ -567,8 +588,32 @@ function knockDown(f, away, force) {
   f.attack = 0;                                    // whatever it was doing, it is not now
   f.fallDir = -away;
 }
-function hurtFoe(f, dmg, knock, from, crit) {
+// Is its shield up? It guards while it is just standing there, and the
+// shield has to come down for it to swing - so there IS a way through,
+// you just have to wait for it. Knocked over, it guards nothing.
+function guarding(f) {
+  if (!f || !f.E) return false;            // nothing there guards nothing
+  return !!(f.E.shield && f.attack <= 0 && f.down <= 0 && f.rise <= 0 &&
+            !f.flying && f.frozen <= 0);
+}
+function hurtFoe(f, dmg, knock, from, crit, ignoreShield) {
   if (f.dead) return;
+  if (!ignoreShield && guarding(f)) {
+    // it takes the blow on the shield: almost nothing gets through, and
+    // it does not budge an inch
+    f.health -= Math.max(1, Math.round(dmg * 0.15));
+    f.hurt = 0.12;
+    f.guardFlash = 0.22;
+    floatText(f.x, f.depth, f.z + 46, 'BLOCKED', '#9fd8ff');
+    tone(900, 0.07, 'square', 0.07, 500);
+    for (let i = 0; i < 6; i++) {
+      const a = Math.random() * Math.PI * 2;
+      particles.push({ x: f.x - f.face * 18, depth: f.depth, z: f.z + 34,
+                       vx: Math.cos(a) * 90, vz: Math.sin(a) * 90 + 40,
+                       life: 0.3, color: '#cfe8ff' });
+    }
+    return;
+  }
   f.health -= dmg;
   f.hurt = 0.18;
   const away = from ? (f.x > from.x ? 1 : -1) : 1;
@@ -787,6 +832,7 @@ function updateFight(dt) {
   for (const f of foes) {
     if (f.dead) continue;
     f.hurt = Math.max(0, f.hurt - dt);
+    f.guardFlash = Math.max(0, f.guardFlash - dt);
     f.frozen = Math.max(0, f.frozen - dt);
     f.bob += dt * 4;
     if (f.burning > 0) {
@@ -1424,6 +1470,46 @@ function drawGoblin(f, r, headless) {
   ctx.rotate(f.face * (0.5 + sw * 1.6));
   drawWeapon(f.weapon, r);
   ctx.restore();
+
+  // THE SHIELD, on the arm nearest you. It comes UP when it is guarding
+  // and drops out of the way while it swings - so you can see when it is
+  // safe to hit, which is the whole point of it.
+  if (f.E.shield) {
+    const up = guarding(f) ? 1 : 0.25;
+    ctx.save();
+    ctx.translate(-f.face * r * 0.62, -r * (0.55 + up * 0.5) + wob);
+    ctx.rotate(-f.face * (1 - up) * 0.9);
+    const shR = r * 0.62;
+    ctx.fillStyle = f.guardFlash > 0 ? '#dff0ff' : '#6f7a86';
+    ctx.beginPath();
+    ctx.moveTo(0, -shR);
+    ctx.lineTo(shR * 0.82, -shR * 0.5);
+    ctx.lineTo(shR * 0.82, shR * 0.36);
+    ctx.lineTo(0, shR);
+    ctx.lineTo(-shR * 0.82, shR * 0.36);
+    ctx.lineTo(-shR * 0.82, -shR * 0.5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = '#3f464e';
+    ctx.lineWidth = Math.max(2, r * 0.06);
+    ctx.stroke();
+    ctx.fillStyle = '#8d959d';                     // the boss in the middle
+    ctx.beginPath();
+    ctx.arc(0, 0, shR * 0.3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#4a525a';
+    ctx.beginPath();
+    ctx.arc(0, 0, shR * 0.15, 0, Math.PI * 2);
+    ctx.fill();
+    if (f.guardFlash > 0) {                        // it rings when struck
+      ctx.strokeStyle = 'rgba(207,232,255,' + (f.guardFlash / 0.22) + ')';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(0, 0, shR * (1.1 + (1 - f.guardFlash / 0.22) * 0.7), 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
 }
 
 // Each weapon draws itself, standing at the handle and pointing up. So
@@ -1909,7 +1995,9 @@ function drawLooseHead(f, r) {
 function drawFoeBody(f, r, headless) {
   const E = f.E;
   const wob = Math.sin(f.walkT) * r * 0.1;
-  if (f.kind === 'goblin') {
+  // brutes are goblins, just twice the size and carrying a shield - so
+  // they go through exactly the same drawing rather than a copy of it
+  if (f.kind === 'goblin' || f.kind === 'brute') {
     drawGoblin(f, r, headless);
   } else if (f.kind === 'bat') {
     const flap = Math.sin(f.bob * 3) * r * 0.5;
@@ -2836,7 +2924,7 @@ function slamImpact() {
     const near = 1 - (dx / SLAM_REACH) * 0.45;
     let dmg = Math.round((12 + myPower() * 3 + weaponDamage()) * near);
     if (crit) dmg = Math.round(dmg * CRIT_DAMAGE);
-    hurtFoe(f, dmg, 30, hero, crit);
+    hurtFoe(f, dmg, 30, hero, crit, true);         // a slam goes through shields
     got++;
   }
   if (got) floatText(hero.x, hero.depth, 96, got > 1 ? 'SLAM x' + got : 'SLAM!', '#ffd83d');
