@@ -524,6 +524,10 @@ const AIM_TIME = 0.7;        // how long it hauls the bowstring back
 const ARROW_SPEED = 620;     // how fast the arrow goes down the level
 const KEEP_AWAY = 210;       // it backs off if you get closer than this
 const BOW_RANGE = 470;       // and steps up if you are further than this
+// FIVE SECONDS between arrows. The 0.7s of aiming happens INSIDE this
+// wait, not on top of it, so what you actually get is one arrow every
+// five seconds - not one every 5.7.
+const BOW_COOL = 5;
 
 // Loose one arrow from an archer towards where you are standing NOW.
 // It does not steer after that - walk sideways and it sails past you.
@@ -1106,7 +1110,7 @@ function updateFight(dt) {
       } else if (f.cool <= 0) {                    // the gap is right: shoot
         f.aim = AIM_TIME;
         f.loosed = false;
-        f.cool = 1.3 + Math.random() * 0.9;
+        f.cool = BOW_COOL;
       } else {
         if (Math.abs(dd) > 0.05) f.depth += Math.sign(dd) * DEPTH_SPEED * 0.5 * dt;
         f.walkT += dt * 2.5;                       // shuffling, lining you up
