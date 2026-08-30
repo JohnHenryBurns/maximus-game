@@ -121,7 +121,7 @@ const LEVELS = [
   { id: 1, name: 'THE MEADOW', x: 0.25, y: 0.55, needs: 0, count: 8, enemy: 'crawler',
     scene: 'grass', blurb: 'out of the gates, after him', brutes: 1 },
   { id: 2, name: 'DARK WOOD', x: 0.37, y: 0.74, needs: 1, count: 10, enemy: 'archer',
-    scene: 'wood', blurb: 'something in the trees', brutes: 2, bats: 6, trees: 26 },
+    scene: 'wood', blurb: 'something in the trees', brutes: 2, bats: 12, trees: 26 },
   { id: 3, name: 'THE CAVES', x: 0.49, y: 0.5, needs: 2, count: 11, enemy: 'slime',
     scene: 'cave', blurb: 'dripping, and full of slime', brutes: 2 },
   { id: 4, name: 'SNOW PASS', x: 0.61, y: 0.72, needs: 3, count: 12, enemy: 'goblin',
@@ -607,6 +607,20 @@ function growLimb(x, y, angle, len, thick, depth, limbs, leaves) {
                 thick: thick * 0.3, depth: depth + 1 };
     limbs.push(t);
   }
+}
+
+// How solid a tree should be drawn. A tree nearer the camera than you
+// are is drawn ON TOP of you, and one of the front row can hide you
+// completely - so it goes see-through when you step behind it. It fades
+// in as you get close rather than blinking, because a tree that snaps
+// between solid and clear is worse than the problem it is fixing.
+//
+// This is only sums, so it lives outside the drawing where the robots
+// can check it.
+function treeFade(p, who) {
+  if (!who || p.depth <= who.depth + 0.06) return 1;   // behind you: solid
+  const near = 1 - Math.min(1, Math.abs(p.x - who.x) / 150);
+  return 1 - near * 0.78;
 }
 
 // A TREE, planted where an earth crawler went down. Everything about
@@ -2147,6 +2161,7 @@ function drawProp(p, sc, t) {
     const ease = g >= 1 ? 1 : 1 + 2.2 * Math.pow(g - 1, 3) + 1.2 * Math.pow(g - 1, 2);
     if (ease <= 0.02) return;                           // not out of the soil yet
     ctx.save();
+    ctx.globalAlpha = treeFade(p, hero);
     ctx.scale(ease, ease);
     const h = r * 2.7;
     ctx.fillStyle = '#5b4a2c';                          // soil pushed up round it
@@ -2571,6 +2586,118 @@ function drawArrow(a, sc) {
   ctx.restore();
 }
 
+// A BAT. A furry block with fangs and a pair of wings, and that is the
+// whole animal. The fur is worked out from the bat's own seed rather
+// than rolled while drawing, so each bat is shaggy in its own way and
+// stays that way instead of shimmering.
+function drawBat(f, r, headless) {
+  const E = f.E;
+  const L = f.look || rollLook();
+  r = r * L.size;
+  // same number in, same number out - a seeded roll, no memory needed
+  const rnd = (i) => {
+    const v = Math.sin((L.seed + 1) * 12.9898 + i * 78.233) * 43758.5453;
+    return v - Math.floor(v);
+  };
+  const flap = Math.sin(f.bob * 3);
+  const s = r * 0.66;                        // half the width of the block
+  const cy = -r * 0.72;                      // middle of the body
+
+  // THE WINGS, behind the block so the body sits in front of them.
+  // A wing has to SPREAD out sideways and dip below the shoulder. Two
+  // earlier goes got this wrong: reaching straight out made a dark
+  // ribbon, and sitting too high and small made a pair of ears.
+  const wingPath = (side, lift) => {
+    ctx.beginPath();
+    ctx.moveTo(side * s * 0.6, cy - s * 0.55);
+    ctx.quadraticCurveTo(side * r * 1.0, cy - r * 1.0 - lift,
+                         side * r * 1.9, cy - r * 0.34 - lift * 0.6);
+    // three scallops on the way back in - that is what makes it a bat
+    // wing rather than a leaf
+    ctx.quadraticCurveTo(side * r * 1.62, cy + r * 0.16, side * r * 1.34, cy + r * 0.34);
+    ctx.quadraticCurveTo(side * r * 1.12, cy + r * 0.56, side * r * 0.94, cy + r * 0.2);
+    ctx.quadraticCurveTo(side * r * 0.7, cy + r * 0.46, side * s * 0.6, cy + s * 0.5);
+    ctx.closePath();
+  };
+  for (const side of [-1, 1]) {
+    const lift = flap * r * 0.45;
+    ctx.fillStyle = E.dark;
+    wingPath(side, lift);
+    ctx.fill();
+    // the finger bones holding the wing open. CLIPPED to the wing, or
+    // they poke out past the edge of it and look like whiskers.
+    ctx.save();
+    wingPath(side, lift);
+    ctx.clip();
+    ctx.strokeStyle = E.body;
+    ctx.lineWidth = r * 0.055;
+    for (const k of [0, 1, 2]) {
+      ctx.beginPath();
+      ctx.moveTo(side * s * 0.6, cy - s * 0.3);
+      ctx.lineTo(side * r * 1.9, cy - r * (0.3 - k * 0.32) - lift * 0.6);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+  // THE FUR. Little spikes all the way round the edge of the block,
+  // drawn before the block so their roots are hidden underneath it.
+  ctx.fillStyle = E.body;
+  const edges = [[0, -1], [1, 0], [0, 1], [-1, 0]];   // top, right, bottom, left
+  let n = 0;
+  for (const [nx, ny] of edges) {
+    for (let i = 0; i < 7; i++) {
+      const t = (i + 0.5) / 7 - 0.5;                  // along this edge
+      const px = (nx ? nx * s : t * s * 2);
+      const py = cy + (ny ? ny * s : t * s * 2);
+      const len = s * (0.2 + rnd(n) * 0.32);
+      const w = s * 0.16;
+      const lean = (rnd(n + 40) - 0.5) * 0.5;         // fur does not all point out
+      const tx = px + nx * len - ny * len * lean;
+      const ty = py + ny * len + nx * len * lean;
+      ctx.beginPath();
+      ctx.moveTo(px - ny * w, py + nx * w);
+      ctx.lineTo(tx, ty);
+      ctx.lineTo(px + ny * w, py - nx * w);
+      ctx.closePath();
+      ctx.fill();
+      n++;
+    }
+  }
+
+  // THE BLOCK itself
+  ctx.fillStyle = E.body;
+  roundRect(-s, cy - s, s * 2, s * 2, s * 0.22);
+  ctx.fill();
+  ctx.fillStyle = E.dark;                            // shadow along the bottom
+  roundRect(-s, cy + s * 0.24, s * 2, s * 0.76, s * 0.22);
+  ctx.fill();
+
+  if (headless) return;
+
+  // eyes
+  ctx.fillStyle = '#ffe94a';
+  ctx.beginPath();
+  ctx.arc(-s * 0.38, cy - s * 0.2, s * 0.2, 0, Math.PI * 2);
+  ctx.arc(s * 0.38, cy - s * 0.2, s * 0.2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#2a1d0a';
+  ctx.beginPath();
+  ctx.arc(-s * 0.38, cy - s * 0.2, s * 0.08, 0, Math.PI * 2);
+  ctx.arc(s * 0.38, cy - s * 0.2, s * 0.08, 0, Math.PI * 2);
+  ctx.fill();
+
+  // THE FANGS, hanging down out of the bottom of the block
+  ctx.fillStyle = '#fdf6e3';
+  for (const side of [-1, 1]) {
+    ctx.beginPath();
+    ctx.moveTo(side * s * 0.34 - s * 0.13, cy + s * 0.52);
+    ctx.lineTo(side * s * 0.34 + s * 0.13, cy + s * 0.52);
+    ctx.lineTo(side * s * 0.34, cy + s * 1.02);
+    ctx.closePath();
+    ctx.fill();
+  }
+}
+
 function drawFoeBody(f, r, headless) {
   const E = f.E;
   const wob = Math.sin(f.walkT) * r * 0.1;
@@ -2583,22 +2710,7 @@ function drawFoeBody(f, r, headless) {
   } else if (f.kind === 'crawler') {
     drawCrawler(f, r, headless);
   } else if (f.kind === 'bat') {
-    const flap = Math.sin(f.bob * 3) * r * 0.5;
-    ctx.fillStyle = E.dark;
-    for (const side of [-1, 1]) {
-      ctx.beginPath();
-      ctx.moveTo(0, -r * 0.4);
-      ctx.quadraticCurveTo(side * r * 1.5, -r * 0.6 - flap, side * r * 1.7, -r * 0.1 + flap);
-      ctx.quadraticCurveTo(side * r * 1.1, -r * 0.1, 0, -r * 0.1);
-      ctx.closePath(); ctx.fill();
-    }
-    ctx.fillStyle = E.body;
-    ctx.beginPath(); ctx.arc(0, -r * 0.4, r * 0.62, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#ffe94a';
-    ctx.beginPath();
-    ctx.arc(-r * 0.22, -r * 0.5, r * 0.13, 0, Math.PI * 2);
-    ctx.arc(r * 0.22, -r * 0.5, r * 0.13, 0, Math.PI * 2);
-    ctx.fill();
+    drawBat(f, r, headless);
   } else if (f.kind === 'slime') {
     const squash = 1 + Math.sin(f.bob) * 0.12;
     ctx.fillStyle = E.body;
