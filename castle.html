@@ -116,8 +116,8 @@ const KNIGHTS = [
 // appearing out of nowhere behind you.
 const LEVELS = [
   { id: 0, name: 'THE CASTLE', x: 0.12, y: 0.74, needs: -1, count: 10, enemy: 'goblin',
-    scene: 'castle', blurb: 'ten of them are in YOUR hall, after the gold',
-    chest: true, cutscene: true },
+    scene: 'castle', blurb: 'they have wrecked your hall and want the gold',
+    chest: true, cutscene: true, wrecked: true },
   { id: 1, name: 'THE MEADOW', x: 0.25, y: 0.55, needs: 0, count: 8, enemy: 'goblin',
     scene: 'grass', blurb: 'out of the gates, after him' },
   { id: 2, name: 'DARK WOOD', x: 0.37, y: 0.74, needs: 1, count: 10, enemy: 'bat',
@@ -218,6 +218,7 @@ const ENEMY_KINDS = {
 
 let hero = null, foes = [], magics = [], camX = 0;
 let heads = [];                  // heads that have popped off and gone bouncing
+let props = [];                  // rubble, fires and broken stone on the floor
 let fightLevel = null, cleared = false, resultTimer = 0, clearTimer = 0;
 let chest = null;                // the chest of gold, on levels that have one
 let cut = null;                  // a cutscene playing, if there is one
@@ -324,6 +325,7 @@ function startLevel(lv) {
   particles = [];
   floaters = [];
   heads = [];
+  props = [];
   chest = null;
   cut = null;
   camX = 0;
@@ -333,10 +335,38 @@ function startLevel(lv) {
   screen = 'fight';
 }
 
+// The state your hall has been left in. Rubble and fires are laid out
+// along the level and stand on the floor like everybody else, so they
+// sort by depth and you can walk in front of or behind them.
+function litterLevel(lv) {
+  props = [];
+  if (!lv.wrecked) return;
+  // a seeded shuffle would be overkill - this only runs once per level
+  const drop = (kind, x, depth, size) => props.push({
+    kind, x, depth, z: 0, size,
+    seed: Math.random() * 100,
+    r: 16 * size,
+  });
+  for (let x = 260; x < STAGE_W - 120; x += 150 + Math.random() * 120) {
+    const roll = Math.random();
+    const depth = 0.08 + Math.random() * 0.86;
+    if (roll < 0.42) drop('rubble', x, depth, 0.7 + Math.random() * 0.8);
+    else if (roll < 0.7) drop('fire', x, depth, 0.75 + Math.random() * 0.6);
+    else if (roll < 0.86) drop('block', x, depth, 0.8 + Math.random() * 0.7);
+    else drop('column', x, depth, 0.9 + Math.random() * 0.5);
+  }
+  // and a proper heap of it near the gold, where they broke in
+  for (let i = 0; i < 5; i++) {
+    drop(i % 2 ? 'rubble' : 'fire', STAGE_W - 420 + i * 70, 0.15 + Math.random() * 0.3,
+         0.8 + Math.random() * 0.6);
+  }
+}
+
 // Everybody gets put out along the level at the start, spread from one
 // end to the other. They wait where they stand until you come near, so
 // you meet them a few at a time as you walk.
 function fillLevel(lv) {
+  litterLevel(lv);
   const first = 460;                              // room to get going
   const last = STAGE_W - 300;
   for (let i = 0; i < lv.count; i++) {
@@ -1210,6 +1240,99 @@ function drawFoe(f, sx, sy, sc) {
 
 // The body itself. headless is true when the head has popped off, in
 // which case we leave a green stump where the neck was.
+// Broken stone and burning floor. Each one draws itself standing at its
+// own feet, so the stage code only has to say where it is.
+function drawProp(p, sc, t) {
+  const r = 16 * sc * p.size;
+  if (p.kind === 'fire') {
+    // a fire burning on the ground: three tongues of flame, each on its
+    // own wobble, so it never looks like a repeating pattern
+    const glow = 0.7 + Math.sin(t * 5 + p.seed) * 0.3;
+    ctx.fillStyle = 'rgba(255,150,40,' + (0.1 + glow * 0.09) + ')';
+    ctx.beginPath();
+    ctx.ellipse(0, 0, r * 2.4, r * 0.9, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#2a1a12';                          // scorched floor
+    ctx.beginPath();
+    ctx.ellipse(0, 0, r * 1.15, r * 0.42, 0, 0, Math.PI * 2);
+    ctx.fill();
+    for (let i = 0; i < 3; i++) {
+      const off = (i - 1) * r * 0.5;
+      const wob = Math.sin(t * 7 + p.seed + i * 2.1);
+      const h = r * (1.5 + wob * 0.35) * (i === 1 ? 1.25 : 1);
+      ctx.fillStyle = ['#e0521f', '#f2861f', '#ffbe3d'][i];
+      ctx.beginPath();
+      ctx.moveTo(off - r * 0.36, 0);
+      ctx.quadraticCurveTo(off - r * 0.42 + wob * r * 0.2, -h * 0.55, off + wob * r * 0.18, -h);
+      ctx.quadraticCurveTo(off + r * 0.42 + wob * r * 0.2, -h * 0.55, off + r * 0.36, 0);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.fillStyle = 'rgba(255,240,170,0.9)';            // the hot middle
+    const wob2 = Math.sin(t * 9 + p.seed);
+    ctx.beginPath();
+    ctx.moveTo(-r * 0.2, 0);
+    ctx.quadraticCurveTo(-r * 0.24, -r * 0.6, wob2 * r * 0.1, -r * 0.95);
+    ctx.quadraticCurveTo(r * 0.24, -r * 0.6, r * 0.2, 0);
+    ctx.closePath();
+    ctx.fill();
+  } else if (p.kind === 'block') {
+    // a single big square block of masonry, knocked off a wall
+    ctx.fillStyle = '#6a6070';
+    roundRect(-r * 0.8, -r * 1.1, r * 1.6, r * 1.1, r * 0.1);
+    ctx.fill();
+    ctx.fillStyle = '#7d7386';                          // the lit top face
+    roundRect(-r * 0.8, -r * 1.1, r * 1.6, r * 0.3, r * 0.1);
+    ctx.fill();
+    ctx.fillStyle = '#4e4658';
+    ctx.fillRect(-r * 0.8, -r * 0.5, r * 1.6, r * 0.09);
+    ctx.fillRect(-r * 0.1, -r * 1.1, r * 0.09, r * 0.6);
+  } else if (p.kind === 'column') {
+    // a broken pillar, snapped off near the base
+    ctx.fillStyle = '#5a5266';
+    roundRect(-r * 0.5, -r * 1.9, r, r * 1.9, r * 0.12);
+    ctx.fill();
+    ctx.fillStyle = '#6d6478';
+    roundRect(-r * 0.5, -r * 1.9, r * 0.35, r * 1.9, r * 0.12);
+    ctx.fill();
+    ctx.fillStyle = '#3f394a';                          // the jagged snapped top
+    ctx.beginPath();
+    ctx.moveTo(-r * 0.5, -r * 1.9);
+    ctx.lineTo(-r * 0.2, -r * 2.1);
+    ctx.lineTo(r * 0.1, -r * 1.82);
+    ctx.lineTo(r * 0.5, -r * 2.05);
+    ctx.lineTo(r * 0.5, -r * 1.78);
+    ctx.lineTo(-r * 0.5, -r * 1.7);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#4e4658';                          // rubble round the foot
+    ctx.beginPath();
+    ctx.ellipse(0, 0, r * 0.95, r * 0.3, 0, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    // a heap of broken chunks. The shapes come from the prop's own seed,
+    // so the same heap looks the same every frame instead of shimmering.
+    for (let i = 0; i < 6; i++) {
+      const a = p.seed + i * 2.3;
+      const cx = Math.sin(a) * r * 0.9;
+      const cy = -Math.abs(Math.cos(a * 1.7)) * r * 0.5;
+      const w = r * (0.3 + (Math.sin(a * 3) + 1) * 0.16);
+      ctx.fillStyle = i % 2 ? '#5f5769' : '#6f667a';
+      ctx.beginPath();
+      ctx.moveTo(cx - w, cy);
+      ctx.lineTo(cx - w * 0.5, cy - w * 0.9);
+      ctx.lineTo(cx + w * 0.7, cy - w * 0.7);
+      ctx.lineTo(cx + w, cy);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.fillStyle = 'rgba(30,26,38,0.35)';              // dust on the floor
+    ctx.beginPath();
+    ctx.ellipse(0, 0, r * 1.2, r * 0.32, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
 // A head on its own, off its body. It is the same head the goblin
 // wears, minus the neck - masks, horns, six eyes and all.
 function drawLooseHead(f, r) {
@@ -1374,41 +1497,77 @@ function drawHall(S, sc) {
   ctx.fillRect(0, 0, S.W, h);
   const step = 260;
   const start = -((camX * 0.55) % step) - step;
+  // which pillars are wrecked is decided by WHERE they are, not by when
+  // they get drawn - so the same pillar is broken every time you walk
+  // past it instead of flickering between whole and ruined
+  const worldOf = x => Math.round((x + camX * 0.55) / step);
   for (let x = start; x < S.W + step; x += step) {
+    const id = worldOf(x);
+    const wrecked = fightLevel && fightLevel.wrecked;
+    const smashed = wrecked && ((id * 2654435761) % 7) < 3;
     // the dark arch
     ctx.fillStyle = 'rgba(0,0,0,0.34)';
     const aw = 96, ah = h * 0.44;
     roundRect(x + step / 2 - aw / 2, h - ah, aw, ah, aw * 0.45);
     ctx.fill();
-    // the pillar
+    // the pillar - snapped off partway up if this one has been smashed
+    const pillarH = smashed ? h * 0.34 : h * 0.62;
     ctx.fillStyle = sc.floor2;
-    ctx.fillRect(x - 26, h - h * 0.62, 52, h * 0.62);
+    ctx.fillRect(x - 26, h - pillarH, 52, pillarH);
     ctx.fillStyle = 'rgba(255,255,255,0.07)';
-    ctx.fillRect(x - 26, h - h * 0.62, 16, h * 0.62);
-    // the banner
-    ctx.fillStyle = '#7a2338';
-    ctx.beginPath();
-    ctx.moveTo(x - 20, h - h * 0.58);
-    ctx.lineTo(x + 20, h - h * 0.58);
-    ctx.lineTo(x + 20, h - h * 0.24);
-    ctx.lineTo(x, h - h * 0.18);
-    ctx.lineTo(x - 20, h - h * 0.24);
-    ctx.closePath();
-    ctx.fill();
-    ctx.fillStyle = '#ffd83d';
-    ctx.beginPath();
-    ctx.arc(x, h - h * 0.42, 9, 0, Math.PI * 2);
-    ctx.fill();
-    // a torch, flickering
-    const flick = 0.75 + Math.sin(Date.now() / 90 + x) * 0.25;
-    ctx.fillStyle = 'rgba(255,170,60,' + flick * 0.8 + ')';
-    ctx.beginPath();
-    ctx.arc(x + step / 2, h - h * 0.66, 13 * flick, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = 'rgba(255,232,150,' + flick + ')';
-    ctx.beginPath();
-    ctx.arc(x + step / 2, h - h * 0.66, 6 * flick, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.fillRect(x - 26, h - pillarH, 16, pillarH);
+    if (smashed) {
+      ctx.fillStyle = '#3f394a';                       // the broken-off top
+      ctx.beginPath();
+      ctx.moveTo(x - 26, h - pillarH);
+      ctx.lineTo(x - 10, h - pillarH - 16);
+      ctx.lineTo(x + 6, h - pillarH - 4);
+      ctx.lineTo(x + 26, h - pillarH - 20);
+      ctx.lineTo(x + 26, h - pillarH + 6);
+      ctx.lineTo(x - 26, h - pillarH + 8);
+      ctx.closePath();
+      ctx.fill();
+    } else {
+      // the banner, still hanging - but torn along the bottom
+      ctx.fillStyle = '#6b1f31';
+      ctx.beginPath();
+      ctx.moveTo(x - 20, h - h * 0.58);
+      ctx.lineTo(x + 20, h - h * 0.58);
+      ctx.lineTo(x + 20, h - h * 0.3);
+      if (wrecked) {                                   // ragged, burnt edge
+        ctx.lineTo(x + 12, h - h * 0.22);
+        ctx.lineTo(x + 6, h - h * 0.3);
+        ctx.lineTo(x - 4, h - h * 0.2);
+        ctx.lineTo(x - 12, h - h * 0.28);
+      } else {
+        ctx.lineTo(x, h - h * 0.18);
+      }
+      ctx.lineTo(x - 20, h - h * 0.24);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = wrecked ? '#a88c2a' : '#ffd83d';
+      ctx.beginPath();
+      ctx.arc(x, h - h * 0.42, 9, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // a torch. In a wrecked hall most of them have gone out.
+    const dark = wrecked && ((id * 40503) % 5) < 3;
+    if (!dark) {
+      const flick = 0.75 + Math.sin(Date.now() / 90 + x) * 0.25;
+      ctx.fillStyle = 'rgba(255,170,60,' + flick * 0.8 + ')';
+      ctx.beginPath();
+      ctx.arc(x + step / 2, h - h * 0.66, 13 * flick, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(255,232,150,' + flick + ')';
+      ctx.beginPath();
+      ctx.arc(x + step / 2, h - h * 0.66, 6 * flick, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      ctx.fillStyle = 'rgba(20,14,10,0.8)';            // a dead, sooty bracket
+      ctx.beginPath();
+      ctx.arc(x + step / 2, h - h * 0.66, 7, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
   // the top of the wall
   ctx.fillStyle = 'rgba(0,0,0,0.3)';
@@ -1491,6 +1650,9 @@ function drawFight() {
     }
   }
 
+  // rubble and fires stand on the floor like everybody else, so you can
+  // walk in front of them or behind them
+  for (const p of props) cast.push({ a: p, prop: true });
   // the chest sits on the floor with everybody else, sorted by depth
   if (chest) cast.push({ a: chest, chest: true });
   if (cut) cast.push({ a: { x: cut.x, depth: cut.depth, z: 0, r: 30 }, baron: true });
@@ -1501,6 +1663,21 @@ function drawFight() {
     const p = toScreen(a, S, camX);
     const floorY = S.backY + a.depth * S.floorH;
     if (p.x < -220 || p.x > S.W + 220) continue;
+    if (c.prop) {
+      const t = Date.now() / 1000;
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      drawProp(a, p.sc, t);
+      ctx.restore();
+      // a fire throws sparks up into the air
+      if (a.kind === 'fire' && Math.random() < 0.09) {
+        particles.push({ x: a.x + (Math.random() - 0.5) * 20, depth: a.depth,
+                         z: 12 + Math.random() * 20, vx: (Math.random() - 0.5) * 20,
+                         vz: 70 + Math.random() * 60, life: 0.7,
+                         color: Math.random() < 0.5 ? '#ffbe3d' : '#e0521f' });
+      }
+      continue;
+    }
     if (c.chest) {
       if (chest.taken && cut) continue;            // he is carrying it now
       drawShadow(p.x, floorY, p.sc, 32);
