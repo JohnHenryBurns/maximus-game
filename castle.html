@@ -149,12 +149,19 @@ function isOpen(lv) { return lv.needs < 0 || isBeaten(lv.needs); }
 function heroLevel() { return 1 + Math.floor(save.xp / 60); }
 function maxHealth() { return KNIGHTS[save.knight].health + (heroLevel() - 1) * 12; }
 function myPower() { return KNIGHTS[save.knight].power + Math.floor((heroLevel() - 1) * 0.7); }
+// CRITICAL HITS. One swing in six lands properly and does more than
+// twice the damage. The chance creeps up as you level, so getting
+// stronger feels different rather than just being a bigger number.
+const CRIT_DAMAGE = 2.4;
+function critChance() { return Math.min(0.34, 0.16 + (heroLevel() - 1) * 0.015); }
+function rollCrit() { return Math.random() < critChance(); }
 function playerName() { return (save.name || '').trim() || 'KNIGHT'; }
 
 let screen = 'title';            // title | select | map | fight | cleared | dead
 let held = {}, touchMode = false, uiRects = [], shake = 0;
 let particles = [], floaters = [];
 let mapPick = 0;
+let critFlash = 0;               // a gold ring that snaps out on a critical
 </script>
 <script>
 // =====================================================================
@@ -274,6 +281,7 @@ function newFoe(kind, x, depth) {
     health: E.health, maxHealth: E.health,
     weapon: WEAPON_LIST[Math.floor(Math.random() * WEAPON_LIST.length)],
     attack: 0, cool: 0.6 + Math.random() * 0.7, hurt: 0, dead: false,
+    down: 0, kvx: 0, rise: 0,      // knocked over, sliding back, getting up
     frozen: 0, burning: 0, poisoned: 0, walkT: Math.random() * 6,
     bob: Math.random() * 6,
     awake: false,                  // stands about until you come near
@@ -459,14 +467,35 @@ function faceToward(a, b) { a.face = b.x > a.x ? 1 : -1; }
 // anything without a weapon just swings its fists, so this never breaks
 function weaponOf(f) { return WEAPONS[f.weapon] || WEAPONS.club; }
 
-function hurtFoe(f, dmg, knock, from) {
+// KNOCKED FLAT. Take a hit and survive it, and you go over backwards,
+// slide along the floor, lie there a moment and then get up and come
+// straight back. It is what makes hitting something feel solid - you
+// can SEE what the blow did rather than just watching a number.
+const DOWN_TIME = 0.55;          // how long they lie there
+const RISE_TIME = 0.35;          // and how long getting up takes
+function knockDown(f, away, force) {
+  if (f.E.boss) {                                  // too big to floor
+    f.kvx = away * force * 0.25;
+    return;
+  }
+  f.down = DOWN_TIME;
+  f.rise = 0;
+  f.kvx = away * force;
+  f.attack = 0;                                    // whatever it was doing, it is not now
+  f.fallDir = -away;
+}
+function hurtFoe(f, dmg, knock, from, crit) {
   if (f.dead) return;
   f.health -= dmg;
   f.hurt = 0.18;
-  f.x += knock * (from ? (f.x > from.x ? 1 : -1) : 1);
-  floatText(f.x, f.depth, f.z + 40, String(Math.round(dmg)), '#fff');
-  boom(f.x, f.depth, f.z + 20, f.E.body, 6);
+  const away = from ? (f.x > from.x ? 1 : -1) : 1;
+  floatText(f.x, f.depth, f.z + 40, (crit ? 'CRIT ' : '') + Math.round(dmg),
+            crit ? '#ffd83d' : '#fff');
+  boom(f.x, f.depth, f.z + 20, f.E.body, crit ? 14 : 6);
   hitSound();
+  // a proper blow puts them on the floor; poison and burning just sting
+  if (knock > 0 && f.health > 0) knockDown(f, away, 240 + knock * 9 + (crit ? 200 : 0));
+  else f.x += knock * away;
   if (f.health <= 0) {
     f.dead = true;
     f.deadT = 0;
@@ -639,8 +668,18 @@ function updateFight(dt) {
         if (f.dead) continue;
         if ((f.x - hero.x) * hero.face < -12) continue;   // must be in front
         if (!inRange(hero, f, reach)) continue;
-        const dmg = 7 + myPower() * 2 + hero.combo * 2;
-        hurtFoe(f, dmg, 14 + hero.combo * 3, hero);
+        const crit = rollCrit();
+        let dmg = 7 + myPower() * 2 + hero.combo * 2;
+        if (crit) dmg = Math.round(dmg * CRIT_DAMAGE);
+        hurtFoe(f, dmg, (14 + hero.combo * 3) * (crit ? 2.2 : 1), hero, crit);
+        if (crit) {
+          // a critical is loud: gold sparks, a big shake and a ring
+          shake = Math.max(shake, 16);
+          boom(f.x, f.depth, f.z + 26, '#ffd83d', 22);
+          tone(880, 0.09, 'square', 0.11, 300);
+          tone(1320, 0.13, 'square', 0.07);
+          critFlash = 0.3;
+        }
         landed = true;
       }
       if (landed) {
@@ -670,6 +709,29 @@ function updateFight(dt) {
       f.poisoned -= dt;
       f.poisonTick = (f.poisonTick || 0) + dt;
       if (f.poisonTick > 0.5) { f.poisonTick = 0; hurtFoe(f, 3 + myPower(), 0, null); }
+    }
+    // sliding along the floor after a hit, however it happened
+    if (f.kvx !== 0) {
+      f.x += f.kvx * dt;
+      f.kvx *= Math.pow(0.02, dt);                  // friction stops it quickly
+      if (Math.abs(f.kvx) < 8) f.kvx = 0;
+      f.x = Math.max(20, Math.min(STAGE_W - 20, f.x));
+    }
+    // FLAT ON ITS BACK. It lies there, then spends a moment climbing
+    // back up, and only then can it come at you again.
+    if (f.down > 0) {
+      f.down -= dt;
+      if (f.down <= 0) { f.down = 0; f.rise = RISE_TIME; }
+      continue;
+    }
+    if (f.rise > 0) {
+      f.rise -= dt;
+      if (f.rise <= 0) {
+        f.rise = 0;
+        f.awake = true;                             // and it has NOT forgotten you
+        if (Math.random() < 0.35) tone(150 + Math.random() * 90, 0.09, 'square', 0.04);
+      }
+      continue;
     }
     if (f.frozen > 0) continue;                     // frozen solid, cannot act
 
@@ -798,6 +860,7 @@ function updateFight(dt) {
   const want = hero.x - S.W * 0.42;
   camX += (Math.max(0, Math.min(STAGE_W - S.W, want)) - camX) * Math.min(1, dt * 4);
   if (shake > 0) shake = Math.max(0, shake - dt * 60);
+  if (critFlash > 0) critFlash = Math.max(0, critFlash - dt);
 
   for (const p of particles) {
     p.x += p.vx * dt; p.z += p.vz * dt; p.vz -= 340 * dt; p.life -= dt;
@@ -1281,6 +1344,16 @@ function drawFoe(f, sx, sy, sc) {
       drawFoeBody(f, r, true);
       ctx.restore();
       return;
+    }
+  }
+  if (f.down > 0 || f.rise > 0) {
+    // flat on its back, then hauling itself upright again
+    const tipped = f.down > 0 ? 1 : (f.rise / RISE_TIME);
+    ctx.rotate((f.fallDir || 1) * tipped * Math.PI * 0.46);
+    // little puffs of dust while it is on the floor
+    if (f.down > 0 && Math.random() < 0.05) {
+      particles.push({ x: f.x, depth: f.depth, z: 4, vx: (Math.random() - 0.5) * 30,
+                       vz: 24, life: 0.4, color: '#8a8290' });
     }
   }
   if (f.hurt > 0) ctx.globalAlpha = 0.65;
@@ -2039,6 +2112,16 @@ function drawFight() {
   }
   ctx.globalAlpha = 1;
   ctx.textAlign = 'left';
+  // the flash of a critical, snapping outwards from where you stand
+  if (critFlash > 0) {
+    const p = toScreen(hero, S, camX);
+    const grow = 1 - critFlash / 0.3;
+    ctx.strokeStyle = 'rgba(255,216,61,' + (critFlash / 0.3) * 0.8 + ')';
+    ctx.lineWidth = 6 * (1 - grow);
+    ctx.beginPath();
+    ctx.ellipse(p.x, p.y - 20, 40 + grow * 130, 16 + grow * 46, 0, 0, Math.PI * 2);
+    ctx.stroke();
+  }
   drawFightHUD(S);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
 }
@@ -2274,6 +2357,22 @@ function drawMap(S) {
   ctx.fillText('arrows pick a level   -   C knight   -   M mode', S.W - 16, py + 78);
   ctx.textAlign = 'left';
 
+  // START AGAIN. Tucked away, and it asks twice.
+  const rw = Math.min(180, S.W * 0.22), rh = Math.min(34, S.H * 0.06);
+  const rx = 16, ry = py - rh - 12;
+  const armed = wipeArmed > 0;
+  ctx.fillStyle = armed ? 'rgba(255,60,60,0.25)' : 'rgba(10,8,18,0.6)';
+  roundRect(rx, ry, rw, rh, 8); ctx.fill();
+  ctx.strokeStyle = armed ? '#ff5a5a' : 'rgba(255,255,255,0.25)';
+  ctx.lineWidth = 2;
+  roundRect(rx, ry, rw, rh, 8); ctx.stroke();
+  ctx.textAlign = 'center';
+  ctx.fillStyle = armed ? '#ff8b8b' : 'rgba(255,255,255,0.5)';
+  ctx.font = 'bold ' + Math.min(13, S.W / 46) + 'px monospace';
+  ctx.fillText(armed ? 'REALLY? TAP AGAIN' : 'START AGAIN  (R)', rx + rw / 2, ry + rh * 0.63);
+  uiRects.push({ x: rx + rw / 2, y: ry + rh / 2, w: rw / 2, h: rh / 2, wipe: true });
+  ctx.textAlign = 'left';
+
   // the difficulty, up in the corner where it is out of the way
   const M = mode();
   const mw2 = Math.min(190, S.W * 0.24), mh2 = Math.min(46, S.H * 0.08);
@@ -2369,6 +2468,24 @@ function jump() {
   hero.z = 1;
   tone(300, 0.1, 'sine', 0.05, 520);
 }
+// Starting again from nothing. This throws away every level you have
+// beaten and every point of XP, so it asks twice - the second tap
+// within three seconds is the one that does it.
+let wipeArmed = 0;
+function wipeSave() {
+  if (wipeArmed <= 0) {
+    wipeArmed = 3;
+    tone(300, 0.12, 'square', 0.07);
+    return;
+  }
+  wipeArmed = 0;
+  save.beaten = [];
+  save.xp = 0;
+  mapPick = 0;
+  saveGame();
+  sadTune();
+}
+
 function cycleMode(step) {
   modeIx = (modeIx + step + MODES.length) % MODES.length;
   localStorage.setItem('castle_mode', String(modeIx));
@@ -2430,6 +2547,7 @@ addEventListener('keydown', e => {
     if (k === ' ') advance();
     if (k.toLowerCase() === 'c') { screen = 'select'; }
     if (k.toLowerCase() === 'm') cycleMode(1);
+    if (k.toLowerCase() === 'r') wipeSave();
     return;
   }
   if (screen === 'fight') {
@@ -2507,6 +2625,7 @@ canvas.addEventListener('pointerdown', e => {
   for (const b of uiRects) {
     if (Math.abs(e.clientX - b.x) > b.w || Math.abs(e.clientY - b.y) > b.h) continue;
     if (b.knight !== undefined) { save.knight = b.knight; saveGame(); tone(600, 0.05, 'square', 0.05); return; }
+    if (b.wipe) { wipeSave(); return; }
     if (b.modeBtn) { cycleMode(1); return; }
     if (b.mapNode !== undefined) {
       if (mapPick === b.mapNode) goFromMap(); else mapPick = b.mapNode;
@@ -2560,6 +2679,8 @@ function loop(now) {
   last = now;
   if (screen === 'fight') updateFight(dt);
   if (screen === 'cutscene') updateCutscene(dt);
+  if (wipeArmed > 0 && screen === 'map') wipeArmed = Math.max(0, wipeArmed - dt);
+  else if (screen !== 'map') wipeArmed = 0;
   if (screen === 'cleared' || screen === 'dead') {
     resultTimer += dt;
     for (const p of particles) { p.x += p.vx * dt; p.z += p.vz * dt; p.vz -= 340 * dt; p.life -= dt; }
