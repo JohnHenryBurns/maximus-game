@@ -1343,9 +1343,35 @@ function drawSplat(sp, sc) {
 // A knight who did not make it, lying on his back with his sword stuck
 // in the floor beside him. He is on YOUR side - that is the point of
 // him being there.
+//
+// His MAGIC is leaking out. A red knight seeps embers, blue seeps
+// frost, green seeps poison, orange seeps sparks - each in his own
+// colour, pooling on the floor and running out of the cracks in his
+// armour. It says the same thing a wound would and looks better doing
+// it, because it is the thing that made him a knight draining away.
 function drawFallenKnight(p, sc) {
   const K = KNIGHTS[p.knight];
   const r = 17 * sc;
+  const t = Date.now() / 1000;
+  // the pool it has run into, breathing slowly
+  const pulse = 0.82 + Math.sin(t * 1.6 + p.seed) * 0.18;
+  ctx.fillStyle = K.magicColor;
+  ctx.globalAlpha = 0.2 * pulse;
+  ctx.beginPath();
+  ctx.ellipse(p.lean * r * 0.3, r * 0.1, r * 2.3 * pulse, r * 0.8 * pulse, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 0.42;
+  ctx.beginPath();
+  for (let i = 0; i <= 12; i++) {
+    const a = (i / 12) * Math.PI * 2;
+    const wob = 0.7 + (Math.sin(p.seed + i * 2.4) * 0.5 + 0.5) * 0.6;
+    const x = p.lean * r * 0.3 + Math.cos(a) * r * 1.5 * wob;
+    const y = r * 0.1 + Math.sin(a) * r * 0.5 * wob;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.fill();
+  ctx.globalAlpha = 1;
   ctx.save();
   ctx.rotate(p.lean * Math.PI * 0.5);              // lying flat
   // legs
@@ -1384,6 +1410,28 @@ function drawFallenKnight(p, sc) {
   ctx.arc(0, -r * 1.78, r * 0.13, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
+  // drops of it seeping out and running down into the pool. They are
+  // worked out from the time, so they fall smoothly without anybody
+  // having to keep a list of them.
+  ctx.fillStyle = K.magicColor;
+  for (let i = 0; i < 3; i++) {
+    const phase = (t * 0.55 + i * 0.37 + p.seed) % 1;
+    const dx = p.lean * r * (0.5 + i * 0.42);
+    ctx.globalAlpha = 0.75 * (1 - phase);
+    ctx.beginPath();
+    ctx.ellipse(dx, -r * 0.9 + phase * r * 0.95, r * 0.11, r * 0.17, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // and a wisp of it rising off him
+  ctx.globalAlpha = 0.3;
+  for (let i = 0; i < 2; i++) {
+    const rise = ((t * 0.4 + i * 0.5 + p.seed) % 1);
+    ctx.beginPath();
+    ctx.arc(p.lean * r * 0.2 + Math.sin(rise * 6 + i) * r * 0.3,
+            -r * 0.6 - rise * r * 2.2, r * 0.16 * (1 - rise), 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
 }
 
 function drawProp(p, sc, t) {
