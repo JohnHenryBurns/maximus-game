@@ -273,6 +273,33 @@ function newHero() {
     walkT: 0,
   };
 }
+// EVERY ONE OF THEM IS DIFFERENT.
+//
+// The look is worked out ONCE, when the creature is made, and kept on
+// it. Roll these while drawing instead and it would flicker through
+// twenty different faces a second - the same reason the broken pillars
+// are decided by where they stand.
+const SKINS = ['#78b043', '#8cc24e', '#639635', '#86a83c', '#5f8f4a'];
+const SKINS_DARK = ['#4c7526', '#5c8231', '#3f6420', '#566e24', '#3d6030'];
+const CLOAKS = ['#6b4a2a', '#7d5732', '#5a3d22', '#75513a', '#604428'];
+const CLOAKS_DARK = ['#3d2916', '#4a331c', '#33210f', '#452c20', '#372615'];
+const EYE_COLOURS = ['#ffe94a', '#ffd12a', '#ffa93d', '#f6ff5c', '#ffbe1f'];
+function rollLook() {
+  const skin = Math.floor(Math.random() * SKINS.length);
+  const cloak = Math.floor(Math.random() * CLOAKS.length);
+  return {
+    skin: SKINS[skin], skinDark: SKINS_DARK[skin],
+    cloak: CLOAKS[cloak], cloakDark: CLOAKS_DARK[cloak],
+    eyes: EYE_COLOURS[Math.floor(Math.random() * EYE_COLOURS.length)],
+    size: 0.86 + Math.random() * 0.3,              // some are bigger than others
+    mask: Math.floor(Math.random() * 3),           // round, squared off, or banded
+    horns: Math.floor(Math.random() * 3),          // curved, straight, or one snapped
+    cracked: Math.random() < 0.32,                 // a split across the mask
+    rivets: 8 + Math.floor(Math.random() * 5),
+    seed: Math.random() * 100,
+  };
+}
+
 function newFoe(kind, x, depth) {
   const E = ENEMY_KINDS[kind];
   return {
@@ -280,6 +307,7 @@ function newFoe(kind, x, depth) {
     x, depth, z: E.flies ? 42 : 0, vz: 0,
     vx: 0, vdepth: 0, face: -1, r: E.r,
     health: E.health, maxHealth: E.health,
+    look: rollLook(),
     weapon: WEAPON_LIST[Math.floor(Math.random() * WEAPON_LIST.length)],
     attack: 0, cool: 0.6 + Math.random() * 0.7, hurt: 0, dead: false,
     down: 0, kvx: 0, kvz: 0, rise: 0, flying: false, tumble: 0, spinZ: 0,
@@ -1154,17 +1182,19 @@ function drawBaron(sx, sy, sc, phase, t) {
 // each other, which is what stops it looking like a printed pattern.
 function drawGoblin(f, r, headless) {
   const E = f.E;
+  const L = f.look || rollLook();                  // its own colours and shapes
+  r = r * L.size;                                  // and its own size
   const wob = Math.sin(f.walkT) * r * 0.09;
   const hy = -r * 1.62 + wob;                      // where the head sits
   // bare green feet under the cloak
-  ctx.fillStyle = E.skinDark;
+  ctx.fillStyle = L.skinDark;
   for (const side of [-1, 1]) {
     const lift = Math.sin(f.walkT + (side > 0 ? Math.PI : 0)) * r * 0.16;
     roundRect(side * r * 0.28 - r * 0.13, -r * 0.24 + lift, r * 0.26, r * 0.26, r * 0.08);
     ctx.fill();
   }
   // the cloak: a bell with a torn hem, worn on the body only
-  ctx.fillStyle = E.body;
+  ctx.fillStyle = L.cloak;
   ctx.beginPath();
   ctx.moveTo(-r * 0.44, hy + r * 0.5);
   ctx.quadraticCurveTo(-r * 0.95, -r * 0.5, -r * 0.86, 0);
@@ -1175,7 +1205,7 @@ function drawGoblin(f, r, headless) {
   ctx.quadraticCurveTo(r * 0.95, -r * 0.5, r * 0.44, hy + r * 0.5);
   ctx.closePath();
   ctx.fill();
-  ctx.fillStyle = E.dark;                          // a shadowed fold down the middle
+  ctx.fillStyle = L.cloakDark;                     // a shadowed fold down the middle
   ctx.beginPath();
   ctx.moveTo(-r * 0.1, hy + r * 0.55);
   ctx.lineTo(r * 0.1, hy + r * 0.55);
@@ -1184,7 +1214,7 @@ function drawGoblin(f, r, headless) {
   ctx.closePath();
   ctx.fill();
   // green arms coming out of the cloak
-  ctx.fillStyle = E.skin;
+  ctx.fillStyle = L.skin;
   for (const side of [-1, 1]) {
     ctx.beginPath();
     ctx.ellipse(side * r * 0.62, hy + r * 0.75, r * 0.17, r * 0.3, side * 0.25, 0, Math.PI * 2);
@@ -1192,7 +1222,7 @@ function drawGoblin(f, r, headless) {
   }
   if (headless) {
     // the head has gone: a green stump where the neck was, dripping
-    ctx.fillStyle = E.skinDark;
+    ctx.fillStyle = L.skinDark;
     ctx.beginPath();
     ctx.ellipse(0, hy + r * 0.42, r * 0.3, r * 0.16, 0, 0, Math.PI * 2);
     ctx.fill();
@@ -1210,31 +1240,43 @@ function drawGoblin(f, r, headless) {
   // stroked line, because a line has the same width all the way along
   // and can never actually be sharp.
   for (const side of [-1, 1]) {
+    // one in three has had a horn snapped off in a fight
+    const stub = L.horns === 2 && side === (L.seed > 50 ? 1 : -1);
+    const len = stub ? 0.42 : 1;
+    // 0 curls outward, 1 goes almost straight up, 2 is the snapped pair
+    const out = L.horns === 1 ? 0.62 : 1.02;
+    const tipX = L.horns === 1 ? 0.42 : 0.86;
     ctx.fillStyle = '#d8cfb4';
     ctx.beginPath();
-    ctx.moveTo(side * r * 0.26, hy - r * 0.16);              // thick at the skull
-    ctx.quadraticCurveTo(side * r * 1.02, hy - r * 0.44,
-                         side * r * 0.86, hy - r * 1.24);    // the point
-    ctx.quadraticCurveTo(side * r * 0.86, hy - r * 0.5,
+    ctx.moveTo(side * r * 0.26, hy - r * 0.16);
+    ctx.quadraticCurveTo(side * r * out, hy - r * 0.44 * len,
+                         side * r * tipX, hy - r * 1.24 * len);
+    ctx.quadraticCurveTo(side * r * tipX, hy - r * 0.5 * len,
                          side * r * 0.5, hy - r * 0.06);
     ctx.closePath();
     ctx.fill();
-    ctx.fillStyle = 'rgba(0,0,0,0.22)';                      // a shaded underside
+    ctx.fillStyle = 'rgba(0,0,0,0.22)';
     ctx.beginPath();
     ctx.moveTo(side * r * 0.42, hy - r * 0.12);
-    ctx.quadraticCurveTo(side * r * 0.9, hy - r * 0.5,
-                         side * r * 0.86, hy - r * 1.24);
-    ctx.quadraticCurveTo(side * r * 0.8, hy - r * 0.52,
+    ctx.quadraticCurveTo(side * r * (out - 0.12), hy - r * 0.5 * len,
+                         side * r * tipX, hy - r * 1.24 * len);
+    ctx.quadraticCurveTo(side * r * (tipX - 0.06), hy - r * 0.52 * len,
                          side * r * 0.52, hy - r * 0.08);
     ctx.closePath();
     ctx.fill();
+    if (stub) {                                    // a ragged snapped end
+      ctx.fillStyle = '#a89e84';
+      ctx.beginPath();
+      ctx.ellipse(side * r * tipX, hy - r * 1.24 * len, r * 0.11, r * 0.05, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
   // THE HEAD: green, out in the open, no hood
-  ctx.fillStyle = E.skin;
+  ctx.fillStyle = L.skin;
   ctx.beginPath();
   ctx.ellipse(0, hy, r * 0.66, r * 0.6, 0, 0, Math.PI * 2);
   ctx.fill();
-  ctx.fillStyle = E.skinDark;                      // the underside, in shadow
+  ctx.fillStyle = L.skinDark;                      // the underside, in shadow
   ctx.beginPath();
   ctx.ellipse(0, hy + r * 0.3, r * 0.55, r * 0.22, 0, 0, Math.PI);
   ctx.fill();
@@ -1263,7 +1305,7 @@ function drawGoblin(f, r, headless) {
       ctx.beginPath();
       ctx.ellipse(p.x, p.y, r * 0.13, r * 0.13 * open, 0, 0, Math.PI * 2);
       ctx.fill();
-      ctx.fillStyle = E.eyes;
+      ctx.fillStyle = L.eyes;
       ctx.beginPath();
       ctx.ellipse(p.x, p.y, r * 0.085, r * 0.085 * open, 0, 0, Math.PI * 2);
       ctx.fill();
@@ -1282,24 +1324,48 @@ function drawGoblin(f, r, headless) {
   }
   ctx.clip('evenodd');
   ctx.fillStyle = '#4a525a';                                 // dark iron
-  ctx.beginPath();
-  ctx.ellipse(0, hy + r * 0.04, r * 0.68, r * 0.62, 0, 0, Math.PI * 2);
-  ctx.fill();
+  if (L.mask === 1) {
+    // squared off, like a plate hammered flat
+    roundRect(-r * 0.66, hy - r * 0.56, r * 1.32, r * 1.22, r * 0.12);
+    ctx.fill();
+  } else {
+    ctx.beginPath();
+    ctx.ellipse(0, hy + r * 0.04, r * 0.68, r * 0.62, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
   ctx.fillStyle = '#333a41';                                 // shadowed lower half
   ctx.beginPath();
   ctx.ellipse(0, hy + r * 0.32, r * 0.66, r * 0.36, 0, 0, Math.PI * 2);
   ctx.fill();
-  ctx.fillStyle = '#5e6870';                                 // a ridge down the middle
-  ctx.fillRect(-r * 0.055, hy - r * 0.58, r * 0.11, r * 1.18);
+  if (L.mask === 2) {
+    // banded across, rather than ridged down the middle
+    ctx.fillStyle = '#5e6870';
+    ctx.fillRect(-r * 0.7, hy - r * 0.34, r * 1.4, r * 0.1);
+    ctx.fillRect(-r * 0.7, hy + r * 0.14, r * 1.4, r * 0.1);
+  } else {
+    ctx.fillStyle = '#5e6870';                               // a ridge down the middle
+    ctx.fillRect(-r * 0.055, hy - r * 0.58, r * 0.11, r * 1.18);
+  }
   ctx.fillStyle = 'rgba(255,255,255,0.09)';                  // a highlight along the top
   ctx.beginPath();
   ctx.ellipse(-r * 0.16, hy - r * 0.3, r * 0.36, r * 0.14, -0.3, 0, Math.PI * 2);
   ctx.fill();
+  if (L.cracked) {
+    // a split across the iron, from some earlier fight
+    ctx.strokeStyle = '#232830';
+    ctx.lineWidth = Math.max(1.4, r * 0.055);
+    ctx.beginPath();
+    ctx.moveTo(-r * 0.62, hy - r * 0.1 + (L.seed % 3) * r * 0.1);
+    ctx.lineTo(-r * 0.12, hy + r * 0.16);
+    ctx.lineTo(r * 0.2, hy - r * 0.06);
+    ctx.lineTo(r * 0.64, hy + r * 0.2);
+    ctx.stroke();
+  }
   ctx.restore();
-  // rivets, right round the rim
+  // rivets, right round the rim - not all of them have the same number
   ctx.fillStyle = '#7d868e';
-  for (let i = 0; i < 10; i++) {
-    const a = (i / 10) * Math.PI * 2;
+  for (let i = 0; i < L.rivets; i++) {
+    const a = (i / L.rivets) * Math.PI * 2;
     ctx.beginPath();
     ctx.arc(Math.cos(a) * r * 0.58, hy + r * 0.04 + Math.sin(a) * r * 0.53, r * 0.045, 0, Math.PI * 2);
     ctx.fill();
@@ -1732,6 +1798,8 @@ function drawProp(p, sc, t) {
 // wears, minus the neck - masks, horns, six eyes and all.
 function drawLooseHead(f, r) {
   const E = f.E;
+  const L = f.look || rollLook();
+  r = r * L.size;
   if (f.kind !== 'goblin') {
     ctx.fillStyle = E.body;
     ctx.beginPath(); ctx.arc(0, 0, r * 0.55, 0, Math.PI * 2); ctx.fill();
@@ -1752,8 +1820,8 @@ function drawLooseHead(f, r) {
     ctx.closePath();
     ctx.fill();
   }
-  // the green skull
-  ctx.fillStyle = E.skin;
+  // the green skull, in whatever green THIS one was
+  ctx.fillStyle = L.skin;
   ctx.beginPath();
   ctx.ellipse(0, 0, r * 0.66, r * 0.6, 0, 0, Math.PI * 2);
   ctx.fill();
