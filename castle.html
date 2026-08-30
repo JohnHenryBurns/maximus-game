@@ -121,7 +121,7 @@ const LEVELS = [
   { id: 1, name: 'THE MEADOW', x: 0.25, y: 0.55, needs: 0, count: 8, enemy: 'crawler',
     scene: 'grass', blurb: 'out of the gates, after him', brutes: 1 },
   { id: 2, name: 'DARK WOOD', x: 0.37, y: 0.74, needs: 1, count: 10, enemy: 'archer',
-    scene: 'wood', blurb: 'something in the trees', brutes: 2 },
+    scene: 'wood', blurb: 'something in the trees', brutes: 2, bats: 6, trees: 26 },
   { id: 3, name: 'THE CAVES', x: 0.49, y: 0.5, needs: 2, count: 11, enemy: 'slime',
     scene: 'cave', blurb: 'dripping, and full of slime', brutes: 2 },
   { id: 4, name: 'SNOW PASS', x: 0.61, y: 0.72, needs: 3, count: 12, enemy: 'goblin',
@@ -640,6 +640,17 @@ function plantTree(x, depth, size) {
 // sort by depth and you can walk in front of or behind them.
 function litterLevel(lv) {
   props = [];
+  // A WOOD NEEDS TREES IN IT. Same trees the crawlers grow, but planted
+  // already full grown. They go along the BACK of the level and along
+  // the very front lip, so they frame the fight rather than standing in
+  // the middle of it where you cannot see past them.
+  for (let i = 0; i < (lv.trees || 0); i++) {
+    const x = 140 + (i / (lv.trees || 1)) * (STAGE_W - 240) + (Math.random() - 0.5) * 170;
+    const front = Math.random() < 0.24;
+    const depth = front ? 0.92 + Math.random() * 0.08 : Math.random() * 0.17;
+    plantTree(x, depth, 0.95 + Math.random() * 0.85);
+    props[props.length - 1].grow = 1;             // already grown, not sprouting
+  }
   if (!lv.wrecked) return;
   // a seeded shuffle would be overkill - this only runs once per level
   const drop = (kind, x, depth, size) => props.push({
@@ -706,10 +717,24 @@ function fillLevel(lv) {
   for (let i = 0; i < bigCount; i++) {
     bigAt.add(Math.floor(((i + 0.7) / bigCount) * count));
   }
+  // And some of them are BATS, spread the same way. A bat never lands,
+  // so it flies over the top of the fight and comes at you from a
+  // height nothing else does.
+  const batCount = Math.min(count - bigCount,
+                            Math.round((lv.bats || 0) * (mode().count / 25)));
+  const batAt = new Set();
+  for (let i = 0; i < batCount; i++) {
+    let slot = Math.floor(((i + 0.25) / batCount) * count);
+    // never put a bat where a brute already is - one of them would win
+    // and the other would just never appear
+    while (bigAt.has(slot) || batAt.has(slot)) slot = (slot + 1) % count;
+    batAt.add(slot);
+  }
   for (let i = 0; i < count; i++) {
     const t = count === 1 ? 0.5 : i / (count - 1);
     const x = first + t * (last - first) + (Math.random() - 0.5) * 130;
-    foes.push(newFoe(bigAt.has(i) ? 'brute' : lv.enemy, x, 0.15 + Math.random() * 0.75));
+    const kind = bigAt.has(i) ? 'brute' : batAt.has(i) ? 'bat' : lv.enemy;
+    foes.push(newFoe(kind, x, 0.15 + Math.random() * 0.75));
   }
   if (lv.boss) foes.push(newFoe('boss', STAGE_W - 180, 0.55));
   if (lv.chest) {
