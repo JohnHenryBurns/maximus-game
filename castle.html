@@ -118,7 +118,7 @@ const LEVELS = [
   { id: 0, name: 'THE CASTLE', x: 0.12, y: 0.74, needs: -1, count: 10, enemy: 'goblin',
     scene: 'castle', blurb: 'they have wrecked your hall and want the gold',
     chest: true, cutscene: true, wrecked: true, brutes: 1 },
-  { id: 1, name: 'THE MEADOW', x: 0.25, y: 0.55, needs: 0, count: 8, enemy: 'goblin',
+  { id: 1, name: 'THE MEADOW', x: 0.25, y: 0.55, needs: 0, count: 8, enemy: 'crawler',
     scene: 'grass', blurb: 'out of the gates, after him', brutes: 1 },
   { id: 2, name: 'DARK WOOD', x: 0.37, y: 0.74, needs: 1, count: 10, enemy: 'bat',
     scene: 'wood', blurb: 'something in the trees', brutes: 2 },
@@ -283,6 +283,10 @@ const ENEMY_KINDS = {
             speed: 118, r: 17, xp: 9, flies: true },
   slime:  { name: 'SLIME', body: '#3fbf8f', dark: '#1f6f52', health: 30, power: 7,
             speed: 58, r: 22, xp: 11 },
+  // The meadow's own monster: a walking rock. Slow and solid - it soaks
+  // up more hits than a goblin but it will never catch you in a footrace.
+  crawler:{ name: 'EARTH CRAWLER', body: '#7d7970', dark: '#494740', health: 34, power: 7,
+            speed: 52, r: 23, xp: 13 },
   knight: { name: 'SOLDIER', body: '#9aa4b4', dark: '#4d5666', health: 40, power: 9,
             speed: 84, r: 21, xp: 15 },
   boss:   { name: 'THE BARON', body: '#b02a6a', dark: '#61143a', health: 260, power: 13,
@@ -343,6 +347,27 @@ function rollLook() {
     cracked: Math.random() < 0.32,                 // a split across the mask
     rivets: 8 + Math.floor(Math.random() * 5),
     seed: Math.random() * 100,
+    // EARTH CRAWLER parts. Rolled here, once, at spawn - if we rolled
+    // these while drawing, the rock would change shape 60 times a second.
+    rock: {
+      lumps: Array.from({ length: 11 }, () => 0.6 + Math.random() * 0.28),
+      roots: Array.from({ length: 6 }, (_, i) => ({
+        x: -0.5 + i * 0.2 + (Math.random() - 0.5) * 0.08,
+        out: (-0.5 + i * 0.2) * 0.85 + (Math.random() - 0.5) * 0.22,
+        bend: (Math.random() - 0.5) * 0.55,
+        thick: 0.095 + Math.random() * 0.055,
+        toe: (Math.random() < 0.5 ? -1 : 1) * (0.12 + Math.random() * 0.12),
+      })),
+      moss: Array.from({ length: 4 }, () => ({
+        // angle between PI and 2PI is the TOP of the rock on a canvas,
+        // because y counts downwards. Moss grows on top, not underneath.
+        a: Math.PI + Math.random() * Math.PI, d: 0.3 + Math.random() * 0.42,
+        w: 0.07 + Math.random() * 0.09, dark: Math.random() < 0.5,
+      })),
+      eyeSpread: Math.random() * 0.1,
+      eyeSkew: (Math.random() - 0.5) * 0.14,
+      crack: -0.1 + Math.random() * 0.5,
+    },
   };
 }
 
@@ -643,7 +668,8 @@ function hurtFoe(f, dmg, knock, from, crit, ignoreShield) {
     floatText(f.x, f.depth, f.z + 74, '+' + coins + 'g', '#ffd83d');
     // Two ways to go, picked at random: topple over and lie there, or
     // the head comes clean off and bounces away. Roughly one in three.
-    f.deathStyle = Math.random() < 0.34 ? 'pop' : 'topple';
+    // A rock has no neck, so a crawler always crumbles where it stands.
+    f.deathStyle = (f.kind !== 'crawler' && Math.random() < 0.34) ? 'pop' : 'topple';
     f.fallDir = f.face * -1;
     addSplat(f.x, f.depth, f.deathStyle === 'pop' ? 1.3 : 0.9);
     if (f.deathStyle === 'pop') {
@@ -2000,6 +2026,137 @@ function drawLooseHead(f, r) {
   ctx.fill();
 }
 
+// EARTH CRAWLERS. A boulder that got up and walked off: four green eyes
+// glowing out of the stone, and six tree roots underneath doing the
+// walking. Every lump and every root is rolled ONCE when it spawns and
+// stored on the look, so the rock keeps its shape instead of wriggling
+// about while it stands still.
+function drawCrawler(f, r, headless) {
+  const E = f.E;
+  const L = f.look || rollLook();
+  const R = L.rock;
+  r = r * L.size;
+  const wob = Math.sin(f.walkT) * r * 0.05;      // the whole rock rocks along
+  const bodyY = -r * 1.0 + wob;                  // middle of the boulder
+
+  // SIX ROOTS, drawn first so the boulder sits down on top of them.
+  // They lift one after another round the six, like a caterpillar.
+  ctx.lineCap = 'round';
+  for (let i = 0; i < 6; i++) {
+    const t = R.roots[i];
+    const lift = Math.max(0, Math.sin(f.walkT * 1.7 + i * 1.05)) * r * 0.22;
+    const sx = t.x * r;                          // where it leaves the rock
+    const ex = (t.x + t.out) * r;                // where the toe puts down
+    ctx.strokeStyle = i % 2 ? '#4a3418' : '#5c4222';
+    ctx.lineWidth = r * t.thick;
+    ctx.beginPath();
+    ctx.moveTo(sx, bodyY + r * 0.42);
+    ctx.quadraticCurveTo(sx + t.bend * r, bodyY + r * 0.95 - lift, ex, -lift);
+    ctx.stroke();
+    ctx.lineWidth = r * t.thick * 0.52;          // a toe splitting off the end
+    ctx.beginPath();
+    ctx.moveTo(ex, -lift);
+    ctx.lineTo(ex + t.toe * r, -lift + r * 0.03);
+    ctx.stroke();
+  }
+  ctx.lineCap = 'butt';
+
+  // THE BOULDER. A ring of points at wobbly distances from the middle -
+  // that is all a lumpy rock is.
+  const N = R.lumps.length;
+  const rockPath = () => {
+    ctx.beginPath();
+    // A point every so often round a circle, at wobbly distances - but
+    // curved THROUGH the points instead of straight lines between them,
+    // or you get a polygon with visible flat sides, not a boulder.
+    const pt = (i) => {
+      const a = ((i % N) / N) * Math.PI * 2;
+      const rad = r * R.lumps[i % N];
+      return { x: Math.cos(a) * rad * 1.14, y: bodyY + Math.sin(a) * rad * 0.94 };
+    };
+    const mid = (i) => {
+      const p = pt(i), q = pt(i + 1);
+      return { x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 };
+    };
+    const m0 = mid(0);
+    ctx.moveTo(m0.x, m0.y);
+    for (let i = 1; i <= N; i++) {
+      const c = pt(i), m = mid(i);
+      ctx.quadraticCurveTo(c.x, c.y, m.x, m.y);
+    }
+    ctx.closePath();
+  };
+  ctx.fillStyle = E.body;
+  rockPath();
+  ctx.fill();
+  // the underside is in shadow: clip to the rock, then paint the bottom
+  ctx.save();
+  rockPath();
+  ctx.clip();
+  // The underside, cut on a slant. A flat rectangle across the middle
+  // read like a lid sitting on the rock instead of shadow under it.
+  ctx.fillStyle = E.dark;
+  ctx.beginPath();
+  ctx.moveTo(-r * 1.4, bodyY + r * 0.12);
+  ctx.quadraticCurveTo(0, bodyY + r * 0.46, r * 1.4, bodyY + r * 0.06);
+  ctx.lineTo(r * 1.4, bodyY + r * 1.6);
+  ctx.lineTo(-r * 1.4, bodyY + r * 1.6);
+  ctx.closePath();
+  ctx.fill();
+  // and a lighter cap where the sun hits the top
+  ctx.fillStyle = 'rgba(255,255,255,0.13)';
+  ctx.beginPath();
+  ctx.ellipse(-r * 0.16, bodyY - r * 0.62, r * 0.72, r * 0.38, -0.2, 0, Math.PI * 2);
+  ctx.fill();
+  // MOSS, because it has been standing in a meadow
+  for (const m of R.moss) {
+    ctx.fillStyle = m.dark ? '#3f7a2a' : '#5aa838';
+    ctx.beginPath();
+    ctx.ellipse(Math.cos(m.a) * r * m.d, bodyY + Math.sin(m.a) * r * m.d * 0.8,
+                r * m.w, r * m.w * 0.55, m.a, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // a crack or two across the stone
+  ctx.strokeStyle = E.dark;
+  ctx.lineWidth = r * 0.028;
+  const cy = bodyY + r * (0.42 + R.crack * 0.3);      // low, under the eyes
+  ctx.beginPath();
+  ctx.moveTo(-r * 0.8, cy);
+  ctx.lineTo(-r * 0.2, cy + r * 0.12);
+  ctx.lineTo(r * 0.55, cy - r * 0.05);
+  ctx.stroke();
+  ctx.restore();
+
+  if (headless) return;                          // no eyes on a broken one
+
+  // FOUR EYES glowing out of the stone. Same trick as the goblins: a
+  // dark socket first, then a soft glow, then a bright middle - so an
+  // eye that blinks shows the dark INSIDE the rock, not a hole through it.
+  for (let i = 0; i < 4; i++) {
+    const top = i < 2;
+    const px = ((i % 2) ? 1 : -1) * r * (0.34 + R.eyeSpread) + (top ? 0 : R.eyeSkew * r);
+    const py = bodyY + (top ? -r * 0.26 : r * 0.16);
+    const blink = Math.sin(f.bob * 1.2 + i * 2.3);
+    const open = blink > -0.88 ? 1 : 0.12;
+    ctx.fillStyle = '#0c1408';
+    ctx.beginPath();
+    ctx.arc(px, py, r * 0.125, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(118,255,86,0.30)';
+    ctx.beginPath();
+    ctx.ellipse(px, py, r * 0.2, r * 0.2 * open, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#7dff56';
+    ctx.beginPath();
+    ctx.ellipse(px, py, r * 0.105, r * 0.105 * open, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#e6ffd8';
+    ctx.beginPath();
+    ctx.ellipse(px, py, r * 0.045, r * 0.045 * open, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
 function drawFoeBody(f, r, headless) {
   const E = f.E;
   const wob = Math.sin(f.walkT) * r * 0.1;
@@ -2007,6 +2164,8 @@ function drawFoeBody(f, r, headless) {
   // they go through exactly the same drawing rather than a copy of it
   if (f.kind === 'goblin' || f.kind === 'brute') {
     drawGoblin(f, r, headless);
+  } else if (f.kind === 'crawler') {
+    drawCrawler(f, r, headless);
   } else if (f.kind === 'bat') {
     const flap = Math.sin(f.bob * 3) * r * 0.5;
     ctx.fillStyle = E.dark;
