@@ -165,7 +165,33 @@ let mapPick = 0;
 // floor gets its screen position and its size from its depth, which is
 // the whole trick of this view.
 // =====================================================================
-const STAGE_W = 2100;            // how long a level is, in world units
+// =====================================================================
+// THE THREE MODES.
+//
+// They change how many are waiting for you: 20, 25, or 25 plus another
+// twenty on top. The LEVEL GETS LONGER to match, so forty-five of them
+// is a long march rather than a solid wall you cannot get through - the
+// same idea as a bigger board needing more apples in Snake Fight.
+// =====================================================================
+const MODES = [
+  { name: 'EASY',   count: 20, desc: '20 of them' },
+  { name: 'NORMAL', count: 25, desc: '25 of them' },
+  { name: 'HARD',   count: 45, desc: '25 and TWENTY MORE' },
+];
+let modeIx = parseInt(localStorage.getItem('castle_mode') || '1');
+if (!(modeIx >= 0 && modeIx < MODES.length)) modeIx = 1;
+function mode() { return MODES[modeIx]; }
+// how many turn up in a level - the boss level keeps its own smaller
+// count, because forty-five soldiers AND a boss is not a fight, it is a
+// queue
+function levelCount(lv) { return lv.boss ? Math.round(mode().count * 0.4) : mode().count; }
+// and the level stretches to fit them, so they are never shoulder to
+// shoulder however many you asked for
+let STAGE_W = 2100;
+function stageLengthFor(lv) {
+  return Math.round(1500 + levelCount(lv) * 105);
+}
+
 function stage() {
   const W = canvas.width, H = canvas.height;
   const hud = Math.min(76, H * 0.13);
@@ -319,6 +345,7 @@ const MAGIC_COOL = 3.2;
 
 function startLevel(lv) {
   fightLevel = lv;
+  STAGE_W = stageLengthFor(lv);                   // longer levels for more of them
   hero = newHero();
   foes = [];
   magics = [];
@@ -367,10 +394,11 @@ function litterLevel(lv) {
 // you meet them a few at a time as you walk.
 function fillLevel(lv) {
   litterLevel(lv);
+  const count = levelCount(lv);
   const first = 460;                              // room to get going
   const last = STAGE_W - 300;
-  for (let i = 0; i < lv.count; i++) {
-    const t = lv.count === 1 ? 0.5 : i / (lv.count - 1);
+  for (let i = 0; i < count; i++) {
+    const t = count === 1 ? 0.5 : i / (count - 1);
     const x = first + t * (last - first) + (Math.random() - 0.5) * 130;
     foes.push(newFoe(lv.enemy, x, 0.15 + Math.random() * 0.75));
   }
@@ -1821,10 +1849,13 @@ function drawFightHUD(S) {
   ctx.fillStyle = '#fff';
   ctx.font = 'bold ' + Math.min(16, S.W / 36) + 'px monospace';
   ctx.fillText(fightLevel.name, S.W - 14, S.hud * 0.42);
+  ctx.fillStyle = ['#7fdf3f', '#ffd83d', '#ff5a5a'][modeIx];
+  ctx.font = 'bold ' + Math.min(12, S.W / 48) + 'px monospace';
+  ctx.fillText(mode().name, S.W - 14, S.hud * 0.2);
   ctx.fillStyle = 'rgba(255,255,255,0.6)';
   ctx.font = 'bold ' + Math.min(13, S.W / 44) + 'px monospace';
   const left = foes.filter(f => !f.dead).length;
-  ctx.fillText(left ? left + ' of ' + fightLevel.count + ' left' : 'ALL CLEAR',
+  ctx.fillText(left ? left + ' of ' + levelCount(fightLevel) + ' left' : 'ALL CLEAR',
                S.W - 14, S.hud * 0.75);
   ctx.textAlign = 'left';
   if (hero.combo > 1) {
@@ -1996,7 +2027,27 @@ function drawMap(S) {
   }
   ctx.fillStyle = 'rgba(255,255,255,0.35)';
   ctx.font = Math.min(12, S.W / 50) + 'px monospace';
-  ctx.fillText('arrows pick a level   -   C changes knight', S.W - 16, py + 78);
+  ctx.fillText('arrows pick a level   -   C knight   -   M mode', S.W - 16, py + 78);
+  ctx.textAlign = 'left';
+
+  // the difficulty, up in the corner where it is out of the way
+  const M = mode();
+  const mw2 = Math.min(190, S.W * 0.24), mh2 = Math.min(46, S.H * 0.08);
+  const mx2 = S.W - mw2 - 14, my2 = 14;
+  const col = ['#7fdf3f', '#ffd83d', '#ff5a5a'][modeIx];
+  ctx.fillStyle = 'rgba(10,8,18,0.65)';
+  roundRect(mx2, my2, mw2, mh2, 8); ctx.fill();
+  ctx.strokeStyle = col;
+  ctx.lineWidth = 2;
+  roundRect(mx2, my2, mw2, mh2, 8); ctx.stroke();
+  ctx.textAlign = 'center';
+  ctx.fillStyle = col;
+  ctx.font = 'bold ' + Math.min(17, S.W / 34) + 'px monospace';
+  ctx.fillText(M.name, mx2 + mw2 / 2, my2 + mh2 * 0.45);
+  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  ctx.font = Math.min(11, S.W / 54) + 'px monospace';
+  ctx.fillText(M.desc + '  -  press M', mx2 + mw2 / 2, my2 + mh2 * 0.78);
+  uiRects.push({ x: mx2 + mw2 / 2, y: my2 + mh2 / 2, w: mw2 / 2, h: mh2 / 2, modeBtn: true });
   ctx.textAlign = 'left';
 }
 </script>
@@ -2074,6 +2125,12 @@ function jump() {
   hero.z = 1;
   tone(300, 0.1, 'sine', 0.05, 520);
 }
+function cycleMode(step) {
+  modeIx = (modeIx + step + MODES.length) % MODES.length;
+  localStorage.setItem('castle_mode', String(modeIx));
+  tone(500 + modeIx * 120, 0.07, 'square', 0.06);
+}
+
 function pickMapNode(dir) {
   // step to the next level along, skipping any still locked
   for (let tries = 0; tries < LEVELS.length; tries++) {
@@ -2128,6 +2185,7 @@ addEventListener('keydown', e => {
     if (k === 'ArrowLeft' || k === 'ArrowDown') pickMapNode(-1);
     if (k === ' ') advance();
     if (k.toLowerCase() === 'c') { screen = 'select'; }
+    if (k.toLowerCase() === 'm') cycleMode(1);
     return;
   }
   if (screen === 'fight') {
@@ -2205,6 +2263,7 @@ canvas.addEventListener('pointerdown', e => {
   for (const b of uiRects) {
     if (Math.abs(e.clientX - b.x) > b.w || Math.abs(e.clientY - b.y) > b.h) continue;
     if (b.knight !== undefined) { save.knight = b.knight; saveGame(); tone(600, 0.05, 'square', 0.05); return; }
+    if (b.modeBtn) { cycleMode(1); return; }
     if (b.mapNode !== undefined) {
       if (mapPick === b.mapNode) goFromMap(); else mapPick = b.mapNode;
       return;
