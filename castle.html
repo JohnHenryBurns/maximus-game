@@ -125,7 +125,10 @@ const LEVELS = [
     extras: [{ kind: 'bat', count: 12 }] },
   { id: 3, name: 'THE CAVES', x: 0.49, y: 0.5, needs: 2, count: 11, enemy: 'slime',
     scene: 'cave', blurb: 'dripping, and full of slime', brutes: 2,
-    falling: true, extras: [{ kind: 'skeleton', count: 11 },
+    // skeletons come down from 11 to make room for the bats, or the level
+    // fills up and there is barely a slime left in a cave famous for them
+    falling: true, extras: [{ kind: 'skeleton', count: 8 },
+                             { kind: 'bat', count: 6 },
                              { kind: 'bonegiant', count: 3 }] },
   { id: 4, name: 'SNOW PASS', x: 0.61, y: 0.72, needs: 3, count: 12, enemy: 'goblin',
     scene: 'snow', blurb: 'cold, and they are waiting', brutes: 3 },
