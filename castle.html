@@ -298,8 +298,8 @@ const ENEMY_KINDS = {
   // Waits at the end of the dark wood. An archer grown huge, with a
   // crystal staff instead of a bow.
   warlock:{ name: 'THE CRYSTAL WARLOCK', body: '#2a2140', dark: '#171126',
-            health: 210, power: 11, speed: 46, r: 36, xp: 80,
-            boss: true, caster: true },
+            health: 210, power: 11, speed: 46, r: 19, xp: 80,
+            boss: true, caster: true, giantBar: true },
   knight: { name: 'SOLDIER', body: '#9aa4b4', dark: '#4d5666', health: 40, power: 9,
             speed: 84, r: 21, xp: 15 },
   boss:   { name: 'THE BARON', body: '#b02a6a', dark: '#61143a', health: 260, power: 13,
@@ -397,7 +397,6 @@ function newFoe(kind, x, depth) {
     health: E.health, maxHealth: E.health,
     look: (function () {
       const L = rollLook();
-      if (E.caster) L.size *= 1.8;               // twice an archer, near enough
       if (E.big) {                     // bigger than the rest, but not screen-eating
         L.size *= 1.5;
         L.skin = E.skin; L.skinDark = E.skinDark; L.eyes = E.eyes;
@@ -2033,7 +2032,7 @@ function drawFoe(f, sx, sy, sc) {
   }
   ctx.restore();
   // a little health bar over anybody who has been hit
-  if (!f.dead && f.health < f.maxHealth) {
+  if (!f.dead && f.health < f.maxHealth && !f.E.giantBar) {
     const w = r * 2;
     ctx.fillStyle = 'rgba(0,0,0,0.55)';
     ctx.fillRect(sx - w / 2, sy - r * 2.9, w, 5);
@@ -2886,11 +2885,11 @@ function drawWarlock(f, r, headless) {
     for (let i = 0; i < 4; i++) {
       const ex = f.face * r * 0.08 + ((i % 2) ? 1 : -1) * r * (i < 2 ? 0.1 : 0.19);
       const ey = hy + (i < 2 ? -r * 0.08 : r * 0.14);
-      ctx.fillStyle = 'rgba(190,120,255,' + (0.32 * glow) + ')';
+      ctx.fillStyle = 'rgba(90,190,255,' + (0.32 * glow) + ')';
       ctx.beginPath();
       ctx.arc(ex, ey, r * 0.13, 0, Math.PI * 2);
       ctx.fill();
-      ctx.fillStyle = 'rgba(214,168,255,' + Math.min(1, glow) + ')';
+      ctx.fillStyle = 'rgba(170,230,255,' + Math.min(1, glow) + ')';
       ctx.beginPath();
       ctx.arc(ex, ey, r * 0.055, 0, Math.PI * 2);
       ctx.fill();
@@ -3485,6 +3484,39 @@ function drawFightHUD(S) {
   ctx.fillText(left ? left + ' of ' + levelTotal(fightLevel) + ' left' : 'ALL CLEAR',
                S.W - 14, S.hud * 0.75);
   ctx.textAlign = 'left';
+  // THE BOSS BAR. Once you have woken him up, his health goes right
+  // across the top of the screen instead of on a little bar over his
+  // head - so you can watch it come down while you are busy dodging.
+  const bigBoss = foes.find(f => f.E.giantBar && !f.dead && f.awake);
+  if (bigBoss) {
+    const bw = S.W * 0.66, bh = Math.max(16, S.H * 0.032);
+    const bx = (S.W - bw) / 2, by = S.hud + 12;
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    roundRect(bx - 4, by - 4, bw + 8, bh + 8, 7);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.13)';
+    roundRect(bx, by, bw, bh, 5);
+    ctx.fill();
+    // it drains from the middle out to BOTH ends, which is what makes a
+    // boss bar look like a boss bar rather than a big ordinary one
+    const frac = Math.max(0, bigBoss.health / bigBoss.maxHealth);
+    const g = ctx.createLinearGradient(bx, 0, bx + bw, 0);
+    g.addColorStop(0, '#5aa8ff');
+    g.addColorStop(0.5, '#b070ff');
+    g.addColorStop(1, '#5aa8ff');
+    ctx.fillStyle = g;
+    roundRect(bx + bw * (1 - frac) / 2, by, bw * frac, bh, 5);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(190,225,255,0.8)';
+    ctx.lineWidth = 2;
+    roundRect(bx, by, bw, bh, 5);
+    ctx.stroke();
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#eaf4ff';
+    ctx.font = 'bold ' + Math.min(15, S.W / 46) + 'px monospace';
+    ctx.fillText(bigBoss.E.name, S.W / 2, by + bh - Math.max(4, bh * 0.28));
+    ctx.textAlign = 'left';
+  }
   if (hero.combo > 1) {
     ctx.textAlign = 'center';
     ctx.fillStyle = '#ffd83d';
