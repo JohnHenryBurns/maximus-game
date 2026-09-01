@@ -121,9 +121,11 @@ const LEVELS = [
   { id: 1, name: 'THE MEADOW', x: 0.25, y: 0.55, needs: 0, count: 8, enemy: 'crawler',
     scene: 'grass', blurb: 'out of the gates, after him', brutes: 1 },
   { id: 2, name: 'DARK WOOD', x: 0.37, y: 0.74, needs: 1, count: 10, enemy: 'archer',
-    scene: 'wood', blurb: 'something in the trees', brutes: 2, bats: 12, trees: 26, endBoss: 'warlock' },
+    scene: 'wood', blurb: 'something in the trees', brutes: 2, trees: 26, endBoss: 'warlock',
+    extras: [{ kind: 'bat', count: 12 }] },
   { id: 3, name: 'THE CAVES', x: 0.49, y: 0.5, needs: 2, count: 11, enemy: 'slime',
-    scene: 'cave', blurb: 'dripping, and full of slime', brutes: 2 },
+    scene: 'cave', blurb: 'dripping, and full of slime', brutes: 2,
+    falling: true, extras: [{ kind: 'skeleton', count: 11 }] },
   { id: 4, name: 'SNOW PASS', x: 0.61, y: 0.72, needs: 3, count: 12, enemy: 'goblin',
     scene: 'snow', blurb: 'cold, and they are waiting', brutes: 3 },
   { id: 5, name: 'THE KEEP', x: 0.73, y: 0.46, needs: 4, count: 12, enemy: 'knight',
@@ -300,6 +302,10 @@ const ENEMY_KINDS = {
   warlock:{ name: 'THE CRYSTAL WARLOCK', body: '#2a2140', dark: '#171126',
             health: 210, power: 11, speed: 46, r: 19, xp: 80,
             boss: true, caster: true, giantBar: true, stages: 2 },
+  // Down in the caves. An iron helmet, a sword, and no flesh to slow it
+  // down - about as quick as you are.
+  skeleton:{ name: 'SKELETON', body: '#ded6c6', dark: '#a99e8a', health: 32, power: 8,
+             speed: 80, r: 20, xp: 14 },
   knight: { name: 'SOLDIER', body: '#9aa4b4', dark: '#4d5666', health: 40, power: 9,
             speed: 84, r: 21, xp: 15 },
   boss:   { name: 'THE BARON', body: '#b02a6a', dark: '#61143a', health: 260, power: 13,
@@ -360,6 +366,11 @@ function rollLook() {
     cracked: Math.random() < 0.32,                 // a split across the mask
     rivets: 8 + Math.floor(Math.random() * 5),
     seed: Math.random() * 100,
+    // SKELETON bits: old bones are yellower than new ones, and the
+    // helmets come in three shapes so a cave is not full of twins
+    bone: ['#e8e0d2', '#ddd3bf', '#f0e9dd', '#d6cbb4'][Math.floor(Math.random() * 4)],
+    boneDark: ['#ab9f8b', '#9c907c', '#b5a994', '#94886f'][Math.floor(Math.random() * 4)],
+    helm: Math.floor(Math.random() * 3),
     // HOODED ARCHER colours. Deep and dim - they live in a dark wood.
     robe: ['#3b3350', '#312b46', '#43395c', '#2c3348', '#3a2f42'][Math.floor(Math.random() * 5)],
     robeDark: ['#221d33', '#1b172b', '#291f3a', '#191e2d', '#231b28'][Math.floor(Math.random() * 5)],
@@ -507,6 +518,8 @@ function startLevel(lv) {
   magics = [];
   arrows = [];
   pools = [];
+  rocks = [];
+  rockTimer = 1.8;
   summoned = 0;
   particles = [];
   floaters = [];
@@ -733,6 +746,133 @@ function warlockStageTwo(f) {
   tone(70, 0.7, 'sawtooth', 0.11, 260);
 }
 
+// ROCKS OFF THE CEILING. They only fall in a cave, and they do not care
+// whose head they land on - yours or a skeleton's.
+let rocks = [];
+let rockTimer = 0;
+// The ceiling is only 200 up, and they fall slowly. Both numbers matter:
+// higher and faster looked right on paper, but the rock spent the whole
+// drop ABOVE the top of the screen and all you ever saw was the ring.
+// Now you watch the thing coming.
+const ROCK_TOP = 200;         // how far up the ceiling is
+const ROCK_GRAV = 380;        // slow enough that you get about a second
+const ROCK_R = 74;            // how wide the landing is
+const ROCK_EVERY = 2.7;       // roughly this many seconds between them
+
+function dropRock(x, depth) {
+  rocks.push({
+    x: Math.max(60, Math.min(STAGE_W - 60, x)),
+    depth: Math.max(0, Math.min(1, depth)),
+    z: ROCK_TOP, vz: 0, size: 0.75 + Math.random() * 0.6,
+    turn: Math.random() * 6, spin: (Math.random() - 0.5) * 7,
+    seed: Math.random() * 100, done: false, gone: 0,
+  });
+  tone(210, 0.16, 'triangle', 0.04, 150);
+}
+
+function updateRocks(dt) {
+  if (fightLevel && fightLevel.falling && !hero.dead) {
+    rockTimer -= dt;
+    if (rockTimer <= 0) {
+      rockTimer = ROCK_EVERY * (0.65 + Math.random() * 0.75);
+      // near you, but not exactly on you - it should be dodgeable by
+      // standing still as often as by moving
+      dropRock(hero.x + (Math.random() - 0.5) * 420,
+               hero.depth + (Math.random() - 0.5) * 0.55);
+    }
+  }
+  for (const rk of rocks) {
+    if (rk.done) { rk.gone += dt; continue; }
+    rk.vz -= ROCK_GRAV * dt;
+    rk.z += rk.vz * dt;
+    rk.turn += rk.spin * dt;
+    if (rk.z <= 0) {
+      rk.z = 0;
+      rk.done = true;
+      // it lands on whoever is underneath - and that includes the
+      // skeletons. a falling rock has no side.
+      if (!hero.dead && Math.abs(rk.x - hero.x) < ROCK_R &&
+          Math.abs(rk.depth - hero.depth) < 0.18 && hero.z < 40) {
+        hurtHero(9);
+      }
+      for (const f of foes) {
+        if (f.dead) continue;
+        if (Math.abs(rk.x - f.x) < ROCK_R && Math.abs(rk.depth - f.depth) < 0.18 &&
+            (f.z || 0) < 40) {
+          hurtFoe(f, 16, 0, null, false, true);
+        }
+      }
+      shake = Math.max(shake, 11);
+      tone(80, 0.22, 'square', 0.09, 45);
+      for (let i = 0; i < 12; i++) {
+        const a = Math.random() * Math.PI * 2;
+        particles.push({ x: rk.x, depth: rk.depth, z: 8,
+                         vx: Math.cos(a) * 150, vz: Math.abs(Math.sin(a)) * 130,
+                         life: 0.5, color: i % 2 ? '#8a8290' : '#6a6270' });
+      }
+    }
+  }
+  rocks = rocks.filter(rk => rk.gone < 1.1);
+}
+
+// A rock in the air, and the ring on the floor showing where it is about
+// to land. The ring tightens as it comes down, exactly like the warlock's
+// shadow pool - if a warning worked once, use the same warning again.
+function drawRockShadow(rk, sc) {
+  if (rk.done) return;
+  const near = 1 - Math.min(1, rk.z / ROCK_TOP);         // 0 up high, 1 landing
+  ctx.fillStyle = 'rgba(0,0,0,' + (0.14 + near * 0.3) + ')';
+  ctx.beginPath();
+  ctx.ellipse(0, 0, ROCK_R * sc * (0.45 + near * 0.55),
+              ROCK_R * 0.36 * sc * (0.45 + near * 0.55), 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,190,120,' + (0.3 + near * 0.6) + ')';
+  ctx.lineWidth = 3 * sc;
+  ctx.beginPath();
+  ctx.ellipse(0, 0, ROCK_R * sc, ROCK_R * 0.36 * sc, 0, 0, Math.PI * 2);
+  ctx.stroke();
+}
+
+function drawRock(rk, sc) {
+  const r = 26 * sc * rk.size;
+  if (rk.done) {                                   // burst into chunks on landing
+    const g = Math.min(1, rk.gone / 1.1);
+    ctx.globalAlpha = 1 - g;
+    ctx.fillStyle = '#6a6270';
+    for (let i = 0; i < 5; i++) {
+      const a = rk.seed + i * 1.7;
+      ctx.beginPath();
+      ctx.ellipse(Math.cos(a) * r * (0.4 + g * 1.5), -Math.abs(Math.sin(a)) * r * 0.4,
+                  r * 0.26, r * 0.2, a, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    return;
+  }
+  ctx.save();
+  ctx.rotate(rk.turn);
+  ctx.fillStyle = '#7b7480';                       // a lumpy rock, seeded so it
+  ctx.beginPath();                                 // keeps its shape on the way down
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    const v = Math.sin(rk.seed + i * 2.4);
+    const rad = r * (0.78 + v * 0.22);
+    const px = Math.cos(a) * rad, py = Math.sin(a) * rad;
+    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = '#5a5360';                       // a shadowed underside
+  ctx.beginPath();
+  ctx.ellipse(r * 0.1, r * 0.3, r * 0.55, r * 0.34, 0.3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#918a99';                       // and a lit top
+  ctx.beginPath();
+  ctx.ellipse(-r * 0.22, -r * 0.34, r * 0.34, r * 0.22, -0.3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
 // Grow one twisted limb, and everything that forks off the end of it.
 // This calls ITSELF - a branch is just a smaller tree. That is called
 // recursion, and it is why the tree comes out gnarled instead of tidy.
@@ -897,28 +1037,30 @@ function fillLevel(lv) {
   // Some of them are BRUTES: twice the size, carrying a shield. They are
   // spaced through the level rather than bunched, so you meet one every
   // so often instead of walking into all of them at once.
-  const bigCount = Math.min(count, Math.round((lv.brutes || 0) * (mode().count / 25)));
-  const bigAt = new Set();
-  for (let i = 0; i < bigCount; i++) {
-    bigAt.add(Math.floor(((i + 0.7) / bigCount) * count));
-  }
-  // And some of them are BATS, spread the same way. A bat never lands,
-  // so it flies over the top of the fight and comes at you from a
-  // height nothing else does.
-  const batCount = Math.min(count - bigCount,
-                            Math.round((lv.bats || 0) * (mode().count / 25)));
-  const batAt = new Set();
-  for (let i = 0; i < batCount; i++) {
-    let slot = Math.floor(((i + 0.25) / batCount) * count);
-    // never put a bat where a brute already is - one of them would win
-    // and the other would just never appear
-    while (bigAt.has(slot) || batAt.has(slot)) slot = (slot + 1) % count;
-    batAt.add(slot);
-  }
+  // WHO STANDS WHERE. This was written out once for brutes and again for
+  // bats, and the caves wanted a third copy for skeletons - so it is one
+  // function now that any level can call for any kind.
+  //
+  // Each kind gets spread evenly down the level rather than bunched, and
+  // nothing may take a slot that is already taken: two kinds on one slot
+  // means one of them silently never turns up at all.
+  const slotKind = new Map();
+  const claim = (kind, howMany, offset) => {
+    const n = Math.min(count - slotKind.size,
+                       Math.round((howMany || 0) * (mode().count / 25)));
+    for (let i = 0; i < n; i++) {
+      let slot = Math.floor(((i + offset) / n) * count) % count;
+      while (slotKind.has(slot)) slot = (slot + 1) % count;
+      slotKind.set(slot, kind);
+    }
+  };
+  claim('brute', lv.brutes, 0.7);
+  let spread = 0.25;
+  for (const ex of (lv.extras || [])) { claim(ex.kind, ex.count, spread); spread += 0.18; }
   for (let i = 0; i < count; i++) {
     const t = count === 1 ? 0.5 : i / (count - 1);
     const x = first + t * (last - first) + (Math.random() - 0.5) * 130;
-    const kind = bigAt.has(i) ? 'brute' : batAt.has(i) ? 'bat' : lv.enemy;
+    const kind = slotKind.get(i) || lv.enemy;
     foes.push(newFoe(kind, x, 0.15 + Math.random() * 0.75));
   }
   if (lv.boss) foes.push(newFoe('boss', STAGE_W - 180, 0.55));
@@ -1396,6 +1538,7 @@ function updateFight(dt) {
   }
   updateArrows(dt);
   updatePools(dt);
+  updateRocks(dt);
   for (const a of arrows) if (a.orb) a.spin = (a.spin || 0) + dt;
   for (const sp of splats) sp.born = Math.min(1, sp.born + dt * 4);
   // the fallen stay lying there for a few seconds before fading away
@@ -2465,6 +2608,10 @@ function drawLooseHead(f, r) {
   const E = f.E;
   const L = f.look || rollLook();
   r = r * L.size;
+  if (f.kind === 'skeleton') {
+    drawSkull(f, r, 0, L);                       // helmet still on
+    return;
+  }
   if (f.kind !== 'goblin') {
     ctx.fillStyle = E.body;
     ctx.beginPath(); ctx.arc(0, 0, r * 0.55, 0, Math.PI * 2); ctx.fill();
@@ -3063,6 +3210,180 @@ function drawOrb(a, sc) {
   ctx.fill();
 }
 
+// A SKELETON out of the caves. Bones, an iron helmet and a sword. It is
+// built the same way as everybody else - feet at y = 0, head up at the
+// top - so it walks, gets knocked flat and dies with the same code.
+function drawSkeleton(f, r, headless) {
+  const L = f.look || rollLook();
+  r = r * L.size;
+  const bone = L.bone, boneDark = L.boneDark;
+  const wob = Math.sin(f.walkT) * r * 0.09;
+  const hy = -r * 1.66 + wob;                    // where the skull sits
+  const swing = f.attack > 0 ? (1 - f.attack / 0.42) : 0;
+
+  // LEGS. Two bones each, so it walks like a puppet.
+  ctx.strokeStyle = bone;
+  ctx.lineWidth = r * 0.15;
+  ctx.lineCap = 'round';
+  for (const side of [-1, 1]) {
+    const step = Math.sin(f.walkT + (side > 0 ? Math.PI : 0)) * r * 0.22;
+    ctx.beginPath();
+    ctx.moveTo(side * r * 0.2, -r * 0.78);
+    ctx.lineTo(side * r * 0.24 + step * 0.4, -r * 0.4);
+    ctx.lineTo(side * r * 0.22 + step, -r * 0.03);
+    ctx.stroke();
+  }
+  // THE SPINE AND RIBS
+  ctx.lineWidth = r * 0.17;
+  ctx.beginPath();
+  ctx.moveTo(0, -r * 0.72);
+  ctx.lineTo(0, hy + r * 0.44);
+  ctx.stroke();
+  ctx.lineWidth = r * 0.115;
+  for (let i = 0; i < 4; i++) {
+    const ry = hy + r * (0.62 + i * 0.24);
+    const rw = r * (0.42 - i * 0.045);
+    ctx.beginPath();
+    ctx.moveTo(-rw, ry - r * 0.06);
+    ctx.quadraticCurveTo(0, ry + r * 0.13, rw, ry - r * 0.06);
+    ctx.stroke();
+  }
+  ctx.fillStyle = boneDark;                      // the hips
+  roundRect(-r * 0.3, -r * 0.86, r * 0.6, r * 0.2, r * 0.08);
+  ctx.fill();
+
+  // THE OFF ARM, hanging
+  ctx.strokeStyle = bone;
+  ctx.lineWidth = r * 0.12;
+  ctx.beginPath();
+  ctx.moveTo(-f.face * r * 0.3, hy + r * 0.62);
+  ctx.lineTo(-f.face * r * 0.52, hy + r * 1.0 + wob * 0.5);
+  ctx.lineTo(-f.face * r * 0.44, hy + r * 1.36);
+  ctx.stroke();
+
+  // THE SWORD ARM, and the sword. It lifts and comes down as it swings.
+  const lift = -swing * 1.5 + (f.attack > 0 ? 0.5 : 0);
+  ctx.save();
+  ctx.translate(f.face * r * 0.42, hy + r * 0.78);
+  ctx.rotate(f.face * (0.5 + lift));
+  ctx.strokeStyle = bone;
+  ctx.lineWidth = r * 0.12;
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.lineTo(f.face * r * 0.42, r * 0.1);
+  ctx.stroke();
+  // the sword itself, gripped at the end of the arm
+  ctx.translate(f.face * r * 0.46, r * 0.1);
+  ctx.fillStyle = '#3a3f4a';                     // the grip
+  roundRect(-r * 0.07, -r * 0.12, r * 0.14, r * 0.3, r * 0.05);
+  ctx.fill();
+  ctx.fillStyle = '#8d99a8';                     // the crossguard
+  roundRect(-r * 0.26, -r * 0.2, r * 0.52, r * 0.11, r * 0.04);
+  ctx.fill();
+  ctx.fillStyle = '#cfd8e6';                     // the blade
+  ctx.beginPath();
+  ctx.moveTo(-r * 0.1, -r * 0.2);
+  ctx.lineTo(r * 0.1, -r * 0.2);
+  ctx.lineTo(r * 0.06, -r * 1.22);
+  ctx.lineTo(0, -r * 1.38);
+  ctx.lineTo(-r * 0.06, -r * 1.22);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = '#eef3fa';                     // the lit edge of it
+  ctx.beginPath();
+  ctx.moveTo(-r * 0.1, -r * 0.2);
+  ctx.lineTo(-r * 0.03, -r * 0.2);
+  ctx.lineTo(-r * 0.02, -r * 1.2);
+  ctx.lineTo(-r * 0.06, -r * 1.22);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+  ctx.lineCap = 'butt';
+
+  if (headless) {
+    ctx.fillStyle = boneDark;                    // a bare neck bone
+    ctx.beginPath();
+    ctx.ellipse(0, hy + r * 0.44, r * 0.13, r * 0.09, 0, 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
+  drawSkull(f, r, hy, L);
+}
+
+// The skull and the helmet on top of it. Pulled out on its own because
+// the head comes off when you hit one hard enough, and then it has to be
+// drawn again all by itself, bouncing along the floor.
+function drawSkull(f, r, hy, L) {
+  // the skull
+  ctx.fillStyle = L.bone;
+  ctx.beginPath();
+  ctx.ellipse(0, hy, r * 0.42, r * 0.4, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = L.bone;                        // the jaw
+  roundRect(-r * 0.24, hy + r * 0.22, r * 0.48, r * 0.22, r * 0.07);
+  ctx.fill();
+  ctx.fillStyle = L.boneDark;                    // the line of the teeth
+  for (let i = 0; i < 4; i++) {
+    ctx.fillRect(-r * 0.18 + i * r * 0.12, hy + r * 0.22, r * 0.03, r * 0.2);
+  }
+  // eye sockets, with a spark of light down in them
+  ctx.fillStyle = '#0d0f14';
+  ctx.beginPath();
+  ctx.ellipse(-r * 0.17, hy - r * 0.02, r * 0.13, r * 0.15, 0, 0, Math.PI * 2);
+  ctx.ellipse(r * 0.17, hy - r * 0.02, r * 0.13, r * 0.15, 0, 0, Math.PI * 2);
+  ctx.fill();
+  const spark = 0.6 + Math.sin(f.bob * 2.2) * 0.25;
+  ctx.fillStyle = 'rgba(120,230,255,' + spark + ')';
+  ctx.beginPath();
+  ctx.arc(-r * 0.17, hy, r * 0.05, 0, Math.PI * 2);
+  ctx.arc(r * 0.17, hy, r * 0.05, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#0d0f14';                     // the nose hole
+  ctx.beginPath();
+  ctx.moveTo(0, hy + r * 0.04);
+  ctx.lineTo(r * 0.06, hy + r * 0.18);
+  ctx.lineTo(-r * 0.06, hy + r * 0.18);
+  ctx.closePath();
+  ctx.fill();
+
+  // THE HELMET, in one of three shapes so they are not all identical
+  ctx.fillStyle = '#5e6874';
+  if (L.helm === 0) {                            // a round cap
+    ctx.beginPath();
+    ctx.arc(0, hy - r * 0.06, r * 0.46, Math.PI, 0);
+    ctx.fill();
+    ctx.fillRect(-r * 0.46, hy - r * 0.1, r * 0.92, r * 0.1);
+  } else if (L.helm === 1) {                     // a pointed one
+    ctx.beginPath();
+    ctx.moveTo(-r * 0.46, hy - r * 0.02);
+    ctx.quadraticCurveTo(-r * 0.3, hy - r * 0.7, 0, hy - r * 0.78);
+    ctx.quadraticCurveTo(r * 0.3, hy - r * 0.7, r * 0.46, hy - r * 0.02);
+    ctx.closePath();
+    ctx.fill();
+  } else {                                       // a horned one
+    ctx.beginPath();
+    ctx.arc(0, hy - r * 0.04, r * 0.45, Math.PI, 0);
+    ctx.fill();
+    ctx.fillRect(-r * 0.45, hy - r * 0.08, r * 0.9, r * 0.09);
+    ctx.fillStyle = '#d8cfb4';
+    for (const side of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(side * r * 0.36, hy - r * 0.22);
+      ctx.quadraticCurveTo(side * r * 0.78, hy - r * 0.36, side * r * 0.7, hy - r * 0.72);
+      ctx.quadraticCurveTo(side * r * 0.62, hy - r * 0.4, side * r * 0.28, hy - r * 0.14);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.fillStyle = '#5e6874';
+  }
+  ctx.fillStyle = '#767f8c';                     // the lit side of the helmet
+  ctx.beginPath();
+  ctx.arc(-r * 0.12, hy - r * 0.12, r * 0.3, Math.PI, Math.PI * 1.6);
+  ctx.fill();
+  ctx.fillStyle = '#4a525e';                     // the nose guard down the front
+  ctx.fillRect(-r * 0.05, hy - r * 0.16, r * 0.1, r * 0.3);
+}
+
 function drawFoeBody(f, r, headless) {
   const E = f.E;
   const wob = Math.sin(f.walkT) * r * 0.1;
@@ -3070,6 +3391,8 @@ function drawFoeBody(f, r, headless) {
   // they go through exactly the same drawing rather than a copy of it
   if (f.kind === 'goblin' || f.kind === 'brute') {
     drawGoblin(f, r, headless);
+  } else if (f.kind === 'skeleton') {
+    drawSkeleton(f, r, headless);
   } else if (f.kind === 'warlock') {
     drawWarlock(f, r, headless);
   } else if (f.kind === 'archer') {
@@ -3318,6 +3641,14 @@ function drawFight() {
     drawPool(pl, q.sc);
     ctx.restore();
   }
+  // and the ring showing where a rock is about to land
+  for (const rk of rocks) {
+    const q = toScreen({ x: rk.x, depth: rk.depth, z: 0 }, S, camX);
+    ctx.save();
+    ctx.translate(q.x, S.backY + rk.depth * S.floorH);
+    drawRockShadow(rk, q.sc);
+    ctx.restore();
+  }
   // goo goes on the floor first, flat, so everybody walks over the top
   // of it rather than it sitting on their feet
   for (const sp of splats) {
@@ -3334,6 +3665,7 @@ function drawFight() {
   // arrows sort by depth too, so one loosed along the back of the level
   // passes behind anyone standing at the front
   for (const a of arrows) cast.push({ a, arrow: true });
+  for (const rk of rocks) cast.push({ a: rk, rock: true });
   // the chest sits on the floor with everybody else, sorted by depth
   if (chest) cast.push({ a: chest, chest: true });
   if (cut) cast.push({ a: { x: cut.x, depth: cut.depth, z: 0, r: 30 }, baron: true });
@@ -3357,6 +3689,13 @@ function drawFight() {
                          vz: 70 + Math.random() * 60, life: 0.7,
                          color: Math.random() < 0.5 ? '#ffbe3d' : '#e0521f' });
       }
+      continue;
+    }
+    if (c.rock) {
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      drawRock(a, p.sc);
+      ctx.restore();
       continue;
     }
     if (c.arrow) {
