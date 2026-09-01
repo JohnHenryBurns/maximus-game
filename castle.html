@@ -299,7 +299,7 @@ const ENEMY_KINDS = {
   // crystal staff instead of a bow.
   warlock:{ name: 'THE CRYSTAL WARLOCK', body: '#2a2140', dark: '#171126',
             health: 210, power: 11, speed: 46, r: 19, xp: 80,
-            boss: true, caster: true, giantBar: true },
+            boss: true, caster: true, giantBar: true, stages: 2 },
   knight: { name: 'SOLDIER', body: '#9aa4b4', dark: '#4d5666', health: 40, power: 9,
             speed: 84, r: 21, xp: 15 },
   boss:   { name: 'THE BARON', body: '#b02a6a', dark: '#61143a', health: 260, power: 13,
@@ -406,6 +406,7 @@ function newFoe(kind, x, depth) {
     weapon: WEAPON_LIST[Math.floor(Math.random() * WEAPON_LIST.length)],
     attack: 0, cool: 0.6 + Math.random() * 0.7, hurt: 0, dead: false,
     aim: 0, loosed: false,        // archers only: hauling the string back
+    stage: 1, stageFlash: 0,      // the warlock only: which half of his fight
     down: 0, kvx: 0, kvz: 0, rise: 0, flying: false, tumble: 0, spinZ: 0, guardFlash: 0,
     // thrown through the air, then flat on the floor, then getting up
     frozen: 0, burning: 0, poisoned: 0, walkT: Math.random() * 6,
@@ -506,6 +507,7 @@ function startLevel(lv) {
   magics = [];
   arrows = [];
   pools = [];
+  summoned = 0;
   particles = [];
   floaters = [];
   wave = null;
@@ -653,6 +655,82 @@ function drawPool(p, sc) {
   ctx.beginPath();
   ctx.ellipse(0, 0, POOL_R * sc * (1 - t), POOL_R * 0.36 * sc * (1 - t), 0, 0, Math.PI * 2);
   ctx.stroke();
+}
+
+// HOW MANY he has dropped in out of the sky. The counter at the top of
+// the screen has to know, or it starts saying 7 of 26 left.
+let summoned = 0;
+const SUMMON_HEIGHT = 470;
+const SUMMON_CAP = 8;         // never more than this many of his goblins at once
+
+// STAGE ONE: goblins, launched out of the sky. They come down where you
+// are standing, and their shadow is on the ground the whole way down -
+// so you can see where one is about to land and get out from under it.
+function castGoblins(f) {
+  // A CAP. He summons for as long as he is alive, so without this the
+  // goblins pile up faster than you can cut them down and the fight
+  // stops being winnable.
+  const alive = foes.filter(g => g.summoned && !g.dead).length;
+  const n = Math.min(f.stage === 1 ? 3 : 2, Math.max(0, SUMMON_CAP - alive));
+  for (let i = 0; i < n; i++) {
+    const x = hero.x + (i - (n - 1) / 2) * 135 + (Math.random() - 0.5) * 90;
+    const g = newFoe('goblin',
+                     Math.max(70, Math.min(STAGE_W - 70, x)),
+                     Math.max(0, Math.min(1, hero.depth + (Math.random() - 0.5) * 0.5)));
+    // Straight into the thrown-through-the-air code that already exists.
+    // A goblin falling out of the sky and a goblin you have just walloped
+    // are doing the same thing, so they can use the same code.
+    g.z = SUMMON_HEIGHT + Math.random() * 130;
+    g.flying = true;
+    g.kvx = (Math.random() - 0.5) * 50;
+    g.kvz = -30;
+    g.spinZ = (Math.random() - 0.5) * 11;
+    g.awake = true;
+    g.summoned = true;
+    foes.push(g);
+    summoned++;
+  }
+  tone(300, 0.32, 'square', 0.06, 130);
+}
+
+// STAGE TWO: plasma. Three balls in a fan, and they do NOT drop the way
+// an arrow does - dodge them by stepping up or down the floor.
+function castPlasma(f) {
+  const dx = hero.x - f.x, dd = hero.depth - f.depth;
+  const dist = Math.max(1, Math.abs(dx));
+  for (const spread of [-0.42, 0, 0.42]) {
+    arrows.push({
+      orb: true,
+      x: f.x + f.face * 30, depth: f.depth, z: 44,
+      vx: f.face * 380,
+      vdepth: (dd / dist) * 380 + spread,
+      power: f.E.power, life: 2.6, spent: false, spin: 0,
+    });
+  }
+  tone(520, 0.22, 'sawtooth', 0.07, 260);
+}
+
+// HE DOES NOT DIE THE FIRST TIME. Run him out of health in stage one and
+// he slams the staff down, comes back with twice the health, and starts
+// throwing plasma as well as goblins.
+function warlockStageTwo(f) {
+  f.stage = 2;
+  f.maxHealth = f.E.health * 2;
+  f.health = f.maxHealth;
+  f.cast = 0;
+  f.fired = true;
+  f.cool = 1.7;                       // a breather before he starts again
+  f.stageFlash = 1.3;
+  f.hurt = 0;
+  // the staff comes down and shadow pools burst out all round him
+  for (let i = -2; i <= 2; i++) {
+    pools.push({ x: f.x + i * 155,
+                 depth: Math.max(0, Math.min(1, f.depth + i * 0.13)),
+                 t: 0, power: f.E.power, done: false });
+  }
+  floatText(f.x, f.depth, 96, 'STAGE 2', '#8fe0ff');
+  shake = Math.max(shake, 22);
+  tone(70, 0.7, 'sawtooth', 0.11, 260);
 }
 
 // Grow one twisted limb, and everything that forks off the end of it.
@@ -924,6 +1002,12 @@ function hurtFoe(f, dmg, knock, from, crit, ignoreShield) {
   // a proper blow puts them on the floor; poison and burning just sting
   if (knock > 0 && f.health > 0) knockDown(f, away, 240 + knock * 9 + (crit ? 200 : 0));
   else f.x += knock * away;
+  // THE WARLOCK GETS UP AGAIN. Empty his bar in stage one and he comes
+  // back with twice as much of it instead of dying.
+  if (f.health <= 0 && f.E.stages && f.stage === 1) {
+    warlockStageTwo(f);
+    return;
+  }
   if (f.health <= 0) {
     f.dead = true;
     f.deadT = 0;
@@ -1140,6 +1224,7 @@ function updateFight(dt) {
     if (f.dead) continue;
     f.hurt = Math.max(0, f.hurt - dt);
     f.guardFlash = Math.max(0, f.guardFlash - dt);
+    f.stageFlash = Math.max(0, (f.stageFlash || 0) - dt);
     f.frozen = Math.max(0, f.frozen - dt);
     f.bob += dt * 4;
     if (f.burning > 0) {
@@ -1234,7 +1319,7 @@ function updateFight(dt) {
       if (f.cast > 0) {
         if (!f.fired && f.cast < 0.06) {
           f.fired = true;
-          if (f.spell === 1) castPool(f); else castOrbs(f);
+          if (f.spell === 'plasma') castPlasma(f); else castGoblins(f);
         }
         f.walkT += dt * 1.2;
         continue;                                  // he stands still to cast
@@ -1248,7 +1333,10 @@ function updateFight(dt) {
       } else if (f.cool <= 0) {
         f.cast = CAST_TIME;
         f.fired = false;
-        f.spell = (f.spell || 0) === 1 ? 0 : 1;    // take turns
+        // STAGE ONE is goblins out of the sky and nothing else. STAGE
+        // TWO adds plasma, and he takes turns between the two.
+        f.spell = f.stage === 1 ? 'goblins'
+                : (f.spell === 'plasma' ? 'goblins' : 'plasma');
         f.cool = WARLOCK_COOL;
       } else {
         if (Math.abs(dd) > 0.05) f.depth += Math.sign(dd) * DEPTH_SPEED * 0.4 * dt;
@@ -2957,19 +3045,19 @@ function drawWarlock(f, r, headless) {
 function drawOrb(a, sc) {
   const r = 17 * sc;
   const pulse = 1 + Math.sin((a.spin || 0) * 6) * 0.12;
-  ctx.fillStyle = 'rgba(150,70,235,0.24)';
+  ctx.fillStyle = 'rgba(90,190,255,0.26)';
   ctx.beginPath();
   ctx.arc(0, 0, r * 1.5 * pulse, 0, Math.PI * 2);
   ctx.fill();
-  ctx.fillStyle = '#7a2fd8';
+  ctx.fillStyle = '#3f9dff';
   ctx.beginPath();
   ctx.arc(0, 0, r * 0.78 * pulse, 0, Math.PI * 2);
   ctx.fill();
-  ctx.fillStyle = '#1d0b33';                          // dark middle - it is dark magic
+  ctx.fillStyle = '#dff2ff';                          // white hot in the middle
   ctx.beginPath();
   ctx.arc(0, 0, r * 0.4 * pulse, 0, Math.PI * 2);
   ctx.fill();
-  ctx.fillStyle = 'rgba(230,200,255,0.85)';
+  ctx.fillStyle = 'rgba(255,255,255,0.95)';
   ctx.beginPath();
   ctx.arc(-r * 0.28, -r * 0.28, r * 0.14, 0, Math.PI * 2);
   ctx.fill();
@@ -3481,7 +3569,8 @@ function drawFightHUD(S) {
   ctx.fillStyle = 'rgba(255,255,255,0.6)';
   ctx.font = 'bold ' + Math.min(13, S.W / 44) + 'px monospace';
   const left = foes.filter(f => !f.dead).length;
-  ctx.fillText(left ? left + ' of ' + levelTotal(fightLevel) + ' left' : 'ALL CLEAR',
+  ctx.fillText(left ? left + ' of ' + (levelTotal(fightLevel) + summoned) + ' left'
+                    : 'ALL CLEAR',
                S.W - 14, S.hud * 0.75);
   ctx.textAlign = 'left';
   // THE BOSS BAR. Once you have woken him up, his health goes right
@@ -3501,9 +3590,10 @@ function drawFightHUD(S) {
     // boss bar look like a boss bar rather than a big ordinary one
     const frac = Math.max(0, bigBoss.health / bigBoss.maxHealth);
     const g = ctx.createLinearGradient(bx, 0, bx + bw, 0);
-    g.addColorStop(0, '#5aa8ff');
-    g.addColorStop(0.5, '#b070ff');
-    g.addColorStop(1, '#5aa8ff');
+    const two = bigBoss.stage > 1;
+    g.addColorStop(0, two ? '#ff7a3d' : '#5aa8ff');
+    g.addColorStop(0.5, two ? '#ffd83d' : '#b070ff');
+    g.addColorStop(1, two ? '#ff7a3d' : '#5aa8ff');
     ctx.fillStyle = g;
     roundRect(bx + bw * (1 - frac) / 2, by, bw * frac, bh, 5);
     ctx.fill();
@@ -3514,7 +3604,8 @@ function drawFightHUD(S) {
     ctx.textAlign = 'center';
     ctx.fillStyle = '#eaf4ff';
     ctx.font = 'bold ' + Math.min(15, S.W / 46) + 'px monospace';
-    ctx.fillText(bigBoss.E.name, S.W / 2, by + bh - Math.max(4, bh * 0.28));
+    ctx.fillText(bigBoss.E.name + (bigBoss.stage > 1 ? '  -  STAGE 2' : ''),
+                 S.W / 2, by + bh - Math.max(4, bh * 0.28));
     ctx.textAlign = 'left';
   }
   if (hero.combo > 1) {
