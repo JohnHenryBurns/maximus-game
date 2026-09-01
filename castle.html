@@ -125,7 +125,8 @@ const LEVELS = [
     extras: [{ kind: 'bat', count: 12 }] },
   { id: 3, name: 'THE CAVES', x: 0.49, y: 0.5, needs: 2, count: 11, enemy: 'slime',
     scene: 'cave', blurb: 'dripping, and full of slime', brutes: 2,
-    falling: true, extras: [{ kind: 'skeleton', count: 11 }] },
+    falling: true, extras: [{ kind: 'skeleton', count: 11 },
+                             { kind: 'bonegiant', count: 3 }] },
   { id: 4, name: 'SNOW PASS', x: 0.61, y: 0.72, needs: 3, count: 12, enemy: 'goblin',
     scene: 'snow', blurb: 'cold, and they are waiting', brutes: 3 },
   { id: 5, name: 'THE KEEP', x: 0.73, y: 0.46, needs: 4, count: 12, enemy: 'knight',
@@ -306,6 +307,11 @@ const ENEMY_KINDS = {
   // down - about as quick as you are.
   skeleton:{ name: 'SKELETON', body: '#ded6c6', dark: '#a99e8a', health: 32, power: 8,
              speed: 80, r: 20, xp: 14 },
+  // A skeleton that got very big and very old. Green with age, a giant
+  // sword, and slow enough that you can get round behind it.
+  bonegiant:{ name: 'BONE GIANT', body: '#c9c3ac', dark: '#8f8670', health: 96, power: 15,
+              speed: 44, r: 34, xp: 40, big: 1.75,
+              bone: '#cfc9ae', boneDark: '#8a8168' },
   knight: { name: 'SOLDIER', body: '#9aa4b4', dark: '#4d5666', health: 40, power: 9,
             speed: 84, r: 21, xp: 15 },
   boss:   { name: 'THE BARON', body: '#b02a6a', dark: '#61143a', health: 260, power: 13,
@@ -314,7 +320,7 @@ const ENEMY_KINDS = {
   // standing there, so hitting the front of it is nearly useless - you
   // have to wait for it to swing, or slam it off its feet.
   brute:  { name: 'BRUTE', body: '#6b4a2a', dark: '#3d2916', health: 85, power: 14,
-            speed: 52, r: 33, xp: 34, big: true, shield: true,
+            speed: 52, r: 33, xp: 34, big: 1.5, shield: true,
             skin: '#78b043', skinDark: '#4c7526', eyes: '#ffe94a' },
 };
 
@@ -408,9 +414,15 @@ function newFoe(kind, x, depth) {
     health: E.health, maxHealth: E.health,
     look: (function () {
       const L = rollLook();
-      if (E.big) {                     // bigger than the rest, but not screen-eating
-        L.size *= 1.5;
-        L.skin = E.skin; L.skinDark = E.skinDark; L.eyes = E.eyes;
+      // BIG ONES. E.big is the number it scales by, so a brute and a bone
+      // giant can be different sizes without two copies of this.
+      if (E.big) {
+        L.size *= (E.big === true ? 1.5 : E.big);
+        // only take the colours the kind actually has - a bone giant has
+        // no skin to override, and handing it undefined would wipe out
+        // perfectly good values
+        if (E.skin) { L.skin = E.skin; L.skinDark = E.skinDark; L.eyes = E.eyes; }
+        if (E.bone) { L.bone = E.bone; L.boneDark = E.boneDark; }
       }
       return L;
     })(),
@@ -3391,7 +3403,7 @@ function drawFoeBody(f, r, headless) {
   // they go through exactly the same drawing rather than a copy of it
   if (f.kind === 'goblin' || f.kind === 'brute') {
     drawGoblin(f, r, headless);
-  } else if (f.kind === 'skeleton') {
+  } else if (f.kind === 'skeleton' || f.kind === 'bonegiant') {
     drawSkeleton(f, r, headless);
   } else if (f.kind === 'warlock') {
     drawWarlock(f, r, headless);
