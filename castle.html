@@ -123,8 +123,8 @@ const LEVELS = [
   { id: 2, name: 'DARK WOOD', x: 0.37, y: 0.74, needs: 1, count: 10, enemy: 'archer',
     scene: 'wood', blurb: 'something in the trees', brutes: 2, trees: 26, endBoss: 'warlock',
     extras: [{ kind: 'bat', count: 12 }] },
-  { id: 3, name: 'THE CAVES', x: 0.49, y: 0.5, needs: 2, count: 11, enemy: 'slime',
-    scene: 'cave', blurb: 'dripping, and full of slime', brutes: 2,
+  { id: 3, name: 'CURSED CAVERN', x: 0.49, y: 0.5, needs: 2, count: 11, enemy: 'slime',
+    scene: 'cave', blurb: 'dripping, cursed, and full of teeth', brutes: 2, cavern: true,
     // skeletons come down from 11 to make room for the bats, or the level
     // fills up and there is barely a slime left in a cave famous for them
     falling: true, extras: [{ kind: 'skeleton', count: 8 },
@@ -888,6 +888,120 @@ function drawRock(rk, sc) {
   ctx.restore();
 }
 
+// THE CURSED CAVERN. No sky and no hills - a rock ceiling with
+// stalactites hanging off it, teeth coming up out of the floor at the
+// back, water dripping, and crystals glowing in the dark.
+//
+// Everything here is worked out from its position in the WORLD, not from
+// where it happens to be on screen. That is what makes it scroll
+// properly instead of sliding about, and it means no lists to keep.
+function cavernHash(n) {
+  const v = Math.sin(n * 127.1 + 311.7) * 43758.5453;
+  return v - Math.floor(v);
+}
+
+function drawCavern(S, sc, t) {
+  const h = cavernHash;
+  // the rock behind everything
+  const rock = ctx.createLinearGradient(0, 0, 0, S.backY);
+  rock.addColorStop(0, '#0b0813');
+  rock.addColorStop(1, '#2a2140');
+  ctx.fillStyle = rock;
+  ctx.fillRect(0, 0, S.W, S.backY);
+
+  const SP = 84;                                  // one rock tooth every so often
+  // THE FAR WALL: stalagmites standing along the back of the cave, slower
+  // than the floor so they slide past behind everything
+  const backOff = camX * 0.34;
+  let first = Math.floor(backOff / SP) - 1;
+  let last = first + Math.ceil(S.W / SP) + 2;
+  ctx.fillStyle = '#0f0b18';
+  for (let n = first; n <= last; n++) {
+    const x = n * SP - backOff;
+    const w = SP * (0.3 + h(n + 900) * 0.5);
+    const tall = 26 + h(n + 910) * 80;
+    ctx.beginPath();
+    ctx.moveTo(x - w, S.backY);
+    ctx.lineTo(x + (h(n + 920) - 0.5) * w * 0.7, S.backY - tall);
+    ctx.lineTo(x + w, S.backY);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // THE CEILING, closer to you, so it slides faster than the far wall
+  const off = camX * 0.55;
+  const ceilH = S.backY * 0.34;
+  first = Math.floor(off / SP) - 1;
+  last = first + Math.ceil(S.W / SP) + 2;
+  ctx.fillStyle = '#0d0a16';
+  ctx.fillRect(0, 0, S.W, ceilH);
+  for (let n = first; n <= last; n++) {
+    const x = n * SP - off;
+    const w = SP * (0.25 + h(n) * 0.35);
+    const len = 16 + h(n + 77) * 92;
+    ctx.beginPath();
+    ctx.moveTo(x - w, ceilH - 1);
+    ctx.lineTo(x + w, ceilH - 1);
+    ctx.lineTo(x + (h(n + 5) - 0.5) * w, ceilH + len);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // DRIPS. No list and no updating - where a drop is comes straight out
+  // of the clock, so it falls forever for free.
+  for (let n = first; n <= last; n++) {
+    if (h(n + 200) > 0.3) continue;               // only some of them drip
+    const x = n * SP - off + (h(n + 5) - 0.5) * SP * 0.3;
+    const len = 16 + h(n + 77) * 92;
+    const fall = S.backY - (ceilH + len);
+    const p = (t * 0.42 + h(n + 210)) % 1;
+    ctx.fillStyle = 'rgba(150,220,255,' + (0.75 - p * 0.4) + ')';
+    ctx.beginPath();
+    ctx.ellipse(x, ceilH + len + p * fall, 2.2, 4.5 + p * 3, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // CURSED CRYSTALS, growing out of the rock and breathing light
+  for (let n = first; n <= last; n++) {
+    if (h(n + 300) > 0.26) continue;
+    const x = n * SP - off;
+    const y = ceilH + 30 + h(n + 400) * (S.backY - ceilH - 60);
+    const s = 6 + h(n + 500) * 10;
+    const pulse = 0.5 + Math.sin(t * 1.5 + n * 1.3) * 0.3;
+    const green = h(n + 600) < 0.5;
+    const c1 = green ? '120,255,150' : '120,220,255';
+    // a lump of darker rock round it first. without this the crystal
+    // reads as a gem floating in mid air rather than one growing out of
+    // the cavern wall.
+    ctx.fillStyle = '#191330';
+    ctx.beginPath();
+    for (let k = 0; k < 7; k++) {
+      const a2 = (k / 7) * Math.PI * 2;
+      const rad = s * (1.5 + h(n + 700 + k) * 0.9);
+      const px = x + Math.cos(a2) * rad, py = y + Math.sin(a2) * rad * 0.8;
+      if (k === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = 'rgba(' + c1 + ',' + (0.13 * pulse) + ')';
+    ctx.beginPath();
+    ctx.arc(x, y, s * 3.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(' + c1 + ',' + (0.55 + pulse * 0.4) + ')';
+    ctx.beginPath();
+    ctx.moveTo(x, y - s * 1.5);
+    ctx.lineTo(x + s * 0.55, y);
+    ctx.lineTo(x, y + s * 1.5);
+    ctx.lineTo(x - s * 0.55, y);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,' + (0.5 * pulse) + ')';
+    ctx.beginPath();
+    ctx.ellipse(x - s * 0.16, y - s * 0.4, s * 0.16, s * 0.4, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
 // Grow one twisted limb, and everything that forks off the end of it.
 // This calls ITSELF - a branch is just a smaller tree. That is called
 // recursion, and it is why the tree comes out gnarled instead of tidy.
@@ -935,7 +1049,8 @@ function growLimb(x, y, angle, len, thick, depth, limbs, leaves) {
   }
 }
 
-// How solid a tree should be drawn. A tree nearer the camera than you
+// How solid a tall prop should be drawn. Anything nearer the camera than
+// you
 // are is drawn ON TOP of you, and one of the front row can hide you
 // completely - so it goes see-through when you step behind it. It fades
 // in as you get close rather than blinking, because a tree that snaps
@@ -943,7 +1058,7 @@ function growLimb(x, y, angle, len, thick, depth, limbs, leaves) {
 //
 // This is only sums, so it lives outside the drawing where the robots
 // can check it.
-function treeFade(p, who) {
+function propFade(p, who) {
   if (!who || p.depth <= who.depth + 0.06) return 1;   // behind you: solid
   const near = 1 - Math.min(1, Math.abs(p.x - who.x) / 150);
   return 1 - near * 0.78;
@@ -980,6 +1095,18 @@ function plantTree(x, depth, size) {
 // sort by depth and you can walk in front of or behind them.
 function litterLevel(lv) {
   props = [];
+  // THE CURSED CAVERN FLOOR: rock teeth and the bones of whoever came
+  // down here before you. Along the back and the front lip like the
+  // trees, so they never stand in the middle of the fight.
+  for (let i = 0; i < (lv.cavern ? 30 : 0); i++) {
+    const x = 130 + (i / 30) * (STAGE_W - 230) + (Math.random() - 0.5) * 150;
+    const front = Math.random() < 0.3;
+    const depth = front ? 0.93 + Math.random() * 0.07 : Math.random() * 0.16;
+    const kind = Math.random() < 0.68 ? 'stalag' : 'bones';
+    props.push({ kind, x, depth, z: 0,
+                 size: (kind === 'bones' ? 0.7 : 0.9) + Math.random() * 0.8,
+                 seed: Math.random() * 100, r: 16 });
+  }
   // A WOOD NEEDS TREES IN IT. Same trees the crawlers grow, but planted
   // already full grown. They go along the BACK of the level and along
   // the very front lip, so they frame the fight rather than standing in
@@ -2537,7 +2664,7 @@ function drawProp(p, sc, t) {
     const ease = g >= 1 ? 1 : 1 + 2.2 * Math.pow(g - 1, 3) + 1.2 * Math.pow(g - 1, 2);
     if (ease <= 0.02) return;                           // not out of the soil yet
     ctx.save();
-    ctx.globalAlpha = treeFade(p, hero);
+    ctx.globalAlpha = propFade(p, hero);
     ctx.scale(ease, ease);
     const h = r * 2.7;
     ctx.fillStyle = '#5b4a2c';                          // soil pushed up round it
@@ -2571,6 +2698,75 @@ function drawProp(p, sc, t) {
       ctx.fill();
     }
     ctx.restore();
+  } else if (p.kind === 'stalag') {
+    // A ROCK TOOTH growing up out of the cavern floor. Its lean and its
+    // bumps come from its own seed, so it stands still.
+    // A tall one at the front would hide you, exactly like a tree, so it
+    // uses the same fade. One rule, learnt once, applied everywhere.
+    ctx.save();
+    ctx.globalAlpha = propFade(p, hero);
+    const tall = r * (1.6 + (p.seed % 1) * 1.5);
+    const lean = ((p.seed * 7) % 1 - 0.5) * r * 0.5;
+    ctx.fillStyle = '#3d3550';
+    ctx.beginPath();
+    ctx.moveTo(-r * 0.5, 0);
+    ctx.quadraticCurveTo(-r * 0.34 + lean * 0.4, -tall * 0.5, lean, -tall);
+    ctx.quadraticCurveTo(r * 0.34 + lean * 0.4, -tall * 0.5, r * 0.5, 0);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#4e4468';                          // the lit side
+    ctx.beginPath();
+    ctx.moveTo(-r * 0.5, 0);
+    ctx.quadraticCurveTo(-r * 0.34 + lean * 0.4, -tall * 0.5, lean, -tall);
+    ctx.quadraticCurveTo(-r * 0.06 + lean * 0.5, -tall * 0.5, -r * 0.1, 0);
+    ctx.closePath();
+    ctx.fill();
+    if ((p.seed * 13) % 1 < 0.35) {                     // some have a crystal on
+      const gy = -tall * 0.55;
+      ctx.fillStyle = 'rgba(120,255,170,0.2)';
+      ctx.beginPath();
+      ctx.arc(lean * 0.5, gy, r * 0.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#7dffae';
+      ctx.beginPath();
+      ctx.moveTo(lean * 0.5, gy - r * 0.3);
+      ctx.lineTo(lean * 0.5 + r * 0.12, gy);
+      ctx.lineTo(lean * 0.5, gy + r * 0.3);
+      ctx.lineTo(lean * 0.5 - r * 0.12, gy);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
+  } else if (p.kind === 'bones') {
+    // WHOEVER CAME DOWN HERE BEFORE YOU. A skull and a few ribs lying in
+    // the dust - it is a cursed cavern, it should look like one.
+    ctx.fillStyle = 'rgba(0,0,0,0.22)';
+    ctx.beginPath();
+    ctx.ellipse(0, 0, r * 0.9, r * 0.26, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#cfc6b0';                        // ribs, half buried
+    ctx.lineWidth = r * 0.1;
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 3; i++) {
+      const bx = r * (0.1 + i * 0.3);
+      ctx.beginPath();
+      ctx.moveTo(bx, -r * 0.05);
+      ctx.quadraticCurveTo(bx + r * 0.16, -r * 0.34, bx + r * 0.04, -r * 0.5);
+      ctx.stroke();
+    }
+    ctx.lineCap = 'butt';
+    ctx.fillStyle = '#ded5bf';                          // the skull
+    ctx.beginPath();
+    ctx.ellipse(-r * 0.45, -r * 0.22, r * 0.3, r * 0.26, 0.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#ded5bf';
+    roundRect(-r * 0.62, -r * 0.1, r * 0.34, r * 0.14, r * 0.05);
+    ctx.fill();
+    ctx.fillStyle = '#15121c';                          // empty sockets
+    ctx.beginPath();
+    ctx.arc(-r * 0.54, -r * 0.26, r * 0.085, 0, Math.PI * 2);
+    ctx.arc(-r * 0.34, -r * 0.3, r * 0.085, 0, Math.PI * 2);
+    ctx.fill();
   } else if (p.kind === 'column') {
     // a broken pillar, snapped off near the base
     ctx.fillStyle = '#5a5266';
@@ -3479,7 +3675,8 @@ function drawFoeBody(f, r, headless) {
 const SCENES = {
   grass: { sky1: '#6fc3f0', sky2: '#bfe9c8', floor: '#4f9a45', floor2: '#3f7d38', far: '#2f6f4a' },
   wood:  { sky1: '#1f3524', sky2: '#33543a', floor: '#3e6b38', floor2: '#2f5a2c', far: '#16311d' },
-  cave:  { sky1: '#161122', sky2: '#2a2140', floor: '#4a4058', floor2: '#3a3246', far: '#0f0b18' },
+  cave:  { sky1: '#161122', sky2: '#2a2140', floor: '#4a4058', floor2: '#3a3246',
+           far: '#0f0b18', cavern: true },
   snow:  { sky1: '#93b8e0', sky2: '#dbeaf6', floor: '#e6eff7', floor2: '#cfdcea', far: '#a9c2d8' },
   castle:{ sky1: '#2a1c3a', sky2: '#4a3560', floor: '#6a6070', floor2: '#544b5c',
            far: '#241a33', hall: true },
@@ -3577,7 +3774,8 @@ function drawStage(S, sc) {
   sky.addColorStop(1, sc.sky2);
   ctx.fillStyle = sky;
   ctx.fillRect(0, 0, S.W, S.backY);
-  if (sc.hall) drawHall(S, sc);
+  if (sc.cavern) drawCavern(S, sc, Date.now() / 1000);
+  else if (sc.hall) drawHall(S, sc);
   else {
     // a bumpy line of hills in the distance
     ctx.fillStyle = sc.far;
