@@ -560,6 +560,18 @@ a.arcade-pill.arcade-float {
     // horizon far enough and your brain is completely convinced.
     pitch: 0,
 
+    // CROUCHING, from 0 (stood up) to 1 (all the way down).
+    //
+    // It is NOT a true-or-false. Snapping between two heights makes the
+    // whole cavern jump, and a view that jumps is horrible to look at.
+    // This slides toward whichever one you are asking for, so the camera
+    // sinks and rises instead of teleporting.
+    crouch: 0,
+
+    // The phone button is a toggle - you cannot hold a button down AND
+    // steer AND shoot with two thumbs. Shift on a keyboard is held.
+    crouchLatch: false,
+
     // Counts frames since the game started. Handy for anything that
     // needs to know how much time has gone by - bobbing, timers.
     frame: 0,
@@ -609,6 +621,17 @@ a.arcade-pill.arcade-float {
   // How fast you walk and turn, per frame. Small numbers! This runs 60
   // times a second, so 0.05 per frame is really 3 squares per second.
   const MOVE_SPEED = 0.045;
+
+  // CROUCHING. Three numbers, and each one is doing a job:
+  //   DROP  - how far the view sinks, measured in screen dots like pitch
+  //   EASE  - how much of the way it moves each frame. 0.18 takes about
+  //           a fifth of a second, which reads as ducking rather than
+  //           either snapping or sinking like a lift.
+  //   SLOW  - crouched you move at 45% speed. Crouching has to COST you
+  //           something or there is no reason ever to stand up.
+  const CROUCH_DROP = 120;
+  const CROUCH_EASE = 0.18;
+  const CROUCH_SLOW = 0.45;
   const TURN_SPEED = 0.035;
 
   // How far your torch reaches before everything goes pitch black.
@@ -758,6 +781,7 @@ a.arcade-pill.arcade-float {
   // let go of the lot. Same for a thumb still on the joystick.
   function forgetAllInput() {
     for (const key of Object.keys(keys)) keys[key] = false;
+    state.crouchLatch = false;   // or you come back still crouching
     mouseHeld = false;
     drive.id = null;        // the walking stick
     look.id = null;         // the looking thumb
@@ -806,6 +830,7 @@ a.arcade-pill.arcade-float {
   const ACTION = { x: 722, y: 448, r: 46 };
   const SLASH  = { x: 722, y: 344, r: 43 };
   const DROP   = { x: 722, y: 246, r: 40 };
+  const CROUCH = { x: 722, y: 152, r: 40 };   // shift, for people with no shift
   const MUTE   = { x: 754, y: 46,  r: 30 };   // tucked up out of the way
   const FULL   = { x: 686, y: 46,  r: 30 };
 
@@ -887,6 +912,9 @@ a.arcade-pill.arcade-float {
         continue;
       }
       if (inButton(p, DROP)) { dropItem(); continue; }
+      // A toggle, not a hold. You cannot press and keep pressing a
+      // button while also steering and shooting with two thumbs.
+      if (inButton(p, CROUCH)) { state.crouchLatch = !state.crouchLatch; continue; }
       if (inButton(p, MUTE)) { toggleMute(); continue; }
       if (inButton(p, FULL)) { toggleFullscreen(); continue; }
 
@@ -1398,6 +1426,19 @@ a.arcade-pill.arcade-float {
     if (keys['z']) state.angle -= TURN_SPEED;
     if (keys['x']) state.angle += TURN_SPEED;
 
+    // CROUCH. Hold shift, or tap the button on a phone.
+    //
+    // Slide toward where we want to be instead of jumping there. Each
+    // frame we close a fifth of the gap, so it moves fast at first and
+    // eases in at the end all by itself - which is exactly how a real
+    // thing moving would look, and it is one line of maths.
+    const wantCrouch = (keys['shift'] || state.crouchLatch) ? 1 : 0;
+    state.crouch += (wantCrouch - state.crouch) * CROUCH_EASE;
+    if (Math.abs(state.crouch - wantCrouch) < 0.005) state.crouch = wantCrouch;
+
+    // How fast you can move right now. 1 stood up, CROUCH_SLOW down.
+    const nowSpeed = MOVE_SPEED * (1 - state.crouch * (1 - CROUCH_SLOW));
+
     // FORWARD is the direction you're facing. Math.cos gives the x part of
     // that direction, Math.sin gives the y part. That pair is how you turn
     // "an angle" into "a direction".
@@ -1428,8 +1469,8 @@ a.arcade-pill.arcade-float {
       // Skip this and running diagonally is about 1.4x faster. Every game
       // has this bug once.
       const len = Math.sqrt(goX * goX + goY * goY);
-      tryMove(state.x + (goX / len) * MOVE_SPEED,
-              state.y + (goY / len) * MOVE_SPEED);
+      tryMove(state.x + (goX / len) * nowSpeed,
+              state.y + (goY / len) * nowSpeed);
     }
 
     // ---- and the same again, but from your left thumb ----
@@ -1452,9 +1493,9 @@ a.arcade-pill.arcade-float {
         const forward = -pushY;
         const sideways = pushX;
         const goX = (Math.cos(state.angle) * forward
-                   - Math.sin(state.angle) * sideways) * MOVE_SPEED;
+                   - Math.sin(state.angle) * sideways) * nowSpeed;
         const goY = (Math.sin(state.angle) * forward
-                   + Math.cos(state.angle) * sideways) * MOVE_SPEED;
+                   + Math.cos(state.angle) * sideways) * nowSpeed;
         tryMove(state.x + goX, state.y + goY);
       }
     }
@@ -3126,6 +3167,8 @@ a.arcade-pill.arcade-float {
     state.y = startRow + 0.5;
     state.angle = 0.7;
     state.pitch = 0;
+    state.crouch = 0;
+    state.crouchLatch = false;
     state.health = MAX_HEARTS * 2;
     state.mercy = 0;
     state.hurtFlash = 0;
@@ -4929,6 +4972,11 @@ a.arcade-pill.arcade-float {
                [46, 62, 96], [176, 206, 255],
                held ? ITEMS[held].icon : null);
 
+    // CROUCH lights up while you are down, so the button tells you which
+    // way round the toggle is. A toggle you cannot read is a trap.
+    drawButton(CROUCH, state.crouch > 0.5 ? 'STAND' : 'CROUCH', state.crouch > 0.5,
+               [70, 46, 96], [206, 176, 255]);
+
   }
 
   function drawButton(btn, label, ready, onColour, edgeColour, icon) {
@@ -5048,7 +5096,12 @@ a.arcade-pill.arcade-float {
     // you look up or down, and EVERYTHING that gets drawn has to follow
     // it - floor, ceiling, walls, chests, webs. Anything still measuring
     // from the middle would just detach and float.
-    const horizon = Math.round(halfH + state.pitch);
+    // Crouching drops your eyes, so the horizon slides DOWN the screen
+    // and you see more roof and less floor - which is what being closer
+    // to the ground looks like. Everything in the renderer already
+    // measures from the horizon, so this one line crouches the entire
+    // cavern: walls, floor, roof, webs, chests and spiders together.
+    const horizon = Math.round(halfH + state.pitch + state.crouch * CROUCH_DROP);
 
     // Which way we're facing, as a direction instead of an angle.
     const dirX = Math.cos(state.angle);
