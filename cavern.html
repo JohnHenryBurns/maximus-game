@@ -1520,6 +1520,7 @@ a.arcade-pill.arcade-float {
     buildHuntMap();
 
     updateSpiders();
+    updateBats();
     updateNests();     // does nothing unless your level has nests in it
     refillSpiders();   // does nothing unless you're in NIGHTMARE
     checkVictory();
@@ -2881,6 +2882,7 @@ a.arcade-pill.arcade-float {
     // this exact list. Hand them a replacement and they'd carry on
     // looking at the old empty one forever.
     sprites.length = 0;
+    swarms.length = 0;   // the bats go with them
 
     // Collect every open floor square in the whole cavern.
     let spots = openFloorSquares();
@@ -2893,6 +2895,18 @@ a.arcade-pill.arcade-float {
       for (const p of (placedSpiders || [])) taken.add(p.row * MAP_W + p.col);
       for (const p of (placedSpawners || [])) taken.add(p.row * MAP_W + p.col);
       spots = spots.filter(s => !taken.has(s.row * MAP_W + s.col));
+    }
+
+    // BAT SWARMS. They go in BEFORE the early exit that builder levels
+    // take, so a cave you drew yourself gets bats as well. Put this after
+    // that return and they would only ever appear in the built-in cavern,
+    // which is exactly the sort of thing nobody notices for a month.
+    //
+    // They fly up near the roof, so unlike everything else down here they
+    // are allowed to start right next to you - you cannot walk into one.
+    for (let i = 0; i < SWARM_COUNT && spots.length > 0; i++) {
+      const pick = spots[Math.floor((i + 0.5) / SWARM_COUNT * spots.length)];
+      makeSwarm(pick.col + 0.5, pick.row + 0.5);
     }
 
     // Nests go down first, so they're in the cavern before anything else
@@ -3776,6 +3790,9 @@ a.arcade-pill.arcade-float {
 
   // `let` again - applyDifficulty() up above swaps these when you pick
   // a level, which is how the spiders come out pink.
+  // Dusty purple. Dark enough to lose against the roof, light enough
+  // that torchlight actually picks one out when it comes at you.
+  const BAT_COLOUR = [92, 70, 118];
   let SPIDER_BODY = [40, 30, 36];
   let SPIDER_HEAD = [54, 40, 47];
   let SPIDER_LEG  = [28, 21, 26];
@@ -3984,6 +4001,253 @@ a.arcade-pill.arcade-float {
   // in front of that wall or hidden behind it.
   const zBuffer = new Float32Array(canvas.width);
 
+
+  // =====================================================================
+  //  BATS
+  // =====================================================================
+  //  Spiders walk the floor and hunt you. Bats do neither. They belong to
+  //  a SWARM, they live up near the roof, and they do not care about you
+  //  at all until you get close - then the whole lot scatters.
+  //
+  //  Nothing here hunts, so none of the flood-fill hunting code applies.
+  //  A bat only ever asks three questions:
+  //     where is the middle of my swarm?   (come back toward it)
+  //     is anyone too close to me?         (shove off)
+  //     is there rock in the way?          (turn)
+  //  Those three rules and nothing else are what makes a flock look alive.
+  //  It is called flocking, and people have been doing it since 1986.
+
+  const SWARM_COUNT   = 3;      // how many separate swarms in a cavern
+  const SWARM_SIZE    = 7;      // bats in each one
+  const BAT_SPEED     = 0.030;  // a bit faster than you can walk
+  const BAT_TURN      = 0.09;   // how sharply it can change its mind
+  const BAT_PULL      = 0.020;  // how hard the swarm middle tugs it back
+  const BAT_PUSH      = 0.055;  // how hard bats shove each other apart
+  const BAT_SPACE     = 0.45;   // closer than this and they push apart
+  const BAT_WANDER    = 0.35;   // a bit of nonsense so they never line up
+  const BAT_CEILING   = -0.34;  // how high they fly. negative is UP.
+  const BAT_FLAP      = 0.15;   // how far the wingtips rise and fall
+  const BAT_SIZE      = 0.20;   // how big a bat is, in cavern squares
+  const BAT_SCARE     = 2.6;    // get this close and the swarm scatters
+  const BAT_PANIC     = 90;     // and stays scattered this many frames
+  const BAT_WING_BEAT = 0.42;   // radians per frame of wing flapping
+
+  // Every swarm keeps its own middle. Working it out once per swarm per
+  // frame beats every bat asking every other bat where it is - that would
+  // be SWARM_SIZE times more sums for exactly the same answer.
+  const swarms = [];
+
+  function makeSwarm(cx, cy) {
+    const swarm = { x: cx, y: cy, driftX: 0, driftY: 0, panic: 0, retarget: 0 };
+    swarms.push(swarm);
+    for (let i = 0; i < SWARM_SIZE; i++) {
+      const a = (i / SWARM_SIZE) * Math.PI * 2;
+      sprites.push({
+        kind: 'bat',
+        swarm: swarm,
+        x: cx + Math.cos(a) * 0.4,
+        y: cy + Math.sin(a) * 0.4,
+        vx: Math.cos(a) * BAT_SPEED,
+        vy: Math.sin(a) * BAT_SPEED,
+        // Each bat flaps on its own beat. Start them all together and the
+        // swarm beats like one enormous bat, which looks very wrong.
+        wing: Math.random() * Math.PI * 2,
+        // and hangs at its own height, so they are not a flat sheet
+        lift: (Math.random() - 0.5) * 0.14,
+      });
+    }
+  }
+
+  // Bats squeeze through gaps a spider could not, so they check a smaller
+  // box than a walking thing does - but they still cannot fly into rock.
+  function batCanGo(x, y) {
+    return !isWall(x, y);
+  }
+
+  function updateBats() {
+    if (swarms.length === 0) return;
+
+    // ---- each swarm first: where is its middle, and is it frightened? --
+    for (const swarm of swarms) {
+      let sx = 0, sy = 0, n = 0;
+      for (const b of sprites) {
+        if (b.kind === 'bat' && b.swarm === swarm) { sx += b.x; sy += b.y; n++; }
+      }
+      if (n === 0) continue;
+      swarm.x = sx / n;
+      swarm.y = sy / n;
+
+      // YOU walked up to them. The whole swarm bolts.
+      const dx = swarm.x - state.x, dy = swarm.y - state.y;
+      if (Math.sqrt(dx * dx + dy * dy) < BAT_SCARE) swarm.panic = BAT_PANIC;
+      if (swarm.panic > 0) swarm.panic--;
+
+      // Every so often the swarm picks a new way to drift, so it wanders
+      // off round the cavern instead of hovering in one spot forever.
+      swarm.retarget--;
+      if (swarm.retarget <= 0) {
+        swarm.retarget = 120 + Math.floor(Math.random() * 180);
+        const a = Math.random() * Math.PI * 2;
+        swarm.driftX = Math.cos(a);
+        swarm.driftY = Math.sin(a);
+      }
+    }
+
+    // ---- then each bat ------------------------------------------------
+    for (const bat of sprites) {
+      if (bat.kind !== 'bat') continue;
+      const swarm = bat.swarm;
+
+      // 1. COME BACK TO THE MIDDLE. Without this they drift apart and you
+      //    have seven lonely bats instead of a swarm.
+      let goX = (swarm.x - bat.x) * BAT_PULL;
+      let goY = (swarm.y - bat.y) * BAT_PULL;
+
+      // 2. GET OFF ME. Without this they all pile into the middle and
+      //    become one bat-shaped lump.
+      for (const other of sprites) {
+        if (other.kind !== 'bat' || other === bat || other.swarm !== swarm) continue;
+        const ox = bat.x - other.x, oy = bat.y - other.y;
+        const gap = Math.sqrt(ox * ox + oy * oy);
+        if (gap > 0.0001 && gap < BAT_SPACE) {
+          goX += (ox / gap) * BAT_PUSH * (1 - gap / BAT_SPACE);
+          goY += (oy / gap) * BAT_PUSH * (1 - gap / BAT_SPACE);
+        }
+      }
+
+      // 3. GO SOMEWHERE. The swarm's drift, plus a little nonsense of its
+      //    own so no two bats ever fly exactly the same line.
+      goX += swarm.driftX * BAT_SPEED * BAT_WANDER;
+      goY += swarm.driftY * BAT_SPEED * BAT_WANDER;
+
+      // 4. FRIGHTENED? Straight away from you, fast.
+      if (swarm.panic > 0) {
+        const ax = bat.x - state.x, ay = bat.y - state.y;
+        const away = Math.sqrt(ax * ax + ay * ay) || 1;
+        goX += (ax / away) * BAT_SPEED * 1.6;
+        goY += (ay / away) * BAT_SPEED * 1.6;
+      }
+
+      // Steer TOWARD what it wants rather than snapping to it. A bat that
+      // can turn instantly looks like a fly, not a bat.
+      bat.vx += (goX - bat.vx) * BAT_TURN;
+      bat.vy += (goY - bat.vy) * BAT_TURN;
+
+      // Never faster than its top speed, and never stopped dead either.
+      const speed = Math.sqrt(bat.vx * bat.vx + bat.vy * bat.vy);
+      const top = BAT_SPEED * (swarm.panic > 0 ? 1.7 : 1);
+      if (speed > top) { bat.vx = (bat.vx / speed) * top; bat.vy = (bat.vy / speed) * top; }
+      else if (speed < top * 0.25 && speed > 0.0001) {
+        bat.vx = (bat.vx / speed) * top * 0.25;
+        bat.vy = (bat.vy / speed) * top * 0.25;
+      }
+
+      // ROCK. Try each direction on its own, so a bat that clips a wall
+      // slides along it instead of stopping dead in front of it.
+      if (batCanGo(bat.x + bat.vx, bat.y)) bat.x += bat.vx;
+      else bat.vx = -bat.vx * 0.6;
+      if (batCanGo(bat.x, bat.y + bat.vy)) bat.y += bat.vy;
+      else bat.vy = -bat.vy * 0.6;
+
+      bat.wing += BAT_WING_BEAT;
+    }
+  }
+
+  // ONE BAT, up near the roof. It is drawn from four spots in the cavern -
+  // nose, tail and two wingtips - handed to the same camera the chests and
+  // the spiders use. So it sits in the world properly: it gets smaller
+  // with distance, it goes dark out of torchlight, and walls hide it.
+  function drawBat(bat, cam, depth) {
+    // H is the height of the screen. Every drawing function in this file
+    // fetches its own copy - it is NOT a global. Leaving it out crashed
+    // the whole draw, and the robot tests missed it because the bats
+    // happened to be too far off in the dark to reach the line that used
+    // it. A test that never runs the code proves nothing about the code.
+    const H = canvas.height;
+    // Wings beat, and the whole bat rides up and down a little with them.
+    const beat = Math.sin(bat.wing);
+    const high = BAT_CEILING + bat.lift + beat * BAT_FLAP * 0.35;
+
+    // Which way it is flying, so the wings sit across the body and not
+    // along it. A bat drawn without this is a bat flying sideways.
+    const speed = Math.sqrt(bat.vx * bat.vx + bat.vy * bat.vy) || 1;
+    const aheadX = bat.vx / speed, aheadY = bat.vy / speed;
+    const sideX = -aheadY, sideY = aheadX;
+
+    const S = BAT_SIZE;
+    const spread = S * (0.55 + Math.abs(beat) * 1.25);   // wings open and shut
+    const wingUp = high - beat * BAT_FLAP;               // and rise and fall
+
+    // The wingtips are SWEPT BACK, not straight out to the sides. Sat
+    // square on the body they gave a flat bar - and from underneath,
+    // which is where you always see these, a flat bar is all you got.
+    const sweep = S * 0.55;
+    const nose = cam.project(bat.x + aheadX * S * 0.95, bat.y + aheadY * S * 0.95, high);
+    const tail = cam.project(bat.x - aheadX * S * 1.05, bat.y - aheadY * S * 1.05, high + S * 0.18);
+    const left = cam.project(bat.x + sideX * spread - aheadX * sweep,
+                             bat.y + sideY * spread - aheadY * sweep, wingUp);
+    const right = cam.project(bat.x - sideX * spread - aheadX * sweep,
+                              bat.y - sideY * spread - aheadY * sweep, wingUp);
+    if (!nose || !tail || !left || !right) return;
+
+    // Out of torchlight it is not there at all, same rule as everything
+    // else down here.
+    const light = Math.max(0, 1 - depth / TORCH_RANGE);
+    if (light <= 0.02) return;
+
+    // Hidden behind rock? The wall in that screen column is nearer than
+    // the bat, so the rock wins.
+    // zBuffer holds one distance per PIXEL across the screen, not one
+    // per 2-pixel column - the wall loop fills every pixel it covers.
+    // Dividing by COLUMN_W here looked reasonable and quietly hid almost
+    // every bat, by comparing it against a wall halfway across the view.
+    const slot = Math.max(0, Math.min(zBuffer.length - 1, Math.floor(nose.sx)));
+    if (zBuffer[slot] < depth) return;
+
+    const shade = (v) => 'rgb(' + Math.round(BAT_COLOUR[0] * v) + ',' +
+                                  Math.round(BAT_COLOUR[1] * v) + ',' +
+                                  Math.round(BAT_COLOUR[2] * v) + ')';
+
+    // the wings: two triangles, nose to tail to wingtip
+    // The wings CURVE out to the tip and back. Straight lines from nose
+    // to tip to tail gave a flat wedge that read as a paper dart. The
+    // wingtip is used as the bend of the curve rather than a corner.
+    ctx.fillStyle = shade(light * 0.72);
+    for (const tip of [left, right]) {
+      ctx.beginPath();
+      ctx.moveTo(nose.sx, nose.sy);
+      ctx.quadraticCurveTo(tip.sx, tip.sy, tail.sx, tail.sy);
+      // and a shallow scoop back in, so the back edge is not a straight
+      // line either - that scoop is most of what says bat
+      ctx.quadraticCurveTo((tip.sx + nose.sx) / 2 - (tip.sx - nose.sx) * 0.18,
+                           (tip.sy + nose.sy) / 2 - (tip.sy - nose.sy) * 0.18,
+                           nose.sx, nose.sy);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // the body, a fat little bar down the middle
+    ctx.strokeStyle = shade(light);
+    ctx.lineWidth = Math.max(1.5, (S * 2.2 * H / depth) * 0.16);
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(nose.sx, nose.sy);
+    ctx.lineTo(tail.sx, tail.sy);
+    ctx.stroke();
+    ctx.lineCap = 'butt';
+
+    // two eyes, but only when it is near enough that you would see them
+    if (depth < TORCH_RANGE * 0.55) {
+      const eye = Math.max(1, (H / depth) * 0.012);
+      ctx.fillStyle = 'rgb(' + Math.round(255 * light) + ',' +
+                               Math.round(210 * light) + ',80)';
+      const ex = (nose.sx - tail.sx) * 0.12, ey = (nose.sy - tail.sy) * 0.12;
+      ctx.beginPath();
+      ctx.arc(nose.sx - ex + eye, nose.sy - ey, eye, 0, Math.PI * 2);
+      ctx.arc(nose.sx - ex - eye, nose.sy - ey, eye, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
 
   // --- 7e. THINGS YOU CAN CARRY ----------------------------------------
 
@@ -5364,6 +5628,10 @@ a.arcade-pill.arcade-float {
       }
       if (thing.kind === 'spider') {
         drawSpider(thing, cam, depth);
+        continue;
+      }
+      if (thing.kind === 'bat') {
+        drawBat(thing, cam, depth);
         continue;
       }
 
