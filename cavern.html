@@ -2873,6 +2873,42 @@ a.arcade-pill.arcade-float {
   // This used to run itself the moment the page loaded. It can't any more:
   // it doesn't know how many spiders to make until you've picked a level.
   // So it's a function now, and startGame() calls it once you have.
+  // CAN YOU ACTUALLY GET THERE?
+  //
+  // Not every open square is a square you can reach. This cavern has a
+  // pocket of 14 squares walled off from the rest of it - open floor,
+  // no way in. Anything dropped in there is gone forever: a chest you
+  // can never open, and - much worse - a SPIDER YOU CAN NEVER KILL,
+  // which makes the whole level unwinnable, because winning means
+  // killing all of them.
+  //
+  // Same flood fill as the hunt map, but starting from where you will
+  // stand rather than where you are - because this runs before you have
+  // been put down.
+  function reachableFrom(startCol, startRow) {
+    const seen = new Set();
+    if (startCol < 0 || startRow < 0 || startCol >= MAP_W || startRow >= MAP_H) return seen;
+    if (MAP[startRow][startCol] !== '.') return seen;
+    const queue = [startRow * MAP_W + startCol];
+    seen.add(queue[0]);
+    for (let head = 0; head < queue.length; head++) {
+      const cell = queue[head];
+      const col = cell % MAP_W;
+      const row = (cell - col) / MAP_W;
+      const step = (c, r) => {
+        if (c < 0 || r < 0 || c >= MAP_W || r >= MAP_H) return;
+        if (MAP[r][c] !== '.') return;
+        const id = r * MAP_W + c;
+        if (seen.has(id)) return;
+        seen.add(id);
+        queue.push(id);
+      };
+      step(col - 1, row); step(col + 1, row);
+      step(col, row - 1); step(col, row + 1);
+    }
+    return seen;
+  }
+
   function scatterThings() {
     // Sweep the cavern empty first, so picking a new level doesn't just
     // pile fresh spiders on top of the old ones.
@@ -2884,8 +2920,11 @@ a.arcade-pill.arcade-float {
     sprites.length = 0;
     swarms.length = 0;   // the bats go with them
 
-    // Collect every open floor square in the whole cavern.
-    let spots = openFloorSquares();
+    // Collect every open floor square you can actually WALK TO. Sealed-off
+    // pockets are dropped here, once, so nothing downstream has to think
+    // about them ever again.
+    const canReach = reachableFrom(startCol, startRow);
+    let spots = openFloorSquares().filter(s => canReach.has(s.row * MAP_W + s.col));
 
     // Squares you've already put something on are out of the running, so
     // a random cobweb can't land on top of your chest.
@@ -4059,7 +4098,7 @@ a.arcade-pill.arcade-float {
   const SWARM_SIZE     = 14;    // bats in a cloud. Lots. It is a cloud.
   const SWARM_MAX      = 2;     // never more than this many clouds at once
   const SWARM_EVERY    = 420;   // roughly this many frames between arrivals
-  const BAT_SPEED      = 0.055; // fast. It should be over before you react.
+  const BAT_SPEED      = 0.078; // fast. It should be over before you react.
   const BAT_TURN       = 0.10;  // how sharply one can change its mind
   // Gentle. It does not need to be strong: every bat is following the
   // SAME map toward the same person, and that keeps them together far
@@ -4071,11 +4110,12 @@ a.arcade-pill.arcade-float {
   const BAT_PUSH       = 0.070; // how hard they shove each other apart
   const BAT_SPACE      = 0.30;  // closer than this and they push apart
   const BAT_CEILING    = -0.30; // how high they fly. negative is UP.
-  const BAT_FLAP       = 0.13;  // how far the wingtips rise and fall
+  const BAT_FLAP       = 0.30;  // how far the wingtips rise and fall
   const BAT_SIZE       = 0.22;  // how big one is, in cavern squares
-  const BAT_WING_BEAT  = 0.55;  // radians per frame of wing flapping
+  const BAT_WING_BEAT  = 0.44;  // radians per frame of wing flapping
   const SWARM_GONE     = 4.5;   // once it is this far past you, it vanishes
-  const SWARM_ARRIVE   = 9;     // and it comes in from about this far off
+  const SWARM_ARRIVE   = 7.5;   // and it comes in from about this far off -
+                                // just past your torch, so it is heard not seen
 
   const swarms = [];
   let nextSwarm = 180;          // frames until the first one turns up
@@ -4107,6 +4147,23 @@ a.arcade-pill.arcade-float {
 
   // Somewhere to come FROM. Far enough off to be out of your torchlight,
   // so a cloud is always heard before it is seen.
+  // IS THIS SQUARE A HALLWAY?
+  //
+  // A hallway is somewhere with rock on both sides - a passage, not a
+  // room and not a junction. Count the open squares round it: two, and
+  // facing each other, means you are in a corridor. Anything else is a
+  // corner, a junction, a room or a dead end.
+  function isHallway(col, row) {
+    if (col < 1 || row < 1 || col >= MAP_W - 1 || row >= MAP_H - 1) return false;
+    if (MAP[row][col] !== '.') return false;
+    const up    = MAP[row - 1][col] === '.';
+    const down  = MAP[row + 1][col] === '.';
+    const left  = MAP[row][col - 1] === '.';
+    const right = MAP[row][col + 1] === '.';
+    // open front and back, walled either side - both ways round
+    return (up && down && !left && !right) || (left && right && !up && !down);
+  }
+
   function farOffSpot() {
     const spots = openFloorSquares();
     if (!spots.length) return null;
@@ -4127,6 +4184,12 @@ a.arcade-pill.arcade-float {
     for (const s of spots) {
       const dx = s.col + 0.5 - state.x, dy = s.row + 0.5 - state.y;
       const gap = Math.sqrt(dx * dx + dy * dy);
+      // HALLWAYS ONLY. A cloud belongs in a passage, pouring down it at
+      // you - not hanging about in the middle of an open room.
+      if (!isHallway(s.col, s.row)) continue;
+      // and never from a pocket with no route to you - it would fly at a
+      // wall for the rest of its life
+      if (stepsFromYou(s.col + 0.5, s.row + 0.5) < 0) continue;
       if (gap > SWARM_ARRIVE) faraway.push(s);
       if (gap > bestGap) { bestGap = gap; best = s; }
     }
@@ -4177,7 +4240,10 @@ a.arcade-pill.arcade-float {
       const from = farOffSpot();
       if (from) {
         makeSwarm(from.x, from.y);
-        screech(0.35);                  // heard first, in the distance
+        // ONE screech, when it sets off, and that is the only one you
+        // get. It used to screech again on the way in and again
+        // overhead, and three screeches turned a fright into a noise.
+        screech(0.9);
       } else {
         nextSwarm = 60;                 // nowhere far enough yet; try again soon
       }
@@ -4215,9 +4281,12 @@ a.arcade-pill.arcade-float {
       // IT COMES STRAIGHT AT YOU, then carries on straight past. Once it
       // has been close it stops steering toward you for good - that is
       // what makes it a fly-past instead of a thing that circles you.
-      if (!swarm.past && nearest < 1.3) {
-        swarm.past = true;
-        screech(1);                     // right over your head
+      // 1.7, not 1.3. Fourteen bats piling into the mouth of a corridor
+      // can jam up with the closest of them still a square and a half
+      // off - and then the cloud never counts as having passed, and
+      // hangs about instead of leaving. At 1.7 it is on top of you.
+      if (!swarm.past && nearest < 1.7) {
+        swarm.past = true;              // no second screech - see above
       }
 
       // AND THEN IT IS GONE. Behind you, far off, out of the dark it came
@@ -4237,10 +4306,6 @@ a.arcade-pill.arcade-float {
         continue;
       }
 
-      // a screech every so often while it is still on its way in
-      if (!swarm.past && swarm.age % 96 === 0) {
-        screech(Math.max(0.15, 0.8 - gap / 14));
-      }
 
 
       // ---- and now each bat in it ------------------------------------
@@ -4328,12 +4393,17 @@ a.arcade-pill.arcade-float {
           bat.vy = (bat.vy / speed) * BAT_SPEED;
         }
 
-        // ROCK. Each direction on its own, so it slides along a wall
-        // instead of stopping dead against it.
+        // ROCK. Each direction on its own, so it SLIDES along a wall.
+        //
+        // Bouncing off (flipping the speed round) was throwing away most
+        // of the flight: in a passage full of bats they were forever
+        // knocking each other into the walls and rebounding, and a cloud
+        // crossed the cave at a third of its own top speed. Killing just
+        // the blocked direction lets it run along the wall instead.
         if (!isWall(bat.x + bat.vx, bat.y)) bat.x += bat.vx;
-        else bat.vx = -bat.vx * 0.5;
+        else bat.vx = 0;
         if (!isWall(bat.x, bat.y + bat.vy)) bat.y += bat.vy;
-        else bat.vy = -bat.vy * 0.5;
+        else bat.vy = 0;
 
         bat.wing += BAT_WING_BEAT;
       }
@@ -4349,17 +4419,26 @@ a.arcade-pill.arcade-float {
   function drawBat(bat, cam, depth) {
     const H = canvas.height;
 
-    const beat = Math.sin(bat.wing);
-    const high = BAT_CEILING + bat.lift + beat * BAT_FLAP * 0.3;
+    // THE FLAP. A wing does not swing evenly up and down - it snaps down
+    // hard and creeps back up. Squaring the top half of the beat gives
+    // exactly that shape for one line of maths, and it is the whole
+    // difference between something flying and something wobbling.
+    const raw = Math.sin(bat.wing);
+    const beat = raw > 0 ? raw * raw : -Math.abs(raw) * 0.75;
+    // and the whole bat rises and falls with its own wings
+    const high = BAT_CEILING + bat.lift - beat * BAT_FLAP * 0.45;
 
     const speed = Math.sqrt(bat.vx * bat.vx + bat.vy * bat.vy) || 1;
     const aheadX = bat.vx / speed, aheadY = bat.vy / speed;
     const sideX = -aheadY, sideY = aheadX;
 
     const S = BAT_SIZE * bat.puff;
-    const spread = S * (0.5 + Math.abs(beat) * 1.15);
-    const sweep = S * 0.5;
-    const wingUp = high - beat * BAT_FLAP;
+    // Wings nearly shut at the bottom of the beat, wide open at the top.
+    // The old range barely changed and read as a stiff kite.
+    const open = 0.5 + beat * 0.5;                 // 0 folded, 1 spread
+    const spread = S * (0.28 + open * 1.5);
+    const sweep = S * (0.62 - open * 0.34);        // swept back when folded
+    const wingUp = high - beat * BAT_FLAP * 1.4;
 
     const nose = cam.project(bat.x + aheadX * S, bat.y + aheadY * S, high);
     const tail = cam.project(bat.x - aheadX * S, bat.y - aheadY * S, high + S * 0.15);
@@ -5495,6 +5574,94 @@ a.arcade-pill.arcade-float {
   }
 
 
+  // --- 7g4. DUCK ----------------------------------------------------------
+  //
+  // A cloud is coming. The word DUCK, in red, with the paint running down
+  // off the bottom of it.
+  //
+  // The drips are worked out from the clock and the letter they hang off,
+  // so they always run the same way for the same warning and grow while
+  // it is up. Nothing is stored and nothing has to be tidied away.
+
+  const DUCK_SHOW = 3.2;        // how far off a cloud has to be to warn you
+  const DUCK_DRIPS = 7;
+
+  function duckWarning() {
+    // Only while a cloud is still on its way IN. Once it has gone past
+    // there is nothing left to duck.
+    let closest = -1;
+    for (const swarm of swarms) {
+      if (swarm.past) continue;
+      let near = 999;
+      for (const b of sprites) {
+        if (b.kind !== 'bat' || b.swarm !== swarm) continue;
+        const d = Math.hypot(b.x - state.x, b.y - state.y);
+        if (d < near) near = d;
+      }
+      if (near < 900 && (closest < 0 || near < closest)) closest = near;
+    }
+    return closest;
+  }
+
+  function drawDuck() {
+    const near = duckWarning();
+    if (near < 0 || near > TORCH_RANGE * 1.6) return;
+
+    const W = canvas.width, H = canvas.height;
+    // It grows and gets solid as the cloud closes in.
+    const urgency = Math.max(0, Math.min(1, 1 - near / (TORCH_RANGE * 1.6)));
+    const t = state.frame / 60;
+
+    const size = Math.round(H * (0.13 + urgency * 0.07));
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+    ctx.font = 'bold ' + size + 'px monospace';
+
+    const midX = W / 2;
+    const baseY = Math.round(H * 0.34);
+    const word = 'DUCK';
+    const wide = ctx.measureText(word).width;
+
+    // THE DRIPS FIRST, so they hang from behind the letters and the join
+    // never shows. Each one runs from its own place along the word and
+    // has been running for its own length of time.
+    for (let i = 0; i < DUCK_DRIPS; i++) {
+      // steady, seeded-looking numbers from the drip's number alone
+      const a = Math.sin(i * 91.7) * 0.5 + 0.5;
+      const b = Math.sin(i * 47.3 + 2.1) * 0.5 + 0.5;
+      const dx = midX - wide / 2 + wide * (0.06 + a * 0.88);
+      const wobble = 0.55 + b * 0.8;
+      // the run creeps down, then hangs
+      const run = Math.min(1, (t * 0.5 + b) % 1.6) * size * 0.75 * wobble;
+      const thick = size * (0.035 + b * 0.045);
+
+      ctx.fillStyle = 'rgba(150,10,14,' + (0.55 + urgency * 0.4) + ')';
+      ctx.fillRect(dx - thick / 2, baseY - size * 0.1, thick, run);
+      // the fat bead on the end of the run
+      ctx.beginPath();
+      ctx.arc(dx, baseY - size * 0.1 + run, thick * 0.85, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // a dark shadow behind the word so it reads against pale rock too
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillText(word, midX + 3, baseY + 3);
+
+    // THE WORD. Brighter in the middle than at the edges, like wet paint.
+    const paint = ctx.createLinearGradient(0, baseY - size, 0, baseY);
+    paint.addColorStop(0, '#ff2a2a');
+    paint.addColorStop(0.55, '#c00b12');
+    paint.addColorStop(1, '#7a0409');
+    ctx.fillStyle = paint;
+    ctx.fillText(word, midX, baseY);
+
+    ctx.lineWidth = Math.max(1, size * 0.035);
+    ctx.strokeStyle = 'rgba(40,0,2,0.85)';
+    ctx.strokeText(word, midX, baseY);
+    ctx.restore();
+  }
+
   // --- 8. DRAW --------------------------------------------------------
   // Runs about 60 times a second. DRAW paints. It never changes anything.
 
@@ -5924,6 +6091,7 @@ a.arcade-pill.arcade-float {
     }
 
     // Hearts, thumb controls, then your pockets - over the top of all.
+    drawDuck();
     drawHearts();
     drawKills();
     drawVictory();
