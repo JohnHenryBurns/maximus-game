@@ -4246,16 +4246,33 @@ a.arcade-pill.arcade-float {
     // ---- do we need a new cloud? -------------------------------------
     nextSwarm--;
     if (nextSwarm <= 0 && swarms.length < SWARM_MAX) {
-      nextSwarm = SWARM_EVERY * (0.6 + Math.random() * 0.8);
-      const from = farOffSpot();
-      if (from) {
-        makeSwarm(from.x, from.y);
-        // ONE screech, when it sets off, and that is the only one you
-        // get. It used to screech again on the way in and again
-        // overhead, and three screeches turned a fright into a noise.
-        screech(0.9);
+      // ONLY WHEN YOU ARE IN A HALLWAY.
+      //
+      // A passage has rock on both sides, so when the cloud comes down it
+      // there is nowhere to go but DOWN - which is the whole point of the
+      // red word. Standing in an open room you could simply step aside,
+      // and a threat you can walk away from is not a threat.
+      //
+      // Not spawning yet is not the same as waiting another twenty
+      // seconds: keep the timer short and check again in a moment, so one
+      // turns up soon after you step into a passage.
+      if (!isHallway(Math.floor(state.x), Math.floor(state.y))) {
+        // Not `return` - that would leave the function altogether and
+        // freeze any cloud already in the air the moment you stepped into
+        // a room. Only the SENDING of a new one is skipped.
+        nextSwarm = 40;
       } else {
-        nextSwarm = 60;                 // nowhere far enough yet; try again soon
+        nextSwarm = SWARM_EVERY * (0.6 + Math.random() * 0.8);
+        const from = farOffSpot();
+        if (from) {
+          makeSwarm(from.x, from.y);
+          // ONE screech, when it sets off, and that is the only one you
+          // get. It used to screech again on the way in and again
+          // overhead, and three screeches turned a fright into a noise.
+          screech(0.9);
+        } else {
+          nextSwarm = 60;               // nowhere far enough yet; try again soon
+        }
       }
     }
 
