@@ -3215,7 +3215,7 @@ a.arcade-pill.arcade-float {
     //    which would rather spoil the point of NIGHTMARE.
     state.x = startCol + 0.5;
     state.y = startRow + 0.5;
-    state.angle = 0.7;
+    state.angle = START_ANGLE;
     state.pitch = 0;
     state.crouch = 0;
     state.crouchLatch = false;
@@ -4561,27 +4561,40 @@ a.arcade-pill.arcade-float {
     nightmare: 'RUN THEY ARE COMING',
   };
 
+  const START_ANGLE = 0.7;     // the way you are looking when a cave starts
   const NOTE_REACH = 1.5;      // how close before you can read it
   const NOTE_OUT   = 0.42;     // how far it hangs off the wall it is pinned to
 
   // Pin one up. It needs a floor square with rock on at least one side -
   // you cannot pin a note to thin air.
   function hangNote(spots, startCol, startRow) {
-    // Somewhere you will walk past early on, but not right under your
-    // nose at the start: a note you are standing on when the game begins
-    // is a note nobody reads.
+    // THE NEAREST WALL THERE IS. Not somewhere down the tunnel to be
+    // stumbled on later - right there, on the closest bit of rock to
+    // where you are standing when the cave opens. The first thing you
+    // should see is somebody else's handwriting.
+    //
+    // Every wall face you could pin it to gets a score, and the lowest
+    // wins. Two walls are very often exactly the same distance away - a
+    // corner has two - so a small bonus goes to whichever one you are
+    // already looking at. Nearest first, facing you second.
     const sides = [[0, -1], [0, 1], [-1, 0], [1, 0]];
-    let best = null, bestScore = -1;
+    const lookX = Math.cos(START_ANGLE), lookY = Math.sin(START_ANGLE);
+    let best = null, bestScore = Infinity;
     for (const s of spots) {
-      const away = Math.hypot(s.col - startCol, s.row - startRow);
-      if (away < 2 || away > 7) continue;
       for (const [dx, dy] of sides) {
         const wx = s.col + dx, wy = s.row + dy;
         if (wx < 0 || wy < 0 || wx >= MAP_W || wy >= MAP_H) continue;
         if (MAP[wy][wx] === '.') continue;          // that side is not a wall
-        // nearer is better, so you meet it early
-        const score = 10 - away;
-        if (score > bestScore) {
+        // where the paper would actually hang
+        const px = s.col + 0.5 + dx * NOTE_OUT;
+        const py = s.row + 0.5 + dy * NOTE_OUT;
+        const away = Math.hypot(px - (startCol + 0.5), py - (startRow + 0.5));
+        // which way it is from you, so we can tell if you are facing it
+        const len = away || 1;
+        const infront = ((px - (startCol + 0.5)) / len) * lookX +
+                        ((py - (startRow + 0.5)) / len) * lookY;
+        const score = away - infront * 0.3;
+        if (score < bestScore) {
           bestScore = score;
           best = { col: s.col, row: s.row, dx, dy };
         }
