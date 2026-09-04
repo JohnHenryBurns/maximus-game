@@ -2897,17 +2897,10 @@ a.arcade-pill.arcade-float {
       spots = spots.filter(s => !taken.has(s.row * MAP_W + s.col));
     }
 
-    // BAT SWARMS. They go in BEFORE the early exit that builder levels
-    // take, so a cave you drew yourself gets bats as well. Put this after
-    // that return and they would only ever appear in the built-in cavern,
-    // which is exactly the sort of thing nobody notices for a month.
-    //
-    // They fly up near the roof, so unlike everything else down here they
-    // are allowed to start right next to you - you cannot walk into one.
-    for (let i = 0; i < SWARM_COUNT && spots.length > 0; i++) {
-      const pick = spots[Math.floor((i + 0.5) / SWARM_COUNT * spots.length)];
-      makeSwarm(pick.col + 0.5, pick.row + 0.5);
-    }
+    // No bats are placed here any more. A cloud is not scenery you walk
+    // up to - it arrives out of the dark on its own timer, screeching,
+    // rushes past you and is gone. updateBats() decides when.
+    nextSwarm = 180 + Math.floor(Math.random() * 240);
 
     // Nests go down first, so they're in the cavern before anything else
     // starts counting spiders.
@@ -3790,9 +3783,6 @@ a.arcade-pill.arcade-float {
 
   // `let` again - applyDifficulty() up above swaps these when you pick
   // a level, which is how the spiders come out pink.
-  // Dusty purple. Dark enough to lose against the roof, light enough
-  // that torchlight actually picks one out when it comes at you.
-  const BAT_COLOUR = [92, 70, 118];
   let SPIDER_BODY = [40, 30, 36];
   let SPIDER_HEAD = [54, 40, 47];
   let SPIDER_LEG  = [28, 21, 26];
@@ -4002,251 +3992,412 @@ a.arcade-pill.arcade-float {
   const zBuffer = new Float32Array(canvas.width);
 
 
+  // A SCREECH. A pile of squealing voices sliding down, with a hiss of
+  // wingbeats over the top - never one clean note, because one clean note
+  // sounds like a whistle and a hundred bats do not whistle.
+  function screech(loud) {
+    if (!audio.on) return;
+    const t = audio.ctx.currentTime;
+    const level = Math.max(0, Math.min(1, loud));
+    if (level <= 0.01) return;
+
+    // five voices, all slightly out of tune with each other. Out of tune
+    // ON PURPOSE: perfectly matched notes fuse into one, and the whole
+    // point is that it should sound like a crowd.
+    for (let i = 0; i < 5; i++) {
+      const osc = audio.ctx.createOscillator();
+      osc.type = 'sawtooth';
+      const top = 2200 + Math.random() * 1400;
+      osc.frequency.setValueAtTime(top, t);
+      osc.frequency.exponentialRampToValueAtTime(top * 0.35, t + 0.34);
+
+      const g = audio.ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.05 * level, t + 0.02 + i * 0.012);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.3 + Math.random() * 0.2);
+
+      osc.connect(g);
+      g.connect(audio.ctx.destination);
+      osc.start(t + i * 0.015);
+      osc.stop(t + 0.6);
+    }
+
+    // and the wings: a wash of noise, high and papery
+    const frames = Math.floor(audio.ctx.sampleRate * 0.5);
+    const buffer = audio.ctx.createBuffer(1, frames, audio.ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < frames; i++) {
+      const p = i / frames;
+      // flutter: the hiss pulses, like a lot of wings not quite in time
+      const beat = 0.6 + 0.4 * Math.sin(p * 90);
+      data[i] = (Math.random() * 2 - 1) * (1 - p) * beat;
+    }
+    const src = audio.ctx.createBufferSource();
+    src.buffer = buffer;
+    const f = audio.ctx.createBiquadFilter();
+    f.type = 'highpass';
+    f.frequency.value = 2600;
+    const g2 = audio.ctx.createGain();
+    g2.gain.value = 0.16 * level;
+    src.connect(f);
+    f.connect(g2);
+    g2.connect(audio.ctx.destination);
+    src.start(t);
+  }
+
   // =====================================================================
-  //  BATS
+  //  THE BATS
   // =====================================================================
-  //  Spiders walk the floor and hunt you. Bats do neither. They belong to
-  //  a SWARM, they live up near the roof, and they do not care about you
-  //  at all until you get close - then the whole lot scatters.
+  //  Not creatures you fight, or even really creatures you look at. A
+  //  swarm is a SCREECHING CLOUD OF BLACK that comes out of the dark,
+  //  rushes past you, and is gone behind you before you have turned round.
   //
-  //  Nothing here hunts, so none of the flood-fill hunting code applies.
-  //  A bat only ever asks three questions:
-  //     where is the middle of my swarm?   (come back toward it)
-  //     is anyone too close to me?         (shove off)
-  //     is there rock in the way?          (turn)
-  //  Those three rules and nothing else are what makes a flock look alive.
-  //  It is called flocking, and people have been doing it since 1986.
+  //  So a swarm has a life: it arrives, it passes, it disappears. It does
+  //  not hang about the cavern being a thing on a list. That single idea
+  //  is what makes it frightening rather than decorative.
 
-  const SWARM_COUNT   = 3;      // how many separate swarms in a cavern
-  const SWARM_SIZE    = 7;      // bats in each one
-  const BAT_SPEED     = 0.030;  // a bit faster than you can walk
-  const BAT_TURN      = 0.09;   // how sharply it can change its mind
-  const BAT_PULL      = 0.020;  // how hard the swarm middle tugs it back
-  const BAT_PUSH      = 0.055;  // how hard bats shove each other apart
-  const BAT_SPACE     = 0.45;   // closer than this and they push apart
-  const BAT_WANDER    = 0.35;   // a bit of nonsense so they never line up
-  const BAT_CEILING   = -0.34;  // how high they fly. negative is UP.
-  const BAT_FLAP      = 0.15;   // how far the wingtips rise and fall
-  const BAT_SIZE      = 0.20;   // how big a bat is, in cavern squares
-  const BAT_SCARE     = 2.6;    // get this close and the swarm scatters
-  const BAT_PANIC     = 90;     // and stays scattered this many frames
-  const BAT_WING_BEAT = 0.42;   // radians per frame of wing flapping
+  const SWARM_SIZE     = 14;    // bats in a cloud. Lots. It is a cloud.
+  const SWARM_MAX      = 2;     // never more than this many clouds at once
+  const SWARM_EVERY    = 420;   // roughly this many frames between arrivals
+  const BAT_SPEED      = 0.055; // fast. It should be over before you react.
+  const BAT_TURN       = 0.10;  // how sharply one can change its mind
+  // Gentle. It does not need to be strong: every bat is following the
+  // SAME map toward the same person, and that keeps them together far
+  // better than pulling on each other does. Wound up high it actively
+  // fought the flying - in a corridor one square wide it dragged the
+  // bats at the front backwards toward the ones still round the corner,
+  // and the cloud stuck.
+  const BAT_PULL       = 0.014; // how hard the cloud's middle tugs it back
+  const BAT_PUSH       = 0.070; // how hard they shove each other apart
+  const BAT_SPACE      = 0.30;  // closer than this and they push apart
+  const BAT_CEILING    = -0.30; // how high they fly. negative is UP.
+  const BAT_FLAP       = 0.13;  // how far the wingtips rise and fall
+  const BAT_SIZE       = 0.22;  // how big one is, in cavern squares
+  const BAT_WING_BEAT  = 0.55;  // radians per frame of wing flapping
+  const SWARM_GONE     = 4.5;   // once it is this far past you, it vanishes
+  const SWARM_ARRIVE   = 9;     // and it comes in from about this far off
 
-  // Every swarm keeps its own middle. Working it out once per swarm per
-  // frame beats every bat asking every other bat where it is - that would
-  // be SWARM_SIZE times more sums for exactly the same answer.
   const swarms = [];
+  let nextSwarm = 180;          // frames until the first one turns up
+
+  // AWAY FROM YOU, through the maze. downhillFrom() picks the
+  // neighbouring square with the SMALLEST number on the hunt map, which
+  // is the way toward you. This is the same thing upside down: the
+  // biggest number, which is the way out.
+  //
+  // Without it a cloud that had passed you just flew straight on, hit
+  // the wall two squares later, and spent the rest of its life bouncing
+  // round your ankles - which is the opposite of the whole idea.
+  function awayFromYou(x, y) {
+    const col = Math.floor(x), row = Math.floor(y);
+    if (col < 0 || row < 0 || col >= MAP_W || row >= MAP_H) return null;
+    let best = flow[row * MAP_W + col];
+    if (best < 0) return null;
+    let bestCol = -1, bestRow = -1;
+    const look = (c, r) => {
+      if (c < 0 || r < 0 || c >= MAP_W || r >= MAP_H) return;
+      const v = flow[r * MAP_W + c];
+      if (v > best) { best = v; bestCol = c; bestRow = r; }
+    };
+    look(col - 1, row); look(col + 1, row);
+    look(col, row - 1); look(col, row + 1);
+    if (bestCol < 0) return null;
+    return { x: bestCol + 0.5, y: bestRow + 0.5 };
+  }
+
+  // Somewhere to come FROM. Far enough off to be out of your torchlight,
+  // so a cloud is always heard before it is seen.
+  function farOffSpot() {
+    const spots = openFloorSquares();
+    if (!spots.length) return null;
+
+    // Look at EVERY open square, and keep the ones that are properly far
+    // off - then pick one of THOSE at random.
+    //
+    // Both halves of that matter, and I got each one wrong in turn:
+    //   trying 24 squares at random sometimes came up all-near, and the
+    //   cloud appeared on top of your head with no screech and no fly-in;
+    //   taking the single furthest square instead always chose the same
+    //   dead-end pocket, one square wide, and fourteen bats crammed into
+    //   a dead end cannot get out of it at all.
+    // Far AND varied. There are only 400 squares down here and this runs
+    // once per cloud, not once per frame.
+    const faraway = [];
+    let best = null, bestGap = -1;
+    for (const s of spots) {
+      const dx = s.col + 0.5 - state.x, dy = s.row + 0.5 - state.y;
+      const gap = Math.sqrt(dx * dx + dy * dy);
+      if (gap > SWARM_ARRIVE) faraway.push(s);
+      if (gap > bestGap) { bestGap = gap; best = s; }
+    }
+    if (faraway.length) {
+      const pick = faraway[Math.floor(Math.random() * faraway.length)];
+      return { x: pick.col + 0.5, y: pick.row + 0.5 };
+    }
+
+    // Nowhere far enough. Do not spawn at all - wait and try again in a
+    // moment. A cloud with no run-up is worse than no cloud.
+    if (!best || bestGap < SWARM_ARRIVE * 0.7) return null;
+    return { x: best.col + 0.5, y: best.row + 0.5 };
+  }
 
   function makeSwarm(cx, cy) {
-    const swarm = { x: cx, y: cy, driftX: 0, driftY: 0, panic: 0, retarget: 0 };
+    const swarm = { x: cx, y: cy, panic: 0, past: false, age: 0, called: false };
     swarms.push(swarm);
     for (let i = 0; i < SWARM_SIZE; i++) {
       const a = (i / SWARM_SIZE) * Math.PI * 2;
+      const spread = 0.25 + Math.random() * 0.45;
+      // Check where it is about to appear. A spread of 0.7 from the
+      // middle of a square reaches into the next one along, and if that
+      // one is rock the bat starts its life inside a wall.
+      let bx = cx + Math.cos(a) * spread;
+      let by = cy + Math.sin(a) * spread;
+      if (isWall(bx, by)) { bx = cx; by = cy; }
       sprites.push({
         kind: 'bat',
         swarm: swarm,
-        x: cx + Math.cos(a) * 0.4,
-        y: cy + Math.sin(a) * 0.4,
-        vx: Math.cos(a) * BAT_SPEED,
-        vy: Math.sin(a) * BAT_SPEED,
-        // Each bat flaps on its own beat. Start them all together and the
-        // swarm beats like one enormous bat, which looks very wrong.
+        x: bx,
+        y: by,
+        vx: 0, vy: 0,
+        // Each bat flaps on its own beat. Start them together and the
+        // cloud beats like one enormous bat, which looks very wrong.
         wing: Math.random() * Math.PI * 2,
-        // and hangs at its own height, so they are not a flat sheet
-        lift: (Math.random() - 0.5) * 0.14,
+        lift: (Math.random() - 0.5) * 0.16,
+        puff: 0.6 + Math.random() * 0.7,   // how big a smudge of black it is
       });
     }
-  }
-
-  // Bats squeeze through gaps a spider could not, so they check a smaller
-  // box than a walking thing does - but they still cannot fly into rock.
-  function batCanGo(x, y) {
-    return !isWall(x, y);
+    return swarm;
   }
 
   function updateBats() {
-    if (swarms.length === 0) return;
-
-    // ---- each swarm first: where is its middle, and is it frightened? --
-    for (const swarm of swarms) {
-      let sx = 0, sy = 0, n = 0;
-      for (const b of sprites) {
-        if (b.kind === 'bat' && b.swarm === swarm) { sx += b.x; sy += b.y; n++; }
-      }
-      if (n === 0) continue;
-      swarm.x = sx / n;
-      swarm.y = sy / n;
-
-      // YOU walked up to them. The whole swarm bolts.
-      const dx = swarm.x - state.x, dy = swarm.y - state.y;
-      if (Math.sqrt(dx * dx + dy * dy) < BAT_SCARE) swarm.panic = BAT_PANIC;
-      if (swarm.panic > 0) swarm.panic--;
-
-      // Every so often the swarm picks a new way to drift, so it wanders
-      // off round the cavern instead of hovering in one spot forever.
-      swarm.retarget--;
-      if (swarm.retarget <= 0) {
-        swarm.retarget = 120 + Math.floor(Math.random() * 180);
-        const a = Math.random() * Math.PI * 2;
-        swarm.driftX = Math.cos(a);
-        swarm.driftY = Math.sin(a);
+    // ---- do we need a new cloud? -------------------------------------
+    nextSwarm--;
+    if (nextSwarm <= 0 && swarms.length < SWARM_MAX) {
+      nextSwarm = SWARM_EVERY * (0.6 + Math.random() * 0.8);
+      const from = farOffSpot();
+      if (from) {
+        makeSwarm(from.x, from.y);
+        screech(0.35);                  // heard first, in the distance
+      } else {
+        nextSwarm = 60;                 // nowhere far enough yet; try again soon
       }
     }
 
-    // ---- then each bat ------------------------------------------------
-    for (const bat of sprites) {
-      if (bat.kind !== 'bat') continue;
-      const swarm = bat.swarm;
+    // ---- each cloud ---------------------------------------------------
+    for (let n = swarms.length - 1; n >= 0; n--) {
+      const swarm = swarms[n];
+      const mine = [];
+      let sx = 0, sy = 0;
+      for (const b of sprites) {
+        if (b.kind === 'bat' && b.swarm === swarm) { mine.push(b); sx += b.x; sy += b.y; }
+      }
+      if (mine.length === 0) { swarms.splice(n, 1); continue; }
+      swarm.x = sx / mine.length;
+      swarm.y = sy / mine.length;
+      swarm.age++;
 
-      // 1. COME BACK TO THE MIDDLE. Without this they drift apart and you
-      //    have seven lonely bats instead of a swarm.
-      let goX = (swarm.x - bat.x) * BAT_PULL;
-      let goY = (swarm.y - bat.y) * BAT_PULL;
+      const dx = state.x - swarm.x, dy = state.y - swarm.y;
+      const gap = Math.sqrt(dx * dx + dy * dy);
 
-      // 2. GET OFF ME. Without this they all pile into the middle and
-      //    become one bat-shaped lump.
-      for (const other of sprites) {
-        if (other.kind !== 'bat' || other === bat || other.swarm !== swarm) continue;
-        const ox = bat.x - other.x, oy = bat.y - other.y;
-        const gap = Math.sqrt(ox * ox + oy * oy);
-        if (gap > 0.0001 && gap < BAT_SPACE) {
-          goX += (ox / gap) * BAT_PUSH * (1 - gap / BAT_SPACE);
-          goY += (oy / gap) * BAT_PUSH * (1 - gap / BAT_SPACE);
+      // HOW CLOSE IS THE NEAREST BAT? Not the middle of the cloud.
+      //
+      // The middle is an average, and a cloud strung out down a corridor
+      // can have bats flapping round your ears while its average is still
+      // two squares away. Judged on the average, a cloud could pour past
+      // you and never count as having passed - so it hung about instead
+      // of leaving.
+      let nearest = 999;
+      for (const b of mine) {
+        const bd = Math.hypot(b.x - state.x, b.y - state.y);
+        if (bd < nearest) nearest = bd;
+      }
+
+      // IT COMES STRAIGHT AT YOU, then carries on straight past. Once it
+      // has been close it stops steering toward you for good - that is
+      // what makes it a fly-past instead of a thing that circles you.
+      if (!swarm.past && nearest < 1.3) {
+        swarm.past = true;
+        screech(1);                     // right over your head
+      }
+
+      // AND THEN IT IS GONE. Behind you, far off, out of the dark it came
+      // from. No fade, no bodies on the floor - it simply is not there.
+      // It goes when it is past you and far off. The age limit is only a
+      // backstop for a cloud that somehow never gets to you - and it only
+      // applies OUT OF SIGHT, because a cloud winking out of existence
+      // while you are looking straight at it is worse than one that
+      // dawdles.
+      const outOfSight = gap > TORCH_RANGE;
+      if ((swarm.past && nearest > SWARM_GONE) ||
+          (swarm.age > 60 * 45 && outOfSight)) {
+        for (let i = sprites.length - 1; i >= 0; i--) {
+          if (sprites[i].kind === 'bat' && sprites[i].swarm === swarm) sprites.splice(i, 1);
         }
+        swarms.splice(n, 1);
+        continue;
       }
 
-      // 3. GO SOMEWHERE. The swarm's drift, plus a little nonsense of its
-      //    own so no two bats ever fly exactly the same line.
-      goX += swarm.driftX * BAT_SPEED * BAT_WANDER;
-      goY += swarm.driftY * BAT_SPEED * BAT_WANDER;
-
-      // 4. FRIGHTENED? Straight away from you, fast.
-      if (swarm.panic > 0) {
-        const ax = bat.x - state.x, ay = bat.y - state.y;
-        const away = Math.sqrt(ax * ax + ay * ay) || 1;
-        goX += (ax / away) * BAT_SPEED * 1.6;
-        goY += (ay / away) * BAT_SPEED * 1.6;
+      // a screech every so often while it is still on its way in
+      if (!swarm.past && swarm.age % 96 === 0) {
+        screech(Math.max(0.15, 0.8 - gap / 14));
       }
 
-      // Steer TOWARD what it wants rather than snapping to it. A bat that
-      // can turn instantly looks like a fly, not a bat.
-      bat.vx += (goX - bat.vx) * BAT_TURN;
-      bat.vy += (goY - bat.vy) * BAT_TURN;
 
-      // Never faster than its top speed, and never stopped dead either.
-      const speed = Math.sqrt(bat.vx * bat.vx + bat.vy * bat.vy);
-      const top = BAT_SPEED * (swarm.panic > 0 ? 1.7 : 1);
-      if (speed > top) { bat.vx = (bat.vx / speed) * top; bat.vy = (bat.vy / speed) * top; }
-      else if (speed < top * 0.25 && speed > 0.0001) {
-        bat.vx = (bat.vx / speed) * top * 0.25;
-        bat.vy = (bat.vy / speed) * top * 0.25;
+      // ---- and now each bat in it ------------------------------------
+      for (const bat of mine) {
+        // 1. STAY IN THE CLOUD.
+        let goX = (swarm.x - bat.x) * BAT_PULL;
+        let goY = (swarm.y - bat.y) * BAT_PULL;
+
+        // 2. GET OFF ME. Without this the cloud becomes one blob.
+        //
+        // AND THEN CAP IT. This is the bug that stopped the cloud ever
+        // arriving: shoving adds up once per neighbour, and flying does
+        // not. Thirteen neighbours shoving at 0.07 each is 0.9, against a
+        // fly-forward of 0.055 - so the cloud spent its whole life
+        // elbowing itself and never went anywhere. Any force that sums
+        // over a crowd will always beat one that does not, unless you
+        // put a lid on it.
+        let sepX = 0, sepY = 0;
+        for (const other of mine) {
+          if (other === bat) continue;
+          const ox = bat.x - other.x, oy = bat.y - other.y;
+          const near = Math.sqrt(ox * ox + oy * oy);
+          if (near > 0.0001 && near < BAT_SPACE) {
+            sepX += (ox / near) * BAT_PUSH * (1 - near / BAT_SPACE);
+            sepY += (oy / near) * BAT_PUSH * (1 - near / BAT_SPACE);
+          }
+        }
+        const sep = Math.sqrt(sepX * sepX + sepY * sepY);
+        const sepMax = BAT_SPEED * 0.7;      // never more than the flying
+        if (sep > sepMax) { sepX = (sepX / sep) * sepMax; sepY = (sepY / sep) * sepMax; }
+        goX += sepX;
+        goY += sepY;
+
+        // 3. GO. Toward you while it is coming, straight on once it is
+        //    past - a cloud that turned round and came back would stop
+        //    being weather and start being a monster.
+        if (swarm.past) {
+          // GONE. Straight out and away down the tunnels, never turning
+          // back - a cloud that came round for a second look would stop
+          // being weather and start being a monster.
+          const out = awayFromYou(bat.x, bat.y);
+          if (out) {
+            const oX = out.x - bat.x, oY = out.y - bat.y;
+            const oLen = Math.sqrt(oX * oX + oY * oY) || 1;
+            goX += (oX / oLen) * BAT_SPEED;
+            goY += (oY / oLen) * BAT_SPEED;
+          } else {
+            const on = Math.sqrt(bat.vx * bat.vx + bat.vy * bat.vy) || 1;
+            goX += (bat.vx / on) * BAT_SPEED;
+            goY += (bat.vy / on) * BAT_SPEED;
+          }
+        } else {
+          // WHICH WAY IS YOU? Not a straight line - fly straight at
+          // someone in a maze and the first wall stops you forever. The
+          // spiders already solved this: a flood-fill map, rebuilt every
+          // frame, says which way is downhill toward the player from any
+          // square. The bats ask the same map.
+          //
+          // Each BAT asks from its own square, not the swarm's middle.
+          // The middle is an AVERAGE of fourteen bats, and an average can
+          // land inside a wall when the cloud bends round a corner - the
+          // map then says 'nowhere', and the whole cloud stops dead. A
+          // real bat is always in a real square.
+          let aimX = state.x, aimY = state.y;
+          if (gap > 1.2) {
+            const step = downhillFrom(bat.x, bat.y);
+            if (step) { aimX = step.x; aimY = step.y; }
+          }
+          const aX = aimX - bat.x, aY = aimY - bat.y;
+          const aLen = Math.sqrt(aX * aX + aY * aY) || 1;
+          goX += (aX / aLen) * BAT_SPEED;
+          goY += (aY / aLen) * BAT_SPEED;
+        }
+
+        // a bit of its own nonsense, so no two fly the same line
+        goX += (Math.random() - 0.5) * BAT_SPEED * 0.5;
+        goY += (Math.random() - 0.5) * BAT_SPEED * 0.5;
+
+        bat.vx += (goX - bat.vx) * BAT_TURN;
+        bat.vy += (goY - bat.vy) * BAT_TURN;
+
+        const speed = Math.sqrt(bat.vx * bat.vx + bat.vy * bat.vy);
+        if (speed > BAT_SPEED) {
+          bat.vx = (bat.vx / speed) * BAT_SPEED;
+          bat.vy = (bat.vy / speed) * BAT_SPEED;
+        }
+
+        // ROCK. Each direction on its own, so it slides along a wall
+        // instead of stopping dead against it.
+        if (!isWall(bat.x + bat.vx, bat.y)) bat.x += bat.vx;
+        else bat.vx = -bat.vx * 0.5;
+        if (!isWall(bat.x, bat.y + bat.vy)) bat.y += bat.vy;
+        else bat.vy = -bat.vy * 0.5;
+
+        bat.wing += BAT_WING_BEAT;
       }
-
-      // ROCK. Try each direction on its own, so a bat that clips a wall
-      // slides along it instead of stopping dead in front of it.
-      if (batCanGo(bat.x + bat.vx, bat.y)) bat.x += bat.vx;
-      else bat.vx = -bat.vx * 0.6;
-      if (batCanGo(bat.x, bat.y + bat.vy)) bat.y += bat.vy;
-      else bat.vy = -bat.vy * 0.6;
-
-      bat.wing += BAT_WING_BEAT;
     }
   }
 
-  // ONE BAT, up near the roof. It is drawn from four spots in the cavern -
-  // nose, tail and two wingtips - handed to the same camera the chests and
-  // the spiders use. So it sits in the world properly: it gets smaller
-  // with distance, it goes dark out of torchlight, and walls hide it.
+  // ONE SMUDGE OF THE CLOUD.
+  //
+  // Deliberately NOT a nice picture of a bat. No eyes, no face, no
+  // detail: a torn black shape with soft edges, and fourteen of them
+  // overlapping is the cloud. You are meant to catch a shape and lose it,
+  // not stand and admire the wingspan.
   function drawBat(bat, cam, depth) {
-    // H is the height of the screen. Every drawing function in this file
-    // fetches its own copy - it is NOT a global. Leaving it out crashed
-    // the whole draw, and the robot tests missed it because the bats
-    // happened to be too far off in the dark to reach the line that used
-    // it. A test that never runs the code proves nothing about the code.
     const H = canvas.height;
-    // Wings beat, and the whole bat rides up and down a little with them.
-    const beat = Math.sin(bat.wing);
-    const high = BAT_CEILING + bat.lift + beat * BAT_FLAP * 0.35;
 
-    // Which way it is flying, so the wings sit across the body and not
-    // along it. A bat drawn without this is a bat flying sideways.
+    const beat = Math.sin(bat.wing);
+    const high = BAT_CEILING + bat.lift + beat * BAT_FLAP * 0.3;
+
     const speed = Math.sqrt(bat.vx * bat.vx + bat.vy * bat.vy) || 1;
     const aheadX = bat.vx / speed, aheadY = bat.vy / speed;
     const sideX = -aheadY, sideY = aheadX;
 
-    const S = BAT_SIZE;
-    const spread = S * (0.55 + Math.abs(beat) * 1.25);   // wings open and shut
-    const wingUp = high - beat * BAT_FLAP;               // and rise and fall
+    const S = BAT_SIZE * bat.puff;
+    const spread = S * (0.5 + Math.abs(beat) * 1.15);
+    const sweep = S * 0.5;
+    const wingUp = high - beat * BAT_FLAP;
 
-    // The wingtips are SWEPT BACK, not straight out to the sides. Sat
-    // square on the body they gave a flat bar - and from underneath,
-    // which is where you always see these, a flat bar is all you got.
-    const sweep = S * 0.55;
-    const nose = cam.project(bat.x + aheadX * S * 0.95, bat.y + aheadY * S * 0.95, high);
-    const tail = cam.project(bat.x - aheadX * S * 1.05, bat.y - aheadY * S * 1.05, high + S * 0.18);
+    const nose = cam.project(bat.x + aheadX * S, bat.y + aheadY * S, high);
+    const tail = cam.project(bat.x - aheadX * S, bat.y - aheadY * S, high + S * 0.15);
     const left = cam.project(bat.x + sideX * spread - aheadX * sweep,
                              bat.y + sideY * spread - aheadY * sweep, wingUp);
     const right = cam.project(bat.x - sideX * spread - aheadX * sweep,
                               bat.y - sideY * spread - aheadY * sweep, wingUp);
     if (!nose || !tail || !left || !right) return;
 
-    // Out of torchlight it is not there at all, same rule as everything
-    // else down here.
-    const light = Math.max(0, 1 - depth / TORCH_RANGE);
-    if (light <= 0.02) return;
-
-    // Hidden behind rock? The wall in that screen column is nearer than
-    // the bat, so the rock wins.
-    // zBuffer holds one distance per PIXEL across the screen, not one
-    // per 2-pixel column - the wall loop fills every pixel it covers.
-    // Dividing by COLUMN_W here looked reasonable and quietly hid almost
-    // every bat, by comparing it against a wall halfway across the view.
+    // zBuffer holds one distance per PIXEL, not per 2-pixel column.
     const slot = Math.max(0, Math.min(zBuffer.length - 1, Math.floor(nose.sx)));
     if (zBuffer[slot] < depth) return;
 
-    const shade = (v) => 'rgb(' + Math.round(BAT_COLOUR[0] * v) + ',' +
-                                  Math.round(BAT_COLOUR[1] * v) + ',' +
-                                  Math.round(BAT_COLOUR[2] * v) + ')';
+    // IT IS BLACK. Not dark purple, not dark grey - black, and it only
+    // ever gets FAINTER with distance, never lighter in colour. A shape
+    // that gets paler as it nears you would look like smoke.
+    const near = Math.max(0, Math.min(1, 1 - depth / (TORCH_RANGE * 1.4)));
+    if (near <= 0.02) return;
 
-    // the wings: two triangles, nose to tail to wingtip
-    // The wings CURVE out to the tip and back. Straight lines from nose
-    // to tip to tail gave a flat wedge that read as a paper dart. The
-    // wingtip is used as the bend of the curve rather than a corner.
-    ctx.fillStyle = shade(light * 0.72);
+    ctx.fillStyle = 'rgba(4,2,8,' + (0.42 + near * 0.5) + ')';
     for (const tip of [left, right]) {
       ctx.beginPath();
       ctx.moveTo(nose.sx, nose.sy);
       ctx.quadraticCurveTo(tip.sx, tip.sy, tail.sx, tail.sy);
-      // and a shallow scoop back in, so the back edge is not a straight
-      // line either - that scoop is most of what says bat
-      ctx.quadraticCurveTo((tip.sx + nose.sx) / 2 - (tip.sx - nose.sx) * 0.18,
-                           (tip.sy + nose.sy) / 2 - (tip.sy - nose.sy) * 0.18,
+      ctx.quadraticCurveTo((tip.sx + nose.sx) / 2 - (tip.sx - nose.sx) * 0.2,
+                           (tip.sy + nose.sy) / 2 - (tip.sy - nose.sy) * 0.2,
                            nose.sx, nose.sy);
       ctx.closePath();
       ctx.fill();
     }
-
-    // the body, a fat little bar down the middle
-    ctx.strokeStyle = shade(light);
-    ctx.lineWidth = Math.max(1.5, (S * 2.2 * H / depth) * 0.16);
+    ctx.strokeStyle = 'rgba(2,1,4,' + (0.5 + near * 0.5) + ')';
+    ctx.lineWidth = Math.max(1.5, (S * H / depth) * 0.13);
     ctx.lineCap = 'round';
     ctx.beginPath();
     ctx.moveTo(nose.sx, nose.sy);
     ctx.lineTo(tail.sx, tail.sy);
     ctx.stroke();
     ctx.lineCap = 'butt';
-
-    // two eyes, but only when it is near enough that you would see them
-    if (depth < TORCH_RANGE * 0.55) {
-      const eye = Math.max(1, (H / depth) * 0.012);
-      ctx.fillStyle = 'rgb(' + Math.round(255 * light) + ',' +
-                               Math.round(210 * light) + ',80)';
-      const ex = (nose.sx - tail.sx) * 0.12, ey = (nose.sy - tail.sy) * 0.12;
-      ctx.beginPath();
-      ctx.arc(nose.sx - ex + eye, nose.sy - ey, eye, 0, Math.PI * 2);
-      ctx.arc(nose.sx - ex - eye, nose.sy - ey, eye, 0, Math.PI * 2);
-      ctx.fill();
-    }
   }
 
   // --- 7e. THINGS YOU CAN CARRY ----------------------------------------
