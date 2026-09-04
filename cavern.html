@@ -1526,6 +1526,7 @@ a.arcade-pill.arcade-float {
     checkVictory();
     updateMusic();
     checkPickups();
+    checkNotes();
     checkHazards();
   }
 
@@ -2940,6 +2941,9 @@ a.arcade-pill.arcade-float {
     // up to - it arrives out of the dark on its own timer, screeching,
     // rushes past you and is gone. updateBats() decides when.
     nextSwarm = 180 + Math.floor(Math.random() * 240);
+
+    // Somebody was here before you, and left word on the wall.
+    hangNote(spots, startCol, startRow);
 
     // Nests go down first, so they're in the cavern before anything else
     // starts counting spiders.
@@ -4542,6 +4546,149 @@ a.arcade-pill.arcade-float {
     ctx.lineCap = 'butt';
   }
 
+  // =====================================================================
+  //  NOTES ON THE WALL
+  // =====================================================================
+  //  Somebody was down here before you, and they left word.
+  //
+  //  Which word depends on which cavern you picked - and that is the
+  //  whole joke. The same scrap of paper in the same place says something
+  //  completely different depending on what you have walked into.
+
+  const NOTES = {
+    normal:    'CREATURES LURK WITHIN THESE HALLS',
+    pink:      'TWINKLE TOES',
+    nightmare: 'RUN THEY ARE COMING',
+  };
+
+  const NOTE_REACH = 1.5;      // how close before you can read it
+  const NOTE_OUT   = 0.42;     // how far it hangs off the wall it is pinned to
+
+  // Pin one up. It needs a floor square with rock on at least one side -
+  // you cannot pin a note to thin air.
+  function hangNote(spots, startCol, startRow) {
+    // Somewhere you will walk past early on, but not right under your
+    // nose at the start: a note you are standing on when the game begins
+    // is a note nobody reads.
+    const sides = [[0, -1], [0, 1], [-1, 0], [1, 0]];
+    let best = null, bestScore = -1;
+    for (const s of spots) {
+      const away = Math.hypot(s.col - startCol, s.row - startRow);
+      if (away < 2 || away > 7) continue;
+      for (const [dx, dy] of sides) {
+        const wx = s.col + dx, wy = s.row + dy;
+        if (wx < 0 || wy < 0 || wx >= MAP_W || wy >= MAP_H) continue;
+        if (MAP[wy][wx] === '.') continue;          // that side is not a wall
+        // nearer is better, so you meet it early
+        const score = 10 - away;
+        if (score > bestScore) {
+          bestScore = score;
+          best = { col: s.col, row: s.row, dx, dy };
+        }
+      }
+    }
+    if (!best) return;
+    sprites.push({
+      kind: 'note',
+      // pushed off the middle of its square toward the wall it is on
+      x: best.col + 0.5 + best.dx * NOTE_OUT,
+      y: best.row + 0.5 + best.dy * NOTE_OUT,
+      dx: best.dx, dy: best.dy,
+      read: false,
+    });
+  }
+
+  // Walk up to it and it reads itself out. No button to press: a note you
+  // have to know to press E at is a note that never gets read.
+  function checkNotes() {
+    for (const thing of sprites) {
+      if (thing.kind !== 'note' || thing.read) continue;
+      const gap = Math.hypot(thing.x - state.x, thing.y - state.y);
+      if (gap > NOTE_REACH) continue;
+      thing.read = true;
+      say(noteWords());
+      chime();
+    }
+  }
+
+  // What this cavern's note says. Falls back to the normal one if a
+  // difficulty ever turns up without words of its own, so adding a fourth
+  // cavern can never leave a blank note on the wall.
+  function noteWords() {
+    return NOTES[state.difficulty] || NOTES.normal;
+  }
+
+  // A scrap of paper pinned to the rock. It is built from four corners
+  // handed to the same camera as everything else, so it sits flat against
+  // its wall and turns properly as you walk past.
+  function drawNote(thing, cam, depth) {
+    const H = canvas.height;
+    const light = Math.max(0, 1 - depth / TORCH_RANGE);
+    if (light <= 0.02) return;
+
+    // ACROSS the wall is at right angles to the way the wall faces.
+    const acrossX = -thing.dy, acrossY = thing.dx;
+    const half = 0.19;               // half the width of the sheet
+    const top = -0.16, bot = 0.13;   // above and below your eyeline
+
+    const corners = [
+      cam.project(thing.x - acrossX * half, thing.y - acrossY * half, top),
+      cam.project(thing.x + acrossX * half, thing.y + acrossY * half, top),
+      cam.project(thing.x + acrossX * half, thing.y + acrossY * half, bot),
+      cam.project(thing.x - acrossX * half, thing.y - acrossY * half, bot),
+    ];
+    if (corners.some(c => !c)) return;
+
+    // behind rock? zBuffer is one distance per PIXEL across the screen
+    const mid = (corners[0].sx + corners[1].sx) / 2;
+    const slot = Math.max(0, Math.min(zBuffer.length - 1, Math.floor(mid)));
+    if (zBuffer[slot] < depth) return;
+
+    const paper = (v) => 'rgb(' + Math.round(232 * v) + ',' +
+                                  Math.round(216 * v) + ',' +
+                                  Math.round(176 * v) + ')';
+    ctx.fillStyle = paper(light);
+    ctx.beginPath();
+    ctx.moveTo(corners[0].sx, corners[0].sy);
+    for (let i = 1; i < 4; i++) ctx.lineTo(corners[i].sx, corners[i].sy);
+    ctx.closePath();
+    ctx.fill();
+
+    // a torn dark edge down one side, so it reads as paper and not a tile
+    ctx.strokeStyle = 'rgba(90,72,40,' + light + ')';
+    ctx.lineWidth = Math.max(1, (H / depth) * 0.004);
+    ctx.stroke();
+
+    // SCRIBBLED WRITING. Not the real words - you cannot read handwriting
+    // from across a cave, and pretending you can would look wrong. Lines
+    // that say "there are words here". The words themselves arrive when
+    // you walk up to it.
+    const lines = 4;
+    for (let i = 0; i < lines; i++) {
+      const t = 0.24 + (i / lines) * 0.62;
+      const ax = corners[0].sx + (corners[3].sx - corners[0].sx) * t;
+      const ay = corners[0].sy + (corners[3].sy - corners[0].sy) * t;
+      const bx = corners[1].sx + (corners[2].sx - corners[1].sx) * t;
+      const by = corners[1].sy + (corners[2].sy - corners[1].sy) * t;
+      // last line is short, the way the end of a sentence is
+      const run = i === lines - 1 ? 0.55 : 0.82;
+      ctx.strokeStyle = 'rgba(50,38,22,' + (0.85 * light) + ')';
+      ctx.lineWidth = Math.max(1, (H / depth) * 0.0035);
+      ctx.beginPath();
+      ctx.moveTo(ax + (bx - ax) * 0.09, ay + (by - ay) * 0.09);
+      ctx.lineTo(ax + (bx - ax) * run, ay + (by - ay) * run);
+      ctx.stroke();
+    }
+
+    // a nail through the top of it
+    ctx.fillStyle = 'rgba(120,120,132,' + light + ')';
+    ctx.beginPath();
+    ctx.arc((corners[0].sx + corners[1].sx) / 2,
+            (corners[0].sy + corners[1].sy) / 2 + (H / depth) * 0.012,
+            Math.max(1, (H / depth) * 0.008), 0, Math.PI * 2);
+    ctx.fill();
+  }
+
   // --- 7e. THINGS YOU CAN CARRY ----------------------------------------
 
   const ICON_SIZE = 48;
@@ -6013,6 +6160,10 @@ a.arcade-pill.arcade-float {
       }
       if (thing.kind === 'bat') {
         drawBat(thing, cam, depth);
+        continue;
+      }
+      if (thing.kind === 'note') {
+        drawNote(thing, cam, depth);
         continue;
       }
 
