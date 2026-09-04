@@ -568,6 +568,11 @@ a.arcade-pill.arcade-float {
     // sinks and rises instead of teleporting.
     crouch: 0,
 
+    // The note you are stood at, or null. Held up in front of you for as
+    // long as you stand there - not flashed at you for two seconds.
+    reading: null,
+    readT: 0,
+
     // The phone button is a toggle - you cannot hold a button down AND
     // steer AND shoot with two thumbs. Shift on a keyboard is held.
     crouchLatch: false,
@@ -3219,6 +3224,8 @@ a.arcade-pill.arcade-float {
     state.pitch = 0;
     state.crouch = 0;
     state.crouchLatch = false;
+    state.reading = null;
+    state.readT = 0;
     state.health = MAX_HEARTS * 2;
     state.mercy = 0;
     state.hurtFlash = 0;
@@ -4614,14 +4621,25 @@ a.arcade-pill.arcade-float {
   // Walk up to it and it reads itself out. No button to press: a note you
   // have to know to press E at is a note that never gets read.
   function checkNotes() {
+    // WHICH NOTE ARE YOU AT? The nearest one within arm's reach, or none.
+    // Worked out fresh every frame rather than remembered, so walking
+    // away puts it down without anything having to notice you left.
+    let at = null, nearest = NOTE_REACH;
     for (const thing of sprites) {
-      if (thing.kind !== 'note' || thing.read) continue;
+      if (thing.kind !== 'note') continue;
       const gap = Math.hypot(thing.x - state.x, thing.y - state.y);
-      if (gap > NOTE_REACH) continue;
-      thing.read = true;
-      say(noteWords());
+      if (gap <= nearest) { nearest = gap; at = thing; }
+    }
+
+    if (at && !at.read) {          // the first time you pick this one up
+      at.read = true;
       chime();
     }
+
+    state.reading = at;
+    // counts up while you hold it, so it can slide into view rather
+    // than snapping there, and resets the moment you put it down
+    state.readT = at ? state.readT + 1 : 0;
   }
 
   // What this cavern's note says. Falls back to the normal one if a
@@ -5885,6 +5903,127 @@ a.arcade-pill.arcade-float {
     ctx.restore();
   }
 
+  // --- 7g5. READING IT ---------------------------------------------------
+  //
+  // Standing at the note holds it up in front of you, big enough to
+  // actually read. Step away and you put it back down.
+  //
+  // It is NOT a message that flashes for two seconds and goes. You get to
+  // stand there and read it as long as you like, which is the whole
+  // difference between a line of text and a note somebody left.
+
+  const NOTE_TILT = -0.035;     // a couple of degrees, so it is not machine-straight
+
+  function drawNotePanel() {
+    if (!state.reading) return;
+
+    const W = canvas.width, H = canvas.height;
+    // slides up into view rather than appearing, so it reads as picking
+    // the thing up
+    const open = Math.min(1, state.readT / 10);
+    const ease = 1 - (1 - open) * (1 - open);
+
+    const pw = Math.min(W * 0.62, 460);
+    const ph = pw * 0.66;
+    const px = (W - pw) / 2;
+    const py = (H - ph) / 2 - H * 0.02 + (1 - ease) * H * 0.08;
+
+    ctx.save();
+    ctx.globalAlpha = ease;
+
+    // the whole cave dims behind it, so your eye goes to the paper
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.translate(px + pw / 2, py + ph / 2);
+    ctx.rotate(NOTE_TILT);
+    ctx.translate(-pw / 2, -ph / 2);
+
+    // a shadow under it, so it sits in front of the cave and not on it
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(8, 10, pw, ph);
+
+    // THE PAPER, with a torn wobbly edge instead of four clean corners.
+    // The wobble comes from the position along the edge, so it is the
+    // same tear every time you read it - paper does not re-tear itself.
+    ctx.beginPath();
+    const tear = (i) => Math.sin(i * 12.9898) * 4.2;
+    ctx.moveTo(0, 0);
+    for (let i = 0; i <= 16; i++) ctx.lineTo((i / 16) * pw, tear(i));
+    for (let i = 0; i <= 10; i++) ctx.lineTo(pw + tear(i + 40), (i / 10) * ph);
+    for (let i = 16; i >= 0; i--) ctx.lineTo((i / 16) * pw, ph + tear(i + 80));
+    for (let i = 10; i >= 0; i--) ctx.lineTo(tear(i + 120), (i / 10) * ph);
+    ctx.closePath();
+    const paper = ctx.createLinearGradient(0, 0, 0, ph);
+    paper.addColorStop(0, '#efe3c2');
+    paper.addColorStop(1, '#d9c99f');
+    ctx.fillStyle = paper;
+    ctx.fill();
+
+    // old stains, so it looks like it has been down here a while
+    ctx.fillStyle = 'rgba(120,92,44,0.13)';
+    for (let i = 0; i < 5; i++) {
+      const a = Math.sin(i * 33.7) * 0.5 + 0.5;
+      const b = Math.sin(i * 71.3 + 1.7) * 0.5 + 0.5;
+      ctx.beginPath();
+      ctx.ellipse(pw * (0.1 + a * 0.8), ph * (0.1 + b * 0.8),
+                  pw * (0.03 + a * 0.06), pw * (0.02 + b * 0.05), a * 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // THE WORDS. Wrapped by hand, because a note is only as wide as the
+    // paper and a word cut in half is not readable.
+    const words = noteWords().split(' ');
+    let size = Math.round(pw * 0.105);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    // shrink the writing until the longest line fits, so a longer note
+    // never runs off the edge of its own paper
+    let lines = [];
+    for (let attempt = 0; attempt < 8; attempt++) {
+      ctx.font = 'italic bold ' + size + 'px "Comic Sans MS", "Segoe Script", cursive';
+      lines = [];
+      let line = '';
+      for (const word of words) {
+        const test = line ? line + ' ' + word : word;
+        if (ctx.measureText(test).width > pw * 0.76 && line) {
+          lines.push(line);
+          line = word;
+        } else {
+          line = test;
+        }
+      }
+      if (line) lines.push(line);
+      if (lines.length * size * 1.35 < ph * 0.66) break;
+      size = Math.round(size * 0.86);
+    }
+
+    const lineH = size * 1.35;
+    const top = ph / 2 - ((lines.length - 1) * lineH) / 2;
+    for (let i = 0; i < lines.length; i++) {
+      // ruled line under each one, like a torn-out page
+      ctx.strokeStyle = 'rgba(120,100,60,0.28)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(pw * 0.1, top + i * lineH + size * 0.52);
+      ctx.lineTo(pw * 0.9, top + i * lineH + size * 0.52);
+      ctx.stroke();
+
+      ctx.fillStyle = '#2b2116';
+      ctx.fillText(lines[i], pw / 2, top + i * lineH);
+    }
+
+    // and a note about how to put it down
+    ctx.font = 'bold ' + Math.round(pw * 0.045) + 'px monospace';
+    ctx.fillStyle = 'rgba(70,54,30,0.65)';
+    ctx.fillText('step away to put it down', pw / 2, ph - size * 0.5);
+
+    ctx.restore();
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+  }
+
   // --- 8. DRAW --------------------------------------------------------
   // Runs about 60 times a second. DRAW paints. It never changes anything.
 
@@ -6318,6 +6457,7 @@ a.arcade-pill.arcade-float {
     }
 
     // Hearts, thumb controls, then your pockets - over the top of all.
+    drawNotePanel();
     drawDuck();
     drawHearts();
     drawKills();
