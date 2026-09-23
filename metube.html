@@ -1,0 +1,839 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>MeTube</title>
+<style>
+  /* The whole page is dark, like a real editing program. */
+  html, body { margin: 0; background: #14151c; color: #eee; font-family: system-ui, sans-serif;
+               -webkit-user-select: none; user-select: none; touch-action: manipulation; }
+  h1 { font-size: 1.1rem; margin: 10px 16px 6px; letter-spacing: .5px; }
+  /* THE SCREEN: where the movie plays. It is a canvas, a rectangle we can draw on. */
+  #screen { display: block; width: calc(100% - 32px); max-width: 640px; aspect-ratio: 16 / 9;
+            margin: 0 auto; background: #000; border-radius: 10px; border: 3px solid #333; }
+  .row { display: flex; gap: 8px; align-items: center; justify-content: center; margin: 10px 16px; flex-wrap: wrap; }
+  button { font: inherit; font-weight: 700; padding: 10px 18px; border: 0; border-radius: 10px;
+           background: #3a7bff; color: #fff; cursor: pointer; }
+  button:active { transform: scale(.96); }
+  #play { background: #22c55e; font-size: 1.1rem; }
+  .label { font-size: .8rem; opacity: .7; margin: 12px 16px 4px; text-transform: uppercase; letter-spacing: 1px; }
+  /* THE SHELF and THE TIMELINE are both rows of clip cards. */
+  .clips { display: flex; gap: 8px; margin: 0 16px; overflow-x: auto; padding-bottom: 6px; min-height: 64px; }
+  .clip { flex: 0 0 auto; width: 96px; height: 60px; border-radius: 8px; background: #2a2c3a; border: 2px solid #444;
+          display: flex; align-items: center; justify-content: center; text-align: center;
+          font-size: .8rem; font-weight: 700; cursor: pointer; }
+  .clip:active { transform: scale(.95); }
+  #timeline .clip { background: #4b2d7a; border-color: #8a5cf5; }
+  #timeline:empty::after { content: "Timeline is empty. Tap a clip above to add it."; opacity: .5; font-size: .85rem; align-self: center; }
+  /* THE GALLERY: a grid of tiny thumbnails. It scrolls inside its own box so 500 of them
+     do not push the timeline off the bottom of the page. */
+  #gallery { display: none; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px;
+             margin: 0 16px; max-height: 45vh; overflow-y: auto; padding: 8px; background: #0d0e13; border-radius: 10px; }
+  #gallery.open { display: grid; }
+  .thumb { cursor: pointer; border-radius: 8px; overflow: hidden; background: #2a2c3a; border: 2px solid #444; }
+  .thumb:active { transform: scale(.95); }
+  .thumb canvas { display: block; width: 100%; }
+  .thumb div { font-size: .65rem; padding: 3px 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #galleryBtn { background: #f59e0b; }
+  #save { background: #8a5cf5; }
+  #speedSlider { width: 160px; }
+  #speedBox { width: 64px; font: inherit; padding: 6px; border-radius: 8px; border: 2px solid #444; background: #22242f; color: #fff; text-align: center; }
+  #speedLabel { font-weight: 700; min-width: 90px; }
+  /* SCREENS. Every screen is a box. Only the one with the "show" class is visible;
+     the rest are display:none, which means "pretend this is not even here". */
+  .screen { display: none; }
+  .screen.show { display: block; }
+  .center { max-width: 420px; margin: 40px auto; padding: 0 16px; text-align: center; }
+  .center h2 { font-size: 1.6rem; margin: 0 0 18px; }
+  .center input { width: 100%; box-sizing: border-box; font: inherit; font-size: 1.2rem; padding: 12px;
+                  border-radius: 10px; border: 2px solid #444; background: #22242f; color: #fff; text-align: center; }
+  .big { display: block; width: 100%; margin: 12px 0; padding: 18px; font-size: 1.15rem; }
+  #newProject { background: #22c55e; }  #savedProjects { background: #8a5cf5; }  #browse { background: #f59e0b; }
+  .saved { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 12px 14px; margin: 8px 0;
+           background: #22242f; border-radius: 10px; border: 2px solid #444; cursor: pointer; text-align: left; }
+  .saved small { opacity: .6; }
+  .back { background: #444; }
+  /* THE FEED: one row per video, thumbnail on the left, words on the right. Like a video site. */
+  #feed { max-width: 640px; margin: 0 auto; padding: 0 16px; }
+  .video { display: flex; gap: 12px; align-items: center; padding: 8px; margin: 8px 0; border-radius: 10px;
+           background: #22242f; border: 2px solid #444; cursor: pointer; }
+  .video:active { transform: scale(.98); }
+  .video canvas { width: 128px; height: 72px; border-radius: 6px; flex: 0 0 auto; background: #000; }
+  .video .title { font-weight: 700; font-size: .95rem; }
+  .video .meta { font-size: .78rem; opacity: .65; margin-top: 4px; }
+</style>
+</head>
+<body>
+<!-- THE LOGO. Drawn with code (SVG), not a picture file.
+     YouTube's logo is a red box with a white triangle pointing RIGHT.
+     MeTube is the opposite of that: inverted colors (red → cyan, white → black)
+     and backwards, so the triangle points LEFT. -->
+<h1>
+  <svg width="44" height="31" viewBox="0 0 44 31" style="vertical-align:middle">
+    <rect x="0" y="0" width="44" height="31" rx="9" fill="#00ffff"/>
+    <polygon points="30,7 30,24 13,15.5" fill="#000"/>
+  </svg>
+  MeTube
+</h1>
+
+<!-- SCREEN 1: USERNAME. This is the front door. -->
+<div id="login" class="screen center">
+  <h2>Who's making videos?</h2>
+  <input id="username" placeholder="type a username" maxlength="20" autocomplete="off">
+  <button id="enter" class="big">Enter MeTube ▶</button>
+</div>
+
+<!-- SCREEN 2: HOME. Three doors. -->
+<div id="home" class="screen center">
+  <h2 id="hello">Hi!</h2>
+  <button id="newProject" class="big">🎬 New project</button>
+  <button id="savedProjects" class="big">💾 Saved projects</button>
+  <button id="browse" class="big">🖼 Browse</button>
+</div>
+
+<!-- SCREEN 2b: SAVED PROJECTS. A list you can tap to reopen. -->
+<div id="savedList" class="screen center">
+  <h2>Saved projects</h2>
+  <div id="savedItems"></div>
+  <button id="backFromSaved" class="big back">← Back</button>
+</div>
+
+<!-- SCREEN 2c: BROWSE. A feed of videos from made-up MeTubers. Tap one to open it in the editor. -->
+<div id="browseScreen" class="screen">
+  <div class="row"><button id="backFromBrowse" class="back">← Home</button></div>
+  <div id="feed"></div>
+</div>
+
+<!-- SCREEN 3: THE EDITOR. Everything from here down to the timeline. -->
+<div id="editor" class="screen">
+<canvas id="screen" width="640" height="360"></canvas>
+
+<div class="row">
+  <button id="play">▶ Play</button>
+  <button id="clear">🗑 Clear</button>
+  <button id="galleryBtn">🖼 Picture gallery</button>
+  <button id="save">💾 Save</button>
+  <button id="homeBtn" class="back">🏠 Home</button>
+</div>
+
+<!-- SPEED. Two controls for the same number: a slider to drag and a box to type in.
+     1 is normal. 2 is twice as fast. 0.5 is slow motion. -->
+<div class="row" id="speedRow">
+  <span>🐢</span>
+  <input type="range" id="speedSlider" min="0.25" max="4" step="0.25" value="1">
+  <span>🐇</span>
+  <input type="number" id="speedBox" min="0.1" max="10" step="0.1" value="1">
+  <span id="speedLabel">1× speed</span>
+</div>
+
+<!-- THE GALLERY starts hidden. The button flips the "open" class on and off. -->
+<div id="gallery"></div>
+
+<div class="label">Clips (tap to add)</div>
+<div id="shelf" class="clips">
+  <!-- THE CAMERA BUTTON. A file input with capture="environment" tells a phone
+       "open the back camera". A laptop has no camera like that, so it opens a
+       file picker instead. The input itself is hidden; the green card is the
+       label wrapped around it, and tapping a label pokes the input inside it.
+       The photo stays on your device. Nothing is uploaded anywhere. -->
+  <label class="clip" style="background:#1f4d3a;border-color:#22c55e">
+    📷 Take a photo
+    <input type="file" accept="image/*" capture="environment" id="camera" style="display:none">
+  </label>
+</div>
+
+<div class="label">Timeline (tap to remove)</div>
+<div id="timeline" class="clips"></div>
+</div>  <!-- end of the editor screen -->
+
+<script>
+// ─────────────────────────────────────────────────────────────────────────
+// HOW A CLIP WORKS
+//
+// A clip is NOT a video file. It is a tiny DRAWING RECIPE: a function that gets
+// handed a paintbrush (ctx) and a number t, and draws one frame.
+//
+//   t is how far into the clip we are, from 0 (just started) to 1 (finished).
+//
+// Play the clip by calling that function over and over with t creeping up,
+// and your eyes see a movie. That is all animation is: lots of drawings, fast.
+// ─────────────────────────────────────────────────────────────────────────
+
+const CLIPS = [
+  {
+    name: "🐬 Dampy jumps",
+    seconds: 2,
+    draw(ctx, t) {
+      // Sky and sea
+      ctx.fillStyle = "#7ec8ff"; ctx.fillRect(0, 0, 640, 220);
+      ctx.fillStyle = "#1c6fd6"; ctx.fillRect(0, 220, 640, 140);
+      // Dampy's jump: he goes up then comes back down. Math.sin makes a smooth hump.
+      const x = 80 + t * 480;                       // left to right across the screen
+      const y = 240 - Math.sin(t * Math.PI) * 170;  // the hump: 0 at start, high in the middle, 0 at end
+      ctx.font = "80px serif";
+      ctx.textAlign = "center";
+      ctx.fillText("🐬", x, y);
+      // Splash at the end
+      if (t > 0.9) { ctx.font = "40px serif"; ctx.fillText("💦", x, 235); }
+    }
+  },
+  {
+    name: "💨 Fart cloud",
+    seconds: 2,
+    draw(ctx, t) {
+      ctx.fillStyle = "#3b2f2f"; ctx.fillRect(0, 0, 640, 360);
+      ctx.textAlign = "center";
+      ctx.font = "90px serif";
+      ctx.fillText("🧍", 200, 300);
+      // The cloud grows: font size goes from 20 up to 200 as t goes from 0 to 1.
+      ctx.font = (20 + t * 180) + "px serif";
+      ctx.fillText("💨", 320 + t * 120, 260 - t * 60);
+      if (t > 0.6) { ctx.font = "60px serif"; ctx.fillText("PFFFRRRT", 320, 100); }
+    }
+  },
+  {
+    name: "🐕 Atlas zoomies",
+    seconds: 2,
+    draw(ctx, t) {
+      ctx.fillStyle = "#6bbf59"; ctx.fillRect(0, 0, 640, 360);   // grass
+      ctx.textAlign = "center";
+      ctx.font = "90px serif";
+      // Atlas runs in a circle: cos gives x, sin gives y. Two laps in one clip (t * 2).
+      const angle = t * Math.PI * 2 * 2;
+      const x = 320 + Math.cos(angle) * 200;
+      const y = 200 + Math.sin(angle) * 80;
+      ctx.fillText("🐕", x, y);
+    }
+  },
+];
+
+// ─────────────────────────────────────────────────────────────────────────
+// THE TIMELINE is just a list of clips in the order you picked them.
+// ─────────────────────────────────────────────────────────────────────────
+let timeline = [];          // starts empty
+
+const screen = document.getElementById("screen");
+const ctx = screen.getContext("2d");
+const shelfEl = document.getElementById("shelf");
+const timelineEl = document.getElementById("timeline");
+
+// Put one card on the shelf for a clip. Tapping the card adds that clip to the timeline.
+// This is a function because we need it twice: once for the built-in clips at the
+// start, and again every time you take a photo.
+function addToShelf(clip) {
+  const card = document.createElement("div");
+  card.className = "clip";
+  card.textContent = clip.name;
+  if (clip.image) {                         // a photo clip shows the photo on its card
+    card.style.backgroundImage = "url(" + clip.image.src + ")";
+    card.style.backgroundSize = "cover";
+    card.style.textShadow = "0 0 6px #000";
+  }
+  card.onclick = () => { timeline.push(clip); showTimeline(); preview(clip); };
+  shelfEl.appendChild(card);
+}
+CLIPS.forEach(addToShelf);
+
+// ─────────────────────────────────────────────────────────────────────────
+// THE CAMERA. When a photo comes in, we turn it into a clip: same shape as
+// the built-in ones, a name, some seconds, and a draw recipe. The recipe draws
+// the photo and slowly zooms in, so a still picture feels like a shot in a video.
+// ─────────────────────────────────────────────────────────────────────────
+let photoCount = 0;
+
+// Turn a loaded image into a clip. Used by the camera, and again when a saved project is reopened.
+function makePhotoClip(image) {
+  photoCount++;
+  return {
+    name: "📷 Photo " + photoCount,
+    seconds: 3,
+    image: image,
+    draw(ctx, t) {
+      // Fit the photo onto the screen. Photos come in all shapes; the screen is 640 by 360.
+      // We scale so the photo covers the whole screen, then zoom in a little more as t grows.
+      const cover = Math.max(640 / image.width, 360 / image.height);
+      const zoom = cover * (1 + t * 0.25);     // 25% bigger by the end of the clip
+      const w = image.width * zoom, h = image.height * zoom;
+      ctx.drawImage(image, (640 - w) / 2, (360 - h) / 2, w, h);   // centered
+    }
+  };
+}
+
+document.getElementById("camera").onchange = (event) => {
+  const file = event.target.files[0];
+  if (!file) return;                        // they opened the camera and backed out
+  const big = new Image();
+  big.onload = () => {
+    // A phone photo is HUGE (thousands of pixels wide). We only need 640 by 360, and a
+    // small copy is what lets a saved project fit in the browser's storage. So: draw the
+    // big photo onto a small hidden canvas, then turn that into a compact JPEG string.
+    const small = document.createElement("canvas");
+    small.width = 640; small.height = 360;
+    const sctx = small.getContext("2d");
+    const cover = Math.max(640 / big.width, 360 / big.height);
+    const w = big.width * cover, h = big.height * cover;
+    sctx.drawImage(big, (640 - w) / 2, (360 - h) / 2, w, h);
+    const image = new Image();
+    image.onload = () => {
+      const clip = makePhotoClip(image);
+      addToShelf(clip);
+      timeline.push(clip);                    // and straight onto the timeline, so it plays
+      showTimeline();
+      preview(clip);
+    };
+    image.src = small.toDataURL("image/jpeg", 0.7);   // the photo, squished into one long string of text
+  };
+  // URL.createObjectURL makes a short address that points at the photo on YOUR device.
+  big.src = URL.createObjectURL(file);
+  event.target.value = "";                    // so taking the same photo twice still counts
+};
+
+// Redraw the timeline cards from the list. Tapping a card removes that one clip.
+function showTimeline() {
+  timelineEl.innerHTML = "";
+  timeline.forEach((clip, i) => {
+    const card = document.createElement("div");
+    card.className = "clip";
+    card.textContent = (i + 1) + ". " + clip.name;
+    card.onclick = () => { timeline.splice(i, 1); showTimeline(); };   // splice = take one out of the list
+    timelineEl.appendChild(card);
+  });
+}
+
+// Show the first frame of a clip on the screen, so you can see what you just added.
+function preview(clip) {
+  ctx.clearRect(0, 0, 640, 360);
+  clip.draw(ctx, 0);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// PLAY: walk through the timeline one clip at a time.
+// requestAnimationFrame asks the browser to call us again on the next frame,
+// about 60 times a second. That is the game loop, same as every other game here.
+// ─────────────────────────────────────────────────────────────────────────
+let playing = false;
+
+// ─────────────────────────────────────────────────────────────────────────
+// SPEED. One number, two controls. Whichever one you touch, we copy its value
+// into the other one, so they can never disagree.
+// ─────────────────────────────────────────────────────────────────────────
+let speed = 1;
+const speedSlider = document.getElementById("speedSlider");
+const speedBox = document.getElementById("speedBox");
+const speedLabel = document.getElementById("speedLabel");
+
+function setSpeed(value) {
+  value = Number(value);
+  if (!(value > 0)) return;                         // ignore blanks, letters and zero (zero would freeze forever)
+  speed = Math.min(10, value);                      // 10× is plenty
+  speedSlider.value = speed;
+  speedBox.value = speed;
+  speedLabel.textContent = speed + "× " + (speed < 1 ? "slow-mo" : speed > 1 ? "fast" : "speed");
+}
+speedSlider.oninput = () => setSpeed(speedSlider.value);   // oninput fires while you drag, not just when you let go
+speedBox.oninput = () => setSpeed(speedBox.value);
+
+function play() {
+  if (timeline.length === 0 || playing) return;
+  playing = true;
+  let index = 0;                    // which clip we are on
+  let clipStart = performance.now(); // the time the current clip began, in milliseconds
+  startClip(timeline[0]);
+
+  // Some clips make a sound the moment they begin. Ask the clip if it has one.
+  function startClip(clip) {
+    if (clip.sound) clip.sound();
+  }
+
+  function frame(now) {
+    const clip = timeline[index];
+    // 0 → 1 across the clip. Multiplying by speed makes t climb faster (2 = twice as fast)
+    // or slower (0.5 = slow motion). The clip does not know or care; it just gets a t.
+    let t = (now - clipStart) / (clip.seconds * 1000) * speed;
+    if (t >= 1) {                    // this clip is done, move to the next one
+      index++;
+      clipStart = now;
+      if (index >= timeline.length) { playing = false; theEnd(); return; }
+      startClip(timeline[index]);
+      t = 0;
+    }
+    ctx.clearRect(0, 0, 640, 360);
+    timeline[index].draw(ctx, t);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+}
+
+function theEnd() {
+  ctx.fillStyle = "#000"; ctx.fillRect(0, 0, 640, 360);
+  ctx.fillStyle = "#fff"; ctx.font = "bold 60px sans-serif"; ctx.textAlign = "center";
+  ctx.fillText("THE END", 320, 200);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// THE GALLERY: 500 pictures and videos, all GENERATED.
+//
+// Nobody drew 500 things. There are a handful of recipes below, and each one
+// gets random numbers plugged in: random colors, random emoji, random speeds.
+// Same recipe, different numbers, a different picture every time.
+//
+// SEEDED RANDOM. Math.random() gives different numbers every page load, so the
+// gallery would reshuffle every time you opened it and "picture 42" would never
+// be the same picture twice. A seeded random generator starts from a fixed
+// number (the seed) and always hands out the same sequence after it. Gallery
+// item 42 is item 42 forever, on your phone and on your brother's.
+// ─────────────────────────────────────────────────────────────────────────
+function seededRandom(seed) {
+  return function () {
+    seed = (seed + 0x6D2B79F5) | 0;                       // scramble the seed a bit
+    let r = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    r = (r + Math.imul(r ^ (r >>> 7), 61 | r)) ^ r;
+    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;         // a number from 0 up to (not including) 1
+  };
+}
+
+// Little helpers so the recipes read nicely.
+const pick = (rand, list) => list[Math.floor(rand() * list.length)];
+const between = (rand, lo, hi) => lo + rand() * (hi - lo);
+const hue = (rand) => "hsl(" + Math.floor(rand() * 360) + ", 90%, 55%)";   // any bright color
+
+const EMOJI = ["🐸", "🐷", "🦄", "🍕", "💩", "🐔", "🤖", "👽", "🦖", "🍔", "🐙", "🎸", "⚽", "🧀", "🦆", "🐬"];
+
+// ─────────────────────────────────────────────────────────────────────────
+// SOUND, MADE FROM MATH. There is no sound file. The browser has a sound
+// machine called Web Audio, and we wire pieces together like a synthesizer:
+// a noise maker, a filter that muffles it, and a volume knob that fades it out.
+//
+// A BOOM is two sounds at once:
+//   1. THE THUMP: a deep wobble (a sine wave) that starts low and slides even lower.
+//   2. THE WHOOSH: pure static (random noise) squashed through a filter that
+//      starts open and closes down, so it goes from a crack to a rumble.
+// Both fade to nothing over a couple of seconds.
+// ─────────────────────────────────────────────────────────────────────────
+let audio = null;                                          // the sound machine, made on the first Play
+function getAudio() {
+  if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)();
+  if (audio.state === "suspended") audio.resume();         // phones keep it asleep until you tap
+  return audio;
+}
+
+function boom() {
+  const ac = getAudio(), now = ac.currentTime;
+
+  // 1. THE THUMP
+  const thump = ac.createOscillator();                     // makes a smooth wave
+  thump.type = "sine";
+  thump.frequency.setValueAtTime(120, now);                // starts at 120 Hz, a low hum...
+  thump.frequency.exponentialRampToValueAtTime(25, now + 1.5);   // ...and slides down to 25 Hz, a rumble you feel
+  const thumpVol = ac.createGain();                        // a volume knob
+  thumpVol.gain.setValueAtTime(1.0, now);
+  thumpVol.gain.exponentialRampToValueAtTime(0.001, now + 2.5);  // fade out
+  thump.connect(thumpVol).connect(ac.destination);         // wave → knob → speakers
+  thump.start(now); thump.stop(now + 2.5);
+
+  // 2. THE WHOOSH: three seconds of random numbers is what static sounds like
+  const seconds = 3, buffer = ac.createBuffer(1, ac.sampleRate * seconds, ac.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;   // every sample is random: noise
+  const noise = ac.createBufferSource(); noise.buffer = buffer;
+  const muffle = ac.createBiquadFilter();                  // the filter: lets low sounds through, blocks high ones
+  muffle.type = "lowpass";
+  muffle.frequency.setValueAtTime(3000, now);              // wide open: a sharp CRACK
+  muffle.frequency.exponentialRampToValueAtTime(40, now + 2);   // closing down: a deep rumble
+  const noiseVol = ac.createGain();
+  noiseVol.gain.setValueAtTime(1.0, now);
+  noiseVol.gain.exponentialRampToValueAtTime(0.001, now + 3);
+  noise.connect(muffle).connect(noiseVol).connect(ac.destination);
+  noise.start(now);
+}
+
+// ── THE EXPLOSION: gallery item 1, always. A cartoon KABOOM with a mushroom cloud. ──
+const EXPLOSION = {
+  name: "🎬 Video 1: KABOOM",
+  seconds: 3,
+  sound: boom,                                             // played once, the moment this clip starts
+  draw(ctx, t) {
+    // The first tenth of a second is a white flash. Then the sky darkens as the cloud rises.
+    if (t < 0.04) { ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, 640, 360); return; }
+    // SCREEN SHAKE: for the first part of the clip, nudge the whole drawing a random amount
+    // each frame. Big nudges at first, shrinking to nothing by t = 0.5.
+    const shake = Math.max(0, 0.5 - t) * 60;
+    ctx.save();                                            // remember where the paper was
+    ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);   // nudge the paper
+    ctx.fillStyle = "hsl(30, 60%, " + (35 - t * 25) + "%)"; ctx.fillRect(0, 0, 640, 360);  // orange sky going dark
+    ctx.fillStyle = "#3a2a1a"; ctx.fillRect(0, 300, 640, 60);                                 // ground
+    const grow = Math.min(1, t * 1.6);                 // the cloud grows fast, then hangs there
+    // The stem: a column of smoke rising from the ground.
+    ctx.fillStyle = "#6b5a4a";
+    ctx.beginPath(); ctx.ellipse(320, 300, 40 + grow * 40, 20, 0, 0, Math.PI * 2); ctx.fill();   // dust ring at the base
+    ctx.fillRect(320 - 30 - grow * 20, 300 - grow * 200, 60 + grow * 40, grow * 200);
+    // The cap: a bunch of overlapping circles, orange in the middle fading to smoke on the outside.
+    const capY = 300 - grow * 210, capR = 40 + grow * 110;
+    const puffs = [[0, 0, 1], [-0.7, 0.3, 0.7], [0.7, 0.3, 0.7], [-0.4, -0.4, 0.6], [0.4, -0.4, 0.6], [0, -0.55, 0.5]];
+    for (const [dx, dy, s] of puffs) {
+      ctx.fillStyle = "#4a4038";
+      ctx.beginPath(); ctx.arc(320 + dx * capR, capY + dy * capR, capR * s, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "hsl(" + (20 + t * 10) + ", 100%, " + (60 - t * 30) + "%)";              // the fire inside, cooling
+      ctx.beginPath(); ctx.arc(320 + dx * capR, capY + dy * capR, capR * s * 0.6, 0, Math.PI * 2); ctx.fill();
+    }
+    // The shockwave: a ring racing outward along the ground.
+    ctx.strokeStyle = "rgba(255,240,200," + (1 - t) + ")"; ctx.lineWidth = 6;
+    ctx.beginPath(); ctx.ellipse(320, 300, t * 500, t * 60, 0, 0, Math.PI * 2); ctx.stroke();
+    if (t > 0.3) {
+      ctx.fillStyle = "#fff"; ctx.strokeStyle = "#000"; ctx.lineWidth = 4;
+      ctx.font = "bold 70px sans-serif"; ctx.textAlign = "center";
+      ctx.strokeText("KABOOM!", 320, 90); ctx.fillText("KABOOM!", 320, 90);
+    }
+    ctx.restore();                                         // put the paper back where it was
+  }
+};
+
+// ── THE RECIPES. Each one takes rand (the seeded random) and cooks up a clip. ──
+const RECIPES = [
+  function sunsetPhoto(rand) {                           // PHOTO: a sunset over mountains
+    const top = hue(rand), bottom = hue(rand), sunX = between(rand, 100, 540), sunY = between(rand, 60, 200);
+    const peaks = []; for (let x = 0; x <= 640; x += 80) peaks.push(between(rand, 180, 300));
+    return { kind: "Photo", label: "Sunset", seconds: 2, draw(ctx, t) {
+      const sky = ctx.createLinearGradient(0, 0, 0, 360); sky.addColorStop(0, top); sky.addColorStop(1, bottom);
+      ctx.fillStyle = sky; ctx.fillRect(0, 0, 640, 360);
+      ctx.fillStyle = "#ffe066"; ctx.beginPath(); ctx.arc(sunX, sunY, 40 + t * 6, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#1d1a33"; ctx.beginPath(); ctx.moveTo(0, 360);
+      peaks.forEach((y, i) => ctx.lineTo(i * 80, y)); ctx.lineTo(640, 360); ctx.fill();
+    } };
+  },
+  function blobPhoto(rand) {                             // PHOTO: colorful blobs, like modern art
+    const bg = hue(rand), blobs = [];
+    for (let i = 0; i < 12; i++) blobs.push([between(rand, 0, 640), between(rand, 0, 360), between(rand, 20, 90), hue(rand)]);
+    return { kind: "Photo", label: "Blobs", seconds: 2, draw(ctx, t) {
+      ctx.fillStyle = bg; ctx.fillRect(0, 0, 640, 360);
+      for (const [x, y, r, c] of blobs) { ctx.fillStyle = c; ctx.beginPath(); ctx.arc(x, y, r * (1 + t * 0.1), 0, Math.PI * 2); ctx.fill(); }
+    } };
+  },
+  function bouncer(rand) {                               // VIDEO: an emoji bouncing across the screen
+    const face = pick(rand, EMOJI), bg = hue(rand), bounces = Math.floor(between(rand, 2, 6)), size = between(rand, 60, 130);
+    return { kind: "Video", label: "Bouncing " + face, seconds: 3, draw(ctx, t) {
+      ctx.fillStyle = bg; ctx.fillRect(0, 0, 640, 360);
+      const x = 60 + t * 520, y = 300 - Math.abs(Math.sin(t * Math.PI * bounces)) * 200;   // abs makes every bounce go UP
+      ctx.font = size + "px serif"; ctx.textAlign = "center"; ctx.fillText(face, x, y);
+    } };
+  },
+  function fireworks(rand) {                             // VIDEO: a firework bursting
+    const c = hue(rand), x = between(rand, 120, 520), y = between(rand, 60, 180), rays = Math.floor(between(rand, 8, 24));
+    return { kind: "Video", label: "Firework", seconds: 2, draw(ctx, t) {
+      ctx.fillStyle = "#05051a"; ctx.fillRect(0, 0, 640, 360);
+      if (t < 0.4) { ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(x, 340 - (t / 0.4) * (340 - y), 4, 0, Math.PI * 2); ctx.fill(); return; }
+      const burst = (t - 0.4) / 0.6;                    // 0 → 1 during the burst
+      ctx.strokeStyle = c; ctx.lineWidth = 3; ctx.globalAlpha = 1 - burst;
+      for (let i = 0; i < rays; i++) { const a = i / rays * Math.PI * 2;
+        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + Math.cos(a) * burst * 150, y + Math.sin(a) * burst * 150 + burst * burst * 60); ctx.stroke(); }
+      ctx.globalAlpha = 1;
+    } };
+  },
+  function emojiRain(rand) {                             // VIDEO: it is raining something
+    const face = pick(rand, EMOJI), bg = hue(rand), drops = [];
+    for (let i = 0; i < 25; i++) drops.push([between(rand, 0, 640), between(rand, 0, 1), between(rand, 30, 70)]);
+    return { kind: "Video", label: "Raining " + face, seconds: 3, draw(ctx, t) {
+      ctx.fillStyle = bg; ctx.fillRect(0, 0, 640, 360);
+      ctx.textAlign = "center";
+      for (const [x, offset, size] of drops) { ctx.font = size + "px serif"; ctx.fillText(face, x, ((t * 1.5 + offset) % 1) * 420 - 40); }
+    } };
+  },
+  function spinner(rand) {                               // VIDEO: a spinning shape
+    const c = hue(rand), bg = hue(rand), sides = Math.floor(between(rand, 3, 8)), spins = Math.floor(between(rand, 1, 4));
+    return { kind: "Video", label: sides + "-sided spinner", seconds: 2, draw(ctx, t) {
+      ctx.fillStyle = bg; ctx.fillRect(0, 0, 640, 360);
+      ctx.fillStyle = c; ctx.beginPath();
+      for (let i = 0; i < sides; i++) { const a = t * Math.PI * 2 * spins + i / sides * Math.PI * 2;
+        ctx.lineTo(320 + Math.cos(a) * 120, 180 + Math.sin(a) * 120); }
+      ctx.fill();
+    } };
+  },
+];
+
+// Cook all 500. Item 1 is the explosion; the other 499 come out of the recipes.
+function makeGallery(count) {
+  const rand = seededRandom(2026);           // the seed. Change it and you get a whole different 500.
+  const items = [EXPLOSION];
+  for (let i = 2; i <= count; i++) {
+    const clip = pick(rand, RECIPES)(rand);
+    clip.name = (clip.kind === "Photo" ? "🖼 Photo " : "🎬 Video ") + i + ": " + clip.label;
+    items.push(clip);
+  }
+  return items;
+}
+const GALLERY = makeGallery(500);
+
+// Build the grid the first time the gallery opens. Each thumbnail is its own tiny canvas
+// showing the clip halfway through (t = 0.5), shrunk down with ctx.scale.
+const galleryEl = document.getElementById("gallery");
+let galleryBuilt = false;
+function buildGallery() {
+  GALLERY.forEach(clip => {
+    const card = document.createElement("div");
+    card.className = "thumb";
+    const thumb = document.createElement("canvas");
+    thumb.width = 128; thumb.height = 72;
+    const tctx = thumb.getContext("2d");
+    tctx.scale(128 / 640, 72 / 360);                     // draw at full size, shrunk 5x
+    clip.draw(tctx, 0.5);
+    const caption = document.createElement("div");
+    caption.textContent = clip.name;
+    card.appendChild(thumb); card.appendChild(caption);
+    card.onclick = () => { timeline.push(clip); showTimeline(); preview(clip); };
+    galleryEl.appendChild(card);
+  });
+  galleryBuilt = true;
+}
+
+document.getElementById("galleryBtn").onclick = () => {
+  if (!galleryBuilt) buildGallery();
+  galleryEl.classList.toggle("open");                   // toggle = flip it: open if closed, closed if open
+};
+
+document.getElementById("play").onclick = play;
+document.getElementById("clear").onclick = () => { timeline = []; showTimeline(); ctx.clearRect(0, 0, 640, 360); };
+
+// A friendly screen so the editor is not just a black box.
+function welcomeScreen() {
+  ctx.fillStyle = "#222"; ctx.fillRect(0, 0, 640, 360);
+  ctx.fillStyle = "#fff"; ctx.font = "bold 36px sans-serif"; ctx.textAlign = "center";
+  ctx.fillText("Tap a clip to start your movie", 320, 190);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// SCREENS. Every screen is a box with the class "screen". showScreen(id) gives
+// the "show" class to ONE box and takes it away from all the others, so exactly
+// one screen is visible at a time. That is the whole trick.
+// ─────────────────────────────────────────────────────────────────────────
+function showScreen(id) {
+  document.querySelectorAll(".screen").forEach(box => box.classList.toggle("show", box.id === id));
+}
+
+// ── SCREEN 1: USERNAME ──
+// localStorage is a little notebook the browser keeps for this page, on this device.
+// It remembers the last username so you do not have to retype it. Nothing is sent anywhere.
+let username = "";
+const usernameEl = document.getElementById("username");
+usernameEl.value = localStorage.getItem("metube:lastUser") || "";
+
+function enter() {
+  const name = usernameEl.value.trim();          // trim = chop off spaces at the ends
+  if (!name) { usernameEl.focus(); return; }     // no name, no entry: put the cursor back in the box
+  username = name;
+  localStorage.setItem("metube:lastUser", name);
+  document.getElementById("hello").textContent = "Hi, " + name + "! 👋";
+  showScreen("home");
+}
+document.getElementById("enter").onclick = enter;
+usernameEl.onkeydown = (e) => { if (e.key === "Enter") enter(); };   // the Enter key works too
+
+// ── SCREEN 2: HOME ──
+document.getElementById("newProject").onclick = () => {
+  timeline = []; showTimeline(); welcomeScreen();
+  galleryEl.classList.remove("open");
+  showScreen("editor");
+};
+document.getElementById("browse").onclick = () => {
+  if (!feedBuilt) buildFeed();
+  showScreen("browseScreen");
+};
+document.getElementById("backFromBrowse").onclick = () => showScreen("home");
+document.getElementById("homeBtn").onclick = () => showScreen("home");
+document.getElementById("backFromSaved").onclick = () => showScreen("home");
+
+// ─────────────────────────────────────────────────────────────────────────
+// SAVING. A project is just the timeline, and the timeline is just a list of
+// clips. We do not save the clips themselves; we save their NAMES TAGS:
+//   "clip:2"      the third built-in clip
+//   "gallery:41"  gallery item 42 (lists count from 0, people count from 1)
+//   "photo:..."   a photo, as its JPEG text, because it exists nowhere else
+// Reopening a project turns the tags back into clips.
+// ─────────────────────────────────────────────────────────────────────────
+function clipTag(clip) {
+  const b = CLIPS.indexOf(clip);   if (b >= 0) return "clip:" + b;
+  const g = GALLERY.indexOf(clip); if (g >= 0) return "gallery:" + g;
+  if (clip.feedTag) return clip.feedTag;                  // a clip borrowed from a Browse video
+  if (clip.image) return "photo:" + clip.image.src;
+  return null;
+}
+
+// Photos load in the background, so this works through the list one tag at a time
+// and calls done(clips) when the last one is ready. Order is kept.
+function clipsFromTags(tags, done) {
+  const out = [];
+  (function next(i) {
+    if (i >= tags.length) { done(out); return; }
+    const tag = tags[i];
+    if (tag.startsWith("clip:"))         { out.push(CLIPS[+tag.slice(5)]);   next(i + 1); }
+    else if (tag.startsWith("gallery:")) { out.push(GALLERY[+tag.slice(8)]); next(i + 1); }
+    else if (tag.startsWith("feed:"))    { const [, v, c] = tag.split(":"); out.push(FEED[+v].clips[+c]); next(i + 1); }
+    else {
+      const img = new Image();
+      img.onload = () => { const c = makePhotoClip(img); addToShelf(c); out.push(c); next(i + 1); };
+      img.src = tag.slice(6);
+    }
+  })(0);
+}
+
+const projectsKey = () => "metube:projects:" + username;   // each username gets its own shelf of projects
+const loadProjects = () => JSON.parse(localStorage.getItem(projectsKey()) || "[]");
+
+document.getElementById("save").onclick = () => {
+  if (timeline.length === 0) { alert("Put some clips on the timeline first!"); return; }
+  const title = prompt("Name your video:", "My video");
+  if (title === null) return;                     // they hit cancel
+  const projects = loadProjects();
+  projects.unshift({ title: title || "Untitled", when: new Date().toLocaleDateString(), tags: timeline.map(clipTag).filter(Boolean) });
+  try { localStorage.setItem(projectsKey(), JSON.stringify(projects)); alert("Saved! 💾"); }
+  catch (e) { alert("Too big to save. Photos take a lot of room. Try fewer photos."); }
+};
+
+document.getElementById("savedProjects").onclick = () => {
+  const list = document.getElementById("savedItems");
+  list.innerHTML = "";
+  const projects = loadProjects();
+  if (projects.length === 0) list.innerHTML = "<p style='opacity:.6'>Nothing saved yet. Make a video and hit 💾 Save.</p>";
+  projects.forEach(project => {
+    const row = document.createElement("div");
+    row.className = "saved";
+    row.innerHTML = "<span>🎬 <b></b></span><small></small>";
+    row.querySelector("b").textContent = project.title;
+    row.querySelector("small").textContent = project.tags.length + " clips · " + project.when;
+    row.onclick = () => clipsFromTags(project.tags, clips => {
+      timeline = clips; showTimeline();
+      if (clips.length) preview(clips[0]);
+      showScreen("editor");
+    });
+    list.appendChild(row);
+  });
+  showScreen("savedList");
+};
+
+// ─────────────────────────────────────────────────────────────────────────
+// BROWSE: a feed of videos by made-up MeTubers. Mostly cats.
+//
+// A feed video is a small project: a channel, a title, a view count, and a
+// list of 2 to 4 clips. Same trick as the gallery: a few recipes, a seeded
+// random, and out comes a whole video site. Tap a video and it opens in YOUR
+// editor, which is the whole point of MeTube: you edit other people's videos.
+// ─────────────────────────────────────────────────────────────────────────
+const CATS = ["🐱", "🐈", "🐈‍⬛", "😺", "😹", "🙀"];
+
+const CAT_RECIPES = [
+  function catKnocksItOff(rand) {                        // the classic: cup goes off the table
+    const cat = pick(rand, CATS), thing = pick(rand, ["☕", "🏺", "🥛", "🍰", "🖥️"]), wall = hue(rand);
+    return { kind: "Video", label: "Cat vs " + thing, seconds: 3, draw(ctx, t) {
+      ctx.fillStyle = wall; ctx.fillRect(0, 0, 640, 360);
+      ctx.fillStyle = "#8b5a2b"; ctx.fillRect(60, 220, 380, 20); ctx.fillRect(80, 240, 20, 120); ctx.fillRect(400, 240, 20, 120);   // table
+      ctx.textAlign = "center"; ctx.font = "80px serif";
+      ctx.fillText(cat, 200, 210);
+      // The cup sits still, then at t = 0.5 the paw hits and it flies off and FALLS. Falling is
+      // "go down faster and faster": distance grows with the square of the time since the shove.
+      const shove = Math.max(0, t - 0.5);
+      const x = 360 + shove * 500, y = 205 + shove * shove * 1400;
+      ctx.font = "60px serif"; ctx.fillText(thing, x, Math.min(y, 340));
+      if (t > 0.35 && t < 0.55) { ctx.font = "50px serif"; ctx.fillText("🐾", 290, 200); }
+      if (y > 340) { ctx.font = "bold 50px sans-serif"; ctx.fillStyle = "#fff"; ctx.fillText("CRASH", 500, 120); }
+    } };
+  },
+  function laserChase(rand) {                           // the red dot, and the cat that cannot catch it
+    const cat = pick(rand, CATS), loops = Math.floor(between(rand, 1, 3)), wide = between(rand, 150, 260);
+    return { kind: "Video", label: "Laser cat", seconds: 3, draw(ctx, t) {
+      ctx.fillStyle = "#1a1a2e"; ctx.fillRect(0, 0, 640, 360);
+      const a = t * Math.PI * 2 * loops;                       // the dot runs in a loop
+      const dotX = 320 + Math.cos(a) * wide, dotY = 200 + Math.sin(a * 2) * 90;
+      const lag = a - 0.9;                                     // the cat is always a bit behind
+      const catX = 320 + Math.cos(lag) * wide, catY = 200 + Math.sin(lag * 2) * 90;
+      ctx.textAlign = "center"; ctx.font = "90px serif"; ctx.fillText(cat, catX, catY + 30);
+      ctx.fillStyle = "#ff2222"; ctx.shadowColor = "#ff2222"; ctx.shadowBlur = 20;
+      ctx.beginPath(); ctx.arc(dotX, dotY, 8, 0, Math.PI * 2); ctx.fill(); ctx.shadowBlur = 0;
+    } };
+  },
+  function catInABox(rand) {                            // pops up, ducks down, pops up
+    const cat = pick(rand, CATS), pops = Math.floor(between(rand, 2, 5)), bg = hue(rand);
+    return { kind: "Video", label: "Box cat", seconds: 3, draw(ctx, t) {
+      ctx.fillStyle = bg; ctx.fillRect(0, 0, 640, 360);
+      const up = Math.max(0, Math.sin(t * Math.PI * pops));   // 0 = hiding, 1 = all the way up
+      ctx.textAlign = "center"; ctx.font = "100px serif";
+      ctx.fillText(cat, 320, 250 - up * 110);
+      ctx.font = "160px serif"; ctx.fillText("📦", 320, 340);     // the box is drawn LAST so it covers the cat
+      if (up > 0.9) { ctx.font = "bold 40px sans-serif"; ctx.fillStyle = "#fff"; ctx.fillText("MEOW", 320, 60); }
+    } };
+  },
+  function judgingYou(rand) {                           // slow zoom on a cat face. It knows what you did.
+    const cat = pick(rand, CATS), line = pick(rand, ["judging you", "I saw that", "feed me", "no.", "why are you like this"]);
+    return { kind: "Video", label: "Cat stare", seconds: 3, draw(ctx, t) {
+      ctx.fillStyle = "#222"; ctx.fillRect(0, 0, 640, 360);
+      ctx.textAlign = "center"; ctx.font = (150 + t * 120) + "px serif";   // creeping closer
+      ctx.fillText(cat, 320, 240 + t * 40);
+      if (t > 0.5) { ctx.font = "bold 44px sans-serif"; ctx.fillStyle = "#fff"; ctx.fillText(line, 320, 60); }
+    } };
+  },
+];
+
+// The MeTubers. All made up. Rename them, add your own, it is your site.
+const CHANNELS = ["Whisker Wednesday", "Sir Fartsalot", "Dampy's Hydration Station", "Atlas Barks Back",
+                  "Captain Kaboom", "Professor Pickle", "Chango's Chaos Cam", "The Boring Channel"];
+const TITLES = [
+  "my cat did THIS (not clickbait)", "10 cats vs 1 cucumber", "cat sees itself in mirror 😹",
+  "I let my cat edit this video", "world's laziest cat", "cat ignores me for 3 minutes straight",
+  "the fart heard round the world", "KABOOM compilation #4", "rating every emoji out of 10",
+  "you won't BELIEVE what my dog did", "splash responsibly: a hydration story", "this video has no point",
+];
+const VIEWS = ["12 views", "487 views", "2.1K views", "38K views", "104K views", "1.2M views", "9.8M views", "63M views"];
+
+function makeFeed(count) {
+  const rand = seededRandom(777);                      // its own seed, so the feed never reshuffles either
+  const feed = [];
+  for (let i = 0; i < count; i++) {
+    const clips = [];
+    const howMany = Math.floor(between(rand, 2, 5));   // 2, 3 or 4 clips per video
+    for (let c = 0; c < howMany; c++) {
+      // Two out of three clips are cats. It is the internet.
+      const recipe = rand() < 0.66 ? pick(rand, CAT_RECIPES) : pick(rand, RECIPES);
+      clips.push(recipe(rand));
+    }
+    feed.push({ channel: pick(rand, CHANNELS), title: pick(rand, TITLES), views: pick(rand, VIEWS), clips });
+  }
+  return feed;
+}
+const FEED = makeFeed(60);
+
+// Feed clips need name tags too, so a video you edited can be SAVED. Tag: "feed:videoNumber:clipNumber".
+FEED.forEach((video, v) => video.clips.forEach((clip, c) => { clip.name = "📺 " + clip.label; clip.feedTag = "feed:" + v + ":" + c; }));
+
+const feedEl = document.getElementById("feed");
+let feedBuilt = false;
+function buildFeed() {
+  FEED.forEach(video => {
+    const row = document.createElement("div");
+    row.className = "video";
+    const thumb = document.createElement("canvas");
+    thumb.width = 128; thumb.height = 72;
+    const tctx = thumb.getContext("2d");
+    tctx.scale(128 / 640, 72 / 360);
+    video.clips[0].draw(tctx, 0.6);                     // the thumbnail is the first clip, part way in
+    const words = document.createElement("div");
+    words.innerHTML = "<div class='title'></div><div class='meta'></div>";
+    words.querySelector(".title").textContent = video.title;
+    words.querySelector(".meta").textContent = video.channel + " · " + video.views;
+    row.appendChild(thumb); row.appendChild(words);
+    // Tap: the video's clips become YOUR timeline. Now you are editing their video.
+    row.onclick = () => {
+      timeline = video.clips.slice();                   // slice() = a copy, so their video stays theirs
+      showTimeline(); preview(timeline[0]);
+      showScreen("editor");
+      play();
+    };
+    feedEl.appendChild(row);
+  });
+  feedBuilt = true;
+}
+
+// And we begin at the front door.
+welcomeScreen();
+showScreen("login");
+</script>
+</body>
+</html>
