@@ -1,0 +1,1169 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover">
+<title>DUNGEONS 2</title>
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #0a0810; }
+  /* touch-action: none tells the phone "do not scroll, do not zoom, the GAME handles fingers" */
+  canvas { display: block; touch-action: none; }
+</style>
+<style>
+a.arcade-pill {
+  display: inline-flex !important; align-items: center !important; gap: 6px !important;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif !important;
+  font-size: 13px !important; font-weight: 600 !important; letter-spacing: 0.3px !important;
+  line-height: 1 !important; text-decoration: none !important; text-transform: none !important;
+  color: #ffe0c4 !important;
+  background: rgba(24, 14, 28, 0.62) !important;
+  border: 1px solid rgba(255, 200, 150, 0.42) !important;
+  padding: 7px 13px !important; border-radius: 999px !important;
+  cursor: pointer !important; white-space: nowrap !important;
+  -webkit-backdrop-filter: blur(5px) !important; backdrop-filter: blur(5px) !important;
+  -webkit-tap-highlight-color: transparent !important;
+  transition: transform 0.12s, border-color 0.12s, background 0.12s !important;
+}
+a.arcade-pill:hover, a.arcade-pill:active, a.arcade-pill:focus-visible {
+  transform: scale(1.05) !important;
+  border-color: rgba(255, 200, 150, 0.9) !important;
+  background: rgba(40, 22, 44, 0.78) !important;
+  color: #fff5e8 !important;
+}
+a.arcade-pill .ah-arrow { font-size: 14px !important; opacity: 0.9 !important; }
+a.arcade-pill.arcade-float {
+  position: fixed !important;
+  top: calc(8px + env(safe-area-inset-top, 0px)) !important;
+  left: calc(10px + env(safe-area-inset-left, 0px)) !important;
+  z-index: 2147483000 !important;
+}
+</style>
+</head>
+<body>
+<a id="back" class="arcade-pill arcade-float" href="index.html"
+   aria-label="Back to Max's Arcade"><span class="ah-arrow">&larr;</span>Arcade</a>
+<script>
+(function () {
+  var pill = document.getElementById('back');
+  if (!pill) return;
+  var go = function (e) { e.stopPropagation(); e.preventDefault(); location.href = 'index.html'; };
+  ['click', 'touchend'].forEach(function (t) { pill.addEventListener(t, go, { passive: false }); });
+  ['mousedown', 'touchstart', 'pointerdown'].forEach(function (t) {
+    pill.addEventListener(t, function (e) { e.stopPropagation(); }, { passive: false });
+  });
+})();
+</script>
+<canvas id="game"></canvas>
+<script>
+// =====================================================================
+//  DUNGEONS 2  —  by Max
+//
+//  A dungeon crawler like Minecraft Dungeons:
+//    - a MISSION MAP where you pick a level
+//    - each level is a dungeon of rooms and hallways, built from dice rolls
+//    - a mini-map that fills in as you explore
+//    - find the glowing exit to clear the level and unlock the next one
+// =====================================================================
+
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+// ---------------------------------------------------------------------
+//  PART 1: THE WORLD AND THE CAMERA
+// ---------------------------------------------------------------------
+
+// The world is a grid of square tiles. TILE is how many "world pixels" wide one tile is.
+const TILE = 48;
+const WALL_H = TILE * 1.5;    // how tall the back walls stand
+const RIM_H  = TILE * 0.25;   // how tall the little front rims are
+
+// Minecraft Dungeons looks at the world from a tilted corner, not straight
+// down. So a square tile on the floor shows up as a DIAMOND on screen.
+// This one tiny function does the whole trick: it takes a spot in the
+// world (wx, wy) and says where to paint it on screen.
+//   - walking "east" (wx bigger) goes down-and-right on screen
+//   - walking "south" (wy bigger) goes down-and-left on screen
+function iso(wx, wy) {
+  return { x: wx - wy, y: (wx + wy) * 0.5 };
+}
+
+// ---------------------------------------------------------------------
+//  PART 2: DICE
+// ---------------------------------------------------------------------
+// Math.random() gives a different number every time, which is a problem:
+// level 3 would be a different dungeon every time you played it.
+// makeDice(seed) gives you a dice that rolls the SAME sequence of numbers
+// every time you start it with the same seed. Same seed = same dungeon.
+function makeDice(seed) {
+  let s = seed >>> 0;
+  return function roll() {                      // returns a number from 0 up to (not including) 1
+    s = (s + 0x6D2B79F5) >>> 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// ---------------------------------------------------------------------
+//  PART 3: THE LEVELS
+// ---------------------------------------------------------------------
+// Each mission has a name, how many rooms it has, a dice seed, and its colours.
+//   floor: two shades for the checkerboard
+//   wall:  [top, left side, right side] of the blocks
+//   sky:   what colour the nothing around the level is (black = underground)
+//   flowers: true if the dice should scatter flowers on the ground
+// MAX: most of these names are placeholders. Rename them! They are YOUR levels.
+const LEVELS = [
+  { name: 'THE PLAINS',         rooms: 5,  seed: 101, floor: ['#5fa33a', '#57973a'], wall: ['#6db843', '#7a5230', '#5e3e22'], sky: '#78b4e6', flowers: true, houses: 3, zombies: 3 },
+  { name: 'SOGGY SEWER',        rooms: 6,  seed: 202, floor: ['#3f5a4e', '#375146'], wall: ['#2f4a3e', '#213a2e', '#182e24'] },
+  { name: 'BOOGER BOG',         rooms: 7,  seed: 303, floor: ['#5c6a2e', '#526028'], wall: ['#4a5a24', '#36441a', '#2a3614'] },
+  { name: 'CREEPER CRYPT',      rooms: 8,  seed: 404, floor: ['#3c3c4a', '#343442'], wall: ['#2c2c3a', '#202030', '#181826'] },
+  { name: 'THE LAVA LAUNDRY',   rooms: 9,  seed: 505, floor: ['#5a3a2e', '#513428'], wall: ['#4a2e24', '#36221a', '#2a1a14'] },
+  { name: 'THE BOSS BATHROOM',  rooms: 10, seed: 606, floor: ['#4a3a5e', '#423454'], wall: ['#3a2c4e', '#2a2038', '#20182c'] },
+];
+
+const GRID = 56;          // every level is a GRID x GRID square of tiles
+const VOID = 0, FLOOR = 1, HOUSE = 2;   // what a tile can be
+const HOUSE_H = TILE * 1.6;             // how tall a house stands
+const NO_WALL = 0, TALL_WALL = 1, RIM_WALL = 2;
+
+let level = null;         // the level you are playing right now (built by generateLevel)
+
+// Builds a whole dungeon: drops rooms onto the grid, joins them with
+// hallways, and picks a start and an exit.
+function generateLevel(index) {
+  const info = LEVELS[index];
+  const roll = makeDice(info.seed);
+  const tiles = new Uint8Array(GRID * GRID);   // one number per tile, all VOID to begin with
+  const rooms = [];
+
+  const get = (c, r) => (c < 0 || r < 0 || c >= GRID || r >= GRID) ? VOID : tiles[r * GRID + c];
+  const set = (c, r, v) => { if (c >= 0 && r >= 0 && c < GRID && r < GRID) tiles[r * GRID + c] = v; };
+
+  // Carve a 2-tile-wide hallway from (x1,y1) to (x2,y2). It goes sideways
+  // first and then up/down (or the other way round) so it makes an L shape.
+  function carveHallway(x1, y1, x2, y2, sidewaysFirst) {
+    const sideways = (y, xa, xb) => { for (let x = Math.min(xa, xb); x <= Math.max(xa, xb); x++) { set(x, y, FLOOR); set(x, y + 1, FLOOR); } };
+    const upDown   = (x, ya, yb) => { for (let y = Math.min(ya, yb); y <= Math.max(ya, yb); y++) { set(x, y, FLOOR); set(x + 1, y, FLOOR); } };
+    if (sidewaysFirst) { sideways(y1, x1, x2); upDown(x2, y1, y2); }
+    else               { upDown(x1, y1, y2);   sideways(y2, x1, x2); }
+  }
+
+  // Keep rolling random rooms until we have enough (or we give up trying).
+  let tries = 0;
+  while (rooms.length < info.rooms && tries < 400) {
+    tries++;
+    // the START room is always big (8 to 10), so there is space for houses. Other rooms are 5 to 10.
+    const minSize = rooms.length === 0 ? 8 : 5;
+    const w = minSize + Math.floor(roll() * (11 - minSize));
+    const h = minSize + Math.floor(roll() * (11 - minSize));
+    const c = 2 + Math.floor(roll() * (GRID - w - 4));
+    const r = 2 + Math.floor(roll() * (GRID - h - 4));
+    const room = { c, r, w, h, cx: c + Math.floor(w / 2), cy: r + Math.floor(h / 2) };
+
+    // does it bump into a room we already placed? (with a 2-tile gap)
+    const bumps = rooms.some(o => c < o.c + o.w + 2 && c + w + 2 > o.c && r < o.r + o.h + 2 && r + h + 2 > o.r);
+    if (bumps) continue;
+
+    rooms.push(room);
+    for (let y = r; y < r + h; y++) for (let x = c; x < c + w; x++) set(x, y, FLOOR);
+
+    // join it to the room before it, so every room is reachable
+    if (rooms.length > 1) {
+      const prev = rooms[rooms.length - 2];
+      carveHallway(prev.cx, prev.cy, room.cx, room.cy, roll() < 0.5);
+    }
+  }
+
+  // The exit goes in whichever room is FARTHEST from the start room.
+  const start = rooms[0];
+  let exitRoom = rooms[1];
+  for (const room of rooms) {
+    if (Math.hypot(room.cx - start.cx, room.cy - start.cy) > Math.hypot(exitRoom.cx - start.cx, exitRoom.cy - start.cy)) exitRoom = room;
+  }
+
+  // BURNING HOUSES in the start room. Each house is a 2x2 block of HOUSE
+  // tiles tucked into a corner, and next to each one stands a zombie.
+  const houses = [];     // every HOUSE tile, so we know where to spit fire from
+  const spawns = [];     // where mobs appear when the level starts
+  const corners = [
+    { c: start.c + 1,            r: start.r + 1 },
+    { c: start.c + start.w - 3,  r: start.r + 1 },
+    { c: start.c + 1,            r: start.r + start.h - 3 },
+    { c: start.c + start.w - 3,  r: start.r + start.h - 3 },
+  ];
+  for (let i = 0; i < (info.houses || 0) && i < corners.length; i++) {
+    const { c, r } = corners[i];
+    for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) { set(c + dx, r + dy, HOUSE); houses.push({ c: c + dx, r: r + dy }); }
+    if (i < (info.zombies || 0)) {
+      // the zombie stands between its house and the middle of the room.
+      // Walk along that line until we find a spot that is fully on open floor.
+      const hx = c + 1, hy = r + 1;                          // middle of the house, in tiles
+      const mx = start.cx + 0.5, my = start.cy + 0.5;        // middle of the room
+      for (let t = 0.35; t <= 0.9; t += 0.05) {
+        const x = (hx + (mx - hx) * t) * TILE, y = (hy + (my - hy) * t) * TILE;
+        const clear = [[-12, -12], [12, -12], [-12, 12], [12, 12]].every(([ox, oy]) => get(Math.floor((x + ox) / TILE), Math.floor((y + oy) / TILE)) === FLOOR);
+        if (clear) { spawns.push({ kind: 'zombie', x, y }); break; }
+      }
+    }
+  }
+
+  // Work out which VOID tiles are walls (they touch a floor tile), and
+  // whether each wall is TALL (floor is in front of it, so it is a back wall)
+  // or just a low RIM (floor is behind it, so a tall wall would hide the hero).
+  const walls = new Uint8Array(GRID * GRID);
+  for (let r = 0; r < GRID; r++) {
+    for (let c = 0; c < GRID; c++) {
+      if (get(c, r) !== VOID) continue;   // floors and houses are not walls
+      let touchesFloor = false;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (get(c + dx, r + dy) === FLOOR) touchesFloor = true;
+      if (!touchesFloor) continue;
+      const floorInFront  = get(c, r + 1) === FLOOR || get(c + 1, r) === FLOOR || get(c + 1, r + 1) === FLOOR;
+      const floorBehind   = get(c, r - 1) === FLOOR || get(c - 1, r) === FLOOR;
+      walls[r * GRID + c] = (floorInFront && !floorBehind) ? TALL_WALL : RIM_WALL;
+    }
+  }
+
+  // Flowers! On outdoor levels the dice drop a flower or a grass tuft on
+  // some of the floor tiles. 0 = nothing, 1 = red flower, 2 = yellow flower, 3 = grass tuft.
+  const decor = new Uint8Array(GRID * GRID);
+  if (info.flowers) {
+    for (let i = 0; i < GRID * GRID; i++) {
+      if (tiles[i] !== FLOOR) continue;
+      const chance = roll();
+      if (chance < 0.04) decor[i] = 1;
+      else if (chance < 0.08) decor[i] = 2;
+      else if (chance < 0.20) decor[i] = 3;
+    }
+  }
+
+  return {
+    info, tiles, walls, rooms, decor, houses, spawns,
+    seen: new Uint8Array(GRID * GRID),           // which tiles the mini-map knows about
+    startX: (start.cx + 0.5) * TILE, startY: (start.cy + 0.5) * TILE,
+    exit: { c: exitRoom.cx, r: exitRoom.cy },
+  };
+}
+
+// Is this spot in the world standing on floor?
+function isFloorAt(wx, wy) {
+  const c = Math.floor(wx / TILE), r = Math.floor(wy / TILE);
+  if (c < 0 || r < 0 || c >= GRID || r >= GRID) return false;
+  return level.tiles[r * GRID + c] === FLOOR;
+}
+
+// ---------------------------------------------------------------------
+//  PART 4: THE HERO
+// ---------------------------------------------------------------------
+// The hero is just a bundle of numbers: where they are, how fast they go.
+const hero = {
+  x: 0, y: 0,                // world position (set when a level starts)
+  speed: 220,                // world pixels per second. Try changing this!
+  size: 30,                  // how wide the hero's body is
+  radius: 10,                // how fat the hero is for bumping into walls
+  facing: 1,                 // 1 = looking right, -1 = looking left (which way the picture flips)
+  angle: 0,                  // the direction the hero is FACING, in the world. 0 = east. The mouse sets this.
+  stepTimer: 0,              // counts up while walking, for the leg wobble
+  hp: 5, maxHp: 5,           // hearts. Lose them all and it is game over.
+  hurt: 0,                   // seconds left of the red "ouch" flash
+};
+
+// Can something with this radius stand here without any part of it being
+// inside a wall? We check the four corners of a little square around its feet.
+function canStandAt(x, y, radius) {
+  const r = radius;
+  return isFloorAt(x - r, y - r) && isFloorAt(x + r, y - r) && isFloorAt(x - r, y + r) && isFloorAt(x + r, y + r);
+}
+function canStand(x, y) { return canStandAt(x, y, hero.radius); }
+
+function hurtHero(amount) {
+  hero.hp -= amount;
+  hero.hurt = 0.35;
+  if (hero.hp <= 0) { hero.hp = 0; mode = 'dead'; modeTimer = 0; }
+}
+
+// ---------------------------------------------------------------------
+//  PART 4b: THE SWORD
+// ---------------------------------------------------------------------
+const sword = {
+  reach: TILE * 1.4,         // how far in front of the hero it hits
+  arc: Math.PI * 0.8,        // how wide the swing is (0.8 of a half-turn: a fat slice of pie)
+  damage: 1,
+  swing: 0,                  // seconds left of the swing animation
+  cooldown: 0,               // seconds until you can swing again
+};
+
+// Swing at everything in a pie-slice in front of the hero.
+function swingSword() {
+  if (mode !== 'play' || sword.cooldown > 0) return;
+  sword.cooldown = 0.4;
+  sword.swing = 0.22;
+  for (const m of mobs) {
+    const dx = m.x - hero.x, dy = m.y - hero.y, dist = Math.hypot(dx, dy);
+    if (dist > sword.reach) continue;                       // too far away
+    // how far off the facing direction is this mob? (wrapped so -180..180 degrees)
+    let diff = Math.atan2(dy, dx) - hero.angle;
+    diff = Math.atan2(Math.sin(diff), Math.cos(diff));
+    if (Math.abs(diff) > sword.arc / 2) continue;           // not in the pie slice
+    m.hp -= sword.damage;
+    m.flash = 0.15;
+    // knock it back a bit, if there is floor to knock it onto
+    const kx = dx / dist * TILE * 0.7, ky = dy / dist * TILE * 0.7;
+    if (canStandAt(m.x + kx, m.y, m.radius)) m.x += kx;
+    if (canStandAt(m.x, m.y + ky, m.radius)) m.y += ky;
+    if (m.hp <= 0) {
+      for (let i = 0; i < 12; i++) spawnParticle(m.x, m.y, 20, '#7ad85a', 5, 40 + Math.random() * 60, 0.6, 60);
+    }
+  }
+  mobs = mobs.filter(m => m.hp > 0);   // the dead ones vanish
+}
+
+// ---------------------------------------------------------------------
+//  PART 4c: MOBS (the monsters)
+// ---------------------------------------------------------------------
+let mobs = [];
+
+function spawnMobs() {
+  mobs = [];
+  for (const s of level.spawns) {
+    mobs.push({
+      kind: s.kind, x: s.x, y: s.y,
+      hp: 3, maxHp: 3,
+      speed: 85,              // slower than the hero (220). Zombies shamble.
+      radius: 10,
+      angle: 0, facing: 1, stepTimer: 0,
+      biteTimer: 1.5,         // a little head start before the first bite
+      flash: 0,               // seconds left of the white "got hit" flash
+    });
+  }
+}
+
+const SMELL_RANGE = TILE * 9;   // how far away a zombie can notice you
+const BITE_RANGE  = TILE * 0.65;
+
+function updateMobs(dt) {
+  for (const m of mobs) {
+    m.flash = Math.max(0, m.flash - dt);
+    m.biteTimer = Math.max(0, m.biteTimer - dt);
+    const dx = hero.x - m.x, dy = hero.y - m.y, dist = Math.hypot(dx, dy);
+
+    if (dist < BITE_RANGE) {
+      // close enough to bite
+      if (m.biteTimer <= 0) { m.biteTimer = 1.1; hurtHero(1); }
+      m.stepTimer = 0;
+    } else if (dist < SMELL_RANGE) {
+      // chase! walk straight at the hero (same wall-sliding trick as the hero)
+      m.angle = Math.atan2(dy, dx);
+      const nx = m.x + Math.cos(m.angle) * m.speed * dt;
+      const ny = m.y + Math.sin(m.angle) * m.speed * dt;
+      if (canStandAt(nx, m.y, m.radius)) m.x = nx;
+      if (canStandAt(m.x, ny, m.radius)) m.y = ny;
+      m.stepTimer += dt * 8;
+      const f = iso(Math.cos(m.angle), Math.sin(m.angle)).x;
+      if (f > 0.05) m.facing = 1;
+      if (f < -0.05) m.facing = -1;
+    }
+
+    // zombies should not pile up into one zombie: push apart gently
+    for (const o of mobs) {
+      if (o === m) continue;
+      const ox = m.x - o.x, oy = m.y - o.y, d = Math.hypot(ox, oy);
+      if (d > 0 && d < 22) { m.x += ox / d * 40 * dt; m.y += oy / d * 40 * dt; }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------
+//  PART 4d: PARTICLES (fire, smoke, zombie puffs)
+// ---------------------------------------------------------------------
+// A particle is a little dot that floats up and fades away. Fire is just
+// lots of orange dots. Smoke is lots of grey dots. That is the whole secret.
+let particles = [];
+function spawnParticle(x, y, h, color, size, riseSpeed, life, scatter) {
+  particles.push({
+    x: x + (Math.random() - 0.5) * scatter,   // world position
+    y: y + (Math.random() - 0.5) * scatter,
+    h,                                        // how high off the floor
+    color, size, riseSpeed, life, maxLife: life,
+  });
+}
+function updateParticles(dt) {
+  for (const p of particles) { p.h += p.riseSpeed * dt; p.life -= dt; }
+  particles = particles.filter(p => p.life > 0);
+}
+const FIRE_COLORS = ['#ffd23a', '#ff9a1f', '#ff5a1f', '#ff3a1f'];
+function updateFire(dt) {
+  for (const t of level.houses) {
+    const x = (t.c + 0.5) * TILE, y = (t.r + 0.5) * TILE;
+    if (Math.random() < dt * 7) spawnParticle(x, y, HOUSE_H, FIRE_COLORS[Math.floor(Math.random() * 4)], 5 + Math.random() * 6, 50 + Math.random() * 50, 0.6 + Math.random() * 0.5, TILE * 0.8);
+    if (Math.random() < dt * 1.2) spawnParticle(x, y, HOUSE_H + 20, 'rgba(70,70,70,0.7)', 9 + Math.random() * 6, 30, 1.8, TILE * 0.6);
+  }
+}
+
+// ---------------------------------------------------------------------
+//  PART 5: GAME MODES AND PROGRESS
+// ---------------------------------------------------------------------
+// The game is always in exactly one mode:
+//   'map'     - the mission map, picking a level
+//   'play'    - walking around a dungeon
+//   'cleared' - you just found the exit, showing the banner
+let mode = 'map';
+let currentLevel = 0;    // which mission you are on (0 = the first one)
+let selected = 0;        // which mission is highlighted on the map
+let unlocked = 1;        // how many missions you are allowed to play
+let modeTimer = 0;       // seconds since the mode last changed
+
+// Remember progress between visits. (It is saved inside YOUR browser only.)
+try { unlocked = Math.max(1, Math.min(LEVELS.length, parseInt(localStorage.getItem('dungeons2.unlocked')) || 1)); } catch (e) {}
+function saveProgress() { try { localStorage.setItem('dungeons2.unlocked', String(unlocked)); } catch (e) {} }
+
+function startLevel(index) {
+  currentLevel = index;
+  level = generateLevel(index);
+  hero.x = level.startX;
+  hero.y = level.startY;
+  hero.hp = hero.maxHp;
+  hero.hurt = 0;
+  sword.swing = 0; sword.cooldown = 0;
+  spawnMobs();
+  particles = [];
+  camera.x = iso(hero.x, hero.y).x;
+  camera.y = iso(hero.x, hero.y).y;
+  mode = 'play';
+  modeTimer = 0;
+}
+
+function clearLevel() {
+  mode = 'cleared';
+  modeTimer = 0;
+  if (currentLevel + 1 >= unlocked) {
+    unlocked = Math.min(LEVELS.length, currentLevel + 2);
+    saveProgress();
+  }
+  selected = Math.min(currentLevel + 1, LEVELS.length - 1);
+}
+
+// ---------------------------------------------------------------------
+//  PART 6: CONTROLS
+// ---------------------------------------------------------------------
+// keys['w'] is true while W is held down, false when it is let go.
+const keys = {};
+window.addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  keys[k] = true;
+  if (mode === 'map') {
+    if (k === 'arrowright' || k === 'd') selected = Math.min(selected + 1, LEVELS.length - 1);
+    if (k === 'arrowleft'  || k === 'a') selected = Math.max(selected - 1, 0);
+    if ((k === 'enter' || k === ' ') && selected < unlocked) startLevel(selected);
+  } else if (mode === 'play') {
+    if (k === 'escape') { mode = 'map'; modeTimer = 0; }
+    if (k === ' ') { e.preventDefault(); swingSword(); }
+  }
+});
+window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+
+// TOUCH: a joystick wherever your thumb lands. Put your thumb down anywhere,
+// then drag. The hero walks the way you drag.
+const stick = { on: false, startX: 0, startY: 0, dx: 0, dy: 0 };
+const STICK_REACH = 50;   // how far you can drag before the stick is "all the way"
+
+// Where did a tap land? Checks the map's mission buttons and the MAP button in play.
+function handleTap(px, py) {
+  if (mode === 'map') {
+    const hit = mapNodeAt(px, py);
+    if (hit >= 0) {
+      selected = hit;
+      if (hit < unlocked) startLevel(hit);
+    }
+    return true;
+  }
+  if (mode === 'play' && insideMapButton(px, py)) { mode = 'map'; modeTimer = 0; return true; }
+  return false;
+}
+
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  const t = e.changedTouches[0];
+  if (handleTap(t.clientX, t.clientY)) return;
+  if (mode !== 'play') return;
+  stick.on = true;
+  stick.startX = t.clientX; stick.startY = t.clientY;
+  stick.dx = 0; stick.dy = 0;
+  stick.startTime = performance.now();
+}, { passive: false });
+
+canvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  const t = e.changedTouches[0];
+  stick.dx = t.clientX - stick.startX;
+  stick.dy = t.clientY - stick.startY;
+}, { passive: false });
+
+// Letting go of the screen: if it was a quick tap with hardly any dragging,
+// that was not a walk, that was a SWING.
+const stickOff = e => {
+  e.preventDefault();
+  const quick = performance.now() - (stick.startTime || 0) < 220;
+  const still = Math.hypot(stick.dx, stick.dy) < 12;
+  if (stick.on && quick && still) swingSword();
+  stick.on = false; stick.dx = 0; stick.dy = 0;
+};
+canvas.addEventListener('touchend', stickOff, { passive: false });
+canvas.addEventListener('touchcancel', stickOff, { passive: false });
+
+canvas.addEventListener('click', e => {
+  if (handleTap(e.clientX, e.clientY)) return;
+  if (mode === 'play') swingSword();
+});
+
+// MOUSE: the hero always turns to face wherever the mouse pointer is.
+const mouse = { x: 0, y: 0, moved: false };
+window.addEventListener('mousemove', e => { mouse.x = e.clientX; mouse.y = e.clientY; mouse.moved = true; });
+
+// Turns a spot on the SCREEN into a spot in the WORLD.
+// Step 1: undo the camera (the screen centre is the camera point).
+// Step 2: undo iso(). If x = wx - wy and y = (wx + wy) / 2, then a bit of
+//         algebra gives wx = y + x / 2 and wy = y - x / 2.
+function screenToWorld(px, py) {
+  const sx = (px - canvas.width  / 2) / zoom + camera.x;
+  const sy = (py - canvas.height / 2) / zoom + camera.y;
+  return { x: sy + sx / 2, y: sy - sx / 2 };
+}
+
+// ---------------------------------------------------------------------
+//  PART 7: SCREEN SIZE AND CAMERA
+// ---------------------------------------------------------------------
+// The canvas fills the whole window. The zoom is chosen so you can always
+// see about the same number of tiles, whether on a phone or a big monitor.
+let zoom = 1;
+const TILES_TALL = 9;   // how many tiles fit top-to-bottom on screen. Smaller = more zoomed in.
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  zoom = canvas.height / (TILES_TALL * TILE);
+}
+window.addEventListener('resize', resize);
+resize();
+
+// The camera is just a point on the screen-map that we keep in the middle
+// of the window. Each frame it slides a bit of the way toward the hero,
+// instead of jumping, so it feels like it is on a string.
+const camera = { x: 0, y: 0 };
+const CAMERA_CHASE = 6;   // bigger = stiffer string. Try 1, then try 30!
+function updateCamera(dt) {
+  const target = iso(hero.x, hero.y);
+  const k = 1 - Math.exp(-CAMERA_CHASE * dt);   // what fraction of the gap to close this frame
+  camera.x += (target.x - camera.x) * k;
+  camera.y += (target.y - camera.y) * k;
+}
+
+// ---------------------------------------------------------------------
+//  PART 8: UPDATE (move things)
+// ---------------------------------------------------------------------
+// dt = how many seconds since the last frame (usually about 0.016).
+// Multiplying by dt means the hero goes the same speed on fast AND slow computers.
+function update(dt) {
+  modeTimer += dt;
+  if (mode === 'cleared' && modeTimer > 2.2) { mode = 'map'; modeTimer = 0; }
+  if (mode === 'dead'    && modeTimer > 2.6) { mode = 'map'; modeTimer = 0; }
+  if (mode === 'cleared' || mode === 'dead') { updateParticles(dt); updateFire(dt); }
+  if (mode !== 'play') return;
+
+  // timers tick down
+  sword.swing = Math.max(0, sword.swing - dt);
+  sword.cooldown = Math.max(0, sword.cooldown - dt);
+  hero.hurt = Math.max(0, hero.hurt - dt);
+  updateMobs(dt);
+  updateFire(dt);
+  updateParticles(dt);
+
+  // --- TURNING: the hero faces the mouse pointer ---
+  if (mouse.moved) {
+    const aim = screenToWorld(mouse.x, mouse.y);
+    hero.angle = Math.atan2(aim.y - hero.y, aim.x - hero.x);   // the angle from the hero to the pointer
+  }
+
+  // --- WALKING: W forward, S back, A and D sidestep ---
+  // "forward" is the direction the hero faces. "right" is that turned a quarter turn.
+  const forwardX = Math.cos(hero.angle), forwardY = Math.sin(hero.angle);
+  const rightX = -forwardY,             rightY = forwardX;
+  let ahead = 0, side = 0;   // how much forward (+) or back (-), how much right (+) or left (-)
+  if (keys['w'] || keys['arrowup'])    ahead += 1;
+  if (keys['s'] || keys['arrowdown'])  ahead -= 1;
+  if (keys['d'] || keys['arrowright']) side  += 1;
+  if (keys['a'] || keys['arrowleft'])  side  -= 1;
+  let worldX = forwardX * ahead + rightX * side;
+  let worldY = forwardY * ahead + rightY * side;
+
+  // THE TOUCH JOYSTICK works differently: you drag in a SCREEN direction and
+  // the hero both walks AND turns that way. "Up on screen" is really
+  // north-west in the tilted world, so we convert (iso() run backwards).
+  if (stick.on) {
+    const sx = Math.max(-1, Math.min(1, stick.dx / STICK_REACH));
+    const sy = Math.max(-1, Math.min(1, stick.dy / STICK_REACH));
+    worldX += sx + sy;
+    worldY += sy - sx;
+    if (Math.hypot(sx, sy) > 0.2) hero.angle = Math.atan2(sy - sx, sx + sy);
+  }
+
+  // if you push diagonally, do not go faster than straight. (Pythagoras!)
+  const len = Math.hypot(worldX, worldY);
+  if (len > 1) { worldX /= len; worldY /= len; }
+
+  // which way does the picture flip? Whichever way the hero FACES on screen.
+  const faceOnScreen = iso(forwardX, forwardY).x;
+  if (faceOnScreen > 0.05) hero.facing = 1;
+  if (faceOnScreen < -0.05) hero.facing = -1;
+
+  // Try the sideways step and the up/down step separately. If one of them
+  // would put you in a wall, skip just that one. That is why you can slide
+  // along a wall instead of getting stuck on it.
+  const nextX = hero.x + worldX * hero.speed * dt;
+  const nextY = hero.y + worldY * hero.speed * dt;
+  if (canStand(nextX, hero.y)) hero.x = nextX;
+  if (canStand(hero.x, nextY)) hero.y = nextY;
+
+  if (len > 0.1) hero.stepTimer += dt * 12; else hero.stepTimer = 0;
+
+  // the mini-map learns about every tile within SEE_TILES of the hero
+  const SEE_TILES = 7;
+  const hc = Math.floor(hero.x / TILE), hr = Math.floor(hero.y / TILE);
+  for (let r = hr - SEE_TILES; r <= hr + SEE_TILES; r++) {
+    for (let c = hc - SEE_TILES; c <= hc + SEE_TILES; c++) {
+      if (c < 0 || r < 0 || c >= GRID || r >= GRID) continue;
+      if (Math.hypot(c - hc, r - hr) <= SEE_TILES) level.seen[r * GRID + c] = 1;
+    }
+  }
+
+  // standing on the exit? level cleared!
+  const ex = (level.exit.c + 0.5) * TILE, ey = (level.exit.r + 0.5) * TILE;
+  if (Math.hypot(hero.x - ex, hero.y - ey) < TILE * 0.5) clearLevel();
+}
+
+// ---------------------------------------------------------------------
+//  PART 9: DRAWING THE DUNGEON
+// ---------------------------------------------------------------------
+
+// Traces the diamond shape of one tile, lifted up off the floor by `lift`.
+function tileDiamond(col, row, lift) {
+  const a = iso(col * TILE,       row * TILE);
+  const b = iso((col + 1) * TILE, row * TILE);
+  const c = iso((col + 1) * TILE, (row + 1) * TILE);
+  const d = iso(col * TILE,       (row + 1) * TILE);
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y - lift);
+  ctx.lineTo(b.x, b.y - lift);
+  ctx.lineTo(c.x, c.y - lift);
+  ctx.lineTo(d.x, d.y - lift);
+  ctx.closePath();
+}
+
+// A stone block: a bright top, a lit side, and a shadowy side.
+// That is all a 3D-looking block is in an isometric game: three shapes.
+function drawBlock(col, row, height, colors) {
+  const b = iso((col + 1) * TILE, row * TILE);
+  const c = iso((col + 1) * TILE, (row + 1) * TILE);
+  const d = iso(col * TILE,       (row + 1) * TILE);
+
+  // the side facing down-left (the "south" face)
+  ctx.fillStyle = colors[1];
+  ctx.beginPath();
+  ctx.moveTo(d.x, d.y - height); ctx.lineTo(c.x, c.y - height);
+  ctx.lineTo(c.x, c.y);          ctx.lineTo(d.x, d.y);
+  ctx.closePath(); ctx.fill();
+
+  // the side facing down-right (the "east" face)
+  ctx.fillStyle = colors[2];
+  ctx.beginPath();
+  ctx.moveTo(b.x, b.y - height); ctx.lineTo(c.x, c.y - height);
+  ctx.lineTo(c.x, c.y);          ctx.lineTo(b.x, b.y);
+  ctx.closePath(); ctx.fill();
+
+  // the top
+  ctx.fillStyle = colors[0];
+  tileDiamond(col, row, height);
+  ctx.fill();
+
+  // a dark outline so the bricks look like separate stones
+  ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+}
+
+// A flower or grass tuft sitting on a floor tile. Tiny, but a plain
+// with no flowers is just a green carpet.
+function drawDecor(col, row, kind) {
+  const p = iso((col + 0.5) * TILE, (row + 0.5) * TILE);
+  if (kind === 3) {   // grass tuft: three little green blades
+    ctx.strokeStyle = '#3f8a2a'; ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(p.x - 5, p.y); ctx.lineTo(p.x - 7, p.y - 9);
+    ctx.moveTo(p.x,     p.y); ctx.lineTo(p.x,     p.y - 11);
+    ctx.moveTo(p.x + 5, p.y); ctx.lineTo(p.x + 7, p.y - 9);
+    ctx.stroke();
+    return;
+  }
+  // a flower: a green stem and a coloured blob on top
+  ctx.strokeStyle = '#3f8a2a'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x, p.y - 10); ctx.stroke();
+  ctx.fillStyle = kind === 1 ? '#e8403a' : '#f2d23a';
+  ctx.beginPath(); ctx.arc(p.x, p.y - 12, 4, 0, Math.PI * 2); ctx.fill();
+}
+
+function drawExit(time) {
+  const { c, r } = level.exit;
+  const glow = 0.5 + 0.5 * Math.sin(time * 4);   // pulses between 0 and 1
+  // a glowing pool of light on the floor
+  ctx.fillStyle = `rgba(80, 220, 255, ${0.25 + glow * 0.3})`;
+  tileDiamond(c - 0.5, r - 0.5, 0); ctx.fill();
+  tileDiamond(c + 0.5, r + 0.5, 0); ctx.fill();
+  ctx.fillStyle = `rgba(160, 240, 255, ${0.5 + glow * 0.5})`;
+  tileDiamond(c, r, 0); ctx.fill();
+  // a floating diamond gem above it
+  const p = iso((c + 0.5) * TILE, (r + 0.5) * TILE);
+  const bob = Math.sin(time * 3) * 6;
+  ctx.fillStyle = '#9ff';
+  ctx.beginPath();
+  ctx.moveTo(p.x, p.y - 40 - bob); ctx.lineTo(p.x + 12, p.y - 24 - bob);
+  ctx.lineTo(p.x, p.y - 8 - bob);  ctx.lineTo(p.x - 12, p.y - 24 - bob);
+  ctx.closePath(); ctx.fill();
+}
+
+// A small arrow on the floor showing which way the hero faces.
+// It is drawn in WORLD coordinates and pushed through iso(), so it lies
+// flat on the tilted floor instead of floating on the screen.
+function drawFacingArrow() {
+  const d = TILE * 0.55;                                  // how far in front of the feet
+  const fx = Math.cos(hero.angle), fy = Math.sin(hero.angle);
+  const tip   = iso(hero.x + fx * d,              hero.y + fy * d);
+  const left  = iso(hero.x + fx * d * 0.5 - fy * 8, hero.y + fy * d * 0.5 + fx * 8);
+  const right = iso(hero.x + fx * d * 0.5 + fy * 8, hero.y + fy * d * 0.5 - fx * 8);
+  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  ctx.beginPath(); ctx.moveTo(tip.x, tip.y); ctx.lineTo(left.x, left.y); ctx.lineTo(right.x, right.y); ctx.closePath(); ctx.fill();
+}
+
+// The hero and the zombies are the SAME blocky person shape with different
+// colours. So instead of copy-pasting the drawing twice, one function draws
+// any person, and you hand it a "look": the colours and whether the arms
+// stick out zombie-style.
+const HERO_LOOK   = { skin: '#e8b48a', hair: '#5a3a1e', shirt: '#2fb3a0', pants: '#3b4fa3', armsOut: false };
+const ZOMBIE_LOOK = { skin: '#5a9e4a', hair: '#3f7a32', shirt: '#2e7a8a', pants: '#3b4fa3', armsOut: true };
+
+function drawPerson(x, y, facing, stepTimer, look, s, flash) {
+  const wobble = Math.sin(stepTimer) * 4;   // legs swing while walking
+  const feet = iso(x, y);                   // where the feet are, on screen
+  ctx.save();
+  ctx.translate(feet.x, feet.y - s * 0.75); // lift the sprite so the FEET touch the floor
+  ctx.scale(facing, 1);                     // flip to face left or right
+
+  // shadow on the floor
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  ctx.beginPath(); ctx.ellipse(0, s * 0.75, s * 0.6, s * 0.22, 0, 0, Math.PI * 2); ctx.fill();
+
+  // legs
+  ctx.fillStyle = look.pants;
+  ctx.fillRect(-s * 0.4, s * 0.1 + wobble * 0.3, s * 0.35, s * 0.6);
+  ctx.fillRect(s * 0.05,  s * 0.1 - wobble * 0.3, s * 0.35, s * 0.6);
+  // body
+  ctx.fillStyle = look.shirt;
+  ctx.fillRect(-s * 0.45, -s * 0.5, s * 0.9, s * 0.65);
+  // zombie arms: stuck straight out in front, the classic
+  if (look.armsOut) {
+    ctx.fillStyle = look.skin;
+    ctx.fillRect(s * 0.3, -s * 0.45, s * 0.75, s * 0.2);
+    ctx.fillRect(s * 0.3, -s * 0.2,  s * 0.75, s * 0.2);
+  }
+  // head
+  ctx.fillStyle = look.skin;
+  ctx.fillRect(-s * 0.4, -s * 1.15, s * 0.8, s * 0.7);
+  // hair
+  ctx.fillStyle = look.hair;
+  ctx.fillRect(-s * 0.4, -s * 1.15, s * 0.8, s * 0.22);
+  // eye (only one shows, because we see the side they are facing)
+  ctx.fillStyle = '#222';
+  ctx.fillRect(s * 0.15, -s * 0.85, s * 0.12, s * 0.12);
+
+  // a white flash when hit, drawn over the top
+  if (flash > 0) {
+    ctx.fillStyle = `rgba(255,255,255,${Math.min(1, flash * 6)})`;
+    ctx.fillRect(-s * 0.5, -s * 1.2, s, s * 2);
+  }
+  ctx.restore();
+}
+
+// The sword swing: a white pie-slice that sweeps across the floor in front
+// of the hero. It is drawn in WORLD coordinates so it lies flat on the tilt.
+function drawSwordSwing() {
+  if (sword.swing <= 0) return;
+  const progress = 1 - sword.swing / 0.22;               // 0 at the start of the swing, 1 at the end
+  const from = hero.angle - sword.arc / 2;
+  const to   = from + sword.arc * Math.min(1, progress * 1.4);
+  ctx.fillStyle = `rgba(255,255,255,${0.55 * (1 - progress)})`;
+  ctx.beginPath();
+  const centre = iso(hero.x, hero.y);
+  ctx.moveTo(centre.x, centre.y);
+  for (let i = 0; i <= 10; i++) {
+    const a = from + (to - from) * i / 10;
+    const p = iso(hero.x + Math.cos(a) * sword.reach, hero.y + Math.sin(a) * sword.reach);
+    ctx.lineTo(p.x, p.y);
+  }
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawHero() {
+  drawFacingArrow();
+  drawSwordSwing();
+  drawPerson(hero.x, hero.y, hero.facing, hero.stepTimer, HERO_LOOK, hero.size, 0);
+}
+
+function drawMob(m) {
+  drawPerson(m.x, m.y, m.facing, m.stepTimer, ZOMBIE_LOOK, 30, m.flash);
+  // a little health bar over its head, once it has been hurt
+  if (m.hp < m.maxHp) {
+    const p = iso(m.x, m.y);
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(p.x - 16, p.y - 66, 32, 5);
+    ctx.fillStyle = '#e8403a';
+    ctx.fillRect(p.x - 16, p.y - 66, 32 * m.hp / m.maxHp, 5);
+  }
+}
+
+function drawParticles() {
+  for (const p of particles) {
+    const s = iso(p.x, p.y);
+    const left = p.life / p.maxLife;             // 1 when new, 0 when about to vanish
+    ctx.globalAlpha = left;
+    ctx.fillStyle = p.color;
+    ctx.beginPath(); ctx.arc(s.x, s.y - p.h, p.size * (0.3 + 0.7 * left), 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// Paints the whole dungeon. Only tiles near the camera get painted,
+// because painting 3,000 tiles you cannot see is a waste.
+function drawDungeon(time) {
+  const halfW = canvas.width  / 2 / zoom + TILE * 2;
+  const halfH = canvas.height / 2 / zoom + WALL_H + TILE;
+  const things = [];   // everything that needs sorting by depth before painting
+
+  for (let r = 0; r < GRID; r++) {
+    for (let c = 0; c < GRID; c++) {
+      const p = iso((c + 0.5) * TILE, (r + 0.5) * TILE);
+      if (Math.abs(p.x - camera.x) > halfW || Math.abs(p.y - camera.y) > halfH) continue;   // off screen, skip
+
+      if (level.tiles[r * GRID + c] === FLOOR) {
+        // floor: two shades in a checker pattern so you can SEE yourself moving
+        ctx.fillStyle = level.info.floor[(r + c) % 2];
+        tileDiamond(c, r, 0);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        if (level.decor[r * GRID + c]) drawDecor(c, r, level.decor[r * GRID + c]);
+      } else if (level.tiles[r * GRID + c] === HOUSE) {
+        things.push({ depth: (c + r + 1) * TILE, draw: () => drawBlock(c, r, HOUSE_H, HOUSE_COLORS) });
+      } else if (level.walls[r * GRID + c] !== NO_WALL) {
+        const height = level.walls[r * GRID + c] === TALL_WALL ? WALL_H : RIM_H;
+        things.push({ depth: (c + r + 1) * TILE, draw: () => drawBlock(c, r, height, level.info.wall) });
+      }
+    }
+  }
+
+  drawExit(time);
+
+  // PAINT ORDER MATTERS. Things nearer the camera must be painted later so
+  // they sit on top. "depth" is how near something is: walls, houses, the
+  // hero and the zombies all go in one list, sorted far-to-near, then painted.
+  things.push({ depth: hero.x + hero.y, draw: drawHero });
+  for (const m of mobs) things.push({ depth: m.x + m.y, draw: () => drawMob(m) });
+  things.sort((a, b) => a.depth - b.depth);
+  for (const t of things) t.draw();
+
+  drawParticles();   // fire and smoke float above everything
+}
+const HOUSE_COLORS = ['#3a2214', '#8a5a30', '#6e4524'];   // charred roof, plank sides
+
+// ---------------------------------------------------------------------
+//  PART 10: THE HUD (mini-map, level name, buttons)
+// ---------------------------------------------------------------------
+// Everything here is drawn in plain screen pixels, not world pixels.
+
+const MINI_SCALE = 3;   // screen pixels per tile on the mini-map
+function drawMiniMap() {
+  const size = GRID * MINI_SCALE;
+  const x0 = canvas.width - size - 12, y0 = 12;
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillRect(x0 - 4, y0 - 4, size + 8, size + 8);
+
+  for (let r = 0; r < GRID; r++) {
+    for (let c = 0; c < GRID; c++) {
+      const i = r * GRID + c;
+      if (!level.seen[i]) continue;                         // never been near it: stays dark
+      if (level.tiles[i] === FLOOR) ctx.fillStyle = 'rgba(220,210,240,0.8)';
+      else if (level.walls[i] !== NO_WALL) ctx.fillStyle = 'rgba(90,80,110,0.8)';
+      else continue;
+      ctx.fillRect(x0 + c * MINI_SCALE, y0 + r * MINI_SCALE, MINI_SCALE, MINI_SCALE);
+    }
+  }
+  // the exit, once you have seen it
+  if (level.seen[level.exit.r * GRID + level.exit.c]) {
+    ctx.fillStyle = '#6ff';
+    ctx.fillRect(x0 + level.exit.c * MINI_SCALE - 1, y0 + level.exit.r * MINI_SCALE - 1, MINI_SCALE + 2, MINI_SCALE + 2);
+  }
+  // zombies, but only the ones standing somewhere you have seen
+  ctx.fillStyle = '#ff3b4a';
+  for (const m of mobs) {
+    const c = Math.floor(m.x / TILE), r = Math.floor(m.y / TILE);
+    if (!level.seen[r * GRID + c]) continue;
+    ctx.beginPath(); ctx.arc(x0 + m.x / TILE * MINI_SCALE, y0 + m.y / TILE * MINI_SCALE, 2.5, 0, Math.PI * 2); ctx.fill();
+  }
+  // you
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.arc(x0 + hero.x / TILE * MINI_SCALE, y0 + hero.y / TILE * MINI_SCALE, 3, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+// the little MAP button in the bottom-left corner (for phones, which have no Escape key)
+const mapButton = { x: 14, y: 0, w: 78, h: 34 };
+function insideMapButton(px, py) {
+  mapButton.y = canvas.height - mapButton.h - 14;
+  return px >= mapButton.x && px <= mapButton.x + mapButton.w && py >= mapButton.y && py <= mapButton.y + mapButton.h;
+}
+function drawMapButton() {
+  mapButton.y = canvas.height - mapButton.h - 14;
+  ctx.fillStyle = 'rgba(24,14,28,0.65)';
+  ctx.strokeStyle = 'rgba(255,200,150,0.5)';
+  ctx.lineWidth = 1.5;
+  roundRect(mapButton.x, mapButton.y, mapButton.w, mapButton.h, 17);
+  ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#ffe0c4';
+  ctx.font = 'bold 13px system-ui, sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('MAP', mapButton.x + mapButton.w / 2, mapButton.y + mapButton.h / 2 + 1);
+}
+
+function roundRect(x, y, w, h, rad) {
+  ctx.beginPath();
+  ctx.moveTo(x + rad, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rad);
+  ctx.arcTo(x + w, y + h, x, y + h, rad);
+  ctx.arcTo(x, y + h, x, y, rad);
+  ctx.arcTo(x, y, x + w, y, rad);
+  ctx.closePath();
+}
+
+function drawLevelName() {
+  // the level name floats at the top for a few seconds, then fades out
+  const fade = Math.max(0, Math.min(1, 3.5 - modeTimer));
+  if (fade <= 0) return;
+  ctx.globalAlpha = fade;
+  ctx.fillStyle = '#fff';
+  ctx.font = `bold ${Math.round(Math.min(44, canvas.width / 14))}px system-ui, sans-serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  ctx.shadowColor = 'rgba(0,0,0,0.8)'; ctx.shadowBlur = 12;
+  ctx.fillText(level.info.name, canvas.width / 2, 56);
+  ctx.font = 'bold 16px system-ui, sans-serif';
+  ctx.fillText('MISSION ' + (currentLevel + 1) + '  ·  find the glowing exit', canvas.width / 2, 56 + Math.min(44, canvas.width / 14) + 8);
+  ctx.shadowBlur = 0;
+  ctx.globalAlpha = 1;
+}
+
+function drawClearedBanner() {
+  const pop = Math.min(1, modeTimer * 4);   // the banner pops in over a quarter second
+  ctx.fillStyle = `rgba(0,0,0,${0.55 * pop})`;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.save();
+  ctx.translate(canvas.width / 2, canvas.height / 2);
+  ctx.scale(pop, pop);
+  ctx.fillStyle = '#ffd84a';
+  ctx.font = `bold ${Math.round(Math.min(72, canvas.width / 9))}px system-ui, sans-serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 18;
+  ctx.fillText('LEVEL CLEARED!', 0, -20);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 20px system-ui, sans-serif';
+  ctx.fillText(currentLevel + 1 < LEVELS.length ? 'next mission unlocked' : 'you beat ALL of them. for now.', 0, 36);
+  ctx.restore();
+  ctx.shadowBlur = 0;
+}
+
+// ---------------------------------------------------------------------
+//  PART 11: THE MISSION MAP
+// ---------------------------------------------------------------------
+// Where is mission number i drawn on screen? They zigzag across the page.
+function mapNodePos(i) {
+  const n = LEVELS.length;
+  const pad = Math.min(90, canvas.width * 0.12);
+  const x = pad + (canvas.width - pad * 2) * (n === 1 ? 0.5 : i / (n - 1));
+  const y = canvas.height * 0.56 + Math.sin(i * 1.9) * canvas.height * 0.11;
+  return { x, y };
+}
+function mapNodeAt(px, py) {
+  for (let i = 0; i < LEVELS.length; i++) {
+    const p = mapNodePos(i);
+    if (Math.hypot(px - p.x, py - p.y) < 40) return i;
+  }
+  return -1;
+}
+
+function drawMissionMap(time) {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  // a dark parchment-ish background
+  const g = ctx.createRadialGradient(canvas.width / 2, canvas.height / 2, 50, canvas.width / 2, canvas.height / 2, canvas.width * 0.7);
+  g.addColorStop(0, '#2b2238'); g.addColorStop(1, '#0a0810');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // title
+  ctx.fillStyle = '#ffd84a';
+  ctx.font = `bold ${Math.round(Math.min(64, canvas.width / 9))}px system-ui, sans-serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 16;
+  ctx.fillText('DUNGEONS 2', canvas.width / 2, canvas.height * 0.12);
+  ctx.fillStyle = '#d8cfe8';
+  ctx.font = 'bold 16px system-ui, sans-serif';
+  ctx.fillText('pick a mission', canvas.width / 2, canvas.height * 0.12 + Math.min(64, canvas.width / 9) + 6);
+  ctx.shadowBlur = 0;
+
+  // the winding path between missions
+  ctx.strokeStyle = 'rgba(255,220,160,0.35)';
+  ctx.lineWidth = 6;
+  ctx.setLineDash([10, 12]);
+  ctx.beginPath();
+  for (let i = 0; i < LEVELS.length; i++) {
+    const p = mapNodePos(i);
+    if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+  }
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // the mission buttons
+  for (let i = 0; i < LEVELS.length; i++) {
+    const p = mapNodePos(i);
+    const isUnlocked = i < unlocked;
+    const isSelected = i === selected;
+
+    if (isSelected) {   // pulsing ring around the highlighted one
+      ctx.strokeStyle = `rgba(255,216,74,${0.5 + 0.5 * Math.sin(time * 5)})`;
+      ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.arc(p.x, p.y, 38, 0, Math.PI * 2); ctx.stroke();
+    }
+    ctx.fillStyle = isUnlocked ? LEVELS[i].floor[0] : '#262230';
+    ctx.strokeStyle = isUnlocked ? '#ffe0c4' : '#4a4456';
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(p.x, p.y, 30, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+
+    ctx.fillStyle = isUnlocked ? '#fff' : '#6a6478';
+    ctx.font = 'bold 22px system-ui, sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(isUnlocked ? String(i + 1) : '🔒', p.x, p.y + 1);
+
+    // the name underneath (only for the selected one on narrow screens, to avoid a pile-up)
+    if (isSelected || canvas.width > 900) {
+      ctx.fillStyle = isUnlocked ? '#ffe0c4' : '#6a6478';
+      ctx.font = `bold ${isSelected ? 15 : 12}px system-ui, sans-serif`;
+      ctx.textBaseline = 'top';
+      ctx.fillText(LEVELS[i].name, p.x, p.y + 44);
+    }
+  }
+
+  // how to drive
+  ctx.fillStyle = 'rgba(216,207,232,0.7)';
+  ctx.font = '14px system-ui, sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+  ctx.fillText('← →  pick     ENTER  go     or just tap a mission', canvas.width / 2, canvas.height - 22);
+}
+
+// ---------------------------------------------------------------------
+//  PART 12: DRAW EVERYTHING
+// ---------------------------------------------------------------------
+function drawStick() {
+  // only shows while a thumb is on the screen
+  if (!stick.on) return;
+  ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+  ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.arc(stick.startX, stick.startY, STICK_REACH, 0, Math.PI * 2); ctx.stroke();
+  const len = Math.hypot(stick.dx, stick.dy);
+  const k = len > STICK_REACH ? STICK_REACH / len : 1;
+  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  ctx.beginPath(); ctx.arc(stick.startX + stick.dx * k, stick.startY + stick.dy * k, 20, 0, Math.PI * 2); ctx.fill();
+}
+
+function draw(time) {
+  if (mode === 'map') { drawMissionMap(time); return; }
+
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = level.info.sky || '#0a0810';   // outdoor levels get a sky, underground ones get darkness
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Put the camera point in the middle of the window. Everything else is
+  // painted relative to it, so when the camera moves, the whole world slides.
+  ctx.setTransform(zoom, 0, 0, zoom,
+    canvas.width / 2 - camera.x * zoom,
+    canvas.height / 2 - camera.y * zoom);
+  drawDungeon(time);
+
+  // back to plain screen pixels for the HUD
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  if (hero.hurt > 0) {   // red flash round the edges when bitten
+    ctx.fillStyle = `rgba(255,30,30,${hero.hurt * 1.2})`;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
+  drawHearts();
+  drawMiniMap();
+  drawMapButton();
+  drawLevelName();
+  drawStick();
+  if (mode === 'cleared') drawClearedBanner();
+  if (mode === 'dead') drawDeadBanner();
+}
+
+function drawHearts() {
+  ctx.font = '26px system-ui, sans-serif';
+  ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  for (let i = 0; i < hero.maxHp; i++) {
+    ctx.fillStyle = i < hero.hp ? '#ff3b4a' : 'rgba(0,0,0,0.45)';
+    ctx.fillText('♥', 14 + i * 28, 52);
+  }
+}
+
+function drawDeadBanner() {
+  const pop = Math.min(1, modeTimer * 4);
+  ctx.fillStyle = `rgba(40,0,0,${0.6 * pop})`;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.save();
+  ctx.translate(canvas.width / 2, canvas.height / 2);
+  ctx.scale(pop, pop);
+  ctx.fillStyle = '#7ad85a';
+  ctx.font = `bold ${Math.round(Math.min(64, canvas.width / 10))}px system-ui, sans-serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 18;
+  ctx.fillText('YOU GOT ZOMBIFIED', 0, -20);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 20px system-ui, sans-serif';
+  ctx.fillText('back to the map...', 0, 36);
+  ctx.restore();
+  ctx.shadowBlur = 0;
+}
+
+// ---------------------------------------------------------------------
+//  PART 13: THE GAME LOOP
+// ---------------------------------------------------------------------
+// The browser calls this about 60 times a second. Every time:
+// move stuff, then paint stuff. That is all a game loop is.
+let lastTime = performance.now();
+function loop(now) {
+  const dt = Math.min((now - lastTime) / 1000, 0.05);   // cap it so a lag spike cannot teleport you
+  lastTime = now;
+  update(dt);
+  if (mode !== 'map') updateCamera(dt);
+  draw(now / 1000);
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
