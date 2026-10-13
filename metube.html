@@ -62,6 +62,24 @@
   .video canvas { width: 128px; height: 72px; border-radius: 6px; flex: 0 0 auto; background: #000; }
   .video .title { font-weight: 700; font-size: .95rem; }
   .video .meta { font-size: .78rem; opacity: .65; margin-top: 4px; }
+  .video .sub { color: #22c55e; }
+  .video .sent { color: #f59e0b; }
+  /* THE WATCH PAGE: video on top, then the title row, then comments. */
+  #watchCanvas { display: block; width: calc(100% - 32px); max-width: 640px; aspect-ratio: 16 / 9;
+                 margin: 0 auto; background: #000; border-radius: 10px; border: 3px solid #333; }
+  .watchInfo { max-width: 640px; margin: 10px auto; padding: 0 16px; }
+  .watchInfo h2 { font-size: 1.1rem; margin: 6px 0; }
+  .channelRow { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+  .channelRow small { opacity: .65; }
+  #subscribe { background: #e11d48; }
+  #subscribe.on { background: #444; }
+  #comments { max-width: 640px; margin: 0 auto; padding: 0 16px; }
+  .comment { padding: 8px 0; border-top: 1px solid #333; font-size: .9rem; }
+  .comment b { color: #7ec8ff; }
+  .comment small { opacity: .5; margin-left: 6px; }
+  .commentBox { display: flex; gap: 8px; margin: 10px 0; }
+  .commentBox input { flex: 1; font: inherit; padding: 10px; border-radius: 8px; border: 2px solid #444; background: #22242f; color: #fff; }
+  #share { background: #0ea5e9; }
 </style>
 </head>
 <body>
@@ -105,6 +123,31 @@
   <div id="feed"></div>
 </div>
 
+<!-- SCREEN 2d: WATCH. One video, like a real video site: the video, who made it,
+     Subscribe, Edit, and the comments underneath. -->
+<div id="watchScreen" class="screen">
+  <div class="row"><button id="backFromWatch" class="back">← Browse</button></div>
+  <canvas id="watchCanvas" width="640" height="360"></canvas>
+  <div class="watchInfo">
+    <h2 id="watchTitle"></h2>
+    <div class="channelRow">
+      <div><b id="watchChannel"></b><br><small id="watchMeta"></small></div>
+      <div>
+        <button id="subscribe">Subscribe</button>
+        <button id="watchAgain">▶ Play</button>
+        <button id="editThis">✂️ Edit this video</button>
+      </div>
+    </div>
+  </div>
+  <div id="comments">
+    <div class="commentBox">
+      <input id="commentInput" placeholder="Add a comment..." maxlength="140">
+      <button id="postComment">Post</button>
+    </div>
+    <div id="commentList"></div>
+  </div>
+</div>
+
 <!-- SCREEN 3: THE EDITOR. Everything from here down to the timeline. -->
 <div id="editor" class="screen">
 <canvas id="screen" width="640" height="360"></canvas>
@@ -114,6 +157,7 @@
   <button id="clear">🗑 Clear</button>
   <button id="galleryBtn">🖼 Picture gallery</button>
   <button id="save">💾 Save</button>
+  <button id="share">🔗 Share</button>
   <button id="homeBtn" class="back">🏠 Home</button>
 </div>
 
@@ -141,6 +185,7 @@
     📷 Take a photo
     <input type="file" accept="image/*" capture="environment" id="camera" style="display:none">
   </label>
+  <div class="clip" id="typeText" style="background:#4d3a1f;border-color:#f59e0b">✏️ Type text</div>
 </div>
 
 <div class="label">Timeline (tap to remove)</div>
@@ -260,6 +305,43 @@ function makePhotoClip(image) {
   };
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// TEXT CLIPS. You type words, they become a title card. The words pop in big,
+// then settle. Every text clip gets its own background color, seeded by the
+// words themselves, so "hello" is always the same color everywhere.
+// ─────────────────────────────────────────────────────────────────────────
+function makeTextClip(words) {
+  const rand = seededRandom(words.length * 7 + words.charCodeAt(0));
+  const bg = hue(rand), ink = rand() < 0.5 ? "#fff" : "#111";
+  return {
+    name: "✏️ " + words,
+    seconds: 2,
+    words: words,
+    draw(ctx, t) {
+      ctx.fillStyle = bg; ctx.fillRect(0, 0, 640, 360);
+      // THE POP: the size overshoots (too big) then settles. Math.sin gives the overshoot.
+      const pop = t < 0.3 ? Math.sin(t / 0.3 * Math.PI / 2) * 1.3 : 1.3 - (Math.min(t, 0.5) - 0.3) * 1.5;
+      // Long words need smaller letters. 60px is the biggest; shrink until it fits.
+      let size = 60;
+      ctx.font = "bold " + size + "px sans-serif";
+      while (ctx.measureText(words).width > 580 && size > 18) { size -= 2; ctx.font = "bold " + size + "px sans-serif"; }
+      ctx.save();
+      ctx.translate(320, 180); ctx.scale(pop, pop);   // grow from the middle of the screen
+      ctx.fillStyle = ink; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(words, 0, 0);
+      ctx.restore();
+    }
+  };
+}
+
+document.getElementById("typeText").onclick = () => {
+  const words = prompt("What should it say?", "");
+  if (!words || !words.trim()) return;
+  const clip = makeTextClip(words.trim().slice(0, 60));   // 60 letters is plenty for a title card
+  addToShelf(clip);
+  timeline.push(clip); showTimeline(); preview(clip);
+};
+
 document.getElementById("camera").onchange = (event) => {
   const file = event.target.files[0];
   if (!file) return;                        // they opened the camera and backed out
@@ -334,12 +416,16 @@ function setSpeed(value) {
 speedSlider.oninput = () => setSpeed(speedSlider.value);   // oninput fires while you drag, not just when you let go
 speedBox.oninput = () => setSpeed(speedBox.value);
 
-function play() {
-  if (timeline.length === 0 || playing) return;
+// play() takes WHICH clips to play and WHERE to draw them. Left blank, it plays your
+// timeline on the editor screen. The watch page hands it a video and its own canvas.
+let playRun = 0;                    // a ticket counter, see below
+function play(list = timeline, target = ctx) {
+  if (list.length === 0) return;
+  const me = ++playRun;             // take a ticket. A newer play() takes a newer ticket, and the old one quits.
   playing = true;
   let index = 0;                    // which clip we are on
   let clipStart = performance.now(); // the time the current clip began, in milliseconds
-  startClip(timeline[0]);
+  startClip(list[0]);
 
   // Some clips make a sound the moment they begin. Ask the clip if it has one.
   function startClip(clip) {
@@ -347,28 +433,29 @@ function play() {
   }
 
   function frame(now) {
-    const clip = timeline[index];
+    if (me !== playRun) return;     // somebody pressed Play again, or opened another video: stop this one
+    const clip = list[index];
     // 0 → 1 across the clip. Multiplying by speed makes t climb faster (2 = twice as fast)
     // or slower (0.5 = slow motion). The clip does not know or care; it just gets a t.
     let t = (now - clipStart) / (clip.seconds * 1000) * speed;
     if (t >= 1) {                    // this clip is done, move to the next one
       index++;
       clipStart = now;
-      if (index >= timeline.length) { playing = false; theEnd(); return; }
-      startClip(timeline[index]);
+      if (index >= list.length) { playing = false; theEnd(target); return; }
+      startClip(list[index]);
       t = 0;
     }
-    ctx.clearRect(0, 0, 640, 360);
-    timeline[index].draw(ctx, t);
+    target.clearRect(0, 0, 640, 360);
+    list[index].draw(target, t);
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
 }
 
-function theEnd() {
-  ctx.fillStyle = "#000"; ctx.fillRect(0, 0, 640, 360);
-  ctx.fillStyle = "#fff"; ctx.font = "bold 60px sans-serif"; ctx.textAlign = "center";
-  ctx.fillText("THE END", 320, 200);
+function theEnd(target = ctx) {
+  target.fillStyle = "#000"; target.fillRect(0, 0, 640, 360);
+  target.fillStyle = "#fff"; target.font = "bold 60px sans-serif"; target.textAlign = "center";
+  target.fillText("THE END", 320, 200);
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -591,7 +678,7 @@ document.getElementById("galleryBtn").onclick = () => {
   galleryEl.classList.toggle("open");                   // toggle = flip it: open if closed, closed if open
 };
 
-document.getElementById("play").onclick = play;
+document.getElementById("play").onclick = () => play();
 document.getElementById("clear").onclick = () => { timeline = []; showTimeline(); ctx.clearRect(0, 0, 640, 360); };
 
 // A friendly screen so the editor is not just a black box.
@@ -623,7 +710,8 @@ function enter() {
   username = name;
   localStorage.setItem("metube:lastUser", name);
   document.getElementById("hello").textContent = "Hi, " + name + "! 👋";
-  showScreen("home");
+  // Somebody sent you a video? It is waiting in INBOX. Go straight to it.
+  if (INBOX.length) openWatch(INBOX[0]); else showScreen("home");
 }
 document.getElementById("enter").onclick = enter;
 usernameEl.onkeydown = (e) => { if (e.key === "Enter") enter(); };   // the Enter key works too
@@ -635,7 +723,7 @@ document.getElementById("newProject").onclick = () => {
   showScreen("editor");
 };
 document.getElementById("browse").onclick = () => {
-  if (!feedBuilt) buildFeed();
+  buildFeed();
   showScreen("browseScreen");
 };
 document.getElementById("backFromBrowse").onclick = () => showScreen("home");
@@ -654,6 +742,7 @@ function clipTag(clip) {
   const b = CLIPS.indexOf(clip);   if (b >= 0) return "clip:" + b;
   const g = GALLERY.indexOf(clip); if (g >= 0) return "gallery:" + g;
   if (clip.feedTag) return clip.feedTag;                  // a clip borrowed from a Browse video
+  if (clip.words) return "text:" + clip.words;            // a title card: the tag IS the words
   if (clip.image) return "photo:" + clip.image.src;
   return null;
 }
@@ -668,6 +757,7 @@ function clipsFromTags(tags, done) {
     if (tag.startsWith("clip:"))         { out.push(CLIPS[+tag.slice(5)]);   next(i + 1); }
     else if (tag.startsWith("gallery:")) { out.push(GALLERY[+tag.slice(8)]); next(i + 1); }
     else if (tag.startsWith("feed:"))    { const [, v, c] = tag.split(":"); out.push(FEED[+v].clips[+c]); next(i + 1); }
+    else if (tag.startsWith("text:"))    { const c = makeTextClip(tag.slice(5)); addToShelf(c); out.push(c); next(i + 1); }
     else {
       const img = new Image();
       img.onload = () => { const c = makePhotoClip(img); addToShelf(c); out.push(c); next(i + 1); };
@@ -803,10 +893,17 @@ const FEED = makeFeed(60);
 // Feed clips need name tags too, so a video you edited can be SAVED. Tag: "feed:videoNumber:clipNumber".
 FEED.forEach((video, v) => video.clips.forEach((clip, c) => { clip.name = "📺 " + clip.label; clip.feedTag = "feed:" + v + ":" + c; }));
 
+FEED.forEach((video, v) => video.key = "feed:" + v);   // each video's name tag, for its comments
+
 const feedEl = document.getElementById("feed");
-let feedBuilt = false;
+// Rebuilt every time you open Browse, because subscribing changes the order:
+// videos sent to you first, then channels you subscribe to, then everybody else.
 function buildFeed() {
-  FEED.forEach(video => {
+  feedEl.innerHTML = "";
+  const subs = loadSubs();
+  const rank = video => video.shared ? 0 : subs.includes(video.channel) ? 1 : 2;
+  const videos = INBOX.concat(FEED).sort((a, b) => rank(a) - rank(b));
+  videos.forEach(video => {
     const row = document.createElement("div");
     row.className = "video";
     const thumb = document.createElement("canvas");
@@ -817,19 +914,144 @@ function buildFeed() {
     const words = document.createElement("div");
     words.innerHTML = "<div class='title'></div><div class='meta'></div>";
     words.querySelector(".title").textContent = video.title;
-    words.querySelector(".meta").textContent = video.channel + " · " + video.views;
+    const meta = words.querySelector(".meta");
+    meta.textContent = video.channel + " · " + video.views;
+    if (video.shared) meta.innerHTML += " · <span class='sent'>📩 sent to you</span>";
+    else if (subs.includes(video.channel)) meta.innerHTML += " · <span class='sub'>✓ subscribed</span>";
     row.appendChild(thumb); row.appendChild(words);
-    // Tap: the video's clips become YOUR timeline. Now you are editing their video.
-    row.onclick = () => {
-      timeline = video.clips.slice();                   // slice() = a copy, so their video stays theirs
-      showTimeline(); preview(timeline[0]);
-      showScreen("editor");
-      play();
-    };
+    row.onclick = () => openWatch(video);
     feedEl.appendChild(row);
   });
-  feedBuilt = true;
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// SUBSCRIBE. Your subscriptions are a list of channel names in the browser's
+// notebook, one list per username. Subscribing to a channel you already
+// subscribe to un-subscribes, which is what a toggle is.
+// ─────────────────────────────────────────────────────────────────────────
+const subsKey = () => "metube:subs:" + username;
+const loadSubs = () => JSON.parse(localStorage.getItem(subsKey()) || "[]");
+
+function toggleSub(channel) {
+  let subs = loadSubs();
+  if (subs.includes(channel)) subs = subs.filter(c => c !== channel);   // filter = keep everything except this one
+  else subs.push(channel);
+  localStorage.setItem(subsKey(), JSON.stringify(subs));
+  return subs.includes(channel);
+}
+
+// Every channel gets a made-up subscriber count (seeded by its name, so it never changes),
+// plus one if YOU subscribed. Your subscribe is the +1. That is the whole joke of the internet.
+function subCount(channel) {
+  const rand = seededRandom(channel.length * 31 + channel.charCodeAt(0));
+  const base = Math.floor(between(rand, 200, 5000000));
+  return base + (loadSubs().includes(channel) ? 1 : 0);
+}
+function pretty(n) { return n.toLocaleString(); }   // 121234 → "121,234", so you can see your +1 land
+
+// ─────────────────────────────────────────────────────────────────────────
+// COMMENTS. Each video has a key ("feed:12"), and the comments for it are a
+// list under that key in the browser's notebook. Newest first.
+// ─────────────────────────────────────────────────────────────────────────
+const commentsKey = key => "metube:comments:" + key;
+const loadComments = key => JSON.parse(localStorage.getItem(commentsKey(key)) || "[]");
+
+// ─────────────────────────────────────────────────────────────────────────
+// THE WATCH PAGE. One video at a time, in `watching`.
+// ─────────────────────────────────────────────────────────────────────────
+let watching = null;
+const watchCtx = document.getElementById("watchCanvas").getContext("2d");
+
+function openWatch(video) {
+  watching = video;
+  document.getElementById("watchTitle").textContent = video.title;
+  document.getElementById("watchChannel").textContent = video.channel;
+  document.getElementById("commentInput").value = "";
+  refreshSubscribe();
+  showComments();
+  showScreen("watchScreen");
+  play(video.clips, watchCtx);                          // plays on the watch page's own canvas
+}
+
+function refreshSubscribe() {
+  const on = loadSubs().includes(watching.channel);
+  const button = document.getElementById("subscribe");
+  button.textContent = on ? "✓ Subscribed" : "Subscribe";
+  button.classList.toggle("on", on);
+  document.getElementById("watchMeta").textContent = pretty(subCount(watching.channel)) + " subscribers · " + watching.views;
+}
+
+document.getElementById("subscribe").onclick = () => { toggleSub(watching.channel); refreshSubscribe(); };
+document.getElementById("watchAgain").onclick = () => play(watching.clips, watchCtx);
+document.getElementById("editThis").onclick = () => {
+  timeline = watching.clips.slice();                    // slice() = a copy, so their video stays theirs
+  showTimeline(); preview(timeline[0]);
+  showScreen("editor");
+};
+document.getElementById("backFromWatch").onclick = () => { buildFeed(); showScreen("browseScreen"); };
+
+function showComments() {
+  const list = document.getElementById("commentList");
+  list.innerHTML = "";
+  const all = loadComments(watching.key);
+  if (!all.length) list.innerHTML = "<p style='opacity:.5'>No comments yet. Be the first!</p>";
+  all.forEach(c => {
+    const row = document.createElement("div");
+    row.className = "comment";
+    row.innerHTML = "<b></b><small></small><div></div>";
+    row.querySelector("b").textContent = c.who;          // textContent, never innerHTML, for anything a person typed
+    row.querySelector("small").textContent = c.when;
+    row.querySelector("div").textContent = c.text;
+    list.appendChild(row);
+  });
+}
+
+function postComment() {
+  const input = document.getElementById("commentInput");
+  const text = input.value.trim();
+  if (!text) return;
+  const all = loadComments(watching.key);
+  all.unshift({ who: username, text, when: new Date().toLocaleDateString() });   // unshift = add at the front
+  localStorage.setItem(commentsKey(watching.key), JSON.stringify(all));
+  input.value = "";
+  showComments();
+}
+document.getElementById("postComment").onclick = postComment;
+document.getElementById("commentInput").onkeydown = (e) => { if (e.key === "Enter") postComment(); };
+
+// ─────────────────────────────────────────────────────────────────────────
+// SHARE. MeTube has no server, so "sending" a video means squishing it into a
+// LINK. The link carries your name, the title and the clip tags after the #.
+// Whoever opens the link gets the video at the top of their Browse feed.
+// Photos are left out: a photo is far too big to fit in a link.
+// ─────────────────────────────────────────────────────────────────────────
+document.getElementById("share").onclick = () => {
+  if (timeline.length === 0) { alert("Put some clips on the timeline first!"); return; }
+  const tags = timeline.map(clipTag).filter(tag => tag && !tag.startsWith("photo:"));
+  if (tags.length < timeline.length) alert("Photos can't fit in a link, so they were left out.");
+  if (!tags.length) return;
+  const title = prompt("Name your video:", "My video");
+  if (title === null) return;
+  const packet = { by: username, title: title || "Untitled", tags };
+  const link = location.href.split("#")[0] + "#v=" + encodeURIComponent(JSON.stringify(packet));
+  if (navigator.clipboard) navigator.clipboard.writeText(link).catch(() => {});
+  prompt("Here's your link (it's copied too). Send it to someone:", link);
+};
+
+// OPENING A SHARED LINK. If the address ends in #v=..., unpack it into INBOX.
+const INBOX = [];
+(function readSharedLink() {
+  const hash = location.hash || "";
+  if (!hash.startsWith("#v=")) return;
+  try {
+    const packet = JSON.parse(decodeURIComponent(hash.slice(3)));
+    clipsFromTags(packet.tags, clips => {
+      if (!clips.length) return;
+      INBOX.push({ channel: String(packet.by).slice(0, 20), title: String(packet.title).slice(0, 60),
+                   views: "sent to you", clips, shared: true, key: "shared:" + hash.slice(3, 80) });
+    });
+  } catch (e) { /* a broken or made-up link: just ignore it */ }
+})();
 
 // And we begin at the front door.
 welcomeScreen();
