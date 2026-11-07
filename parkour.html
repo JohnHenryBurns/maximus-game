@@ -138,10 +138,20 @@ const TUNNEL_MAP = [
   'LLLL',
   '....',
   '....',
-  'FFFF',
-  'FFFF',
+  '....',
+  '....',   // ...and at the very end: the glowing purple crack!
 ];
 const TUNNEL_HEIGHT = 4;  // how high the ceiling is
+
+// THE CRACK. A jagged split in the end wall, glowing purple. It's a list
+// of corner points [across, up]: up the left side, then back down the
+// right side. Zigzagging in and out is what makes it look cracked.
+const CRACK_SHAPE = [
+  [-0.35, 0], [-0.5, 0.5], [-0.25, 0.9], [-0.55, 1.4], [-0.3, 1.9],
+  [-0.45, 2.4], [-0.15, 2.9], [0, 3.3],
+  [0.2, 2.8], [0.4, 2.3], [0.15, 1.8], [0.5, 1.3], [0.3, 0.8],
+  [0.55, 0.4], [0.35, 0],
+];
 
 // ---------------------------------------------------------------------
 //  LEVEL 2: THE SKY COURSE (the very first level we made).
@@ -171,7 +181,9 @@ const LEVELS = [
   { name: 'LEVEL 1: THE LAVA TUNNEL', start: { x: 0, y: 0, z: -1.5 },
     fogColor: [70, 45, 35], fogDistance: 40, sky: false, build: buildTunnel },
   { name: 'LEVEL 2: THE SKY COURSE', start: { x: 0, y: 0, z: 1.5 },
-    fogColor: [120, 170, 230], fogDistance: 70, sky: true, build: buildSkyCourse },
+    fogColor: [120, 170, 230], fogDistance: 70, sky: true, build: buildSkyCourse,
+    // What the mysterious voice says when you arrive. Change it to anything!
+    voice: 'Hello. Welcome to the game. I see you have beat the first level.' },
 ];
 
 // These get filled in when a level loads.
@@ -300,6 +312,22 @@ function buildTunnel() {
   addBrickWall([left, 0, back], [1, 0, 0], width, LAVA_Y, top, [0, 0, -1]);   // wall behind you
   addBrickWall([left, 0, front], [1, 0, 0], width, LAVA_Y, top, [0, 0, 1]);   // wall at the end
 
+  // THE GLOWING PURPLE CRACK, on the end wall. We paint it three times:
+  // a big faint glow around it, the purple crack, and a bright white-hot
+  // middle. "layer" tells the painter to do these LAST, on top of the
+  // bricks, in that order.
+  const crackZ = front + 0.02;   // a hair in front of the wall
+  const crackCorners = function (stretchX, stretchY) {
+    return CRACK_SHAPE.map(function (p) {
+      const y = 1.6 + (p[1] - 1.6) * stretchY;          // stretch around the middle
+      return [p[0] * stretchX, Math.max(0.02, y), crackZ];  // but never below the floor
+    });
+  };
+  addFace(crackCorners(2.2, 1.25), [170, 60, 255], [0, 0, 1], { glow: 'halo', layer: 1 });
+  addFace(crackCorners(1, 1),      [170, 60, 255], [0, 0, 1], { glow: 'crack', layer: 2 });
+  addFace(crackCorners(0.3, 0.85), [250, 220, 255], [0, 0, 1], { glow: 'core', layer: 3 });
+  crackExit = { z: front, halfWidth: 0.45 };
+
   // The ceiling: plain grey stone panels.
   for (let z = front; z < back; z++) {
     for (let x = left; x < right; x++) {
@@ -371,10 +399,71 @@ function loadLevel(index) {
   levelIndex = index;
   blocks = [];
   faces = [];
+  crackExit = null;    // only the tunnel has a crack. build() puts it back.
   LEVELS[index].build();
   respawn();
   say(LEVELS[index].name, 3);
+  if (LEVELS[index].voice) speak(LEVELS[index].voice);
 }
+
+// THE VOICE. Browsers come with built-in talking voices, called
+// "speech synthesis". You give it words, and it reads them out loud.
+//
+// Every computer has DIFFERENT voices. Some are old and sound like
+// robots. Newer ones, called "Natural" voices, sound like real people.
+// So here's a list of favourites, best first. The game goes down the
+// list and uses the first one this computer has.
+//   - "Christopher" and "Guy" are deep, human-sounding voices in Edge.
+//   - "Google" voices are in Chrome.
+//   - "Daniel", "Premium" and "Enhanced" ones are on iPhones and iPads.
+//   - "Mark" and "David" are the older Windows voices, if nothing else.
+// Want a different voice? Move a name to the top of the list!
+const VOICE_FAVOURITES = [
+  'Christopher Online (Natural)',
+  'Guy Online (Natural)',
+  'Natural',
+  'Google UK English Male',
+  'Google US English',
+  'Daniel',
+  'Premium',
+  'Enhanced',
+  'Mark',
+  'David',
+];
+
+function pickVoice() {
+  const english = window.speechSynthesis.getVoices().filter(function (v) {
+    return v.lang.indexOf('en') === 0;
+  });
+  for (const favourite of VOICE_FAVOURITES) {
+    const found = english.find(function (v) { return v.name.indexOf(favourite) !== -1; });
+    if (found) return found;
+  }
+  return english[0];   // none of our favourites? use any English voice.
+}
+
+// The list of voices loads a moment after the page does, so we ask for
+// it now. By the time you reach level 2 it's definitely ready.
+if (window.speechSynthesis) window.speechSynthesis.getVoices();
+
+// pitch is how high or low the voice is (1 is normal), and rate is how
+// fast it talks (1 is normal). Squashing the pitch WAY down is what made
+// it sound like a robot before. Real people sound best close to 1.
+function speak(words) {
+  if (!window.speechSynthesis) return;   // some browsers can't talk. that's OK.
+  const voice = new SpeechSynthesisUtterance(words);
+  const best = pickVoice();
+  if (best) voice.voice = best;
+  voice.pitch = 0.9;
+  voice.rate = 0.9;
+  window.speechSynthesis.cancel();       // stop anything it was already saying
+  window.speechSynthesis.speak(voice);
+  // Show the words on screen too, like subtitles.
+  say('"' + words + '"', 6);
+}
+
+let crackExit = null;  // where the crack is, so we know when you walk into it
+let purpleFlash = 0;   // how bright the purple flash is (1 = full, 0 = gone)
 
 let nextLevelAt = 0;   // when to move on to the next level (0 = not yet)
 
@@ -531,7 +620,8 @@ function win() {
   if (lastLevel) {
     say('YOU BEAT THE WHOLE GAME! ' + timeTaken.toFixed(2) + ' seconds', 8);
   } else {
-    say('LEVEL ' + (levelIndex + 1) + ' DONE! ' + timeTaken.toFixed(2) + ' seconds', 3);
+    const how = crackExit ? 'WHOOOSH! Through the crack! ' : 'LEVEL ' + (levelIndex + 1) + ' DONE! ';
+    say(how + timeTaken.toFixed(2) + ' seconds', 3);
     nextLevelAt = performance.now() / 1000 + 3;   // move on in 3 seconds
   }
 }
@@ -592,6 +682,16 @@ function update(dt, now) {
     respawn();
     say('SIZZLE! 🔥 Your shoes melted.', 2);
   }
+
+  // WALKED INTO THE CRACK? You're right up against the end wall, and
+  // lined up with the crack (not off to one side of it).
+  if (crackExit && !finished &&
+      player.z - BODY_RADIUS < crackExit.z + 0.05 &&
+      Math.abs(player.x) < crackExit.halfWidth) {
+    purpleFlash = 1;
+    win();
+  }
+  purpleFlash = Math.max(0, purpleFlash - dt * 0.4);   // the flash fades away
 
   // Finished a level? After a little pause, on to the next one.
   if (nextLevelAt && now >= nextLevelAt) {
@@ -669,15 +769,19 @@ function draw() {
     // fast, because the tunnel has thousands of bricks and tiles.
     const m = f.mid;
     const dist = Math.hypot(m[0] - eye[0], m[1] - eye[1], m[2] - eye[2]);
-    if (dist > level.fogDistance + 2) continue;
+    // (Glowing things shine through the fog, so never skip those.)
+    if (dist > level.fogDistance + 2 && !f.glow) continue;
 
     const pts = clipNear(f.corners.map(toCamera));
     if (pts.length < 3) continue;   // it was all behind you
-    visible.push({ pts: pts, face: f, dist: dist });
+    // Things with a "layer" get painted last, on top, in layer order.
+    // We do that by pretending they're super close.
+    const paintOrder = f.layer ? -f.layer : dist;
+    visible.push({ pts: pts, face: f, dist: dist, paintOrder: paintOrder });
   }
 
   // THE PAINTER'S ALGORITHM: farthest first, nearest last.
-  visible.sort(function (a, b) { return b.dist - a.dist; });
+  visible.sort(function (a, b) { return b.paintOrder - a.paintOrder; });
 
   for (const v of visible) {
     const f = v.face;
@@ -697,6 +801,14 @@ function draw() {
     // Lava glows, so it fades much less.
     let fog = Math.min(1, v.dist / level.fogDistance);
     if (f.lava) fog *= 0.4;
+    if (f.glow) fog = 0;   // the crack is SO bright, fog can't hide it
+
+    // THE CRACK PULSES: brighter, dimmer, brighter, like it's breathing.
+    let pulse = 1;
+    if (f.glow) {
+      pulse = 0.75 + 0.25 * Math.sin(time * 4);
+      color = color.map(function (c) { return c * (0.7 + 0.3 * pulse); });
+    }
     const mix = function (c) {
       return 'rgb(' + c.map(function (val, i) {
         return Math.round(val + (FOG[i] - val) * fog);
@@ -714,12 +826,29 @@ function draw() {
     }
     ctx.closePath();
     ctx.fillStyle = col;
+    if (f.glow) {
+      // A blurry purple "shadow" that's actually light. That's the glow.
+      ctx.shadowColor = 'rgb(190, 80, 255)';
+      ctx.shadowBlur = 40 * pulse;
+      // The outer halo is see-through, so the bricks show behind it.
+      ctx.globalAlpha = f.glow === 'halo' ? 0.3 * pulse : 1;
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.globalAlpha = 1;
+      continue;   // no outline on glowing things
+    }
     ctx.fill();
     // An outline. For bricks it's the grey cement between them. For
     // everything else it's the same colour, which hides tiny cracks.
     ctx.strokeStyle = f.edge ? mix(f.edge) : col;
     ctx.lineWidth = f.edge ? 1.5 : 1;
     ctx.stroke();
+  }
+
+  // WHOOSH: when you go through the crack, the whole screen flashes purple.
+  if (purpleFlash > 0) {
+    ctx.fillStyle = 'rgba(170, 60, 255, ' + purpleFlash + ')';
+    ctx.fillRect(0, 0, W, H);
   }
 
   drawHud();
@@ -745,9 +874,26 @@ function drawHud() {
     ctx.textAlign = 'center';
     ctx.font = 'bold ' + Math.round(Math.min(W, H) * 0.06) + 'px system-ui, sans-serif';
     ctx.lineWidth = 6; ctx.strokeStyle = '#000';
-    ctx.strokeText(message, W / 2, H * 0.3);
     ctx.fillStyle = finished ? '#ffd23f' : '#fff';
-    ctx.fillText(message, W / 2, H * 0.3);
+    // WORD WRAP: add words to a line until it's too wide for the screen,
+    // then start a new line. Like typing in a box that's not very wide.
+    const lines = [];
+    let line = '';
+    for (const word of message.split(' ')) {
+      const tryLine = line ? line + ' ' + word : word;
+      if (ctx.measureText(tryLine).width > W * 0.9 && line) {
+        lines.push(line);
+        line = word;
+      } else {
+        line = tryLine;
+      }
+    }
+    lines.push(line);
+    const lineHeight = Math.min(W, H) * 0.075;
+    lines.forEach(function (l, i) {
+      ctx.strokeText(l, W / 2, H * 0.3 + i * lineHeight);
+      ctx.fillText(l, W / 2, H * 0.3 + i * lineHeight);
+    });
   }
 
   // Phone controls: only drawn once a finger has touched the screen.
