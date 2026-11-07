@@ -1,0 +1,801 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <!-- user-scalable=no stops a double-tap zooming the page in the middle of a jump. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <title>Max's Parkour</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
+    canvas { display: block; width: 100vw; height: 100vh; touch-action: none; }
+
+    /* The same "back to the arcade" pill every game has, in the same corner. */
+    a.arcade-pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      font: 600 13px system-ui, -apple-system, "Segoe UI", sans-serif;
+      color: #ffffff; text-decoration: none;
+      background: rgba(0, 0, 0, 0.55);
+      border: 1px solid rgba(255, 255, 255, 0.5);
+      padding: 7px 13px; border-radius: 999px;
+      position: fixed; z-index: 10;
+      top: calc(8px + env(safe-area-inset-top, 0px));
+      left: calc(10px + env(safe-area-inset-left, 0px));
+      -webkit-tap-highlight-color: transparent;
+    }
+  </style>
+</head>
+<body>
+<a id="back" class="arcade-pill" href="index.html"><span>&larr;</span>Arcade</a>
+<canvas id="game"></canvas>
+
+<script>
+/* The game grabs every touch, which would swallow a tap on the Arcade pill.
+   So the pill handles its own taps first and stops them going any further. */
+(function () {
+  var pill = document.getElementById('back');
+  var go = function (e) { e.stopPropagation(); e.preventDefault(); location.href = 'index.html'; };
+  ['click', 'touchend'].forEach(function (t) { pill.addEventListener(t, go, { passive: false }); });
+  ['mousedown', 'touchstart', 'pointerdown'].forEach(function (t) {
+    pill.addEventListener(t, function (e) { e.stopPropagation(); }, { passive: false });
+  });
+})();
+</script>
+
+<script>
+// =====================================================================
+//  MAX'S PARKOUR
+//
+//  Cursed Cavern used a trick called RAYCASTING, which is brilliant for
+//  flat mazes but can't do jumping UP onto things. Parkour is ALL jumping
+//  up onto things. So this game does real 3D, by hand:
+//
+//    1. The world is a list of BLOCKS (boxes).
+//    2. Every frame, each corner of each block is moved so it's measured
+//       from your eyes instead of from the middle of the world.
+//    3. Then it's squashed flat onto the screen: things far away get
+//       squashed closer to the middle. That's what makes it look 3D.
+//    4. We paint the farthest bits first and the nearest bits last, so
+//       near things cover far things. Painters do the same with a
+//       background and then the trees on top. It's called the
+//       PAINTER'S ALGORITHM.
+// =====================================================================
+
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+let W = 0, H = 0;
+function resize() {
+  W = canvas.width = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ---------------------------------------------------------------------
+//  THE NUMBERS THAT DECIDE HOW YOU MOVE.
+//  Try changing these! What do you think happens if JUMP_POWER is 15?
+// ---------------------------------------------------------------------
+const RUN_SPEED   = 6;    // blocks per second
+const JUMP_POWER  = 9;    // how fast you shoot upward when you jump
+const GRAVITY     = 25;   // how hard the world pulls you back down
+const EYE_HEIGHT  = 1.6;  // your eyes are this far above your feet
+const BODY_HEIGHT = 1.8;  // you're this tall, so you bonk your head on things
+const BODY_RADIUS = 0.3;  // how wide you are (from the middle to the edge)
+const FALL_LIMIT  = -20;  // fall below this and you're sent back to the start
+
+// ---------------------------------------------------------------------
+//  TILE SIZE. How big each checkerboard square is, in blocks.
+//  It used to be 1. Now it's 0.5, so four little tiles fit where one
+//  big one used to be. Try 0.25 for tiny ones!
+// ---------------------------------------------------------------------
+const TILE = 0.5;
+
+const WHITE = [235, 235, 235], BLACK = [20, 20, 24];
+const GOLD = [255, 200, 40], DARK_GOLD = [90, 60, 0];
+const STONE = [120, 125, 140];
+const LAVA = [255, 90, 0];
+const LAVA_Y = -0.4;      // lava sits this far down below the floor
+const THICKNESS = 0.6;    // how thick each floating block is
+
+// ---------------------------------------------------------------------
+//  LEVEL 1: THE LAVA TUNNEL.
+//  This is a MAP. Each line is one step of the tunnel, and the first line
+//  is where you start. Each letter is one square of floor:
+//
+//     .  = floor     L  = LAVA!     F  = the gold finish
+//
+//  You can redesign the whole level just by typing letters here.
+//  Keep every line exactly 4 letters long, so the tunnel stays straight.
+// ---------------------------------------------------------------------
+const TUNNEL_MAP = [
+  '....',
+  '....',
+  '....',
+  '....',
+  'LL..',   // a little pool. go around it!
+  '....',
+  '....',
+  '..LL',
+  '....',
+  '....',
+  'LLLL',   // no way round this one. JUMP.
+  '....',
+  '....',
+  '.LL.',
+  '.LL.',
+  '....',
+  '....',
+  'L..L',
+  'L..L',
+  'L..L',
+  '....',
+  '....',
+  'LLLL',   // a two-step jump
+  'LLLL',
+  '....',
+  '....',
+  'LLLL',
+  'LL.L',   // one tiny stepping stone in the middle of the lava
+  'LLLL',
+  '....',
+  '....',
+  'FFFF',
+  'FFFF',
+];
+const TUNNEL_HEIGHT = 4;  // how high the ceiling is
+
+// ---------------------------------------------------------------------
+//  LEVEL 2: THE SKY COURSE (the very first level we made).
+//  Each line is one block: [left edge, front edge, width, depth, top height].
+//  Forward is the minus direction, so the course goes to bigger minus
+//  numbers the further you get.
+// ---------------------------------------------------------------------
+const SKY_COURSE = [
+  [-3,   -3, 6, 6, 0],    // the start pad
+  [-1,   -7, 2, 2, 0],    // first easy hop
+  [-1,  -12, 2, 2, 0.5],  // a bigger gap, and a bit higher
+  [ 2,  -15, 2, 2, 1],    // off to the right
+  [-1,  -19, 2, 2, 1.5],
+  [ 0,  -28, 1, 7, 1.5],  // the skinny beam. don't wobble.
+  [-1,  -31, 3, 2, 2],    // stairs up...
+  [-1,  -34, 3, 2, 3],
+  [ 2,  -37, 1, 1, 3],    // tiny one-tile hops
+  [ 0,  -40, 1, 1, 3],
+  [-2,  -43, 1, 1, 3.5],
+  [ 0,  -46, 1, 1, 4],
+  [-2,  -54, 4, 5, 4, 'finish'],  // the GOLD finish pad
+];
+
+// The list of levels, in order. Each one says what it's called, where you
+// start, what colour the far-away fog is, and which function builds it.
+const LEVELS = [
+  { name: 'LEVEL 1: THE LAVA TUNNEL', start: { x: 0, y: 0, z: -1.5 },
+    fogColor: [70, 45, 35], fogDistance: 40, sky: false, build: buildTunnel },
+  { name: 'LEVEL 2: THE SKY COURSE', start: { x: 0, y: 0, z: 1.5 },
+    fogColor: [120, 170, 230], fogDistance: 70, sky: true, build: buildSkyCourse },
+];
+
+// These get filled in when a level loads.
+let blocks = [];   // the solid boxes you can stand on and bump into
+let faces = [];    // the flat shapes we paint on the screen
+let levelIndex = 0;
+
+// ---------------------------------------------------------------------
+//  FACES. A face is one flat shape we paint: a list of corners, a colour,
+//  and which way it points (its "normal"). "extra" can add things like
+//  a mortar colour for bricks, or lava: true to make it glow.
+// ---------------------------------------------------------------------
+function addFace(corners, color, normal, extra) {
+  // The middle of the face. We use it to decide what's nearer.
+  let cx = 0, cy = 0, cz = 0;
+  corners.forEach(function (c) { cx += c[0]; cy += c[1]; cz += c[2]; });
+  const n = corners.length;
+  const face = { corners: corners, color: color, normal: normal,
+                 mid: [cx / n, cy / n, cz / n] };
+  if (extra) Object.assign(face, extra);
+  faces.push(face);
+}
+
+// A checkerboard floor, from x0 to x1 and z0 to z1, at height y.
+// To pick a tile's colour, count which tile it is across and which tile
+// it is forward, and add them up. Even = one colour, odd = the other.
+function addCheckerboard(x0, x1, z0, z1, y, finish) {
+  for (let x = x0; x < x1 - 0.001; x += TILE) {
+    for (let z = z0; z < z1 - 0.001; z += TILE) {
+      const count = Math.round(x / TILE) + Math.round(z / TILE);
+      const even = ((count % 2) + 2) % 2 === 0;
+      let color;
+      if (finish) color = even ? GOLD : DARK_GOLD;
+      else        color = even ? WHITE : BLACK;
+      addFace([[x, y, z], [x + TILE, y, z], [x + TILE, y, z + TILE], [x, y, z + TILE]],
+              color, [0, 1, 0]);
+    }
+  }
+}
+
+// A wall of white bricks. Bricks are 1 long and half a block tall, and
+// every other row is shifted along by half a brick. That's how real
+// brick walls are built, so they don't have one long crack down them.
+//   start:   one bottom corner of the wall
+//   along:   which way the wall runs, like [0, 0, -1]
+//   length:  how long it is
+//   normal:  which way the wall faces
+function addBrickWall(start, along, length, yBottom, yTop, normal) {
+  const BRICK_LONG = 1, BRICK_TALL = 0.5;
+  const MORTAR = [150, 140, 130];   // the grey cement between bricks
+  const at = function (u, y) {
+    return [start[0] + along[0] * u, y, start[2] + along[2] * u];
+  };
+  let row = 0;
+  for (let y = yBottom; y < yTop - 0.001; y += BRICK_TALL, row++) {
+    const shift = (row % 2) * (BRICK_LONG / 2);
+    for (let u = -shift; u < length; u += BRICK_LONG) {
+      const u0 = Math.max(0, u), u1 = Math.min(length, u + BRICK_LONG);
+      const y1 = Math.min(yTop, y + BRICK_TALL);
+      // Every brick is a slightly different white, so it looks real.
+      const tint = 215 + Math.floor(Math.random() * 30);
+      addFace([at(u0, y), at(u1, y), at(u1, y1), at(u0, y1)],
+              [tint, tint - 4, tint - 10], normal, { edge: MORTAR });
+    }
+  }
+}
+
+function buildTunnel() {
+  const rows = TUNNEL_MAP.length;
+  const width = TUNNEL_MAP[0].length;
+  const left = -width / 2, right = width / 2;
+  const back = 0, front = -rows;   // the tunnel runs from z=0 to z=-rows
+  const top = TUNNEL_HEIGHT;
+
+  // What letter is at this spot on the map? Outside the map counts as wall.
+  function letterAt(row, col) {
+    if (row < 0 || row >= rows || col < 0 || col >= width) return '#';
+    return TUNNEL_MAP[row][col];
+  }
+
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < width; col++) {
+      const letter = letterAt(row, col);
+      const x0 = left + col, x1 = x0 + 1;
+      const z1 = -row, z0 = z1 - 1;    // row 0 is nearest the start
+
+      if (letter === 'L') {
+        // LAVA: a block sunk down below the floor, that glows and burns.
+        blocks.push({ minX: x0, maxX: x1, minZ: z0, maxZ: z1,
+                      minY: LAVA_Y - 1, maxY: LAVA_Y, lava: true });
+        addFace([[x0, LAVA_Y, z0], [x1, LAVA_Y, z0], [x1, LAVA_Y, z1], [x0, LAVA_Y, z1]],
+                LAVA, [0, 1, 0], { lava: true });
+        continue;
+      }
+
+      // FLOOR (or the gold finish).
+      const finish = letter === 'F';
+      blocks.push({ minX: x0, maxX: x1, minZ: z0, maxZ: z1,
+                    minY: -THICKNESS, maxY: 0, finish: finish });
+      addCheckerboard(x0, x1, z0, z1, 0, finish);
+
+      // If there's lava next door, this square of floor has an edge you
+      // can see down into the pool. Paint that edge as dark rock.
+      const ROCK = [70, 55, 50];
+      if (letterAt(row, col - 1) === 'L')
+        addFace([[x0, LAVA_Y, z0], [x0, LAVA_Y, z1], [x0, 0, z1], [x0, 0, z0]], ROCK, [-1, 0, 0]);
+      if (letterAt(row, col + 1) === 'L')
+        addFace([[x1, LAVA_Y, z0], [x1, LAVA_Y, z1], [x1, 0, z1], [x1, 0, z0]], ROCK, [1, 0, 0]);
+      if (letterAt(row - 1, col) === 'L')
+        addFace([[x0, LAVA_Y, z1], [x1, LAVA_Y, z1], [x1, 0, z1], [x0, 0, z1]], ROCK, [0, 0, 1]);
+      if (letterAt(row + 1, col) === 'L')
+        addFace([[x0, LAVA_Y, z0], [x1, LAVA_Y, z0], [x1, 0, z0], [x0, 0, z0]], ROCK, [0, 0, -1]);
+    }
+  }
+
+  // THE WALLS, CEILING AND ENDS. Big solid boxes so you can't escape...
+  blocks.push({ minX: left - 1, maxX: left, minY: -2, maxY: top + 1, minZ: front - 1, maxZ: back + 1 });
+  blocks.push({ minX: right, maxX: right + 1, minY: -2, maxY: top + 1, minZ: front - 1, maxZ: back + 1 });
+  blocks.push({ minX: left, maxX: right, minY: top, maxY: top + 1, minZ: front - 1, maxZ: back + 1 });
+  blocks.push({ minX: left, maxX: right, minY: -2, maxY: top, minZ: back, maxZ: back + 1 });
+  blocks.push({ minX: left, maxX: right, minY: -2, maxY: top, minZ: front - 1, maxZ: front });
+
+  // ...and white bricks painted on the insides of them.
+  addBrickWall([left, 0, back], [0, 0, -1], rows, LAVA_Y, top, [1, 0, 0]);    // left wall
+  addBrickWall([right, 0, back], [0, 0, -1], rows, LAVA_Y, top, [-1, 0, 0]);  // right wall
+  addBrickWall([left, 0, back], [1, 0, 0], width, LAVA_Y, top, [0, 0, -1]);   // wall behind you
+  addBrickWall([left, 0, front], [1, 0, 0], width, LAVA_Y, top, [0, 0, 1]);   // wall at the end
+
+  // The ceiling: plain grey stone panels.
+  for (let z = front; z < back; z++) {
+    for (let x = left; x < right; x++) {
+      const shade = 95 + (((x + z) % 2 + 2) % 2 === 0 ? 0 : 8);
+      addFace([[x, top, z], [x + 1, top, z], [x + 1, top, z + 1], [x, top, z + 1]],
+              [shade, shade - 5, shade - 10], [0, -1, 0]);
+    }
+  }
+}
+
+function buildSkyCourse() {
+  SKY_COURSE.forEach(function (line) {
+    const b = {
+      minX: line[0], maxX: line[0] + line[2],
+      minZ: line[1], maxZ: line[1] + line[3],
+      maxY: line[4], minY: line[4] - THICKNESS,
+      finish: line[5] === 'finish',
+    };
+    blocks.push(b);
+    addCheckerboard(b.minX, b.maxX, b.minZ, b.maxZ, b.maxY, b.finish);
+
+    // The four sides and the bottom. Each side gets a slightly different
+    // shade, which fools your eyes into seeing a solid 3D block.
+    const shade = function (k) { return STONE.map(function (v) { return v * k; }); };
+    const x0 = b.minX, x1 = b.maxX, y0 = b.minY, y1 = b.maxY, z0 = b.minZ, z1 = b.maxZ;
+    addFace([[x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]], shade(0.8),  [0, 0, 1]);
+    addFace([[x1, y0, z0], [x0, y0, z0], [x0, y1, z0], [x1, y1, z0]], shade(0.8),  [0, 0, -1]);
+    addFace([[x1, y0, z1], [x1, y0, z0], [x1, y1, z0], [x1, y1, z1]], shade(0.6),  [1, 0, 0]);
+    addFace([[x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0]], shade(0.6),  [-1, 0, 0]);
+    addFace([[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]], shade(0.35), [0, -1, 0]);
+  });
+}
+
+// ---------------------------------------------------------------------
+//  YOU.
+// ---------------------------------------------------------------------
+const player = {
+  x: 0, y: 0, z: 0,                    // where your FEET are
+  vx: 0, vy: 0, vz: 0,                 // how fast you're moving each way
+  yaw: 0,                              // turning left and right
+  pitch: 0,                            // looking up and down
+  onGround: false,
+  lastOnGround: 0,                     // when your feet last touched a block
+};
+
+let started = false;   // have you clicked/tapped to start yet?
+let timerRunning = false, timeTaken = 0;
+let finished = false;
+let falls = 0;
+let message = '', messageUntil = 0;
+let touchUsed = false; // have we seen a finger? then show the phone buttons
+
+function say(text, seconds) {
+  message = text;
+  messageUntil = performance.now() / 1000 + seconds;
+}
+
+// Back to the start of whatever level you're on.
+function respawn() {
+  const start = LEVELS[levelIndex].start;
+  player.x = start.x; player.y = start.y; player.z = start.z;
+  player.vx = player.vy = player.vz = 0;
+  player.yaw = 0; player.pitch = 0;
+  timerRunning = false; timeTaken = 0; finished = false;
+}
+
+// Throw away the old level and build a new one.
+function loadLevel(index) {
+  levelIndex = index;
+  blocks = [];
+  faces = [];
+  LEVELS[index].build();
+  respawn();
+  say(LEVELS[index].name, 3);
+}
+
+let nextLevelAt = 0;   // when to move on to the next level (0 = not yet)
+
+// ---------------------------------------------------------------------
+//  KEYBOARD AND MOUSE.
+// ---------------------------------------------------------------------
+const keys = {};
+window.addEventListener('keydown', function (e) {
+  keys[e.code] = true;
+  if (e.code === 'Space') e.preventDefault();
+  if (e.code === 'KeyR') respawn();
+});
+window.addEventListener('keyup', function (e) { keys[e.code] = false; });
+
+canvas.addEventListener('click', function () {
+  started = true;
+  // POINTER LOCK hides the mouse and lets you turn forever without
+  // the arrow hitting the edge of the screen. Press Esc to get it back.
+  if (canvas.requestPointerLock) canvas.requestPointerLock();
+});
+document.addEventListener('mousemove', function (e) {
+  if (document.pointerLockElement !== canvas) return;
+  turn(e.movementX * 0.0025, e.movementY * 0.0025);
+});
+
+function turn(dx, dy) {
+  player.yaw += dx;
+  player.pitch -= dy;
+  // Don't let you look so far up or down that you flip upside down.
+  player.pitch = Math.max(-1.4, Math.min(1.4, player.pitch));
+}
+
+// ---------------------------------------------------------------------
+//  TOUCH CONTROLS, for phones and tablets.
+//    Left half of the screen:  a thumb stick for running.
+//    Right half:               drag to look around.
+//    The big round button:     JUMP.
+//  Each finger gets a "role" the moment it touches down, and keeps it
+//  until it lifts, so two thumbs can do two jobs at once.
+// ---------------------------------------------------------------------
+const roles = {};
+const stick = { active: false, ox: 0, oy: 0, dx: 0, dy: 0 };
+const STICK_RADIUS = 60;
+let touchJump = false;
+
+function jumpButton() {
+  const r = Math.max(38, Math.min(W, H) * 0.09);
+  return { x: W - r - 30, y: H - r - 40, r: r };
+}
+function inJumpButton(x, y) {
+  const b = jumpButton();
+  return Math.hypot(x - b.x, y - b.y) < b.r * 1.3;  // a bit bigger than it looks, for thumbs
+}
+
+canvas.addEventListener('touchstart', function (e) {
+  e.preventDefault();
+  started = true;
+  touchUsed = true;
+  for (const t of e.changedTouches) {
+    if (inJumpButton(t.clientX, t.clientY)) {
+      roles[t.identifier] = { kind: 'jump' };
+      touchJump = true;
+    } else if (t.clientX < W / 2) {
+      roles[t.identifier] = { kind: 'stick' };
+      stick.active = true; stick.ox = t.clientX; stick.oy = t.clientY;
+      stick.dx = 0; stick.dy = 0;
+    } else {
+      roles[t.identifier] = { kind: 'look', lx: t.clientX, ly: t.clientY };
+    }
+  }
+}, { passive: false });
+
+canvas.addEventListener('touchmove', function (e) {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    const role = roles[t.identifier];
+    if (!role) continue;
+    if (role.kind === 'stick') {
+      let dx = t.clientX - stick.ox, dy = t.clientY - stick.oy;
+      const len = Math.hypot(dx, dy);
+      if (len > STICK_RADIUS) { dx *= STICK_RADIUS / len; dy *= STICK_RADIUS / len; }
+      stick.dx = dx / STICK_RADIUS; stick.dy = dy / STICK_RADIUS;
+    } else if (role.kind === 'look') {
+      turn((t.clientX - role.lx) * 0.006, (t.clientY - role.ly) * 0.006);
+      role.lx = t.clientX; role.ly = t.clientY;
+    }
+  }
+}, { passive: false });
+
+function endTouch(e) {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    const role = roles[t.identifier];
+    if (!role) continue;
+    if (role.kind === 'stick') { stick.active = false; stick.dx = stick.dy = 0; }
+    if (role.kind === 'jump') touchJump = false;
+    delete roles[t.identifier];
+  }
+}
+canvas.addEventListener('touchend', endTouch, { passive: false });
+canvas.addEventListener('touchcancel', endTouch, { passive: false });
+
+// ---------------------------------------------------------------------
+//  BUMPING INTO BLOCKS.
+//  Does your body (a tall thin box) overlap this block? Two boxes overlap
+//  only if they overlap side-to-side AND up-and-down AND front-to-back.
+// ---------------------------------------------------------------------
+function overlaps(b) {
+  const e = 0.001;  // a tiny gap, so standing ON a block doesn't count as being IN it
+  return player.x + BODY_RADIUS > b.minX + e && player.x - BODY_RADIUS < b.maxX - e &&
+         player.z + BODY_RADIUS > b.minZ + e && player.z - BODY_RADIUS < b.maxZ - e &&
+         player.y + BODY_HEIGHT > b.minY + e && player.y < b.maxY - e;
+}
+
+// We move one direction at a time (x, then z, then up/down). If that move
+// pushed you into a block, we slide you back out the way you came.
+// Doing it one direction at a time is what lets you slide along walls.
+function moveX(amount) {
+  player.x += amount;
+  for (const b of blocks) {
+    if (!overlaps(b)) continue;
+    player.x = amount > 0 ? b.minX - BODY_RADIUS : b.maxX + BODY_RADIUS;
+  }
+}
+function moveZ(amount) {
+  player.z += amount;
+  for (const b of blocks) {
+    if (!overlaps(b)) continue;
+    player.z = amount > 0 ? b.minZ - BODY_RADIUS : b.maxZ + BODY_RADIUS;
+  }
+}
+let touchedLava = false;
+function moveY(amount) {
+  player.y += amount;
+  player.onGround = false;
+  for (const b of blocks) {
+    if (!overlaps(b)) continue;
+    if (amount < 0) {             // falling: land on top of it
+      player.y = b.maxY;
+      player.onGround = true;
+      if (b.lava) touchedLava = true;
+      if (b.finish && !finished) win();
+    } else {                      // going up: bonk your head
+      player.y = b.minY - BODY_HEIGHT;
+    }
+    player.vy = 0;
+  }
+}
+
+function win() {
+  finished = true;
+  timerRunning = false;
+  const lastLevel = levelIndex === LEVELS.length - 1;
+  if (lastLevel) {
+    say('YOU BEAT THE WHOLE GAME! ' + timeTaken.toFixed(2) + ' seconds', 8);
+  } else {
+    say('LEVEL ' + (levelIndex + 1) + ' DONE! ' + timeTaken.toFixed(2) + ' seconds', 3);
+    nextLevelAt = performance.now() / 1000 + 3;   // move on in 3 seconds
+  }
+}
+
+// ---------------------------------------------------------------------
+//  UPDATE: everything that happens in one tick of time.
+//  dt is how many seconds passed since the last tick (usually about 0.016).
+// ---------------------------------------------------------------------
+function update(dt, now) {
+  if (!started) return;
+
+  // Which way are you pushing? forward/back and left/right, each -1 to 1.
+  let forward = 0, strafe = 0;
+  if (keys.KeyW || keys.ArrowUp)    forward += 1;
+  if (keys.KeyS || keys.ArrowDown)  forward -= 1;
+  if (keys.KeyD || keys.ArrowRight) strafe += 1;
+  if (keys.KeyA || keys.ArrowLeft)  strafe -= 1;
+  if (stick.active) { forward -= stick.dy; strafe += stick.dx; }
+  const push = Math.hypot(forward, strafe);
+  if (push > 1) { forward /= push; strafe /= push; }  // no running faster diagonally!
+
+  // Turn "forward" and "right" into real world directions, using which
+  // way you're facing. sin and cos are maths for "which way is that angle".
+  const fx = Math.sin(player.yaw), fz = -Math.cos(player.yaw);
+  const rx = Math.cos(player.yaw), rz = Math.sin(player.yaw);
+  player.vx = (fx * forward + rx * strafe) * RUN_SPEED;
+  player.vz = (fz * forward + rz * strafe) * RUN_SPEED;
+
+  // The clock starts the moment you move.
+  if (!timerRunning && !finished && push > 0) timerRunning = true;
+  if (timerRunning) timeTaken += dt;
+
+  // JUMP. "Coyote time": you can still jump for a tenth of a second after
+  // running off an edge, like a cartoon coyote who hasn't looked down yet.
+  // It makes jumps feel fair.
+  if (player.onGround) player.lastOnGround = now;
+  const wantJump = keys.Space || touchJump;
+  if (wantJump && now - player.lastOnGround < 0.1 && player.vy <= 0) {
+    player.vy = JUMP_POWER;
+    player.lastOnGround = -1;
+  }
+
+  // GRAVITY pulls your speed downward a little bit every tick.
+  player.vy -= GRAVITY * dt;
+
+  moveX(player.vx * dt);
+  moveZ(player.vz * dt);
+  moveY(player.vy * dt);
+
+  if (player.y < FALL_LIMIT) {
+    falls++;
+    respawn();
+    say('AAAAAAAAH! Back to the start.', 2);
+  }
+  if (touchedLava) {
+    touchedLava = false;
+    falls++;
+    respawn();
+    say('SIZZLE! 🔥 Your shoes melted.', 2);
+  }
+
+  // Finished a level? After a little pause, on to the next one.
+  if (nextLevelAt && now >= nextLevelAt) {
+    nextLevelAt = 0;
+    loadLevel(levelIndex + 1);
+  }
+}
+
+// ---------------------------------------------------------------------
+//  DRAWING.
+// ---------------------------------------------------------------------
+const NEAR = 0.05;   // anything closer than this to your eyes gets cut off
+
+// Move a world point so it's measured from your eyes, facing your way.
+// After this, z means "how far in front of you" and x means "how far right".
+function toCamera(p) {
+  const dx = p[0] - player.x, dy = p[1] - (player.y + EYE_HEIGHT), dz = p[2] - player.z;
+  const cy0 = Math.cos(player.yaw), sy0 = Math.sin(player.yaw);
+  const x = dx * cy0 + dz * sy0;          // right
+  const z0 = dx * sy0 - dz * cy0;         // forward
+  const cp = Math.cos(player.pitch), sp = Math.sin(player.pitch);
+  const y = dy * cp - z0 * sp;            // up (after tilting your head)
+  const z = z0 * cp + dy * sp;            // forward (after tilting your head)
+  return [x, y, z];
+}
+
+// Chop off the part of a shape that's behind your eyes. If we didn't,
+// things behind you would get drawn upside down in front of you. Spooky.
+function clipNear(pts) {
+  const out = [];
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i], b = pts[(i + 1) % pts.length];
+    const aIn = a[2] > NEAR, bIn = b[2] > NEAR;
+    if (aIn) out.push(a);
+    if (aIn !== bIn) {
+      const t = (NEAR - a[2]) / (b[2] - a[2]);
+      out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, NEAR]);
+    }
+  }
+  return out;
+}
+
+function draw() {
+  const focal = H * 0.8;   // bigger number = more zoomed in
+
+  const level = LEVELS[levelIndex];
+  const FOG = level.fogColor;
+  const time = performance.now() / 1000;
+
+  if (level.sky) {
+    // The sky, with a hazy glow at the horizon. Where's the horizon?
+    // It moves up and down the screen when you look down and up.
+    const horizon = H / 2 + Math.tan(player.pitch) * focal;
+    const sky = ctx.createLinearGradient(0, horizon - H, 0, horizon + H);
+    sky.addColorStop(0, '#3a6fc0');
+    sky.addColorStop(0.5, '#b8d4f0');
+    sky.addColorStop(1, '#2a3550');
+    ctx.fillStyle = sky;
+  } else {
+    // Inside a tunnel there's no sky. Just the dark, far away.
+    ctx.fillStyle = 'rgb(' + FOG.join(',') + ')';
+  }
+  ctx.fillRect(0, 0, W, H);
+
+  // Work out every face we can see, and how far away it is.
+  const eye = [player.x, player.y + EYE_HEIGHT, player.z];
+  const visible = [];
+  for (const f of faces) {
+    // BACKFACE CULLING: if a face is pointing away from you, you can't
+    // see it anyway (it's the back of something), so don't bother.
+    const n = f.normal, c = f.corners[0];
+    if (n[0] * (eye[0] - c[0]) + n[1] * (eye[1] - c[1]) + n[2] * (eye[2] - c[2]) <= 0) continue;
+
+    // Too far away to see through the fog? Skip it. This keeps the game
+    // fast, because the tunnel has thousands of bricks and tiles.
+    const m = f.mid;
+    const dist = Math.hypot(m[0] - eye[0], m[1] - eye[1], m[2] - eye[2]);
+    if (dist > level.fogDistance + 2) continue;
+
+    const pts = clipNear(f.corners.map(toCamera));
+    if (pts.length < 3) continue;   // it was all behind you
+    visible.push({ pts: pts, face: f, dist: dist });
+  }
+
+  // THE PAINTER'S ALGORITHM: farthest first, nearest last.
+  visible.sort(function (a, b) { return b.dist - a.dist; });
+
+  for (const v of visible) {
+    const f = v.face;
+    let color = f.color;
+
+    // LAVA BUBBLES. The green part of the colour goes up and down over
+    // time, so the lava flickers between deep red and bright orange.
+    // Each square starts at a different spot in the wobble, so they don't
+    // all flash together.
+    if (f.lava) {
+      const wobble = Math.sin(time * 3 + f.mid[0] * 2.1 + f.mid[2] * 1.7);
+      color = [255, 80 + wobble * 50, wobble > 0.8 ? 40 : 0];
+    }
+
+    // FOG: far things fade toward the fog colour. It makes distances
+    // easier to judge, which matters a LOT when you're about to jump.
+    // Lava glows, so it fades much less.
+    let fog = Math.min(1, v.dist / level.fogDistance);
+    if (f.lava) fog *= 0.4;
+    const mix = function (c) {
+      return 'rgb(' + c.map(function (val, i) {
+        return Math.round(val + (FOG[i] - val) * fog);
+      }).join(',') + ')';
+    };
+    const col = mix(color);
+
+    ctx.beginPath();
+    for (let i = 0; i < v.pts.length; i++) {
+      const p = v.pts[i];
+      // THE 3D SQUASH: divide by how far away it is. Far = small.
+      const sx = W / 2 + (p[0] / p[2]) * focal;
+      const sy = H / 2 - (p[1] / p[2]) * focal;
+      if (i === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
+    }
+    ctx.closePath();
+    ctx.fillStyle = col;
+    ctx.fill();
+    // An outline. For bricks it's the grey cement between them. For
+    // everything else it's the same colour, which hides tiny cracks.
+    ctx.strokeStyle = f.edge ? mix(f.edge) : col;
+    ctx.lineWidth = f.edge ? 1.5 : 1;
+    ctx.stroke();
+  }
+
+  drawHud();
+}
+
+function drawHud() {
+  // A little dot in the middle so you know where you're looking.
+  ctx.fillStyle = 'rgba(255,255,255,0.8)';
+  ctx.beginPath(); ctx.arc(W / 2, H / 2, 3, 0, Math.PI * 2); ctx.fill();
+
+  // The clock and the fall counter, top right.
+  ctx.font = 'bold 22px system-ui, sans-serif';
+  ctx.textAlign = 'right';
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillRect(W - 190, 10, 180, 62);
+  ctx.fillStyle = '#fff';
+  ctx.fillText('⏱ ' + timeTaken.toFixed(2), W - 22, 36);
+  ctx.fillText('💀 falls: ' + falls, W - 22, 64);
+
+  // Big messages in the middle.
+  const now = performance.now() / 1000;
+  if (now < messageUntil) {
+    ctx.textAlign = 'center';
+    ctx.font = 'bold ' + Math.round(Math.min(W, H) * 0.06) + 'px system-ui, sans-serif';
+    ctx.lineWidth = 6; ctx.strokeStyle = '#000';
+    ctx.strokeText(message, W / 2, H * 0.3);
+    ctx.fillStyle = finished ? '#ffd23f' : '#fff';
+    ctx.fillText(message, W / 2, H * 0.3);
+  }
+
+  // Phone controls: only drawn once a finger has touched the screen.
+  if (touchUsed) {
+    const b = jumpButton();
+    ctx.fillStyle = touchJump ? 'rgba(255,255,255,0.5)' : 'rgba(255,255,255,0.2)';
+    ctx.strokeStyle = 'rgba(255,255,255,0.8)'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#fff'; ctx.textAlign = 'center';
+    ctx.font = 'bold ' + Math.round(b.r * 0.45) + 'px system-ui, sans-serif';
+    ctx.fillText('JUMP', b.x, b.y + b.r * 0.16);
+    if (stick.active) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+      ctx.beginPath(); ctx.arc(stick.ox, stick.oy, STICK_RADIUS, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = 'rgba(255,255,255,0.6)';
+      ctx.beginPath();
+      ctx.arc(stick.ox + stick.dx * STICK_RADIUS, stick.oy + stick.dy * STICK_RADIUS, 24, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // The title screen, until you click or tap.
+  if (!started) {
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = 'center'; ctx.fillStyle = '#fff';
+    ctx.font = 'bold ' + Math.round(Math.min(W, H) * 0.1) + 'px system-ui, sans-serif';
+    ctx.fillText("MAX'S PARKOUR", W / 2, H * 0.4);
+    ctx.font = Math.round(Math.min(W, H) * 0.035) + 'px system-ui, sans-serif';
+    ctx.fillText('Click or tap to start', W / 2, H * 0.52);
+    ctx.fillText('WASD to run · mouse to look · SPACE to jump · R to restart', W / 2, H * 0.6);
+  }
+}
+
+// ---------------------------------------------------------------------
+//  THE GAME LOOP: update, draw, repeat, about 60 times a second.
+// ---------------------------------------------------------------------
+let last = performance.now();
+function loop(t) {
+  // Cap dt so a hiccup (like switching tabs) can't fling you through a block.
+  const dt = Math.min(0.05, (t - last) / 1000);
+  last = t;
+  update(dt, t / 1000);
+  draw();
+  requestAnimationFrame(loop);
+}
+loadLevel(0);
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
