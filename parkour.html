@@ -195,7 +195,11 @@ const LEVELS = [
     fogColor: [40, 30, 35], fogDistance: 35, sky: false, build: buildSpikeRoom },
   { name: 'LEVEL 4: THE LONG HALLWAY', start: { x: 0, y: 0, z: -1.5 },
     fogColor: [70, 45, 35], fogDistance: 40, sky: false, build: buildHallway },
-  { name: 'LEVEL 5: THE SKY COURSE', start: { x: 0, y: 0, z: 1.5 },
+  { name: 'LEVEL 5: THE VOLCANO', start: { x: 0, y: 0, z: 1.5 },
+    fogColor: [120, 45, 25], fogDistance: 45, build: buildVolcano,
+    sky: true, skyColors: ['#1a0505', '#e0602a', '#3a0a05'],   // top, horizon, bottom
+    shake: true },   // the robot arms shake the whole world!
+  { name: 'LEVEL 6: THE SKY COURSE (BONUS!)', start: { x: 0, y: 0, z: 1.5 },
     fogColor: [120, 170, 230], fogDistance: 70, sky: true, build: buildSkyCourse },
 ];
 
@@ -293,6 +297,38 @@ const HALLWAY_HEIGHT = 9;       // a really high ceiling. (Why so high? You'll s
 // The map is made by repeating the same row, HALLWAY_LENGTH times.
 const HALLWAY_MAP = Array(HALLWAY_LENGTH).fill('.'.repeat(HALLWAY_WIDTH));
 let yellowLine = null;   // where the line is (only the hallway has one)
+
+// ---------------------------------------------------------------------
+//  LEVEL 5: THE VOLCANO. A big parkour course over a lake of lava.
+//  Each line is one thing. There are three kinds:
+//    ['block',  left, front, width, depth, top]  - something to stand on
+//    ['spikes', left, front, width, depth, top]  - spikes on top of a block
+//    ['saw',    middle, z, how far it slides, how fast, top]  - a spinning saw!
+//  Forward is the minus direction, like always.
+// ---------------------------------------------------------------------
+const VOLCANO_COURSE = [
+  ['block',  -3,  -3, 6, 6, 0],     // the start
+  ['block',  -1,  -8, 2, 3, 0],
+  ['block',  -2, -15, 4, 5, 0.5],
+  ['spikes', -2, -13, 3, 1, 0.5],   // spikes! there's a gap on the right
+  ['block',  -1, -20, 2, 3, 1],
+  ['block',  -3, -28, 6, 6, 1],
+  ['saw',     0, -25, 2.2, 1.6, 1], // a saw sliding side to side. time it!
+  ['block',   1, -32, 1, 2, 1.5],   // little hops
+  ['block',  -1, -35, 1, 1, 2],
+  ['block',   1, -38, 1, 1, 2.5],
+  ['block',  -2, -46, 4, 6, 2.5],
+  ['spikes', -2, -42, 4, 1, 2.5],   // a whole row of spikes. JUMP!
+  ['saw',     0, -44.5, 1.6, 2.2, 2.5],
+  ['block',  -1, -51, 2, 3, 3],
+  ['block',  -3, -60, 6, 7, 3],
+  ['spikes', -3, -54, 2, 1, 3],
+  ['saw',     0, -55.5, 2.2, 1.8, 3], // TWO saws
+  ['saw',     0, -58, 2.2, 2.6, 3],
+  ['block',  -2, -68, 4, 6, 3],     // the end, with the way out in a wall
+];
+const LAVA_LAKE_Y = -4;   // how far down the lava lake is
+let saws = [];            // the spinning saws (only the volcano has them)
 let truck = null;        // the falling truck (null = no truck... yet)
 
 // These get filled in when a level loads.
@@ -453,12 +489,14 @@ function buildRoom(map, height) {
 //   wallZ:  where the wall is
 //   facing: 1 if the wall faces you as you walk forward (the far wall),
 //          -1 if it's the wall behind where you started
-function addCrack(wallZ, facing) {
+// floorY is how high the floor is in front of it (0 if you leave it out).
+function addCrack(wallZ, facing, floorY) {
+  floorY = floorY || 0;
   const crackZ = wallZ + 0.02 * facing;   // a hair in front of the wall
   const crackCorners = function (stretchX, stretchY) {
     return CRACK_SHAPE.map(function (p) {
       const y = 1.6 + (p[1] - 1.6) * stretchY;          // stretch around the middle
-      return [p[0] * stretchX, Math.max(0.02, y), crackZ];  // but never below the floor
+      return [p[0] * stretchX, floorY + Math.max(0.02, y), crackZ];  // but never below the floor
     });
   };
   const normal = [0, 0, facing];
@@ -585,20 +623,22 @@ function buildSpikeRoom() {
 
 // FOUR SPIKES on one square of floor. Each spike is a PYRAMID: four
 // triangles leaning in to meet at a sharp point at the top.
-function addSpikes(x0, z0) {
+// y is how high the floor under them is (0 if you leave it out).
+function addSpikes(x0, z0, y) {
+  y = y || 0;
   const SPIKE_HEIGHT = 0.6;
   const METAL = [190, 195, 210];
   for (let sx = 0; sx < 2; sx++) {
     for (let sz = 0; sz < 2; sz++) {
       const a = x0 + sx * 0.5, b = a + 0.5;      // left and right of the base
       const c = z0 + sz * 0.5, d = c + 0.5;      // front and back of the base
-      const tip = [a + 0.25, SPIKE_HEIGHT, c + 0.25];
+      const tip = [a + 0.25, y + SPIKE_HEIGHT, c + 0.25];
       // Each triangle leans outward a bit, so its "normal" points out
       // and a little bit up. The shading makes the spike look 3D.
-      addFace([[a, 0, d], [b, 0, d], tip], METAL.map(function (v) { return v * 0.85; }), [0, 0.4, 1]);
-      addFace([[b, 0, c], [a, 0, c], tip], METAL.map(function (v) { return v * 0.6; }),  [0, 0.4, -1]);
-      addFace([[b, 0, d], [b, 0, c], tip], METAL.map(function (v) { return v * 1.0; }),  [1, 0.4, 0]);
-      addFace([[a, 0, c], [a, 0, d], tip], METAL.map(function (v) { return v * 0.7; }),  [-1, 0.4, 0]);
+      addFace([[a, y, d], [b, y, d], tip], METAL.map(function (v) { return v * 0.85; }), [0, 0.4, 1]);
+      addFace([[b, y, c], [a, y, c], tip], METAL.map(function (v) { return v * 0.6; }),  [0, 0.4, -1]);
+      addFace([[b, y, d], [b, y, c], tip], METAL.map(function (v) { return v * 1.0; }),  [1, 0.4, 0]);
+      addFace([[a, y, c], [a, y, d], tip], METAL.map(function (v) { return v * 0.7; }),  [-1, 0.4, 0]);
     }
   }
 }
@@ -650,13 +690,97 @@ function removeElevator() {
   elevator = null;
 }
 
+function buildVolcano() {
+  saws = [];
+  VOLCANO_COURSE.forEach(function (line) {
+    const kind = line[0];
+    if (kind === 'block') {
+      addFloatingBlock(line[1], line[2], line[3], line[4], line[5], false);
+    } else if (kind === 'spikes') {
+      // One patch of spikes on every 1x1 square in the area.
+      for (let x = line[1]; x < line[1] + line[3]; x++) {
+        for (let z = line[2]; z < line[2] + line[4]; z++) {
+          addSpikes(x, z, line[5]);
+          spikeCells.push({ minX: x, maxX: x + 1, minZ: z, maxZ: z + 1, y: line[5] });
+        }
+      }
+    } else if (kind === 'saw') {
+      addSaw(line[1], line[2], line[3], line[4], line[5]);
+    }
+  });
+
+  // THE LAVA LAKE, way down below. Big 2x2 squares of lava, glowing.
+  // And one giant invisible block of lava, so falling in counts.
+  for (let x = -10; x < 10; x += 2) {
+    for (let z = -76; z < 6; z += 2) {
+      addFace([[x, LAVA_LAKE_Y, z], [x + 2, LAVA_LAKE_Y, z], [x + 2, LAVA_LAKE_Y, z + 2], [x, LAVA_LAKE_Y, z + 2]],
+              LAVA, [0, 1, 0], { lava: true });
+    }
+  }
+  blocks.push({ minX: -40, maxX: 40, minZ: -120, maxZ: 40,
+                minY: LAVA_LAKE_Y - 2, maxY: LAVA_LAKE_Y, lava: true });
+
+  // THE WAY OUT: a brick wall on the last block, with the purple crack in it.
+  const last = VOLCANO_COURSE[VOLCANO_COURSE.length - 1];
+  const wallZ = last[2], floorY = last[5];
+  blocks.push({ minX: -2, maxX: 2, minY: floorY, maxY: floorY + 4, minZ: wallZ - 0.5, maxZ: wallZ });
+  addBrickWall([-2, 0, wallZ], [1, 0, 0], 4, floorY, floorY + 4, [0, 0, 1]);
+  addCrack(wallZ, 1, floorY);
+}
+
+// A SAW: a spinning blade standing up on its edge, sliding side to side.
+// Its corners change every frame (it spins and moves!), so instead of
+// fixed corners, each saw face remembers which saw it belongs to, and the
+// drawing code asks sawCorners() where the corners are RIGHT NOW.
+function addSaw(middle, z, slide, speed, top) {
+  const saw = { middle: middle, x: middle, y: top + 0.55, z: z, slide: slide,
+                speed: speed, spin: 0, radius: 0.7 };
+  saws.push(saw);
+  // A blade and a hub, on both sides (so you can see it from either side).
+  [1, -1].forEach(function (side) {
+    addFace([[0, 0, 0], [0, 0, 0], [0, 0, 0]], [205, 210, 220], [0, 0, side],
+            { saw: saw, side: side, part: 'blade' });
+    addFace([[0, 0, 0], [0, 0, 0], [0, 0, 0]], [200, 40, 40], [0, 0, side],
+            { saw: saw, side: side, part: 'hub' });
+  });
+}
+
+// Where are a saw's corners right now? The blade is a circle of TEETH:
+// points that go out to the full size, then in a bit, then out, then in.
+// Turning all of them by "spin" makes it look like it's spinning.
+function sawCorners(f) {
+  const s = f.saw;
+  const z = s.z + f.side * (f.part === 'hub' ? 0.04 : 0.02);
+  const points = [];
+  if (f.part === 'blade') {
+    const TEETH = 14;
+    for (let i = 0; i < TEETH * 2; i++) {
+      const angle = s.spin + i * Math.PI / TEETH;
+      const r = i % 2 === 0 ? s.radius : s.radius * 0.8;
+      points.push([s.x + Math.cos(angle) * r, s.y + Math.sin(angle) * r, z]);
+    }
+  } else {
+    for (let i = 0; i < 8; i++) {
+      const angle = s.spin + i * Math.PI / 4;
+      points.push([s.x + Math.cos(angle) * 0.22, s.y + Math.sin(angle) * 0.22, z]);
+    }
+  }
+  return points;
+}
+
 function buildSkyCourse() {
   SKY_COURSE.forEach(function (line) {
+    addFloatingBlock(line[0], line[1], line[2], line[3], line[4], line[5] === 'finish');
+  });
+}
+
+// One floating block with a checkerboard top and stone sides.
+function addFloatingBlock(left, front, width, depth, top, finish) {
     const b = {
-      minX: line[0], maxX: line[0] + line[2],
-      minZ: line[1], maxZ: line[1] + line[3],
-      maxY: line[4], minY: line[4] - THICKNESS,
-      finish: line[5] === 'finish',
+      minX: left, maxX: left + width,
+      minZ: front, maxZ: front + depth,
+      maxY: top, minY: top - THICKNESS,
+      finish: finish,
     };
     blocks.push(b);
     addCheckerboard(b.minX, b.maxX, b.minZ, b.maxZ, b.maxY, b.finish);
@@ -670,7 +794,6 @@ function buildSkyCourse() {
     addFace([[x1, y0, z1], [x1, y0, z0], [x1, y1, z0], [x1, y1, z1]], shade(0.6),  [1, 0, 0]);
     addFace([[x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0]], shade(0.6),  [-1, 0, 0]);
     addFace([[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]], shade(0.35), [0, -1, 0]);
-  });
 }
 
 // ---------------------------------------------------------------------
@@ -716,11 +839,14 @@ function loadLevel(index) {
   nearButton = null;
   spikeCells = [];     // no spikes unless build() makes some
   yellowLine = null;   // no line unless build() makes one
+  saws = [];           // no saws unless build() makes some
+  shaker = null;       // nice and still, unless this level says otherwise
   truck = null;
   elevator = null;     // no elevator unless a button makes one
   blackout = 0;
   LEVELS[index].build();
   respawn();
+  if (LEVELS[index].shake) startShake();
   if (LEVELS[index].voice) {
     // The voice talks first. The level's name waits until the robot
     // arms are finished, so the two don't land on top of each other.
@@ -1266,9 +1392,29 @@ function update(dt, now) {
     say('Going down...', 2);
   }
 
+  // SAWS: slide side to side (sin goes smoothly back and forth between
+  // -1 and 1, forever), and spin. Touch one and... OUCH.
+  for (const s of saws) {
+    s.x = s.middle + Math.sin(now * s.speed) * s.slide;
+    s.spin += dt * 12;
+    const touching =
+      Math.abs(player.x - s.x) < s.radius + BODY_RADIUS - 0.1 &&   // side to side
+      Math.abs(player.z - s.z) < BODY_RADIUS + 0.1 &&              // front to back
+      player.y < s.y + s.radius && player.y + BODY_HEIGHT > s.y - s.radius;   // up and down
+    if (touching) {
+      ouch();
+      falls++;
+      flash = 0.7; flashColor = '255, 60, 60';
+      say('BZZZZZRRRT! 🪚 The saw got you!', 2);
+      respawn();
+      break;
+    }
+  }
+
   // SPIKES! If your feet are on a spiky square, OUCH.
   for (const s of spikeCells) {
-    if (player.y < 0.5 &&
+    const floorY = s.y || 0;
+    if (player.y < floorY + 0.5 && player.y > floorY - 0.3 &&
         player.x > s.minX - 0.1 && player.x < s.maxX + 0.1 &&
         player.z > s.minZ - 0.1 && player.z < s.maxZ + 0.1) {
       ouch();
@@ -1393,14 +1539,27 @@ function draw() {
   const FOG = level.fogColor;
   const time = performance.now() / 1000;
 
+  // SHAKY? Everything in the world gets drawn through this shake: moved
+  // a little (translate) and tilted a little (rotate). We also zoom in a
+  // tiny bit (scale), so the shaking never shows the edges of the world.
+  ctx.save();
+  if (shaker) {
+    const shake = worldShake();
+    ctx.translate(W / 2 + shake.x, H / 2 + shake.y);
+    ctx.rotate(shake.tilt);
+    ctx.scale(1.08, 1.08);
+    ctx.translate(-W / 2, -H / 2);
+  }
+
   if (level.sky) {
     // The sky, with a hazy glow at the horizon. Where's the horizon?
     // It moves up and down the screen when you look down and up.
     const horizon = H / 2 + Math.tan(player.pitch) * focal;
     const sky = ctx.createLinearGradient(0, horizon - H, 0, horizon + H);
-    sky.addColorStop(0, '#3a6fc0');
-    sky.addColorStop(0.5, '#b8d4f0');
-    sky.addColorStop(1, '#2a3550');
+    const colors = level.skyColors || ['#3a6fc0', '#b8d4f0', '#2a3550'];
+    sky.addColorStop(0, colors[0]);
+    sky.addColorStop(0.5, colors[1]);
+    sky.addColorStop(1, colors[2]);
     ctx.fillStyle = sky;
   } else {
     // Inside a tunnel there's no sky. Just the dark, far away.
@@ -1416,6 +1575,12 @@ function draw() {
     // it has dropped, and the truck's pieces get lifted UP by however
     // high the truck is. We work this out FIRST, because everything
     // below needs to know where the face really is right now.
+    // Saws spin and slide, so ask where their corners are right now.
+    if (f.saw) {
+      f.corners = sawCorners(f);
+      f.mid = [f.saw.x, f.saw.y, f.saw.z];
+    }
+
     let lift = 0, shift = 0;
     if (f.elevator && elevator) lift = elevator.drop;
     if (f.truck && truck) { lift = truck.y; shift = truck.ahead; }
@@ -1515,6 +1680,7 @@ function draw() {
 
     if (f.text && v.pts.length === 4) paintWords(f.text, v.pts, focal);
   }
+  ctx.restore();   // stop shaking. The timer and messages stay still.
 
   // WHOOSH: when you go through the crack, the whole screen flashes purple.
   if (flash > 0) {
@@ -1531,7 +1697,7 @@ function draw() {
 }
 
 // PAINTING WORDS ON A WALL. We have the sign's four corners on the screen.
-// setTransform STRETCHES and TILTS everything we draw after it, so we
+// transform STRETCHES and TILTS everything we draw after it, so we
 // stretch a pretend flat 500x130 box to fit exactly onto the sign.
 // Then we just write the words in the box, and they land on the sign,
 // squashed and tilted the right way for 3D.
@@ -1542,7 +1708,7 @@ function paintWords(lines, pts, focal) {
   const bottomLeft = screen[0], topRight = screen[2], topLeft = screen[3];
   const BOX_W = 500, BOX_H = 130;
   ctx.save();
-  ctx.setTransform(
+  ctx.transform(
     (topRight.x - topLeft.x) / BOX_W, (topRight.y - topLeft.y) / BOX_W,
     (bottomLeft.x - topLeft.x) / BOX_H, (bottomLeft.y - topLeft.y) / BOX_H,
     topLeft.x, topLeft.y);
@@ -1661,6 +1827,7 @@ function drawHud() {
   }
 
   drawRobotSubtitles();
+  drawShakeArms();
 
   // The title screen, until you click or tap.
   if (!started) {
@@ -1898,16 +2065,22 @@ function drawMetalLetter(letter, x, y, angle) {
 // triangle with the line from shoulder to claw, and a bit of triangle
 // maths (the "law of cosines") tells us the angle to bend at.
 function drawArm(arm) {
-  const s = shoulder(arm);
-  const c = arm.claw;
-  const bone = robo.reach;
+  const letter = arm.holding ? arm.holding.letter : null;
+  drawArmAt(shoulder(arm), arm.claw, robo.reach, letter, !!arm.holding);
+}
+
+// Draws any robot arm: from shoulder s, reaching for claw spot c, with
+// bones this long. It can carry a metal letter, and its claw can be shut.
+// elbowSide: which way the elbow sticks out (-1 or 1). Leave it out for -1.
+function drawArmAt(s, c, bone, letter, clawShut, elbowSide) {
+  elbowSide = elbowSide || -1;
   let dx = c.x - s.x, dy = c.y - s.y;
   let d = Math.hypot(dx, dy);
   d = Math.max(1, Math.min(d, bone * 2 - 0.5));   // can't reach farther than both bones
   const pointing = Math.atan2(dy, dx);
   const bend = Math.acos(Math.min(1, d / (2 * bone)));
-  const elbow = { x: s.x + Math.cos(pointing - bend) * bone,
-                  y: s.y + Math.sin(pointing - bend) * bone };
+  const elbow = { x: s.x + Math.cos(pointing + elbowSide * bend) * bone,
+                  y: s.y + Math.sin(pointing + elbowSide * bend) * bone };
   const hand = { x: s.x + Math.cos(pointing) * d, y: s.y + Math.sin(pointing) * d };
 
   ctx.lineCap = 'round';
@@ -1920,10 +2093,10 @@ function drawArm(arm) {
   });
 
   // The letter it's carrying, hanging below the claw.
-  if (arm.holding) drawMetalLetter(arm.holding.letter, hand.x, hand.y + robo.fontSize * 0.55, 0);
+  if (letter) drawMetalLetter(letter, hand.x, hand.y + robo.fontSize * 0.55, 0);
 
   // The claw: two pincers. Wide open when empty, squeezed shut when holding.
-  const open = arm.holding ? 0.25 : 0.7;
+  const open = clawShut ? 0.25 : 0.7;
   ctx.strokeStyle = '#2b3036'; ctx.lineWidth = 4;
   [-1, 1].forEach(function (side) {
     const a = Math.PI / 2 + side * open;
@@ -1939,6 +2112,85 @@ function drawArm(arm) {
     ctx.beginPath(); ctx.arc(j.x, j.y, i === 2 ? 6 : 9, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = '#3d2a10';
     ctx.beginPath(); ctx.arc(j.x, j.y, 2.5, 0, Math.PI * 2); ctx.fill();
+  });
+}
+
+// ---------------------------------------------------------------------
+//  THE SHAKE. Two robot arms come down, grab the top edge of the world,
+//  and SHAKE it like a snow globe. When they let go, it keeps on shaking
+//  (a bit gentler) for the whole level. Volcanoes are like that.
+//  Here's the timetable, in seconds:
+//     0.0 - 0.9   the arms slide down and grab the top edge
+//     0.9 - 2.4   they shake it, HARD
+//     2.4 - 3.3   they let go and slide back up (the shaking carries on)
+// ---------------------------------------------------------------------
+const SHAKE_STRENGTH = 6;     // how much it shakes after the arms leave. 0 = no shake!
+const ARMS_SHAKE = 22;        // how much it shakes while the arms are shaking it
+let shaker = null;            // null = no shaking on this level
+const SHAKE_GRAB = 0.9, SHAKE_HARD = 1.5, SHAKE_LEAVE = 0.9;
+
+function startShake() {
+  shaker = { start: performance.now() / 1000, grabbed: false, done: false };
+}
+
+// How far is the world shaken right now? Instead of jumping about
+// completely at random (which looks glitchy), we add up a few sin waves
+// that wobble at different speeds. Together they look like a real shake.
+function worldShake() {
+  if (!shaker) return { x: 0, y: 0, tilt: 0 };
+  const t = performance.now() / 1000 - shaker.start;
+  let power = 0;
+  if (t > SHAKE_GRAB && t < SHAKE_GRAB + SHAKE_HARD) power = ARMS_SHAKE;
+  else if (t >= SHAKE_GRAB + SHAKE_HARD) power = SHAKE_STRENGTH;
+  return {
+    x: power * (Math.sin(t * 31) + Math.sin(t * 47 + 1)) / 2,
+    y: power * (Math.sin(t * 37 + 2) + Math.sin(t * 53)) / 2,
+    tilt: power * Math.sin(t * 23) / 600,
+  };
+}
+
+function drawShakeArms() {
+  if (!shaker) return;
+  const t = performance.now() / 1000 - shaker.start;
+  if (t > SHAKE_GRAB + SHAKE_HARD + SHAKE_LEAVE) return;   // the arms are gone
+  const bone = 70;
+  const shake = worldShake();
+
+  // Sounds and messages, each one only once.
+  if (t > SHAKE_GRAB && !shaker.grabbed) {
+    shaker.grabbed = true; clank(); rumble();
+    say('WHOA WHOA WHOA!', 1.5);
+  }
+  if (t > SHAKE_GRAB + SHAKE_HARD && !shaker.done) {
+    shaker.done = true; clank();
+    say('The robots let go... but it is STILL SHAKING!', 3);
+  }
+
+  // How far down are the shoulders? Slide in at the start, out at the end.
+  let hidden = 1 - smooth(t / SHAKE_GRAB);
+  if (t > SHAKE_GRAB + SHAKE_HARD) hidden = smooth((t - SHAKE_GRAB - SHAKE_HARD) / SHAKE_LEAVE);
+  const shoulderY = 10 - hidden * (bone * 2 + 40);
+
+  // The rail with the danger stripes.
+  ctx.fillStyle = '#2b3036';
+  ctx.fillRect(0, shoulderY - 14, W, 12);
+  ctx.fillStyle = '#ffcc00';
+  for (let x = -20; x < W; x += 28) {
+    ctx.beginPath();
+    ctx.moveTo(x, shoulderY - 2); ctx.lineTo(x + 12, shoulderY - 2);
+    ctx.lineTo(x + 20, shoulderY - 14); ctx.lineTo(x + 8, shoulderY - 14);
+    ctx.fill();
+  }
+
+  [0.25, 0.75].forEach(function (where) {
+    const s = { x: W * where, y: shoulderY };
+    const holding = t > SHAKE_GRAB && t < SHAKE_GRAB + SHAKE_HARD;
+    // While holding on, the claw moves WITH the shaking world.
+    const claw = holding
+      ? { x: s.x + shake.x, y: s.y + 90 + shake.y }
+      : { x: s.x, y: s.y + 90 };
+    // The left arm's elbow sticks out left, the right one's sticks out right.
+    drawArmAt(s, claw, bone, null, holding, where < 0.5 ? 1 : -1);
   });
 }
 
