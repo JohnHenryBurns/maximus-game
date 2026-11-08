@@ -180,11 +180,48 @@ const SKY_COURSE = [
 const LEVELS = [
   { name: 'LEVEL 1: THE LAVA TUNNEL', start: { x: 0, y: 0, z: -1.5 },
     fogColor: [70, 45, 35], fogDistance: 40, sky: false, build: buildTunnel },
-  { name: 'LEVEL 2: THE SKY COURSE', start: { x: 0, y: 0, z: 1.5 },
-    fogColor: [120, 170, 230], fogDistance: 70, sky: true, build: buildSkyCourse,
-    // What the mysterious voice says when you arrive. Change it to anything!
-    voice: 'Hello. Welcome to the game. I see you have beat the first level.' },
+  { name: 'LEVEL 2: THE PUZZLE ROOM', start: { x: 0, y: 0, z: -1.5 },
+    fogColor: [70, 45, 35], fogDistance: 40, sky: false, build: buildPuzzleRoom,
+    // What the mysterious voice says when you arrive, one line at a time.
+    // Change them to anything! Add more lines if you want!
+    voice: [
+      'Hello. Welcome to the game. I see you have beat the first level.',
+      'Ah, puzzles. My favorite.',
+    ] },
+  { name: 'LEVEL 3: THE SKY COURSE', start: { x: 0, y: 0, z: 1.5 },
+    fogColor: [120, 170, 230], fogDistance: 70, sky: true, build: buildSkyCourse },
 ];
+
+// ---------------------------------------------------------------------
+//  LEVEL 2: THE PUZZLE ROOM.
+//  A room with three buttons, and a sign that tells you which one to
+//  push first. The sign is LYING. The red button zaps you.
+//
+//  PUZZLE_ANSWER is the secret right order. Change it to make your own
+//  puzzle! (Don't put 'red' in it... or do. It's your game.)
+// ---------------------------------------------------------------------
+const PUZZLE_ANSWER = ['green', 'blue'];
+const SIGN_WORDS = ['PUSH THE RED', 'BUTTON FIRST'];
+const PUZZLE_ROOM_MAP = [
+  '..........',
+  '..........',
+  '..........',
+  '..........',
+  '..........',
+  '..........',
+  '..........',
+  '..........',
+  '..........',
+  '..........',
+  '..........',
+  '..........',
+];
+const BUTTON_COLORS = {
+  red:   [230, 30, 30],
+  blue:  [40, 90, 240],
+  green: [40, 200, 60],
+};
+let puzzle = null;   // the buttons and how far you've got. Only level 2 has one.
 
 // These get filled in when a level loads.
 let blocks = [];   // the solid boxes you can stand on and bump into
@@ -252,16 +289,24 @@ function addBrickWall(start, along, length, yBottom, yTop, normal) {
 }
 
 function buildTunnel() {
-  const rows = TUNNEL_MAP.length;
-  const width = TUNNEL_MAP[0].length;
+  buildRoom(TUNNEL_MAP);
+  addCrack(-TUNNEL_MAP.length, 1);   // the way out: in the wall at the far end
+}
+
+// Builds a closed-in room from a map: floor, lava, white brick walls and
+// a ceiling. The tunnel and the puzzle room are both made with this.
+// That's the good thing about a FUNCTION: write it once, use it lots.
+function buildRoom(map) {
+  const rows = map.length;
+  const width = map[0].length;
   const left = -width / 2, right = width / 2;
-  const back = 0, front = -rows;   // the tunnel runs from z=0 to z=-rows
+  const back = 0, front = -rows;   // the room runs from z=0 to z=-rows
   const top = TUNNEL_HEIGHT;
 
   // What letter is at this spot on the map? Outside the map counts as wall.
   function letterAt(row, col) {
     if (row < 0 || row >= rows || col < 0 || col >= width) return '#';
-    return TUNNEL_MAP[row][col];
+    return map[row][col];
   }
 
   for (let row = 0; row < rows; row++) {
@@ -312,22 +357,6 @@ function buildTunnel() {
   addBrickWall([left, 0, back], [1, 0, 0], width, LAVA_Y, top, [0, 0, -1]);   // wall behind you
   addBrickWall([left, 0, front], [1, 0, 0], width, LAVA_Y, top, [0, 0, 1]);   // wall at the end
 
-  // THE GLOWING PURPLE CRACK, on the end wall. We paint it three times:
-  // a big faint glow around it, the purple crack, and a bright white-hot
-  // middle. "layer" tells the painter to do these LAST, on top of the
-  // bricks, in that order.
-  const crackZ = front + 0.02;   // a hair in front of the wall
-  const crackCorners = function (stretchX, stretchY) {
-    return CRACK_SHAPE.map(function (p) {
-      const y = 1.6 + (p[1] - 1.6) * stretchY;          // stretch around the middle
-      return [p[0] * stretchX, Math.max(0.02, y), crackZ];  // but never below the floor
-    });
-  };
-  addFace(crackCorners(2.2, 1.25), [170, 60, 255], [0, 0, 1], { glow: 'halo', layer: 1 });
-  addFace(crackCorners(1, 1),      [170, 60, 255], [0, 0, 1], { glow: 'crack', layer: 2 });
-  addFace(crackCorners(0.3, 0.85), [250, 220, 255], [0, 0, 1], { glow: 'core', layer: 3 });
-  crackExit = { z: front, halfWidth: 0.45 };
-
   // The ceiling: plain grey stone panels.
   for (let z = front; z < back; z++) {
     for (let x = left; x < right; x++) {
@@ -336,6 +365,64 @@ function buildTunnel() {
               [shade, shade - 5, shade - 10], [0, -1, 0]);
     }
   }
+}
+
+// THE GLOWING PURPLE CRACK, the way out of a room. We paint it three
+// times: a big faint glow around it, the purple crack, and a bright
+// white-hot middle. "layer" tells the painter to do these LAST, on top
+// of the bricks, in that order.
+//   wallZ:  where the wall is
+//   facing: 1 if the wall faces you as you walk forward (the far wall),
+//          -1 if it's the wall behind where you started
+function addCrack(wallZ, facing) {
+  const crackZ = wallZ + 0.02 * facing;   // a hair in front of the wall
+  const crackCorners = function (stretchX, stretchY) {
+    return CRACK_SHAPE.map(function (p) {
+      const y = 1.6 + (p[1] - 1.6) * stretchY;          // stretch around the middle
+      return [p[0] * stretchX, Math.max(0.02, y), crackZ];  // but never below the floor
+    });
+  };
+  const normal = [0, 0, facing];
+  addFace(crackCorners(2.2, 1.25), [170, 60, 255], normal, { glow: 'halo', layer: 1 });
+  addFace(crackCorners(1, 1),      [170, 60, 255], normal, { glow: 'crack', layer: 2 });
+  addFace(crackCorners(0.3, 0.85), [250, 220, 255], normal, { glow: 'core', layer: 3 });
+  crackExit = { z: wallZ, facing: facing, halfWidth: 0.45 };
+}
+
+// A plain box with all six sides, for things like button stands.
+// "extra" gets stuck onto every face (that's how buttons know they're buttons).
+function addBox(x0, x1, y0, y1, z0, z1, color, extra) {
+  const shade = function (k) { return color.map(function (v) { return v * k; }); };
+  addFace([[x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1]], shade(1),    [0, 1, 0], extra);
+  addFace([[x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]], shade(0.8),  [0, 0, 1], extra);
+  addFace([[x1, y0, z0], [x0, y0, z0], [x0, y1, z0], [x1, y1, z0]], shade(0.8),  [0, 0, -1], extra);
+  addFace([[x1, y0, z1], [x1, y0, z0], [x1, y1, z0], [x1, y1, z1]], shade(0.65), [1, 0, 0], extra);
+  addFace([[x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0]], shade(0.65), [-1, 0, 0], extra);
+}
+
+function buildPuzzleRoom() {
+  buildRoom(PUZZLE_ROOM_MAP);
+  const front = -PUZZLE_ROOM_MAP.length;
+
+  // THE THREE BUTTONS, each on a grey stand near the far wall.
+  // Red first, like the sign says. Hmm.
+  puzzle = { buttons: [], progress: 0, solved: false };
+  [['red', -3], ['blue', 0], ['green', 3]].forEach(function (b) {
+    const color = b[0], x = b[1], z = front + 2;
+    const button = { color: color, x: x, z: z, lit: false, touching: false };
+    puzzle.buttons.push(button);
+    // The stand: solid, so you bump into it.
+    blocks.push({ minX: x - 0.3, maxX: x + 0.3, minY: 0, maxY: 1, minZ: z - 0.3, maxZ: z + 0.3 });
+    addBox(x - 0.3, x + 0.3, 0, 1, z - 0.3, z + 0.3, [90, 90, 100]);
+    // The big round(ish) button on top.
+    addBox(x - 0.2, x + 0.2, 1, 1.15, z - 0.2, z + 0.2, BUTTON_COLORS[color], { button: button });
+  });
+
+  // THE SIGN. A wooden board on the far wall, with words painted on it.
+  // The corners go: bottom-left, bottom-right, top-right, top-left.
+  const signZ = front + 0.03;
+  addFace([[-2.5, 2.2, signZ], [2.5, 2.2, signZ], [2.5, 3.5, signZ], [-2.5, 3.5, signZ]],
+          [160, 110, 60], [0, 0, 1], { edge: [80, 50, 20], text: SIGN_WORDS, layer: 0.5 });
 }
 
 function buildSkyCourse() {
@@ -399,11 +486,25 @@ function loadLevel(index) {
   levelIndex = index;
   blocks = [];
   faces = [];
-  crackExit = null;    // only the tunnel has a crack. build() puts it back.
+  crackExit = null;    // no crack unless build() makes one
+  puzzle = null;       // no puzzle unless build() makes one
   LEVELS[index].build();
   respawn();
-  say(LEVELS[index].name, 3);
-  if (LEVELS[index].voice) speak(LEVELS[index].voice);
+  if (LEVELS[index].voice) {
+    // The voice talks first. The level's name waits until the robot
+    // arms are finished, so the two don't land on top of each other.
+    speakLines(LEVELS[index].voice);
+    robo.thenSay = LEVELS[index].name;
+  } else {
+    say(LEVELS[index].name, 3);
+  }
+}
+
+// Say several lines, one after another. Say the first one now, and keep
+// the rest in a queue for when the robot arms finish building it.
+function speakLines(lines) {
+  speak(lines[0]);
+  robo.nextLines = lines.slice(1);
 }
 
 // THE VOICE. Browsers come with built-in talking voices, called
@@ -431,10 +532,27 @@ const VOICE_FAVOURITES = [
   'David',
 ];
 
-function pickVoice() {
-  const english = window.speechSynthesis.getVoices().filter(function (v) {
-    return v.lang.indexOf('en') === 0;
+// Every English voice this computer has. "Multilingual" ones can switch
+// language all by themselves, so we leave those out.
+function englishVoices() {
+  if (!window.speechSynthesis) return [];
+  return window.speechSynthesis.getVoices().filter(function (v) {
+    return v.lang.indexOf('en') === 0 && v.name.indexOf('Multilingual') === -1;
   });
+}
+
+// YOUR VOICE PICK. Press V to try the next voice. The game remembers the
+// one you picked (in "localStorage", a little notebook the browser keeps
+// for each website), so it's still your pick next time you play.
+let chosenVoiceName = '';
+try { chosenVoiceName = localStorage.getItem('parkourVoice') || ''; } catch (e) {}
+
+function pickVoice() {
+  const english = englishVoices();
+  // Did you pick one with V? Use that.
+  const chosen = english.find(function (v) { return v.name === chosenVoiceName; });
+  if (chosen) return chosen;
+  // Otherwise go down the favourites list.
   for (const favourite of VOICE_FAVOURITES) {
     const found = english.find(function (v) { return v.name.indexOf(favourite) !== -1; });
     if (found) return found;
@@ -442,28 +560,66 @@ function pickVoice() {
   return english[0];   // none of our favourites? use any English voice.
 }
 
+// V: switch to the next English voice, and say something so you can hear it.
+function nextVoice() {
+  const english = englishVoices();
+  if (!english.length) { say('This browser has no English voices 😢', 3); return; }
+  const now = pickVoice();
+  const next = english[(english.indexOf(now) + 1) % english.length];
+  chosenVoiceName = next.name;
+  try { localStorage.setItem('parkourVoice', next.name); } catch (e) {}
+  // Voice names are long, like "Microsoft Mark - English (United States)".
+  // Just show the short bit before the dash.
+  say('🔊 Voice ' + (english.indexOf(next) + 1) + ' of ' + english.length + ': ' +
+      next.name.split(' - ')[0], 3);
+  sayOutLoud('Hello. Is this voice better?');
+}
+
 // The list of voices loads a moment after the page does, so we ask for
 // it now. By the time you reach level 2 it's definitely ready.
 if (window.speechSynthesis) window.speechSynthesis.getVoices();
 
+// SPEAK = robot-arm subtitles + saying it out loud.
+function speak(words) {
+  // The robot arms build the words on screen, like subtitles.
+  startRobotSubtitles(words);
+  sayOutLoud(words);
+}
+
 // pitch is how high or low the voice is (1 is normal), and rate is how
 // fast it talks (1 is normal). Squashing the pitch WAY down is what made
 // it sound like a robot before. Real people sound best close to 1.
-function speak(words) {
+function sayOutLoud(words) {
   if (!window.speechSynthesis) return;   // some browsers can't talk. that's OK.
-  const voice = new SpeechSynthesisUtterance(words);
-  const best = pickVoice();
-  if (best) voice.voice = best;
-  voice.pitch = 0.9;
-  voice.rate = 0.9;
-  window.speechSynthesis.cancel();       // stop anything it was already saying
-  window.speechSynthesis.speak(voice);
-  // Show the words on screen too, like subtitles.
-  say('"' + words + '"', 6);
+
+  const talk = function () {
+    const voice = new SpeechSynthesisUtterance(words);
+    // ENGLISH, PLEASE. Telling the browser the language means it can't
+    // accidentally grab a voice from some other country.
+    voice.lang = 'en-US';
+    const best = pickVoice();
+    if (best) { voice.voice = best; voice.lang = best.lang; }
+    voice.pitch = 1;
+    voice.rate = 0.9;
+    window.speechSynthesis.cancel();       // stop anything it was already saying
+    window.speechSynthesis.speak(voice);
+  };
+
+  // Is the list of voices ready yet? If not, wait for it (but not
+  // forever: after one second, just talk with whatever's there).
+  if (window.speechSynthesis.getVoices().length) {
+    talk();
+  } else {
+    let done = false;
+    const once = function () { if (!done) { done = true; talk(); } };
+    window.speechSynthesis.addEventListener('voiceschanged', once);
+    setTimeout(once, 1000);
+  }
 }
 
 let crackExit = null;  // where the crack is, so we know when you walk into it
-let purpleFlash = 0;   // how bright the purple flash is (1 = full, 0 = gone)
+let flash = 0;               // how bright the screen flash is (1 = full, 0 = gone)
+let flashColor = '170, 60, 255';   // what colour it flashes (red, green, blue)
 
 let nextLevelAt = 0;   // when to move on to the next level (0 = not yet)
 
@@ -475,11 +631,16 @@ window.addEventListener('keydown', function (e) {
   keys[e.code] = true;
   if (e.code === 'Space') e.preventDefault();
   if (e.code === 'KeyR') respawn();
+  // e.repeat is true when you HOLD a key down and it repeats by itself.
+  // We only want one push per press, so we ignore the repeats.
+  if (e.code === 'KeyE' && !e.repeat) interact();
+  if (e.code === 'KeyV' && !e.repeat) nextVoice();
 });
 window.addEventListener('keyup', function (e) { keys[e.code] = false; });
 
 canvas.addEventListener('click', function () {
   started = true;
+  unlockAudio();
   // POINTER LOCK hides the mouse and lets you turn forever without
   // the arrow hitting the edge of the screen. Press Esc to get it back.
   if (canvas.requestPointerLock) canvas.requestPointerLock();
@@ -513,6 +674,25 @@ function jumpButton() {
   const r = Math.max(38, Math.min(W, H) * 0.09);
   return { x: W - r - 30, y: H - r - 40, r: r };
 }
+// The PUSH button sits just above JUMP, and only shows up when you're
+// next to something you can push.
+function pushTouchButton() {
+  const j = jumpButton();
+  return { x: j.x, y: j.y - j.r * 2.6, r: j.r * 0.8 };
+}
+function inPushButton(x, y) {
+  if (!nearButton) return false;
+  const b = pushTouchButton();
+  return Math.hypot(x - b.x, y - b.y) < b.r * 1.2;
+}
+// The little VOICE button at the top middle, for phones (no V key there).
+function voiceTouchButton() {
+  return { x: W / 2, y: 30, w: 110, h: 34 };
+}
+function inVoiceButton(x, y) {
+  const b = voiceTouchButton();
+  return Math.abs(x - b.x) < b.w / 2 + 8 && Math.abs(y - b.y) < b.h / 2 + 8;
+}
 function inJumpButton(x, y) {
   const b = jumpButton();
   return Math.hypot(x - b.x, y - b.y) < b.r * 1.3;  // a bit bigger than it looks, for thumbs
@@ -521,9 +701,16 @@ function inJumpButton(x, y) {
 canvas.addEventListener('touchstart', function (e) {
   e.preventDefault();
   started = true;
+  unlockAudio();
   touchUsed = true;
   for (const t of e.changedTouches) {
-    if (inJumpButton(t.clientX, t.clientY)) {
+    if (inPushButton(t.clientX, t.clientY)) {
+      roles[t.identifier] = { kind: 'push' };
+      interact();
+    } else if (inVoiceButton(t.clientX, t.clientY)) {
+      roles[t.identifier] = { kind: 'voice' };
+      nextVoice();
+    } else if (inJumpButton(t.clientX, t.clientY)) {
       roles[t.identifier] = { kind: 'jump' };
       touchJump = true;
     } else if (t.clientX < W / 2) {
@@ -613,6 +800,64 @@ function moveY(amount) {
   }
 }
 
+// ---------------------------------------------------------------------
+//  THE BUTTONS. Walk into a button's stand to push it.
+// ---------------------------------------------------------------------
+// Which button are you standing next to? (null = none.) The screen shows
+// "Press E" whenever there is one.
+let nearButton = null;
+function checkButtons() {
+  nearButton = null;
+  for (const b of puzzle.buttons) {
+    if (Math.hypot(player.x - b.x, player.z - b.z) < 1.1) nearButton = b;
+  }
+}
+
+// E (or the PUSH button on a phone): push whatever you're next to.
+function interact() {
+  if (puzzle && nearButton) pushButton(nearButton);
+}
+
+function pushButton(b) {
+  if (b.color === 'red') {
+    // THE SIGN LIED. ZAP!
+    zap();
+    flash = 1; flashColor = '255, 240, 120';   // a bright yellow-white zap
+    falls++;
+    say('ZAAAAP! ⚡ The sign LIED!', 2.5);
+    respawn();
+    if (!puzzle.solved) resetPuzzle();
+    return;
+  }
+  if (puzzle.solved || b.lit) return;
+
+  const rightOne = PUZZLE_ANSWER[puzzle.progress];
+  if (b.color === rightOne) {
+    b.lit = true;
+    puzzle.progress++;
+    ding(puzzle.progress);
+    if (puzzle.progress === PUZZLE_ANSWER.length) {
+      // SOLVED! A crack opens... in the wall behind where you started.
+      puzzle.solved = true;
+      addCrack(0, -1);
+      rumble();
+      flash = 0.6; flashColor = '170, 60, 255';
+      say('Something just CRACKED behind you...', 3.5);
+    } else {
+      say('*click*', 1);
+    }
+  } else {
+    buzz();
+    say('BZZZT! Wrong order. Try again.', 2);
+    resetPuzzle();
+  }
+}
+
+function resetPuzzle() {
+  puzzle.progress = 0;
+  puzzle.buttons.forEach(function (b) { b.lit = false; });
+}
+
 function win() {
   finished = true;
   timerRunning = false;
@@ -683,15 +928,20 @@ function update(dt, now) {
     say('SIZZLE! 🔥 Your shoes melted.', 2);
   }
 
-  // WALKED INTO THE CRACK? You're right up against the end wall, and
-  // lined up with the crack (not off to one side of it).
-  if (crackExit && !finished &&
-      player.z - BODY_RADIUS < crackExit.z + 0.05 &&
-      Math.abs(player.x) < crackExit.halfWidth) {
-    purpleFlash = 1;
-    win();
+  // WALKED INTO THE CRACK? You're right up against its wall, and lined
+  // up with the crack (not off to one side of it).
+  if (crackExit && !finished && Math.abs(player.x) < crackExit.halfWidth) {
+    const againstWall = crackExit.facing > 0
+      ? player.z - BODY_RADIUS < crackExit.z + 0.05    // the far wall
+      : player.z + BODY_RADIUS > crackExit.z - 0.05;   // the wall behind the start
+    if (againstWall) {
+      flash = 1; flashColor = '170, 60, 255';   // purple
+      win();
+    }
   }
-  purpleFlash = Math.max(0, purpleFlash - dt * 0.4);   // the flash fades away
+  flash = Math.max(0, flash - dt * 0.4);   // the flash fades away
+
+  if (puzzle) checkButtons();
 
   // Finished a level? After a little pause, on to the next one.
   if (nextLevelAt && now >= nextLevelAt) {
@@ -796,6 +1046,12 @@ function draw() {
       color = [255, 80 + wobble * 50, wobble > 0.8 ? 40 : 0];
     }
 
+    // BUTTONS that you've pushed the right way light up: their colour
+    // gets mixed halfway to white, so they look like they're glowing.
+    if (f.button && f.button.lit) {
+      color = color.map(function (c) { return c + (255 - c) * 0.55; });
+    }
+
     // FOG: far things fade toward the fog colour. It makes distances
     // easier to judge, which matters a LOT when you're about to jump.
     // Lava glows, so it fades much less.
@@ -843,15 +1099,43 @@ function draw() {
     ctx.strokeStyle = f.edge ? mix(f.edge) : col;
     ctx.lineWidth = f.edge ? 1.5 : 1;
     ctx.stroke();
+
+    if (f.text && v.pts.length === 4) paintWords(f.text, v.pts, focal);
   }
 
   // WHOOSH: when you go through the crack, the whole screen flashes purple.
-  if (purpleFlash > 0) {
-    ctx.fillStyle = 'rgba(170, 60, 255, ' + purpleFlash + ')';
+  if (flash > 0) {
+    ctx.fillStyle = 'rgba(' + flashColor + ', ' + flash + ')';
     ctx.fillRect(0, 0, W, H);
   }
 
   drawHud();
+}
+
+// PAINTING WORDS ON A WALL. We have the sign's four corners on the screen.
+// setTransform STRETCHES and TILTS everything we draw after it, so we
+// stretch a pretend flat 500x130 box to fit exactly onto the sign.
+// Then we just write the words in the box, and they land on the sign,
+// squashed and tilted the right way for 3D.
+function paintWords(lines, pts, focal) {
+  const screen = pts.map(function (p) {
+    return { x: W / 2 + (p[0] / p[2]) * focal, y: H / 2 - (p[1] / p[2]) * focal };
+  });
+  const bottomLeft = screen[0], topRight = screen[2], topLeft = screen[3];
+  const BOX_W = 500, BOX_H = 130;
+  ctx.save();
+  ctx.setTransform(
+    (topRight.x - topLeft.x) / BOX_W, (topRight.y - topLeft.y) / BOX_W,
+    (bottomLeft.x - topLeft.x) / BOX_H, (bottomLeft.y - topLeft.y) / BOX_H,
+    topLeft.x, topLeft.y);
+  ctx.fillStyle = '#2a1608';
+  ctx.font = 'bold 52px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  lines.forEach(function (line, i) {
+    ctx.fillText(line, BOX_W / 2, BOX_H * (i + 1) / (lines.length + 1));
+  });
+  ctx.restore();
 }
 
 function drawHud() {
@@ -896,6 +1180,21 @@ function drawHud() {
     });
   }
 
+  // "PRESS E" when you're standing next to a button.
+  if (nearButton && started) {
+    const name = nearButton.color.toUpperCase();
+    const hint = touchUsed ? 'Tap PUSH to push the ' + name + ' button'
+                           : 'Press E to push the ' + name + ' button';
+    ctx.textAlign = 'center';
+    ctx.font = 'bold ' + Math.round(Math.min(W, H) * 0.04) + 'px system-ui, sans-serif';
+    ctx.lineWidth = 5; ctx.strokeStyle = '#000';
+    ctx.strokeText(hint, W / 2, H * 0.68);
+    ctx.fillStyle = 'rgb(' + BUTTON_COLORS[nearButton.color].map(function (c) {
+      return Math.round(c + (255 - c) * 0.35);   // a bit lighter, so it's easy to read
+    }).join(',') + ')';
+    ctx.fillText(hint, W / 2, H * 0.68);
+  }
+
   // Phone controls: only drawn once a finger has touched the screen.
   if (touchUsed) {
     const b = jumpButton();
@@ -905,6 +1204,22 @@ function drawHud() {
     ctx.fillStyle = '#fff'; ctx.textAlign = 'center';
     ctx.font = 'bold ' + Math.round(b.r * 0.45) + 'px system-ui, sans-serif';
     ctx.fillText('JUMP', b.x, b.y + b.r * 0.16);
+    // PUSH: only there when you're next to a button.
+    if (nearButton) {
+      const p = pushTouchButton();
+      ctx.fillStyle = 'rgba(255, 210, 60, 0.45)';
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold ' + Math.round(p.r * 0.45) + 'px system-ui, sans-serif';
+      ctx.fillText('PUSH', p.x, p.y + p.r * 0.16);
+    }
+    // VOICE: a small pill at the top middle.
+    const vb = voiceTouchButton();
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+    ctx.fillRect(vb.x - vb.w / 2, vb.y - vb.h / 2, vb.w, vb.h);
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 15px system-ui, sans-serif';
+    ctx.fillText('🔊 VOICE', vb.x, vb.y + 5);
     if (stick.active) {
       ctx.strokeStyle = 'rgba(255,255,255,0.5)';
       ctx.beginPath(); ctx.arc(stick.ox, stick.oy, STICK_RADIUS, 0, Math.PI * 2); ctx.stroke();
@@ -914,6 +1229,8 @@ function drawHud() {
       ctx.fill();
     }
   }
+
+  drawRobotSubtitles();
 
   // The title screen, until you click or tap.
   if (!started) {
@@ -925,7 +1242,364 @@ function drawHud() {
     ctx.font = Math.round(Math.min(W, H) * 0.035) + 'px system-ui, sans-serif';
     ctx.fillText('Click or tap to start', W / 2, H * 0.52);
     ctx.fillText('WASD to run · mouse to look · SPACE to jump · R to restart', W / 2, H * 0.6);
+    ctx.fillText('E to push buttons · V to change the voice', W / 2, H * 0.66);
   }
+}
+
+// ---------------------------------------------------------------------
+//  ROBOT ARM SUBTITLES.
+//  When the voice talks, a row of robot arms swings down from a metal
+//  rail at the top of the screen. Each arm grabs a metal letter, swings
+//  it into place, and lets go with a CLANK. Letter by letter, the arms
+//  build the words. When the voice stops, the letters drop and clatter
+//  away, and the arms go back up.
+// ---------------------------------------------------------------------
+const robo = {
+  active: false,
+  pieces: [],      // every metal letter
+  arms: [],        // every robot arm
+  fontSize: 0,
+  startedAt: 0,    // when the arms started coming down
+  allPlacedAt: 0,  // when the last letter got put in place (0 = not yet)
+  dropAt: 0,       // when the letters started falling (0 = not yet)
+  reach: 0,        // how long each arm bone is
+};
+
+// How many seconds each part of an arm's job takes. Smaller = faster arms.
+const ARM_FETCH_TIME = 0.15;   // reaching up to grab a new letter
+const ARM_CARRY_TIME = 0.25;   // swinging the letter to its spot
+const ARM_SLIDE_TIME = 0.4;    // the arms sliding down at the start
+
+function startRobotSubtitles(text) {
+  robo.active = true;
+  robo.pieces = [];
+  robo.arms = [];
+  robo.allPlacedAt = 0;
+  robo.dropAt = 0;
+  robo.startedAt = performance.now() / 1000;
+
+  // 1. WORK OUT WHERE EVERY LETTER GOES.
+  //    Word-wrap the text into lines, then measure each letter's spot.
+  const fs = Math.round(Math.min(W, H) * 0.06);
+  robo.fontSize = fs;
+  ctx.font = 'bold ' + fs + 'px system-ui, sans-serif';
+  const lines = [];
+  let line = '';
+  for (const word of text.split(' ')) {
+    const tryLine = line ? line + ' ' + word : word;
+    if (ctx.measureText(tryLine).width > W * 0.85 && line) { lines.push(line); line = word; }
+    else line = tryLine;
+  }
+  lines.push(line);
+
+  const top = Math.max(110, H * 0.2);   // low enough to give the arms room to swing
+  lines.forEach(function (l, row) {
+    const lineWidth = ctx.measureText(l).width;
+    const left = W / 2 - lineWidth / 2;
+    const y = top + row * fs * 1.25;
+    for (let i = 0; i < l.length; i++) {
+      if (l[i] === ' ') continue;   // nobody needs a metal space
+      // How far along the line is this letter? Measure everything before it.
+      const x = left + ctx.measureText(l.slice(0, i)).width;
+      const w = ctx.measureText(l[i]).width;
+      robo.pieces.push({ letter: l[i], x: x + w / 2, y: y,
+                         placed: false, fallSpeed: 0, spin: 0, angle: 0 });
+    }
+  });
+
+  // 2. MAKE THE ARMS. Wider screens get more arms.
+  //    FAIR SHARES: line all the letters up from left to right, then cut
+  //    the line into equal chunks, one chunk per arm. That way no arm has
+  //    to do way more work than the others. Each arm hangs right above
+  //    the middle of its own chunk.
+  const count = Math.max(3, Math.min(7, Math.round(W / 190)));
+  const leftToRight = robo.pieces.slice().sort(function (a, b) { return a.x - b.x; });
+  const share = Math.ceil(leftToRight.length / count);
+  for (let i = 0; i < count; i++) {
+    const chunk = leftToRight.slice(i * share, (i + 1) * share);
+    if (!chunk.length) continue;
+    // Do the letters in reading order: top line first, then left to right.
+    chunk.sort(function (a, b) { return (a.y - b.y) || (a.x - b.x); });
+    const middle = chunk.reduce(function (sum, p) { return sum + p.x; }, 0) / chunk.length;
+    robo.arms.push({ baseX: middle, jobs: chunk, state: 'home',
+                     t: 0, from: null, claw: null, holding: null });
+  }
+
+  // 3. HOW LONG DO THE ARM BONES NEED TO BE? Long enough that every arm
+  //    can reach its farthest letter, with a bit to spare.
+  let farthest = 100;
+  robo.pieces.forEach(function (p) {
+    for (const arm of robo.arms) {
+      if (arm.jobs.indexOf(p) === -1) continue;
+      farthest = Math.max(farthest, Math.hypot(p.x - arm.baseX, p.y - fs * 0.55));
+    }
+  });
+  robo.reach = farthest * 0.6;   // two bones of 0.6 each = 1.2x the reach needed
+
+  robo.arms.forEach(function (arm) {
+    arm.claw = restSpot(arm);
+    arm.state = arm.jobs.length ? 'fetch' : 'home';
+    arm.from = restSpot(arm);
+  });
+}
+
+// Where the shoulder of an arm is. It slides down from above the screen
+// at the start, and back up at the end.
+function shoulder(arm) {
+  const now = performance.now() / 1000;
+  let hidden = 1 - smooth((now - robo.startedAt) / ARM_SLIDE_TIME);
+  if (robo.dropAt) hidden = smooth((now - robo.dropAt) / 1.2);
+  return { x: arm.baseX, y: 10 - hidden * (robo.reach * 2 + 60) };
+}
+// Where an arm waits, and grabs new letters from: just below its shoulder.
+function restSpot(arm) {
+  const s = shoulder(arm);
+  return { x: s.x + robo.reach * 0.3, y: s.y + robo.reach * 0.5 };
+}
+// Where the claw goes to put a letter down: just above the letter's middle.
+function dropSpot(piece) {
+  return { x: piece.x, y: piece.y - robo.fontSize * 0.55 };
+}
+
+// SMOOTH turns a straight 0-to-1 into a gentle one: slow start, fast
+// middle, slow finish. It's what makes the arms look like machines and
+// not like teleporting robots.
+function smooth(t) {
+  t = Math.max(0, Math.min(1, t));
+  return t * t * (3 - 2 * t);
+}
+function between(a, b, t) {
+  return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+}
+
+function updateRobotSubtitles(dt) {
+  if (!robo.active) return;
+  const now = performance.now() / 1000;
+
+  for (const arm of robo.arms) {
+    if (arm.state === 'fetch') {
+      // Reaching back up to grab the next letter.
+      arm.t += dt / ARM_FETCH_TIME;
+      arm.claw = between(arm.from, restSpot(arm), smooth(arm.t));
+      if (arm.t >= 1) {
+        arm.holding = arm.jobs.shift();
+        arm.state = 'carry'; arm.t = 0;
+      }
+    } else if (arm.state === 'carry') {
+      // Swinging the letter over to its spot.
+      arm.t += dt / ARM_CARRY_TIME;
+      arm.claw = between(restSpot(arm), dropSpot(arm.holding), smooth(arm.t));
+      if (arm.t >= 1) {
+        arm.holding.placed = true;   // let go!
+        arm.holding = null;
+        clank();
+        arm.from = arm.claw; arm.t = 0;
+        arm.state = arm.jobs.length ? 'fetch' : 'goinghome';
+      }
+    } else if (arm.state === 'goinghome') {
+      arm.t += dt / ARM_FETCH_TIME;
+      arm.claw = between(arm.from, restSpot(arm), smooth(arm.t));
+      if (arm.t >= 1) arm.state = 'home';
+    } else {
+      arm.claw = restSpot(arm);   // waiting (and sliding up or down with the rail)
+    }
+  }
+
+  // Are all the letters in place?
+  const allPlaced = robo.pieces.every(function (p) { return p.placed; });
+  if (allPlaced && !robo.allPlacedAt) robo.allPlacedAt = now;
+
+  // Once the voice has finished talking (and you've had a moment to
+  // read it), the letters DROP. Each one gets a little random spin.
+  const stillTalking = window.speechSynthesis && window.speechSynthesis.speaking;
+  if (robo.allPlacedAt && !robo.dropAt && !stillTalking && now > robo.allPlacedAt + 1.5) {
+    robo.dropAt = now;
+    robo.pieces.forEach(function (p) {
+      p.fallSpeed = -Math.random() * 150;   // a little hop first
+      p.spin = (Math.random() - 0.5) * 8;
+    });
+  }
+  if (robo.dropAt) {
+    robo.pieces.forEach(function (p) {
+      p.fallSpeed += 1800 * dt;   // gravity, in pixels per second per second
+      p.y += p.fallSpeed * dt;
+      p.angle += p.spin * dt;
+    });
+    if (now > robo.dropAt + 1.5) {
+      robo.active = false;   // all gone
+      // More lines for the voice to say? Start the next one.
+      // Otherwise, anything waiting to be shown? Show it now.
+      if (robo.nextLines && robo.nextLines.length) {
+        speakLines(robo.nextLines);
+      } else if (robo.thenSay) {
+        say(robo.thenSay, 3); robo.thenSay = '';
+      }
+    }
+  }
+}
+
+// One metal letter. The colour fades from bright silver to dark steel
+// and back again, top to bottom. That's what makes it look like shiny metal.
+function drawMetalLetter(letter, x, y, angle) {
+  const fs = robo.fontSize;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+  const shine = ctx.createLinearGradient(0, -fs * 0.5, 0, fs * 0.5);
+  shine.addColorStop(0, '#f6f8fa');
+  shine.addColorStop(0.45, '#9aa3ad');
+  shine.addColorStop(0.55, '#d8dde2');
+  shine.addColorStop(1, '#5c646d');
+  ctx.font = 'bold ' + fs + 'px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = '#24282c';
+  ctx.strokeText(letter, 0, 0);
+  ctx.fillStyle = shine;
+  ctx.fillText(letter, 0, 0);
+  ctx.restore();
+}
+
+// One robot arm. The tricky part is the ELBOW: we know where the shoulder
+// is, and where we want the claw to be, but where does the elbow go?
+// This is called INVERSE KINEMATICS. Two bones of the same length make a
+// triangle with the line from shoulder to claw, and a bit of triangle
+// maths (the "law of cosines") tells us the angle to bend at.
+function drawArm(arm) {
+  const s = shoulder(arm);
+  const c = arm.claw;
+  const bone = robo.reach;
+  let dx = c.x - s.x, dy = c.y - s.y;
+  let d = Math.hypot(dx, dy);
+  d = Math.max(1, Math.min(d, bone * 2 - 0.5));   // can't reach farther than both bones
+  const pointing = Math.atan2(dy, dx);
+  const bend = Math.acos(Math.min(1, d / (2 * bone)));
+  const elbow = { x: s.x + Math.cos(pointing - bend) * bone,
+                  y: s.y + Math.sin(pointing - bend) * bone };
+  const hand = { x: s.x + Math.cos(pointing) * d, y: s.y + Math.sin(pointing) * d };
+
+  ctx.lineCap = 'round';
+  // The two bones: a dark steel tube with a lighter stripe down it.
+  [[s, elbow, 14], [elbow, hand, 11]].forEach(function (b) {
+    ctx.strokeStyle = '#3d434a'; ctx.lineWidth = b[2];
+    ctx.beginPath(); ctx.moveTo(b[0].x, b[0].y); ctx.lineTo(b[1].x, b[1].y); ctx.stroke();
+    ctx.strokeStyle = '#8b949e'; ctx.lineWidth = b[2] * 0.35;
+    ctx.beginPath(); ctx.moveTo(b[0].x, b[0].y); ctx.lineTo(b[1].x, b[1].y); ctx.stroke();
+  });
+
+  // The letter it's carrying, hanging below the claw.
+  if (arm.holding) drawMetalLetter(arm.holding.letter, hand.x, hand.y + robo.fontSize * 0.55, 0);
+
+  // The claw: two pincers. Wide open when empty, squeezed shut when holding.
+  const open = arm.holding ? 0.25 : 0.7;
+  ctx.strokeStyle = '#2b3036'; ctx.lineWidth = 4;
+  [-1, 1].forEach(function (side) {
+    const a = Math.PI / 2 + side * open;
+    ctx.beginPath();
+    ctx.moveTo(hand.x, hand.y);
+    ctx.lineTo(hand.x + Math.cos(a) * 18, hand.y + Math.sin(a) * 18);
+    ctx.stroke();
+  });
+
+  // Orange joints with a bolt in the middle.
+  [s, elbow, hand].forEach(function (j, i) {
+    ctx.fillStyle = '#ff9f1c';
+    ctx.beginPath(); ctx.arc(j.x, j.y, i === 2 ? 6 : 9, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#3d2a10';
+    ctx.beginPath(); ctx.arc(j.x, j.y, 2.5, 0, Math.PI * 2); ctx.fill();
+  });
+}
+
+function drawRobotSubtitles() {
+  if (!robo.active) return;
+
+  // The rail along the top that the arms hang from.
+  const railY = shoulder(robo.arms[0]).y;
+  if (railY > -20) {
+    ctx.fillStyle = '#2b3036';
+    ctx.fillRect(0, railY - 14, W, 12);
+    ctx.fillStyle = '#ffcc00';   // yellow and black DANGER stripes
+    for (let x = -20; x < W; x += 28) {
+      ctx.beginPath();
+      ctx.moveTo(x, railY - 2); ctx.lineTo(x + 12, railY - 2);
+      ctx.lineTo(x + 20, railY - 14); ctx.lineTo(x + 8, railY - 14);
+      ctx.fill();
+    }
+  }
+
+  // Letters already put in place (or falling away).
+  robo.pieces.forEach(function (p) {
+    if (p.placed) drawMetalLetter(p.letter, p.x, p.y, p.angle);
+  });
+  robo.arms.forEach(drawArm);
+}
+
+// CLANK! A tiny metal sound, made from scratch. A short buzzy note that
+// dies away really fast sounds a lot like metal hitting metal.
+let audio = null;
+function unlockAudio() {
+  // Browsers only let a page make sounds after you've clicked or tapped,
+  // so we set up the sound machine the moment you start the game.
+  if (audio) return;
+  try { audio = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { audio = null; }
+}
+// A handy sound-maker: one note that starts at one pitch and slides to
+// another, then fades out. Almost every sound effect below is made with it.
+//   type: 'sine' is smooth, 'square' is buzzy, 'sawtooth' is harsh
+function beep(startPitch, endPitch, seconds, type, loudness) {
+  if (!audio) return;
+  const t = audio.currentTime;
+  const osc = audio.createOscillator();
+  const vol = audio.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(startPitch, t);
+  osc.frequency.exponentialRampToValueAtTime(endPitch, t + seconds);
+  vol.gain.setValueAtTime(loudness, t);
+  vol.gain.exponentialRampToValueAtTime(0.0001, t + seconds);
+  osc.connect(vol); vol.connect(audio.destination);
+  osc.start(t); osc.stop(t + seconds + 0.05);
+}
+// ZAP: a harsh sound sliding from high to low, really fast. Three at once
+// at slightly different pitches makes it crackle.
+function zap() {
+  beep(1800, 60, 0.5, 'sawtooth', 0.12);
+  beep(1700, 80, 0.45, 'square', 0.08);
+  beep(2400, 100, 0.3, 'sawtooth', 0.06);
+}
+// DING: each right button goes a bit higher, like climbing a ladder.
+function ding(step) {
+  const pitch = 660 * Math.pow(1.25, step);
+  beep(pitch, pitch, 0.4, 'sine', 0.15);
+  beep(pitch * 2, pitch * 2, 0.25, 'sine', 0.05);
+}
+// BZZZT: a low, ugly buzz. The "nope" sound.
+function buzz() {
+  beep(110, 100, 0.45, 'square', 0.1);
+  beep(116, 105, 0.45, 'sawtooth', 0.06);
+}
+// RUMBLE: really low notes that wobble, for the wall cracking open.
+function rumble() {
+  beep(70, 35, 1.4, 'sawtooth', 0.15);
+  beep(55, 30, 1.6, 'square', 0.08);
+  beep(400, 2000, 0.9, 'sine', 0.04);   // and a spooky rising whistle
+}
+
+function clank() {
+  if (!audio) return;
+  const t = audio.currentTime;
+  [[700 + Math.random() * 300, 'square', 0.05], [2600 + Math.random() * 600, 'triangle', 0.04]]
+    .forEach(function (n) {
+      const osc = audio.createOscillator();
+      const vol = audio.createGain();
+      osc.type = n[1];
+      osc.frequency.value = n[0];
+      vol.gain.setValueAtTime(n[2], t);
+      vol.gain.exponentialRampToValueAtTime(0.0001, t + 0.09);
+      osc.connect(vol); vol.connect(audio.destination);
+      osc.start(t); osc.stop(t + 0.1);
+    });
 }
 
 // ---------------------------------------------------------------------
@@ -937,6 +1611,7 @@ function loop(t) {
   const dt = Math.min(0.05, (t - last) / 1000);
   last = t;
   update(dt, t / 1000);
+  updateRobotSubtitles(dt);
   draw();
   requestAnimationFrame(loop);
 }
