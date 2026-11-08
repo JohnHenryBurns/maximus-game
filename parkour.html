@@ -994,6 +994,7 @@ function respawn() {
 // Throw away the old level and build a new one.
 function loadLevel(index) {
   levelIndex = index;
+  rememberProgress(index);   // save where you are, for CONTINUE
   blocks = [];
   faces = [];
   crackExit = null;    // no crack unless build() makes one
@@ -1012,6 +1013,7 @@ function loadLevel(index) {
   respawn();
   if (LEVELS[index].punch) startPunching();
   if (LEVELS[index].broken) startPunching(true);
+  if (!started) return;   // still on the menu: no announcements yet
   if (LEVELS[index].voice) {
     // The voice talks first. The level's name waits until the robot
     // arms are finished, so the two don't land on top of each other.
@@ -1219,17 +1221,29 @@ window.addEventListener('keydown', function (e) {
   // We only want one push per press, so we ignore the repeats.
   if (e.code === 'KeyE' && !e.repeat) interact();
   if (e.code === 'KeyV' && !e.repeat) nextVoice();
+  if (e.code === 'KeyM' && !e.repeat && started) openMenu();
+  if (e.code === 'Escape' && started) openMenu();
+});
+
+// ESC. When your mouse is locked for looking around, the browser keeps
+// the Esc key for itself: it uses it to give you your mouse back. So we
+// can't always hear Esc. Instead we listen for the mouse being GIVEN
+// BACK. If that happens in the middle of the game, open the title screen.
+document.addEventListener('pointerlockchange', function () {
+  if (document.pointerLockElement !== canvas && started) openMenu();
 });
 window.addEventListener('keyup', function (e) { keys[e.code] = false; });
 
-canvas.addEventListener('click', function () {
-  started = true;
+canvas.addEventListener('click', function (e) {
+  // On the menu? Then a click means "press that box".
+  if (!started) { menuClick(e.clientX, e.clientY); return; }
   unlockAudio();
   // POINTER LOCK hides the mouse and lets you turn forever without
   // the arrow hitting the edge of the screen. Press Esc to get it back.
-  if (canvas.requestPointerLock) canvas.requestPointerLock();
+  lockMouse();
 });
 document.addEventListener('mousemove', function (e) {
+  mouseX = e.clientX; mouseY = e.clientY;   // for lighting up menu boxes
   if (document.pointerLockElement !== canvas) return;
   turn(e.movementX * 0.0025, e.movementY * 0.0025);
 });
@@ -1284,9 +1298,14 @@ function inJumpButton(x, y) {
 
 canvas.addEventListener('touchstart', function (e) {
   e.preventDefault();
-  started = true;
-  unlockAudio();
   touchUsed = true;
+  // On the menu? Then a tap means "press that box".
+  if (!started) {
+    const t = e.changedTouches[0];
+    menuClick(t.clientX, t.clientY);
+    return;
+  }
+  unlockAudio();
   for (const t of e.changedTouches) {
     if (inPushButton(t.clientX, t.clientY)) {
       roles[t.identifier] = { kind: 'push' };
@@ -1797,10 +1816,35 @@ function draw() {
     visible.push({ pts: pts, face: f, dist: dist, paintOrder: paintOrder, ghostGlitch: ghostGlitch });
   }
 
+  // YOUR SHADOW. It goes in the list too, so it gets painted in the right
+  // order. We pretend it's a bit closer than it is, so it always lands ON
+  // TOP of the floor tiles it's lying on.
+  const shadow = playerShadow();
+  if (shadow) {
+    const pts = clipNear(shadow.corners.map(toCamera));
+    if (pts.length >= 3) {
+      const d = Math.hypot(player.x - eye[0], shadow.y - eye[1], player.z - eye[2]);
+      visible.push({ pts: pts, shadow: shadow, paintOrder: d - 1 });
+    }
+  }
+
   // THE PAINTER'S ALGORITHM: farthest first, nearest last.
   visible.sort(function (a, b) { return b.paintOrder - a.paintOrder; });
 
   for (const v of visible) {
+    // The shadow is just a see-through dark shape. Paint it and move on.
+    if (v.shadow) {
+      ctx.beginPath();
+      v.pts.forEach(function (p, i) {
+        const sx = W / 2 + (p[0] / p[2]) * focal, sy = H / 2 - (p[1] / p[2]) * focal;
+        if (i === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
+      });
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(0, 0, 0, ' + v.shadow.darkness + ')';
+      ctx.fill();
+      continue;
+    }
+
     const f = v.face;
     let color = f.color;
 
@@ -1891,6 +1935,60 @@ function draw() {
   drawGlitch();
 
   drawHud();
+}
+
+// ---------------------------------------------------------------------
+//  YOUR SHADOW. Imagine the sun is straight overhead. Your shadow lands
+//  on whatever is right underneath you: the highest block top that's
+//  below your feet. It's a dark circle, and the higher you jump, the
+//  fainter and bigger it gets. In mid-air it shows where you'll LAND.
+// ---------------------------------------------------------------------
+const SHADOW_SIZE = 0.35;      // how big your shadow is when you're standing
+const SHADOW_DARKNESS = 0.45;  // 0 = invisible, 1 = totally black
+
+function playerShadow() {
+  if (!started) return null;
+  // Find the block right under you with the highest top.
+  let ground = null;
+  for (const b of blocks) {
+    if (player.x < b.minX || player.x > b.maxX || player.z < b.minZ || player.z > b.maxZ) continue;
+    if (b.maxY > player.y + 0.01) continue;              // that's above you, not below
+    if (!ground || b.maxY > ground.maxY) ground = b;
+  }
+  if (!ground) return null;                              // nothing under you. Gulp.
+
+  const height = player.y - ground.maxY;                 // how far up you are
+  const darkness = SHADOW_DARKNESS * Math.max(0, 1 - height / 6);
+  if (darkness <= 0.01) return null;
+  const radius = SHADOW_SIZE * (1 + height * 0.15);
+  const y = ground.maxY + 0.01;                          // a hair above the floor
+  // Is there floor at this height at a spot? (Room floors are made of lots
+  // of little blocks side by side, so we check ALL of them, not just one.)
+  const floorAt = function (x, z) {
+    return blocks.some(function (b) {
+      return Math.abs(b.maxY - ground.maxY) < 0.001 &&
+             x >= b.minX && x <= b.maxX && z >= b.minZ && z <= b.maxZ;
+    });
+  };
+  // A circle made of 16 points. If a point would hang off the edge into
+  // thin air, we pull it back in toward you until it's on the floor again.
+  const corners = [];
+  for (let i = 0; i < 16; i++) {
+    const a = i * Math.PI * 2 / 16;
+    let r = radius;
+    let step = radius / 2;
+    if (!floorAt(player.x + Math.cos(a) * r, player.z + Math.sin(a) * r)) {
+      // Halve the gap each time: too far? come in. On the floor? go out.
+      // Six goes gets it really close to the edge.
+      r = radius / 2;
+      for (let k = 0; k < 6; k++) {
+        step /= 2;
+        r += floorAt(player.x + Math.cos(a) * r, player.z + Math.sin(a) * r) ? step : -step;
+      }
+    }
+    corners.push([player.x + Math.cos(a) * r, y, player.z + Math.sin(a) * r]);
+  }
+  return { corners: corners, y: y, darkness: darkness };
 }
 
 // PAINTING WORDS ON A WALL. We have the sign's four corners on the screen.
@@ -2028,18 +2126,8 @@ function drawHud() {
   drawGhostArms();
   drawCracks();
 
-  // The title screen, until you click or tap.
-  if (!started) {
-    ctx.fillStyle = 'rgba(0,0,0,0.6)';
-    ctx.fillRect(0, 0, W, H);
-    ctx.textAlign = 'center'; ctx.fillStyle = '#fff';
-    ctx.font = 'bold ' + Math.round(Math.min(W, H) * 0.1) + 'px system-ui, sans-serif';
-    ctx.fillText("MAX'S PARKOUR", W / 2, H * 0.4);
-    ctx.font = Math.round(Math.min(W, H) * 0.035) + 'px system-ui, sans-serif';
-    ctx.fillText('Click or tap to start', W / 2, H * 0.52);
-    ctx.fillText('WASD to run · mouse to look · SPACE to jump · R to restart', W / 2, H * 0.6);
-    ctx.fillText('E to push buttons · V to change the voice', W / 2, H * 0.66);
-  }
+  // The menu, until you pick something.
+  if (!started) drawMenu();
 }
 
 // ---------------------------------------------------------------------
@@ -2676,6 +2764,155 @@ function clank() {
       osc.connect(vol); vol.connect(audio.destination);
       osc.start(t); osc.stop(t + 0.1);
     });
+}
+
+// ---------------------------------------------------------------------
+//  THE MENU. Three big boxes: NEW GAME, CONTINUE, and LEVELS.
+//  Your progress is saved in "localStorage" (the browser's little
+//  notebook for this website), so CONTINUE still works tomorrow.
+// ---------------------------------------------------------------------
+const ALL_LEVELS_UNLOCKED = false;   // true = every level is open in the LEVELS list
+
+let menuPage = 'main';    // 'main' (the 3 boxes) or 'levels' (the list of levels)
+let menuButtons = [];     // the boxes on screen right now, so we know what you clicked
+let mouseX = -1, mouseY = -1;   // where the mouse is, to light up the box under it
+
+// Reading and writing the notebook. "try" means: if the browser won't
+// let us (some private windows don't), just carry on without saving.
+function loadSave(name) {
+  try { const v = localStorage.getItem(name); return v === null ? -1 : Number(v); }
+  catch (e) { return -1; }
+}
+function writeSave(name, value) {
+  try { localStorage.setItem(name, String(value)); } catch (e) {}
+}
+function savedLevel()   { return loadSave('parkourLevel'); }   // where you were (-1 = never played)
+function highestLevel() { return loadSave('parkourBest'); }    // the furthest you've got
+
+// Called every time a level loads, to remember where you are.
+function rememberProgress(index) {
+  if (!started) return;   // just looking at the menu doesn't count
+  writeSave('parkourLevel', index);
+  if (index > highestLevel()) writeSave('parkourBest', index);
+}
+
+function isUnlocked(index) {
+  return ALL_LEVELS_UNLOCKED || index <= Math.max(0, highestLevel());
+}
+
+// Leave the menu and start playing level number "index".
+function playFrom(index) {
+  started = true;
+  menuPage = 'main';
+  falls = 0;
+  unlockAudio();
+  loadLevel(index);
+  if (!touchUsed) lockMouse();
+}
+
+// Lock the mouse for looking around. Right after you press Esc, some
+// browsers say "not yet!" for a second. That's OK: we ignore the
+// complaint, and clicking the game again locks it.
+function lockMouse() {
+  if (!canvas.requestPointerLock) return;
+  try {
+    const asked = canvas.requestPointerLock();
+    if (asked && asked.catch) asked.catch(function () {});
+  } catch (e) {}
+}
+
+// M or Esc: back to the menu.
+function openMenu() {
+  started = false;
+  menuPage = 'main';
+  if (document.exitPointerLock) document.exitPointerLock();
+}
+
+// Somebody clicked or tapped at (x, y) while the menu is showing.
+function menuClick(x, y) {
+  for (const b of menuButtons) {
+    if (b.disabled) continue;
+    if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
+      clank();
+      b.action();
+      return;
+    }
+  }
+}
+
+// One box. It glows when the mouse is over it, and goes grey if you
+// can't press it yet.
+function drawMenuButton(b) {
+  const hover = !b.disabled && mouseX >= b.x && mouseX <= b.x + b.w && mouseY >= b.y && mouseY <= b.y + b.h;
+  ctx.fillStyle = b.disabled ? 'rgba(60, 60, 60, 0.8)'
+                : hover ? 'rgba(255, 255, 255, 0.95)' : 'rgba(20, 20, 24, 0.85)';
+  ctx.strokeStyle = b.disabled ? '#666' : (b.color || '#ffffff');
+  ctx.lineWidth = 4;
+  ctx.fillRect(b.x, b.y, b.w, b.h);
+  ctx.strokeRect(b.x, b.y, b.w, b.h);
+  ctx.fillStyle = b.disabled ? '#999' : hover ? '#111' : '#fff';
+  ctx.textAlign = 'center';
+  ctx.font = 'bold ' + b.fontSize + 'px system-ui, sans-serif';
+  ctx.fillText(b.label, b.x + b.w / 2, b.y + b.h / 2 + b.fontSize * 0.35);
+}
+
+function drawMenu() {
+  // Darken the game behind the menu.
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.65)';
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#fff';
+  const small = Math.min(W, H);
+  ctx.font = 'bold ' + Math.round(small * 0.09) + 'px system-ui, sans-serif';
+  ctx.fillText("MAX'S PARKOUR", W / 2, H * 0.17);
+
+  menuButtons = [];
+  const boxW = Math.min(380, W * 0.8);
+  const left = (W - boxW) / 2;
+
+  if (menuPage === 'main') {
+    // THE THREE BOXES.
+    const boxH = Math.max(52, small * 0.1), gap = boxH * 0.3;
+    const top = H * 0.26;
+    const saved = savedLevel();
+    const fontSize = Math.round(boxH * 0.42);
+    menuButtons.push({ label: 'NEW GAME', color: '#5dff7a', x: left, y: top, w: boxW, h: boxH,
+                       fontSize: fontSize, action: function () { playFrom(0); } });
+    menuButtons.push({ label: saved >= 0 ? 'CONTINUE: LEVEL ' + levelNumber(saved) : 'CONTINUE',
+                       color: '#ffd23f', x: left, y: top + boxH + gap, w: boxW, h: boxH,
+                       fontSize: fontSize, disabled: saved < 0,
+                       action: function () { playFrom(saved); } });
+    menuButtons.push({ label: 'LEVELS', color: '#b07cff', x: left, y: top + 2 * (boxH + gap), w: boxW, h: boxH,
+                       fontSize: fontSize, action: function () { menuPage = 'levels'; } });
+
+    ctx.fillStyle = '#ddd';
+    ctx.font = Math.round(small * 0.03) + 'px system-ui, sans-serif';
+    const y = top + 3 * (boxH + gap) + small * 0.03;
+    ctx.fillText('WASD to run · mouse to look · SPACE to jump · R to restart', W / 2, y);
+    ctx.fillText('E to push buttons · V to change the voice · Esc or M for this menu', W / 2, y + small * 0.045);
+  } else {
+    // THE LEVELS LIST. One box per level. Locked ones are grey.
+    const boxH = Math.max(36, Math.min(54, (H * 0.68) / (LEVELS.length + 1) - 8)), gap = 8;
+    const fontSize = Math.round(boxH * 0.4);
+    const top = H * 0.22;
+    LEVELS.forEach(function (level, i) {
+      const open = isUnlocked(i);
+      menuButtons.push({ label: open ? level.name : '🔒 ' + level.name.split(':')[0],
+                         x: left - 40, y: top + i * (boxH + gap), w: boxW + 80, h: boxH,
+                         fontSize: fontSize, disabled: !open,
+                         action: function () { playFrom(i); } });
+    });
+    menuButtons.push({ label: '← BACK', x: left, y: top + LEVELS.length * (boxH + gap) + 6,
+                       w: boxW, h: boxH, fontSize: fontSize,
+                       action: function () { menuPage = 'main'; } });
+  }
+  menuButtons.forEach(drawMenuButton);
+}
+
+// "LEVEL 3: DOWN BELOW" -> "3". The number is the bit after the word LEVEL.
+function levelNumber(index) {
+  const match = LEVELS[index].name.match(/LEVEL (\d+)/);
+  return match ? match[1] : String(index + 1);
 }
 
 // ---------------------------------------------------------------------
