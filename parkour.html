@@ -784,7 +784,7 @@ function drawGhostArms() {
 //     15        BOOM
 // ---------------------------------------------------------------------
 const BREAK_ROOM_MAP = Array(12).fill('............');
-const BREAK_CRACKS = 40;          // how many cracks grow in the room
+const BREAK_CRACKS = 100;         // how many cracks grow in the room
 const BREAK_CRACKS_START = 3;     // when the first crack appears
 const BREAK_BOOM_AT = 15;         // when the room explodes
 let theBreak = null;              // what's happening in this level so far
@@ -942,11 +942,15 @@ function addArcadeFragments() {
     addBox(p[0] - 0.25, p[0] + 0.25, p[1] - 0.25, p[1] + 0.25, -11.88, -11.85, PEPPERONI, B);
   });
 
+  addArcadeCard(-7, 4.8, -12, '🍕', "MAX'S PIZZA", B);
+
   // DEFEND THE TOOTH: a giant tooth with two roots.
   B = bob();
   addBox(5, 7, 0, 1.6, -16, -14, [245, 245, 235], B);
   addBox(5.2, 5.8, -1.4, 0, -15.5, -14.5, [235, 230, 215], B);
   addBox(6.2, 6.8, -1.4, 0, -15.5, -14.5, [235, 230, 215], B);
+
+  addArcadeCard(6, 1.9, -13.9, '🦷', 'DEFEND THE TOOTH', B);
 
   // SNAKE FIGHT: a wiggly green snake made of blocks.
   B = bob();
@@ -955,8 +959,13 @@ function addArcadeFragments() {
     addBox(x - 0.4, x + 0.4, 4, 4.8, z - 0.4, z + 0.4, i === 0 ? [30, 160, 60] : [60, 200, 90], B);
   }
 
+  addArcadeCard(-7, 5.2, -17.4, '🐍', 'SNAKE FIGHT', B);
+
   // BOOT BALL: a black-and-white football.
-  addSphere(6, 5, -22, 1.4, [240, 240, 240], [30, 30, 30], bob());
+  B = bob();
+  addSphere(6, 5, -22, 1.4, [240, 240, 240], [30, 30, 30], B);
+
+  addArcadeCard(6, 6.6, -22, '⚽', 'BOOT BALL', B);
 
   // KNIGHTS OF THE FOUR: a castle tower with battlements on top.
   B = bob();
@@ -965,6 +974,8 @@ function addArcadeFragments() {
     addBox(p[0], p[0] + 0.5, 2, 2.6, p[1], p[1] + 0.5, [150, 150, 160], B);
   });
 
+  addArcadeCard(-8, 3, -28.9, '🏰', 'KNIGHTS OF THE FOUR', B);
+
   // THE LOST SHIP: a red rocket with a pointy nose and fins.
   B = bob();
   addBox(6.5, 7.5, -1, 3, -33.5, -32.5, [220, 50, 50], B);
@@ -972,10 +983,14 @@ function addArcadeFragments() {
   addBox(6, 6.5, -1, 0, -33.2, -32.8, [60, 60, 200], B);
   addBox(7.5, 8, -1, 0, -33.2, -32.8, [60, 60, 200], B);
 
+  addArcadeCard(7, 4.6, -32.4, '🚀', 'THE LOST SHIP', B);
+
   // DICE QUEST: a big white dice.
   B = bob();
   addBox(-6, -4.5, 6, 7.5, -37, -35.5, [250, 250, 250], B);
   addBox(-5.4, -5.1, 7.5, 7.52, -36.4, -36.1, [20, 20, 20], B);   // one dot on top
+
+  addArcadeCard(-5.25, 7.8, -35.4, '🎲', 'DICE QUEST', B);
 
   // CURSED CAVERN: a big black spider with eight legs.
   B = bob();
@@ -986,16 +1001,30 @@ function addArcadeFragments() {
     addBox(4.6, 6, -2.4, -2.2, z, z + 0.12, [20, 20, 20], B);
   }
 
+  addArcadeCard(4, -1, -38.8, '🕷️', 'CURSED CAVERN', B);
+
   // MONSTER DUEL: a giant playing card.
   B = bob();
   addBox(-5.5, -4, 0, 2.2, -43, -42.9, [200, 30, 40], B);
   addBox(-5.3, -4.2, 0.2, 2, -42.89, -42.88, [250, 245, 235], B);
+
+  addArcadeCard(-4.75, 2.4, -42.8, '🃏', 'MONSTER DUEL', B);
 
   // A FART IN A CAVE: a big green cloud. Phew.
   B = bob();
   addSphere(-4, 7, -14, 1.1, [140, 200, 80], [120, 180, 60], B);
   addSphere(-2.9, 7.4, -14.2, 0.9, [150, 210, 90], [130, 190, 70], B);
   addSphere(-4.9, 7.5, -13.8, 0.8, [130, 190, 70], [150, 210, 90], B);
+  addArcadeCard(-4, 8.7, -13.4, '💨', 'A FART IN A CAVE', B);
+}
+
+// AN ARCADE CARD: a little dark card with a gold border, just like the
+// ones on the Arcade menu, with the game's emoji and its real name. It
+// floats along with its piece (B), so you know which game it came from.
+function addArcadeCard(x, y, z, emoji, name, B) {
+  const extra = Object.assign({ edge: [255, 199, 92], text: [emoji, name], textColor: '#ffe9b8' }, B);
+  addFace([[x - 1.6, y, z], [x + 1.6, y, z], [x + 1.6, y + 1.1, z], [x - 1.6, y + 1.1, z]],
+          [24, 20, 32], [0, 0, 1], extra);
 }
 
 // A ball made of little 4-sided patches, like a globe: rings going round
@@ -2180,7 +2209,9 @@ function draw() {
     if (f.glow) {
       // A blurry purple "shadow" that's actually light. That's the glow.
       ctx.shadowColor = 'rgb(190, 80, 255)';
-      ctx.shadowBlur = 40 * pulse;
+      // (The growing cracks skip the blur: it's slow to draw, and there can
+      // be 100 of them. Their see-through halo is glowy enough.)
+      ctx.shadowBlur = f.wallCrack ? 0 : 40 * pulse;
       // The outer halo is see-through, so the bricks show behind it.
       ctx.globalAlpha = f.glow === 'halo' ? 0.3 * pulse : 1;
       ctx.fill();
@@ -2195,7 +2226,7 @@ function draw() {
     ctx.lineWidth = f.edge ? 1.5 : 1;
     ctx.stroke();
 
-    if (f.text && v.pts.length === 4) paintWords(f.text, v.pts, focal);
+    if (f.text && v.pts.length === 4) paintWords(f.text, v.pts, focal, f.textColor);
   }
   ctx.restore();
 
@@ -2279,7 +2310,7 @@ function playerShadow() {
 // stretch a pretend flat 500x130 box to fit exactly onto the sign.
 // Then we just write the words in the box, and they land on the sign,
 // squashed and tilted the right way for 3D.
-function paintWords(lines, pts, focal) {
+function paintWords(lines, pts, focal, textColor) {
   const screen = pts.map(function (p) {
     return { x: W / 2 + (p[0] / p[2]) * focal, y: H / 2 - (p[1] / p[2]) * focal };
   });
@@ -2290,11 +2321,16 @@ function paintWords(lines, pts, focal) {
     (topRight.x - topLeft.x) / BOX_W, (topRight.y - topLeft.y) / BOX_W,
     (bottomLeft.x - topLeft.x) / BOX_H, (bottomLeft.y - topLeft.y) / BOX_H,
     topLeft.x, topLeft.y);
-  ctx.fillStyle = '#2a1608';
-  ctx.font = 'bold 52px system-ui, sans-serif';
+  ctx.fillStyle = textColor || '#2a1608';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   lines.forEach(function (line, i) {
+    // Long words get a smaller size, so they always fit on the sign.
+    let size = 52;
+    ctx.font = 'bold ' + size + 'px system-ui, sans-serif';
+    const wide = ctx.measureText(line).width;
+    if (wide > BOX_W * 0.92) size = Math.floor(size * BOX_W * 0.92 / wide);
+    ctx.font = 'bold ' + size + 'px system-ui, sans-serif';
     ctx.fillText(line, BOX_W / 2, BOX_H * (i + 1) / (lines.length + 1));
   });
   ctx.restore();
