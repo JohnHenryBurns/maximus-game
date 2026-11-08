@@ -519,7 +519,18 @@ function speakLines(lines) {
 //   - "Daniel", "Premium" and "Enhanced" ones are on iPhones and iPads.
 //   - "Mark" and "David" are the older Windows voices, if nothing else.
 // Want a different voice? Move a name to the top of the list!
+// THE ACCENT. Voices have a language code: 'en-AU' is Australian English,
+// 'en-GB' is British, 'en-US' is American, 'en-IE' is Irish, 'en-IN' is
+// Indian, 'en-NZ' is New Zealand. The game looks for this accent FIRST.
+// Want a different accent? Change the code!
+const VOICE_ACCENT = 'en-AU';
+
 const VOICE_FAVOURITES = [
+  'Natasha',                      // Australian woman (Edge) - a REALLY Aussie accent
+  'William',                      // Australian man (Edge) - but he's a "Multilingual"
+                                  // voice, and can sound quite American
+  'Lee',                          // Australian man (iPhone/iPad)
+  'Karen',                        // Australian woman (iPhone/iPad)
   'Christopher Online (Natural)',
   'Guy Online (Natural)',
   'Natural',
@@ -533,31 +544,42 @@ const VOICE_FAVOURITES = [
 ];
 
 // Every English voice this computer has. "Multilingual" ones can switch
-// language all by themselves, so we leave those out.
+// language all by themselves, so we leave those out, EXCEPT ones with our
+// accent (Edge's Australian man, William, is a multilingual one).
+// Some browsers write 'en_AU' with a line instead of a dash, so we fix that.
+function accentOf(v) { return v.lang.replace('_', '-'); }
 function englishVoices() {
   if (!window.speechSynthesis) return [];
   return window.speechSynthesis.getVoices().filter(function (v) {
-    return v.lang.indexOf('en') === 0 && v.name.indexOf('Multilingual') === -1;
+    if (v.lang.indexOf('en') !== 0) return false;
+    return v.name.indexOf('Multilingual') === -1 || accentOf(v) === VOICE_ACCENT;
   });
 }
 
 // YOUR VOICE PICK. Press V to try the next voice. The game remembers the
 // one you picked (in "localStorage", a little notebook the browser keeps
 // for each website), so it's still your pick next time you play.
+// (It's saved as 'parkourVoiceAussie'. Giving it a new name made the game
+// forget any old pick, so everyone starts with the Australian voice.)
 let chosenVoiceName = '';
-try { chosenVoiceName = localStorage.getItem('parkourVoice') || ''; } catch (e) {}
+try { chosenVoiceName = localStorage.getItem('parkourVoiceAussie') || ''; } catch (e) {}
 
 function pickVoice() {
   const english = englishVoices();
   // Did you pick one with V? Use that.
   const chosen = english.find(function (v) { return v.name === chosenVoiceName; });
   if (chosen) return chosen;
-  // Otherwise go down the favourites list.
-  for (const favourite of VOICE_FAVOURITES) {
-    const found = english.find(function (v) { return v.name.indexOf(favourite) !== -1; });
-    if (found) return found;
+  // Otherwise: voices with our accent first, then all the others. Then
+  // go down the favourites list in each.
+  const withAccent = english.filter(function (v) { return accentOf(v) === VOICE_ACCENT; });
+  for (const group of [withAccent, english]) {
+    for (const favourite of VOICE_FAVOURITES) {
+      const found = group.find(function (v) { return v.name.indexOf(favourite) !== -1; });
+      if (found) return found;
+    }
+    if (group.length) return group[0];   // no favourites? any voice in the group.
   }
-  return english[0];   // none of our favourites? use any English voice.
+  return undefined;
 }
 
 // V: switch to the next English voice, and say something so you can hear it.
@@ -567,7 +589,7 @@ function nextVoice() {
   const now = pickVoice();
   const next = english[(english.indexOf(now) + 1) % english.length];
   chosenVoiceName = next.name;
-  try { localStorage.setItem('parkourVoice', next.name); } catch (e) {}
+  try { localStorage.setItem('parkourVoiceAussie', next.name); } catch (e) {}
   // Voice names are long, like "Microsoft Mark - English (United States)".
   // Just show the short bit before the dash.
   say('🔊 Voice ' + (english.indexOf(next) + 1) + ' of ' + english.length + ': ' +
@@ -601,8 +623,43 @@ function sayOutLoud(words) {
     if (best) { voice.voice = best; voice.lang = best.lang; }
     voice.pitch = 1;
     voice.rate = 0.9;
-    window.speechSynthesis.cancel();       // stop anything it was already saying
-    window.speechSynthesis.speak(voice);
+
+    // THE VOICE REPORT, in the bottom-left corner. It's like a detective's
+    // notebook: which voice did we ask for, and did it actually talk?
+    const shortName = best ? best.name.split(' - ')[0].replace('Microsoft ', '') : 'browser default';
+    voiceReport = '🔊 ' + shortName + ' (' + voice.lang + ') · ' +
+                  englishVoices().length + ' voices · waiting...';
+    let voiceStarted = false;
+    voice.onstart = function () {
+      voiceStarted = true;
+      voiceReport = voiceReport.replace('waiting...', 'TALKING ✓');
+    };
+    voice.onerror = function (e) {
+      if (e.error !== 'interrupted') voiceReport = voiceReport.replace('waiting...', 'ERROR: ' + e.error);
+    };
+
+    // Stop anything it was already saying, then wait a tiny moment before
+    // talking. Some browsers get muddled if you say "stop" and "go" at the
+    // exact same instant, and then they never talk at all.
+    window.speechSynthesis.cancel();
+    setTimeout(function () {
+      window.speechSynthesis.resume();     // in case it got stuck on "pause"
+      window.speechSynthesis.speak(voice);
+    }, 150);
+
+    // THE STUCK-CHECKER. If the voice still hasn't started after 4 seconds,
+    // the browser's talking machine is jammed. Clear it out and try once more.
+    setTimeout(function () {
+      if (voiceStarted || voice.__retried) return;
+      voice.__retried = true;
+      voiceReport = voiceReport.replace('waiting...', 'STUCK, trying again...');
+      window.speechSynthesis.cancel();
+      setTimeout(function () { window.speechSynthesis.speak(voice); }, 150);
+      setTimeout(function () {
+        if (!voiceStarted) voiceReport = voiceReport.replace('STUCK, trying again...',
+          'STILL STUCK: close ALL Edge windows and open the game again');
+      }, 5000);
+    }, 4000);
   };
 
   // Is the list of voices ready yet? If not, wait for it (but not
@@ -1138,7 +1195,19 @@ function paintWords(lines, pts, focal) {
   ctx.restore();
 }
 
+let voiceReport = '';   // what the voice report in the corner says
+
 function drawHud() {
+  if (voiceReport) {
+    ctx.font = 'bold 14px system-ui, sans-serif';
+    ctx.textAlign = 'left';
+    const w = ctx.measureText(voiceReport).width;
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+    ctx.fillRect(8, H - 34, w + 16, 26);
+    ctx.fillStyle = '#ffe680';
+    ctx.fillText(voiceReport, 16, H - 16);
+  }
+
   // A little dot in the middle so you know where you're looking.
   ctx.fillStyle = 'rgba(255,255,255,0.8)';
   ctx.beginPath(); ctx.arc(W / 2, H / 2, 3, 0, Math.PI * 2); ctx.fill();
