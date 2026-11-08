@@ -198,7 +198,11 @@ const LEVELS = [
   { name: 'LEVEL 5: THE VOLCANO', start: { x: 0, y: 0, z: 1.5 },
     fogColor: [60, 20, 12], fogDistance: 45, build: buildVolcano, sky: false,
     punch: true },   // the robot arms PUNCH the screen!
-  { name: 'LEVEL 6: THE SKY COURSE (BONUS!)', start: { x: 0, y: 0, z: 1.5 },
+  { name: 'LEVEL 6: THE GLITCH HALLWAY', start: { x: 0, y: 0, z: -1.5 },
+    fogColor: [35, 15, 45], fogDistance: 40, sky: false, build: buildGlitchHall,
+    broken: true,       // the screen starts out already cracked and shaking
+    glitchHall: true }, // things appear, glitch, and vanish
+  { name: 'LEVEL 7: THE SKY COURSE (BONUS!)', start: { x: 0, y: 0, z: 1.5 },
     fogColor: [120, 170, 230], fogDistance: 70, sky: true, build: buildSkyCourse },
 ];
 
@@ -596,8 +600,15 @@ function buildHallway() {
 function dropTruck() {
   // It's built right on top of where you are. But while it falls, it
   // SWOOPS toward you from up ahead (truck.ahead), so you see it coming.
-  const cx = 0, cz = player.z;
-  const T = { truck: true };   // every piece is marked as part of the truck
+  addTruckFaces(0, player.z, { truck: true });
+  truck = { y: HALLWAY_HEIGHT - 2.5, speed: 0, squashedAt: 0, ahead: -TRUCK_SWOOP };
+  whistle();
+  say('Uh oh...', 1.2);
+}
+
+// Builds a truck out of boxes, sitting on the ground at (cx, cz).
+// T gets stuck onto every piece, to say what this truck is for.
+function addTruckFaces(cx, cz, T) {
   const RED = [210, 40, 40], CAB = [240, 190, 30], BLACK = [25, 25, 25], GLASS = [150, 210, 255];
   // The big red box on the back.
   addBox(cx - 1.8, cx + 0.6, 0.5, 2.3, cz - 0.9, cz + 0.9, RED, T);
@@ -614,15 +625,135 @@ function dropTruck() {
   // them), but you're about to get a really good look at this one.
   addFace([[cx - 1.8, 0.5, cz - 0.9], [cx + 1.8, 0.5, cz - 0.9],
            [cx + 1.8, 0.5, cz + 0.9], [cx - 1.8, 0.5, cz + 0.9]], [110, 30, 30], [0, -1, 0], T);
-
-  truck = { y: HALLWAY_HEIGHT - 2.5, speed: 0, squashedAt: 0, ahead: -TRUCK_SWOOP };
-  whistle();
-  say('Uh oh...', 1.2);
 }
 
 function removeTruck() {
   faces = faces.filter(function (f) { return !f.truck; });
   truck = null;
+}
+
+// ---------------------------------------------------------------------
+//  LEVEL 6: THE GLITCH HALLWAY. The game is breaking. Purple cracks grow
+//  in the walls. Trucks, buttons and robot arms from the other levels
+//  pop up out of nowhere, glitch, and vanish. And the screen is already
+//  cracked and shaking. Just... keep walking.
+// ---------------------------------------------------------------------
+const GLITCH_HALL_LENGTH = 50;
+const GLITCH_HALL_MAP = Array(GLITCH_HALL_LENGTH).fill('....');
+const GHOST_EVERY = 0.3;      // about how many seconds between ghosts appearing
+const WALL_CRACK_COUNT = 12;  // how many purple cracks grow in the walls
+let ghosts = [];              // the things that appear and glitch away
+let wallCracks = [];          // the growing purple cracks
+let nextGhostAt = 0;
+
+function buildGlitchHall() {
+  buildRoom(GLITCH_HALL_MAP, 5);
+  addCrack(-GLITCH_HALL_LENGTH, 1);   // the real way out, at the end
+
+  // THE GROWING CRACKS. Each one starts as nothing, and grows. They take
+  // turns starting, so new ones keep appearing as you go.
+  const now = performance.now() / 1000;
+  wallCracks = [];
+  for (let i = 0; i < WALL_CRACK_COUNT; i++) {
+    const side = i % 2 === 0 ? -1 : 1;    // left wall, right wall, left...
+    const c = {
+      side: side,
+      x: side * 2 - side * 0.02,          // just in front of the wall
+      y: 1.4 + Math.random() * 1.6,
+      z: -3 - i * (GLITCH_HALL_LENGTH - 6) / WALL_CRACK_COUNT - Math.random() * 2,
+      born: now + i * 1.2,                // when it starts growing
+      growTime: 6 + Math.random() * 6,    // how long it takes to get big
+      biggest: 0.4 + Math.random() * 0.8, // how big it gets
+    };
+    wallCracks.push(c);
+    // Like the exit crack: a faint glow, the crack, and a bright middle.
+    const normal = [-side, 0, 0];         // it faces into the hallway
+    addFace([[0, 0, 0], [0, 0, 0], [0, 0, 0]], [170, 60, 255], normal,
+            { wallCrack: c, stretch: [2.2, 1.25], glow: 'halo', layer: 1 });
+    addFace([[0, 0, 0], [0, 0, 0], [0, 0, 0]], [170, 60, 255], normal,
+            { wallCrack: c, stretch: [1, 1], glow: 'crack', layer: 2 });
+    addFace([[0, 0, 0], [0, 0, 0], [0, 0, 0]], [250, 220, 255], normal,
+            { wallCrack: c, stretch: [0.3, 0.85], glow: 'core', layer: 3 });
+  }
+  nextGhostAt = now + 1.5;
+}
+
+// Where are a growing crack's corners RIGHT NOW? Same zigzag shape as the
+// exit crack, but turned to lie flat on a side wall, and scaled by how
+// much it has grown so far.
+function wallCrackCorners(f) {
+  const c = f.wallCrack;
+  const now = performance.now() / 1000;
+  const size = c.biggest * smooth((now - c.born) / c.growTime);
+  return CRACK_SHAPE.map(function (p) {
+    return [c.x,
+            c.y + (p[1] - 1.6) * size * f.stretch[1] * 0.5,
+            c.z + p[0] * size * f.stretch[0]];
+  });
+}
+
+// THE GHOSTS. Every so often, something from another level appears
+// somewhere ahead of you. It stays solid for a moment, then GLITCHES
+// (flickers, jumps about, goes pink and blue) and disappears.
+function updateGlitchHall(now) {
+  // Time for a new one? (But never more than 4 at once.)
+  if (now > nextGhostAt && ghosts.length < 4) {
+    nextGhostAt = now + GHOST_EVERY * (0.5 + Math.random());
+    const kinds = ['truck', 'button', 'arms'];
+    const g = {
+      kind: kinds[Math.floor(Math.random() * kinds.length)],
+      born: now,
+      solidUntil: now + 1 + Math.random(),   // then it starts glitching...
+    };
+    g.goneAt = g.solidUntil + 0.6;           // ...and then it's gone
+    // Somewhere ahead of you, but still inside the hallway.
+    const z = Math.max(-GLITCH_HALL_LENGTH + 2, player.z - 4 - Math.random() * 10);
+    if (g.kind === 'truck') {
+      addTruckFaces(0, z, { ghost: g });
+    } else if (g.kind === 'button') {
+      const x = (Math.random() - 0.5) * 2.4;
+      const color = RAINBOW[Math.floor(Math.random() * RAINBOW.length)];
+      addBox(x - 0.3, x + 0.3, 0, 1, z - 0.3, z + 0.3, [90, 90, 100], { ghost: g });
+      addBox(x - 0.2, x + 0.2, 1, 1.15, z - 0.2, z + 0.2, BUTTON_COLORS[color], { ghost: g });
+    } else {
+      // Robot arms are drawn flat on the screen, so they just need a spot.
+      g.shoulderX = W * (0.15 + Math.random() * 0.7);
+      g.reachX = W * (0.2 + Math.random() * 0.6);
+      g.reachY = H * (0.3 + Math.random() * 0.4);
+    }
+    ghosts.push(g);
+    glitchSound();
+    if (puncher) puncher.glitchUntil = now + 0.2;   // the screen glitches too
+  }
+  // Clear away the ones that are finished.
+  for (const g of ghosts.slice()) {
+    if (now > g.goneAt) {
+      faces = faces.filter(function (f) { return f.ghost !== g; });
+      ghosts.splice(ghosts.indexOf(g), 1);
+    }
+  }
+}
+
+// Is this ghost glitching right now? (Just appeared, or about to vanish.)
+function ghostGlitching(g, now) {
+  return now < g.born + 0.25 || now > g.solidUntil;
+}
+
+// The ghost robot arms, reaching down from the top of the screen.
+function drawGhostArms() {
+  const now = performance.now() / 1000;
+  for (const g of ghosts) {
+    if (g.kind !== 'arms') continue;
+    let jumpX = 0;
+    if (ghostGlitching(g, now)) {
+      if (Math.random() < 0.45) continue;           // flicker!
+      jumpX = (Math.random() - 0.5) * 60;           // jump about!
+    }
+    const sway = Math.sin(now * 3 + g.born) * 30;
+    const s = { x: g.shoulderX + jumpX, y: -10 };
+    const claw = { x: g.reachX + sway + jumpX, y: g.reachY };
+    drawArmAt(s, claw, H * 0.4, null, false, g.shoulderX < W / 2 ? 1 : -1);
+  }
 }
 
 function buildSpikeRoom() {
@@ -872,12 +1003,15 @@ function loadLevel(index) {
   yellowLine = null;   // no line unless build() makes one
   saws = [];           // no saws unless build() makes some
   puncher = null;      // no broken screen, unless this level says otherwise
+  ghosts = [];         // no ghosts, unless this is the glitch hallway
+  wallCracks = [];
   truck = null;
   elevator = null;     // no elevator unless a button makes one
   blackout = 0;
   LEVELS[index].build();
   respawn();
   if (LEVELS[index].punch) startPunching();
+  if (LEVELS[index].broken) startPunching(true);
   if (LEVELS[index].voice) {
     // The voice talks first. The level's name waits until the robot
     // arms are finished, so the two don't land on top of each other.
@@ -1362,6 +1496,7 @@ function win() {
 function update(dt, now) {
   if (!started) return;
   updatePunching(now);
+  if (LEVELS[levelIndex].glitchHall) updateGlitchHall(now);
 
   // THE TRUCK IS COMING. You're frozen to the spot, and your head tilts
   // up so you can watch it fall. (You can't look away. Sorry.)
@@ -1609,6 +1744,20 @@ function draw() {
     // high the truck is. We work this out FIRST, because everything
     // below needs to know where the face really is right now.
     // Saws spin and slide, so ask where their corners are right now.
+    // Growing wall cracks get bigger every frame, so work out their corners too.
+    if (f.wallCrack) {
+      f.corners = wallCrackCorners(f);
+      f.mid = [f.wallCrack.x, f.wallCrack.y, f.wallCrack.z];
+    }
+    // GHOSTS that are glitching flicker (sometimes we just don't draw
+    // them), and jump about sideways.
+    let jumpX = 0, ghostGlitch = false;
+    if (f.ghost && ghostGlitching(f.ghost, time)) {
+      if (Math.random() < 0.45) continue;
+      ghostGlitch = true;
+      jumpX = (Math.random() - 0.5) * 0.8;
+    }
+
     if (f.saw) {
       f.corners = sawCorners(f);
       f.mid = [f.saw.x, f.saw.y, f.saw.z];
@@ -1630,15 +1779,22 @@ function draw() {
     // (Glowing things shine through the fog, so never skip those.)
     if (dist > level.fogDistance + 2 && !f.glow) continue;
 
-    const corners = (lift || shift)
-      ? f.corners.map(function (c) { return [c[0], c[1] + lift, c[2] + shift]; })
+    const corners = (lift || shift || jumpX)
+      ? f.corners.map(function (c) { return [c[0] + jumpX, c[1] + lift, c[2] + shift]; })
       : f.corners;
     const pts = clipNear(corners.map(toCamera));
     if (pts.length < 3) continue;   // it was all behind you
     // Things with a "layer" get painted last, on top, in layer order.
     // We do that by pretending they're super close.
-    const paintOrder = f.layer ? -f.layer : dist;
-    visible.push({ pts: pts, face: f, dist: dist, paintOrder: paintOrder });
+    let paintOrder = f.layer ? -f.layer : dist;
+    // Growing wall cracks are different: they only need to beat the bricks
+    // RIGHT BEHIND them, not everything. So we pretend they're just a bit
+    // closer (2 steps) than they really are. Then a truck in front of one
+    // still covers it up, like it should.
+    if (f.wallCrack) paintOrder = dist - 2 - f.layer * 0.01;
+    // Same for the exit cracks, but 3 steps (some walls have bigger bricks).
+    else if (f.glow) paintOrder = dist - 3 - f.layer * 0.01;
+    visible.push({ pts: pts, face: f, dist: dist, paintOrder: paintOrder, ghostGlitch: ghostGlitch });
   }
 
   // THE PAINTER'S ALGORITHM: farthest first, nearest last.
@@ -1659,6 +1815,12 @@ function draw() {
 
     // BUTTONS that you've pushed the right way light up: their colour
     // gets mixed halfway to white, so they look like they're glowing.
+    // A glitching ghost flashes pink or blue.
+    if (v.ghostGlitch) {
+      const GLITCH_COLORS = [[255, 0, 255], [0, 255, 255], color];
+      color = GLITCH_COLORS[Math.floor(Math.random() * GLITCH_COLORS.length)];
+    }
+
     if (f.button && f.button.lit) {
       color = color.map(function (c) { return c + (255 - c) * 0.55; });
     }
@@ -1863,6 +2025,7 @@ function drawHud() {
 
   drawRobotSubtitles();
   drawPunchArms();
+  drawGhostArms();
   drawCracks();
 
   // The title screen, until you click or tap.
@@ -2163,12 +2326,14 @@ function drawArmAt(s, c, bone, letter, clawShut, elbowSide) {
 // ---------------------------------------------------------------------
 const PUNCHES = 8;           // how many times they punch the screen
 const GLITCH_EVERY = 1;      // about how many seconds between glitches, after the punching
-const SHAKE_POWER = 100;     // how VIOLENTLY the world shakes. 0 = not at all. 100 = chaos.
+const SHAKE_POWER = 75;      // how VIOLENTLY the world shakes. 0 = not at all. 100 = chaos.
 const PUNCH_JOLT = 45;       // the extra big jolt every time a fist lands
 let puncher = null;          // null = no punching on this level
 const PUNCH_SLIDE = 0.8, PUNCH_FIRST = 1.0, PUNCH_GAP = 0.7;
 
-function startPunching() {
+// alreadyBroken: true means skip the robots. The screen is ALREADY
+// smashed when you get there.
+function startPunching(alreadyBroken) {
   const punches = [];
   for (let i = 0; i < PUNCHES; i++) {
     const left = i % 2 === 0;   // left arm, right arm, left arm...
@@ -2183,6 +2348,12 @@ function startPunching() {
   }
   puncher = { start: performance.now() / 1000, punches: punches, cracks: [],
               glitchUntil: 0, nextGlitch: 0 };
+  if (alreadyBroken) {
+    // Pretend the punching happened ages ago: the arms are long gone,
+    // and every punch has already left its crack.
+    puncher.start -= 100;
+    punches.forEach(function (p) { p.landed = true; makeCrack(p.fx * W, p.fy * H); });
+  }
 }
 
 // When the last punch is done, plus a moment to admire the damage.
