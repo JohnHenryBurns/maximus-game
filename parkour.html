@@ -202,7 +202,10 @@ const LEVELS = [
     fogColor: [35, 15, 45], fogDistance: 40, sky: false, build: buildGlitchHall,
     broken: true,       // the screen starts out already cracked and shaking
     glitchHall: true }, // things appear, glitch, and vanish
-  { name: 'LEVEL 7: THE SKY COURSE (BONUS!)', start: { x: 0, y: 0, z: 1.5 },
+  { name: 'LEVEL 7: THE BREAK', start: { x: 0, y: 0, z: -6 },
+    fogColor: [70, 45, 35], fogDistance: 45, sky: false, build: buildBreakRoom,
+    theBreak: true },   // an empty room... for now
+  { name: 'LEVEL 8: THE SKY COURSE (BONUS!)', start: { x: 0, y: 0, z: 1.5 },
     fogColor: [120, 170, 230], fogDistance: 70, sky: true, build: buildSkyCourse },
 ];
 
@@ -685,6 +688,17 @@ function wallCrackCorners(f) {
   const c = f.wallCrack;
   const now = performance.now() / 1000;
   const size = c.biggest * smooth((now - c.born) / c.growTime);
+  // Cracks that can be on ANY surface (walls, floor, ceiling) come with
+  // their own directions: u is "wide", v is "tall".
+  if (c.u) {
+    return CRACK_SHAPE.map(function (p) {
+      const across = p[0] * size * f.stretch[0];
+      const up = (p[1] - 1.6) * size * f.stretch[1] * 0.5;
+      return [c.x + c.u[0] * across + c.v[0] * up,
+              c.y + c.u[1] * across + c.v[1] * up,
+              c.z + c.u[2] * across + c.v[2] * up];
+    });
+  }
   return CRACK_SHAPE.map(function (p) {
     return [c.x,
             c.y + (p[1] - 1.6) * size * f.stretch[1] * 0.5,
@@ -754,6 +768,263 @@ function drawGhostArms() {
     const claw = { x: g.reachX + sway + jumpX, y: g.reachY };
     drawArmAt(s, claw, H * 0.4, null, false, g.shoulderX < W / 2 ? 1 : -1);
   }
+}
+
+// ---------------------------------------------------------------------
+//  LEVEL 7: THE BREAK.
+//  An empty room. Nothing happens. Then cracks start to grow EVERYWHERE,
+//  your heart starts pounding, faster and faster... until the whole room
+//  explodes in blinding purple light. When you can see again, the room is
+//  gone. You're floating in space, with broken pieces of the other arcade
+//  games drifting all around you, and tiny platforms leading to the crack.
+//
+//  The timetable, in seconds after you arrive:
+//     0 - 3     nothing. an empty room. (suspicious)
+//     3 - 15    cracks grow everywhere, your heart beats faster and faster
+//     15        BOOM
+// ---------------------------------------------------------------------
+const BREAK_ROOM_MAP = Array(12).fill('............');
+const BREAK_CRACKS = 40;          // how many cracks grow in the room
+const BREAK_CRACKS_START = 3;     // when the first crack appears
+const BREAK_BOOM_AT = 15;         // when the room explodes
+let theBreak = null;              // what's happening in this level so far
+let respawnPoint = null;          // where you go back to if you fall (null = the level start)
+let fogOverride = null;           // a different fog colour, after the explosion
+let blindingLight = 0;            // the purple light of the explosion (1 = can't see a thing)
+
+// THE FLOATING PLATFORMS, after the explosion. Same as the sky course:
+// [left edge, front edge, width, depth, top height].
+const BREAK_PLATFORMS = [
+  [-1.5,  -7.5, 3, 3, 0],     // where you land after the explosion
+  [-0.5, -10,   1, 1, 0.3],
+  [ 1.5, -13,   1, 1, 0.8],
+  [-1,   -16,   1, 1, 1.2],
+  [-3,   -19,   1, 1, 1.0],
+  [-1,   -22,   1, 1, 1.6],
+  [ 1.5, -25,   1, 1, 2.2],
+  [ 3,   -28,   1, 1, 2.0],
+  [ 1,   -31,   1, 1, 2.6],
+  [-1,   -34,   1, 1, 3.0],
+  [-2,   -40,   4, 4, 3.2],     // the last one, with the crack
+];
+
+function buildBreakRoom() {
+  buildRoom(BREAK_ROOM_MAP, 6);
+  const now = performance.now() / 1000;
+  theBreak = { start: now, exploded: false, nextBeat: now + BREAK_CRACKS_START,
+               said: {} };
+  respawnPoint = null;
+  fogOverride = null;
+  blindingLight = 0;
+
+  // THE CRACKS. 40 of them, on the walls, the floor and the ceiling.
+  // More and more start growing as time goes on: the first few slowly,
+  // then loads all at once at the end.
+  wallCracks = [];
+  const half = 6, front = -12, back = 0, top = 6;
+  for (let i = 0; i < BREAK_CRACKS; i++) {
+    const surface = ['left', 'right', 'front', 'back', 'floor', 'ceiling'][i % 6];
+    const c = { biggest: 0.6 + Math.random() * 1.2, growTime: 2 + Math.random() * 3 };
+    // "Math.pow(..., 0.6)" bunches the start times up towards the end, so
+    // it starts slow and then goes CRAZY.
+    c.born = now + BREAK_CRACKS_START +
+             (BREAK_BOOM_AT - BREAK_CRACKS_START - 1.5) * Math.pow(i / BREAK_CRACKS, 0.6);
+    const along = Math.random(), up = Math.random();
+    // Every crack needs a middle (x, y, z), a direction to be wide in (u),
+    // a direction to be tall in (v), and the way it faces (normal).
+    if (surface === 'left' || surface === 'right') {
+      const s = surface === 'left' ? -1 : 1;
+      Object.assign(c, { x: s * half - s * 0.02, y: 1 + up * 4, z: front + 1 + along * 10,
+                         u: [0, 0, 1], v: [0, 1, 0], normal: [-s, 0, 0] });
+    } else if (surface === 'front' || surface === 'back') {
+      const s = surface === 'front' ? 1 : -1;
+      const z = surface === 'front' ? front + 0.02 : back - 0.02;
+      Object.assign(c, { x: -5 + along * 10, y: 1 + up * 4, z: z,
+                         u: [1, 0, 0], v: [0, 1, 0], normal: [0, 0, s] });
+    } else {
+      const s = surface === 'floor' ? 1 : -1;
+      const y = surface === 'floor' ? 0.02 : top - 0.02;
+      Object.assign(c, { x: -5 + along * 10, y: y, z: front + 1 + up * 10,
+                         u: [1, 0, 0], v: [0, 0, 1], normal: [0, s, 0] });
+    }
+    wallCracks.push(c);
+    addFace([[0, 0, 0], [0, 0, 0], [0, 0, 0]], [170, 60, 255], c.normal,
+            { wallCrack: c, stretch: [2.2, 1.25], glow: 'halo', layer: 1 });
+    addFace([[0, 0, 0], [0, 0, 0], [0, 0, 0]], [170, 60, 255], c.normal,
+            { wallCrack: c, stretch: [1, 1], glow: 'crack', layer: 2 });
+    addFace([[0, 0, 0], [0, 0, 0], [0, 0, 0]], [250, 220, 255], c.normal,
+            { wallCrack: c, stretch: [0.3, 0.85], glow: 'core', layer: 3 });
+  }
+}
+
+// Every tick on this level: heartbeats, messages, and the BIG moment.
+function updateBreak(now) {
+  if (!theBreak) return;
+  const t = now - theBreak.start;
+  const once = function (key, fn) { if (!theBreak.said[key]) { theBreak.said[key] = true; fn(); } };
+
+  if (!theBreak.exploded) {
+    if (t > BREAK_CRACKS_START) once('a', function () { say('...what was that?', 2.5); });
+    if (t > 8) once('b', function () { say('The cracks are SPREADING!', 2.5); });
+    if (t > 12) once('c', function () { say("IT'S GOING TO BLOW!", 2.5); });
+    // The light leaks through the cracks, brighter and brighter, in the
+    // last two seconds.
+    blindingLight = Math.max(0, (t - (BREAK_BOOM_AT - 2)) / 2) * 0.9;
+    if (t > BREAK_BOOM_AT) explode(now);
+  } else {
+    // After the boom, the blinding light slowly fades away.
+    blindingLight = Math.max(0, blindingLight - (1 / 60) / 3);
+    if (t > BREAK_BOOM_AT + 3) once('d', function () { say('Where... am I?', 3); });
+    if (t > BREAK_BOOM_AT + 7) once('e', function () { say('Get to the crack.', 3); });
+  }
+
+  // YOUR HEARTBEAT. Before the boom it speeds up from 60 beats a minute
+  // to 170. After it, it stays fast and nervous.
+  if (t > BREAK_CRACKS_START && now > theBreak.nextBeat) {
+    let bpm = 95;
+    if (!theBreak.exploded) {
+      const progress = (t - BREAK_CRACKS_START) / (BREAK_BOOM_AT - BREAK_CRACKS_START);
+      bpm = 60 + 110 * progress;
+    }
+    theBreak.nextBeat = now + 60 / bpm;   // a minute has 60 seconds
+    heartbeat();
+    // The screen edges throb purple, with every beat.
+    if (flash < 0.15) { flash = 0.15; flashColor = '120, 20, 160'; }
+  }
+}
+
+// BOOM. Throw the whole room away and build the floating world instead.
+// The blinding light covers it up while we swap them, so it looks like
+// the room really exploded.
+function explode(now) {
+  theBreak.exploded = true;
+  boom();
+  blindingLight = 1;
+  faces = [];
+  blocks = [];
+  wallCracks = [];
+  fogOverride = [25, 8, 40];   // deep purple space
+
+  BREAK_PLATFORMS.forEach(function (p) { addFloatingBlock(p[0], p[1], p[2], p[3], p[4], false); });
+  // The way out: a little brick wall on the last platform, with the crack.
+  const last = BREAK_PLATFORMS[BREAK_PLATFORMS.length - 1];
+  const wallZ = last[1], floorY = last[4];
+  blocks.push({ minX: -2, maxX: 2, minY: floorY, maxY: floorY + 4, minZ: wallZ - 0.5, maxZ: wallZ });
+  addBrickWall([-2, 0, wallZ], [1, 0, 0], 4, floorY, floorY + 4, [0, 0, 1]);
+  addCrack(wallZ, 1, floorY);
+
+  addArcadeFragments();
+
+  // You land on the first platform.
+  respawnPoint = { x: 0, y: 0, z: -6 };
+  player.x = 0; player.y = 0; player.z = -6;
+  player.vx = player.vy = player.vz = 0;
+}
+
+// ---------------------------------------------------------------------
+//  FRAGMENTS OF THE OTHER GAMES, floating in space, bobbing up and down.
+//  Each piece gets a "bob" so it floats: a speed, a starting point in
+//  the wobble (phase), and how far it goes up and down (amp).
+// ---------------------------------------------------------------------
+function addArcadeFragments() {
+  const bob = function () {
+    return { bob: { speed: 0.6 + Math.random() * 0.6, phase: Math.random() * 6, amp: 0.3 + Math.random() * 0.4 } };
+  };
+
+  // MAX'S PIZZA: a giant slice, crust at the top, point at the bottom.
+  let B = bob();
+  const PIZZA = [250, 200, 70], PEPPERONI = [190, 40, 30], CRUST = [200, 130, 50];
+  [1, -1].forEach(function (side) {
+    addFace([[-8.5, 4, -12], [-5.5, 4, -12], [-7, 0, -12]], PIZZA, [0, 0, side], B);
+  });
+  addBox(-8.6, -5.4, 4, 4.4, -12.1, -11.9, CRUST, B);
+  [[-7.6, 3.2], [-6.5, 2.9], [-7, 1.9]].forEach(function (p) {
+    addBox(p[0] - 0.25, p[0] + 0.25, p[1] - 0.25, p[1] + 0.25, -11.88, -11.85, PEPPERONI, B);
+  });
+
+  // DEFEND THE TOOTH: a giant tooth with two roots.
+  B = bob();
+  addBox(5, 7, 0, 1.6, -16, -14, [245, 245, 235], B);
+  addBox(5.2, 5.8, -1.4, 0, -15.5, -14.5, [235, 230, 215], B);
+  addBox(6.2, 6.8, -1.4, 0, -15.5, -14.5, [235, 230, 215], B);
+
+  // SNAKE FIGHT: a wiggly green snake made of blocks.
+  B = bob();
+  for (let i = 0; i < 9; i++) {
+    const x = -7 + Math.sin(i * 0.8) * 1.2, z = -18 - i * 0.9;
+    addBox(x - 0.4, x + 0.4, 4, 4.8, z - 0.4, z + 0.4, i === 0 ? [30, 160, 60] : [60, 200, 90], B);
+  }
+
+  // BOOT BALL: a black-and-white football.
+  addSphere(6, 5, -22, 1.4, [240, 240, 240], [30, 30, 30], bob());
+
+  // KNIGHTS OF THE FOUR: a castle tower with battlements on top.
+  B = bob();
+  addBox(-9, -7, -5, 2, -31, -29, [150, 150, 160], B);
+  [[-9, -31], [-7.5, -31], [-9, -29.5], [-7.5, -29.5]].forEach(function (p) {
+    addBox(p[0], p[0] + 0.5, 2, 2.6, p[1], p[1] + 0.5, [150, 150, 160], B);
+  });
+
+  // THE LOST SHIP: a red rocket with a pointy nose and fins.
+  B = bob();
+  addBox(6.5, 7.5, -1, 3, -33.5, -32.5, [220, 50, 50], B);
+  addPyramid(7, 3, -33, 0.5, 1.4, [240, 240, 240], B);
+  addBox(6, 6.5, -1, 0, -33.2, -32.8, [60, 60, 200], B);
+  addBox(7.5, 8, -1, 0, -33.2, -32.8, [60, 60, 200], B);
+
+  // DICE QUEST: a big white dice.
+  B = bob();
+  addBox(-6, -4.5, 6, 7.5, -37, -35.5, [250, 250, 250], B);
+  addBox(-5.4, -5.1, 7.5, 7.52, -36.4, -36.1, [20, 20, 20], B);   // one dot on top
+
+  // CURSED CAVERN: a big black spider with eight legs.
+  B = bob();
+  addSphere(4, -2, -39, 0.8, [25, 25, 30], [60, 20, 20], B);
+  for (let i = 0; i < 4; i++) {
+    const z = -39.9 + i * 0.6;
+    addBox(2, 3.4, -2.4, -2.2, z, z + 0.12, [20, 20, 20], B);
+    addBox(4.6, 6, -2.4, -2.2, z, z + 0.12, [20, 20, 20], B);
+  }
+
+  // MONSTER DUEL: a giant playing card.
+  B = bob();
+  addBox(-5.5, -4, 0, 2.2, -43, -42.9, [200, 30, 40], B);
+  addBox(-5.3, -4.2, 0.2, 2, -42.89, -42.88, [250, 245, 235], B);
+
+  // A FART IN A CAVE: a big green cloud. Phew.
+  B = bob();
+  addSphere(-4, 7, -14, 1.1, [140, 200, 80], [120, 180, 60], B);
+  addSphere(-2.9, 7.4, -14.2, 0.9, [150, 210, 90], [130, 190, 70], B);
+  addSphere(-4.9, 7.5, -13.8, 0.8, [130, 190, 70], [150, 210, 90], B);
+}
+
+// A ball made of little 4-sided patches, like a globe: rings going round
+// (longitude) and rings going up (latitude). Two colours, chequered.
+function addSphere(cx, cy, cz, r, colorA, colorB, extra) {
+  const ROUND = 10, UP = 6;
+  for (let i = 0; i < UP; i++) {
+    const a0 = -Math.PI / 2 + Math.PI * i / UP, a1 = -Math.PI / 2 + Math.PI * (i + 1) / UP;
+    for (let j = 0; j < ROUND; j++) {
+      const b0 = Math.PI * 2 * j / ROUND, b1 = Math.PI * 2 * (j + 1) / ROUND;
+      const at = function (a, b) {
+        return [cx + Math.cos(a) * Math.cos(b) * r, cy + Math.sin(a) * r, cz + Math.cos(a) * Math.sin(b) * r];
+      };
+      const am = (a0 + a1) / 2, bm = (b0 + b1) / 2;
+      const normal = [Math.cos(am) * Math.cos(bm), Math.sin(am), Math.cos(am) * Math.sin(bm)];
+      addFace([at(a0, b0), at(a0, b1), at(a1, b1), at(a1, b0)],
+              (i + j) % 2 === 0 ? colorA : colorB, normal, extra);
+    }
+  }
+}
+
+// A pyramid sitting on (cx, y, cz): a square base, and a point on top.
+function addPyramid(cx, y, cz, halfWidth, height, color, extra) {
+  const a = cx - halfWidth, b = cx + halfWidth, c = cz - halfWidth, d = cz + halfWidth;
+  const tip = [cx, y + height, cz];
+  addFace([[a, y, d], [b, y, d], tip], color, [0, 0.4, 1], extra);
+  addFace([[b, y, c], [a, y, c], tip], color.map(function (v) { return v * 0.7; }), [0, 0.4, -1], extra);
+  addFace([[b, y, d], [b, y, c], tip], color.map(function (v) { return v * 0.85; }), [1, 0.4, 0], extra);
+  addFace([[a, y, c], [a, y, d], tip], color.map(function (v) { return v * 0.6; }), [-1, 0.4, 0], extra);
 }
 
 function buildSpikeRoom() {
@@ -984,7 +1255,7 @@ function say(text, seconds) {
 
 // Back to the start of whatever level you're on.
 function respawn() {
-  const start = LEVELS[levelIndex].start;
+  const start = respawnPoint || LEVELS[levelIndex].start;
   player.x = start.x; player.y = start.y; player.z = start.z;
   player.vx = player.vy = player.vz = 0;
   player.yaw = 0; player.pitch = 0;
@@ -1006,6 +1277,10 @@ function loadLevel(index) {
   puncher = null;      // no broken screen, unless this level says otherwise
   ghosts = [];         // no ghosts, unless this is the glitch hallway
   wallCracks = [];
+  theBreak = null;     // nothing exploding, unless this is the break room
+  respawnPoint = null;
+  fogOverride = null;
+  blindingLight = 0;
   truck = null;
   elevator = null;     // no elevator unless a button makes one
   blackout = 0;
@@ -1516,6 +1791,7 @@ function update(dt, now) {
   if (!started) return;
   updatePunching(now);
   if (LEVELS[levelIndex].glitchHall) updateGlitchHall(now);
+  if (LEVELS[levelIndex].theBreak) updateBreak(now);
 
   // THE TRUCK IS COMING. You're frozen to the spot, and your head tilts
   // up so you can watch it fall. (You can't look away. Sorry.)
@@ -1722,7 +1998,7 @@ function draw() {
   const focal = H * 0.8;   // bigger number = more zoomed in
 
   const level = LEVELS[levelIndex];
-  const FOG = level.fogColor;
+  const FOG = fogOverride || level.fogColor;
   const time = performance.now() / 1000;
 
   ctx.save();
@@ -1785,6 +2061,8 @@ function draw() {
     let lift = 0, shift = 0;
     if (f.elevator && elevator) lift = elevator.drop;
     if (f.truck && truck) { lift = truck.y; shift = truck.ahead; }
+    // Floating things bob gently up and down.
+    if (f.bob) lift = Math.sin(time * f.bob.speed + f.bob.phase) * f.bob.amp;
 
     // BACKFACE CULLING: if a face is pointing away from you, you can't
     // see it anyway (it's the back of something), so don't bother.
@@ -1933,6 +2211,11 @@ function draw() {
   }
   // A broken screen glitches.
   drawGlitch();
+  // BLINDING PURPLE LIGHT, from the explosion.
+  if (blindingLight > 0) {
+    ctx.fillStyle = 'rgba(235, 200, 255, ' + Math.min(1, blindingLight) + ')';
+    ctx.fillRect(0, 0, W, H);
+  }
 
   drawHud();
 }
@@ -2742,6 +3025,21 @@ function glitchSound() {
 function ouch() {
   beep(700, 180, 0.35, 'square', 0.08);
   beep(350, 90, 0.4, 'sine', 0.12);
+}
+
+// BA-BUM: a heartbeat. Two deep thumps close together.
+function heartbeat() {
+  beep(70, 40, 0.16, 'sine', 0.45);
+  beep(110, 60, 0.12, 'triangle', 0.12);
+  setTimeout(function () { beep(62, 38, 0.2, 'sine', 0.38); beep(100, 55, 0.14, 'triangle', 0.1); }, 150);
+}
+// BOOM: the biggest sound in the game.
+function boom() {
+  beep(90, 18, 2.5, 'sawtooth', 0.3);
+  beep(60, 20, 3, 'square', 0.18);
+  beep(3500, 150, 1.5, 'triangle', 0.08);
+  beep(900, 60, 1.8, 'sawtooth', 0.08);
+  rumble();
 }
 
 function rumble() {
