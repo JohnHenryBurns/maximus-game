@@ -188,7 +188,14 @@ const LEVELS = [
       'Hello. Welcome to the game. I see you have beat the first level.',
       'Ah, puzzles. My favorite.',
     ] },
-  { name: 'LEVEL 3: THE SKY COURSE', start: { x: 0, y: 0, z: 1.5 },
+  { name: 'LEVEL 3: THE RAINBOW ROOM', start: { x: 0, y: 0, z: -1.5 },
+    fogColor: [70, 45, 35], fogDistance: 40, sky: false, build: buildRainbowRoom },
+  // You don't walk to this one. The ELEVATOR brings you here.
+  { name: 'LEVEL 3: DOWN BELOW', start: { x: 0, y: 0, z: -1 },
+    fogColor: [40, 30, 35], fogDistance: 35, sky: false, build: buildSpikeRoom },
+  { name: 'LEVEL 4: THE LONG HALLWAY', start: { x: 0, y: 0, z: -1.5 },
+    fogColor: [70, 45, 35], fogDistance: 40, sky: false, build: buildHallway },
+  { name: 'LEVEL 5: THE SKY COURSE', start: { x: 0, y: 0, z: 1.5 },
     fogColor: [120, 170, 230], fogDistance: 70, sky: true, build: buildSkyCourse },
 ];
 
@@ -217,11 +224,76 @@ const PUZZLE_ROOM_MAP = [
   '..........',
 ];
 const BUTTON_COLORS = {
-  red:   [230, 30, 30],
-  blue:  [40, 90, 240],
-  green: [40, 200, 60],
+  red:    [230, 30, 30],
+  orange: [255, 140, 20],
+  yellow: [250, 220, 30],
+  green:  [40, 200, 60],
+  blue:   [40, 90, 240],
+  indigo: [75, 40, 170],
+  violet: [170, 70, 220],
 };
-let puzzle = null;   // the buttons and how far you've got. Only level 2 has one.
+let puzzle = null;   // the buttons, and what kind of puzzle it is. Rooms without buttons: null.
+
+// ---------------------------------------------------------------------
+//  LEVEL 3: THE RAINBOW ROOM, and what's DOWN BELOW it.
+//  One button for every colour of the rainbow. The sign says pick any
+//  colour. It doesn't matter which: an ELEVATOR always appears behind you.
+// ---------------------------------------------------------------------
+const RAINBOW = ['red', 'orange', 'yellow', 'green', 'blue', 'indigo', 'violet'];
+const RAINBOW_SIGN = ['PICK ANY', 'COLOR'];
+const RAINBOW_ROOM_MAP = [
+  '............',
+  '............',
+  '............',
+  '............',
+  '............',
+  '............',
+  '............',
+  '............',
+  '............',
+  '............',
+];
+
+// The room at the bottom of the elevator.  S = SPIKES!  Don't touch them.
+const SPIKE_ROOM_MAP = [
+  '......',   // the elevator lands here
+  '......',
+  '......',
+  '......',
+  'SSS...',   // go around these
+  '......',
+  '......',
+  '...SSS',
+  '......',
+  '......',
+  'SSSSSS',   // no way round. JUMP!
+  '......',
+  '......',
+  '.SSSS.',
+  '......',
+  'S.SS.S',
+  '......',
+  '......',
+  'SSSSSS',   // a big double jump
+  'SSSSSS',
+  '......',
+  '......',
+  '......',   // the way out is in the wall at the end
+];
+let spikeCells = [];   // every square that has spikes on it
+
+// ---------------------------------------------------------------------
+//  LEVEL 4: THE LONG HALLWAY.
+//  Long. Straight. Boring. Except for the yellow line halfway along.
+//  Whatever you do, DON'T step on the yellow line.
+// ---------------------------------------------------------------------
+const HALLWAY_LENGTH = 40;      // how many steps long the hallway is
+const HALLWAY_WIDTH = 4;
+const HALLWAY_HEIGHT = 9;       // a really high ceiling. (Why so high? You'll see.)
+// The map is made by repeating the same row, HALLWAY_LENGTH times.
+const HALLWAY_MAP = Array(HALLWAY_LENGTH).fill('.'.repeat(HALLWAY_WIDTH));
+let yellowLine = null;   // where the line is (only the hallway has one)
+let truck = null;        // the falling truck (null = no truck... yet)
 
 // These get filled in when a level loads.
 let blocks = [];   // the solid boxes you can stand on and bump into
@@ -296,12 +368,13 @@ function buildTunnel() {
 // Builds a closed-in room from a map: floor, lava, white brick walls and
 // a ceiling. The tunnel and the puzzle room are both made with this.
 // That's the good thing about a FUNCTION: write it once, use it lots.
-function buildRoom(map) {
+// height is how high the ceiling is. Leave it out for the normal height.
+function buildRoom(map, height) {
   const rows = map.length;
   const width = map[0].length;
   const left = -width / 2, right = width / 2;
   const back = 0, front = -rows;   // the room runs from z=0 to z=-rows
-  const top = TUNNEL_HEIGHT;
+  const top = height || TUNNEL_HEIGHT;   // "||" means "or, if there isn't one..."
 
   // What letter is at this spot on the map? Outside the map counts as wall.
   function letterAt(row, col) {
@@ -329,6 +402,12 @@ function buildRoom(map) {
       blocks.push({ minX: x0, maxX: x1, minZ: z0, maxZ: z1,
                     minY: -THICKNESS, maxY: 0, finish: finish });
       addCheckerboard(x0, x1, z0, z1, 0, finish);
+
+      // SPIKES on this square?
+      if (letter === 'S') {
+        addSpikes(x0, z0);
+        spikeCells.push({ minX: x0, maxX: x1, minZ: z0, maxZ: z1 });
+      }
 
       // If there's lava next door, this square of floor has an edge you
       // can see down into the pool. Paint that edge as dark rock.
@@ -406,23 +485,169 @@ function buildPuzzleRoom() {
 
   // THE THREE BUTTONS, each on a grey stand near the far wall.
   // Red first, like the sign says. Hmm.
-  puzzle = { buttons: [], progress: 0, solved: false };
-  [['red', -3], ['blue', 0], ['green', 3]].forEach(function (b) {
-    const color = b[0], x = b[1], z = front + 2;
-    const button = { color: color, x: x, z: z, lit: false, touching: false };
-    puzzle.buttons.push(button);
-    // The stand: solid, so you bump into it.
-    blocks.push({ minX: x - 0.3, maxX: x + 0.3, minY: 0, maxY: 1, minZ: z - 0.3, maxZ: z + 0.3 });
-    addBox(x - 0.3, x + 0.3, 0, 1, z - 0.3, z + 0.3, [90, 90, 100]);
-    // The big round(ish) button on top.
-    addBox(x - 0.2, x + 0.2, 1, 1.15, z - 0.2, z + 0.2, BUTTON_COLORS[color], { button: button });
-  });
+  puzzle = { kind: 'liar', buttons: [], progress: 0, solved: false };
+  addButton('red', -3, front + 2);
+  addButton('blue', 0, front + 2);
+  addButton('green', 3, front + 2);
+  addSign(front, SIGN_WORDS);
+}
 
-  // THE SIGN. A wooden board on the far wall, with words painted on it.
-  // The corners go: bottom-left, bottom-right, top-right, top-left.
+// One button on a grey stand. The stand is solid, so you bump into it.
+function addButton(color, x, z) {
+  const button = { color: color, x: x, z: z, lit: false };
+  puzzle.buttons.push(button);
+  blocks.push({ minX: x - 0.3, maxX: x + 0.3, minY: 0, maxY: 1, minZ: z - 0.3, maxZ: z + 0.3 });
+  addBox(x - 0.3, x + 0.3, 0, 1, z - 0.3, z + 0.3, [90, 90, 100]);
+  // The big button on top.
+  addBox(x - 0.2, x + 0.2, 1, 1.15, z - 0.2, z + 0.2, BUTTON_COLORS[color], { button: button });
+}
+
+// THE SIGN. A wooden board on the far wall, with words painted on it.
+// The corners go: bottom-left, bottom-right, top-right, top-left.
+function addSign(front, words) {
   const signZ = front + 0.03;
   addFace([[-2.5, 2.2, signZ], [2.5, 2.2, signZ], [2.5, 3.5, signZ], [-2.5, 3.5, signZ]],
-          [160, 110, 60], [0, 0, 1], { edge: [80, 50, 20], text: SIGN_WORDS, layer: 0.5 });
+          [160, 110, 60], [0, 0, 1], { edge: [80, 50, 20], text: words, layer: 0.5 });
+}
+
+function buildRainbowRoom() {
+  buildRoom(RAINBOW_ROOM_MAP);
+  const front = -RAINBOW_ROOM_MAP.length;
+  puzzle = { kind: 'rainbow', buttons: [] };
+  // Seven buttons in a row, 1.4 apart, with the middle one (green) in the middle.
+  RAINBOW.forEach(function (color, i) {
+    addButton(color, (i - 3) * 1.4, front + 2);
+  });
+  addSign(front, RAINBOW_SIGN);
+}
+
+function buildHallway() {
+  buildRoom(HALLWAY_MAP, HALLWAY_HEIGHT);
+  addCrack(-HALLWAY_LENGTH, 1);   // the way out, at the very end
+
+  // THE YELLOW LINE, halfway along. We take away one row of floor tiles
+  // and put bright yellow ones there instead.
+  const z1 = -Math.round(HALLWAY_LENGTH / 2), z0 = z1 - 0.5;
+  const half = HALLWAY_WIDTH / 2;
+  faces = faces.filter(function (f) {
+    const inRow = f.normal[1] === 1 && f.mid[1] === 0 && f.mid[2] > z0 && f.mid[2] < z1;
+    return !inRow;
+  });
+  for (let x = -half; x < half; x += 0.5) {
+    addFace([[x, 0, z0], [x + 0.5, 0, z0], [x + 0.5, 0, z1], [x, 0, z1]],
+            [255, 215, 0], [0, 1, 0]);
+  }
+  yellowLine = { z0: z0, z1: z1 };
+}
+
+// ---------------------------------------------------------------------
+//  THE TRUCK. A big red truck with a yellow cab and black wheels, made
+//  of boxes. It's built lying on the ground, then we lift it up into the
+//  air by changing truck.y, and let GRAVITY do the rest.
+// ---------------------------------------------------------------------
+function dropTruck() {
+  // It's built right on top of where you are. But while it falls, it
+  // SWOOPS toward you from up ahead (truck.ahead), so you see it coming.
+  const cx = 0, cz = player.z;
+  const T = { truck: true };   // every piece is marked as part of the truck
+  const RED = [210, 40, 40], CAB = [240, 190, 30], BLACK = [25, 25, 25], GLASS = [150, 210, 255];
+  // The big red box on the back.
+  addBox(cx - 1.8, cx + 0.6, 0.5, 2.3, cz - 0.9, cz + 0.9, RED, T);
+  // The cab, where the driver sits.
+  addBox(cx + 0.6, cx + 1.8, 0.5, 1.8, cz - 0.85, cz + 0.85, CAB, T);
+  // The windscreen on the front of the cab.
+  addBox(cx + 1.8, cx + 1.83, 1.1, 1.65, cz - 0.7, cz + 0.7, GLASS, T);
+  // Four wheels.
+  [[-1.2, -1], [-1.2, 1], [1.2, -1], [1.2, 1]].forEach(function (w) {
+    const wx = cx + w[0], wz = cz + w[1] * 0.85;
+    addBox(wx - 0.3, wx + 0.3, 0, 0.6, wz - 0.15, wz + 0.15, BLACK, T);
+  });
+  // The UNDERNEATH. addBox doesn't paint bottoms (you normally never see
+  // them), but you're about to get a really good look at this one.
+  addFace([[cx - 1.8, 0.5, cz - 0.9], [cx + 1.8, 0.5, cz - 0.9],
+           [cx + 1.8, 0.5, cz + 0.9], [cx - 1.8, 0.5, cz + 0.9]], [110, 30, 30], [0, -1, 0], T);
+
+  truck = { y: HALLWAY_HEIGHT - 2.5, speed: 0, squashedAt: 0, ahead: -TRUCK_SWOOP };
+  whistle();
+  say('Uh oh...', 1.2);
+}
+
+function removeTruck() {
+  faces = faces.filter(function (f) { return !f.truck; });
+  truck = null;
+}
+
+function buildSpikeRoom() {
+  buildRoom(SPIKE_ROOM_MAP);
+  addElevator(0, -1, false);                // the elevator you arrived in
+  addCrack(-SPIKE_ROOM_MAP.length, 1);      // the way out, in the far wall
+}
+
+// FOUR SPIKES on one square of floor. Each spike is a PYRAMID: four
+// triangles leaning in to meet at a sharp point at the top.
+function addSpikes(x0, z0) {
+  const SPIKE_HEIGHT = 0.6;
+  const METAL = [190, 195, 210];
+  for (let sx = 0; sx < 2; sx++) {
+    for (let sz = 0; sz < 2; sz++) {
+      const a = x0 + sx * 0.5, b = a + 0.5;      // left and right of the base
+      const c = z0 + sz * 0.5, d = c + 0.5;      // front and back of the base
+      const tip = [a + 0.25, SPIKE_HEIGHT, c + 0.25];
+      // Each triangle leans outward a bit, so its "normal" points out
+      // and a little bit up. The shading makes the spike look 3D.
+      addFace([[a, 0, d], [b, 0, d], tip], METAL.map(function (v) { return v * 0.85; }), [0, 0.4, 1]);
+      addFace([[b, 0, c], [a, 0, c], tip], METAL.map(function (v) { return v * 0.6; }),  [0, 0.4, -1]);
+      addFace([[b, 0, d], [b, 0, c], tip], METAL.map(function (v) { return v * 1.0; }),  [1, 0.4, 0]);
+      addFace([[a, 0, c], [a, 0, d], tip], METAL.map(function (v) { return v * 0.7; }),  [-1, 0.4, 0]);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------
+//  THE ELEVATOR. A 2x2 metal platform with yellow and black danger
+//  stripes round the edge, and a post at each corner.
+//  We take away the floor tiles underneath it, so when it goes DOWN,
+//  there's a real hole in the floor.
+//    moving: true if this elevator is going to take you somewhere.
+// ---------------------------------------------------------------------
+let elevator = null;
+function addElevator(cx, cz, moving) {
+  const x0 = cx - 1, x1 = cx + 1, z0 = cz - 1, z1 = cz + 1;
+  const insidePlatform = function (f) {
+    return f.normal[1] === 1 && f.mid[1] === 0 &&
+           f.mid[0] > x0 && f.mid[0] < x1 && f.mid[2] > z0 && f.mid[2] < z1;
+  };
+  // Hide the floor tiles under the platform (and keep them, in case the
+  // elevator moves somewhere else and we need to put them back).
+  const hidden = faces.filter(insidePlatform);
+  faces = faces.filter(function (f) { return !insidePlatform(f); });
+
+  const extra = moving ? { elevator: true } : null;
+  const YELLOW = [250, 200, 20], DARK = [30, 30, 30], STEEL = [150, 155, 165];
+  for (let x = x0; x < x1 - 0.01; x += 0.5) {
+    for (let z = z0; z < z1 - 0.01; z += 0.5) {
+      const edge = x === x0 || z === z0 || x + 0.5 >= x1 - 0.01 || z + 0.5 >= z1 - 0.01;
+      const stripe = (Math.round(x * 2) + Math.round(z * 2)) % 2 === 0;
+      const color = edge ? (stripe ? YELLOW : DARK) : STEEL;
+      addFace([[x, 0.01, z], [x + 0.5, 0.01, z], [x + 0.5, 0.01, z + 0.5], [x, 0.01, z + 0.5]],
+              color, [0, 1, 0], extra);
+    }
+  }
+  // Four posts, one at each corner.
+  [[x0, z0], [x1 - 0.12, z0], [x0, z1 - 0.12], [x1 - 0.12, z1 - 0.12]].forEach(function (p) {
+    addBox(p[0], p[0] + 0.12, 0, 3, p[1], p[1] + 0.12, YELLOW, extra);
+  });
+  if (moving) {
+    elevator = { x: cx, z: cz, drop: 0, riding: false, hiddenTiles: hidden };
+  }
+}
+
+// Take the elevator away again, and put the floor back where it was.
+function removeElevator() {
+  if (!elevator) return;
+  faces = faces.filter(function (f) { return !f.elevator; });
+  faces = faces.concat(elevator.hiddenTiles);
+  elevator = null;
 }
 
 function buildSkyCourse() {
@@ -488,6 +713,12 @@ function loadLevel(index) {
   faces = [];
   crackExit = null;    // no crack unless build() makes one
   puzzle = null;       // no puzzle unless build() makes one
+  nearButton = null;
+  spikeCells = [];     // no spikes unless build() makes some
+  yellowLine = null;   // no line unless build() makes one
+  truck = null;
+  elevator = null;     // no elevator unless a button makes one
+  blackout = 0;
   LEVELS[index].build();
   respawn();
   if (LEVELS[index].voice) {
@@ -677,6 +908,11 @@ function sayOutLoud(words) {
 let crackExit = null;  // where the crack is, so we know when you walk into it
 let flash = 0;               // how bright the screen flash is (1 = full, 0 = gone)
 let flashColor = '170, 60, 255';   // what colour it flashes (red, green, blue)
+let blackout = 0;            // how dark the screen is going (for the elevator ride)
+const ELEVATOR_SPEED = 1.5;  // how fast the elevator goes down, in blocks per second
+const TRUCK_GRAVITY = 18;    // how hard trucks fall. Bigger = faster truck!
+const TRUCK_SWOOP = 4;       // how far ahead of you the truck starts its fall
+const FOOT_SIZE = 0.15;      // how far your feet reach out from your middle
 
 let nextLevelAt = 0;   // when to move on to the next level (0 = not yet)
 
@@ -864,9 +1100,12 @@ function moveY(amount) {
 // "Press E" whenever there is one.
 let nearButton = null;
 function checkButtons() {
+  // The rainbow buttons are close together, so pick the NEAREST one.
   nearButton = null;
+  let nearest = 1.1;   // anything farther than this doesn't count
   for (const b of puzzle.buttons) {
-    if (Math.hypot(player.x - b.x, player.z - b.z) < 1.1) nearButton = b;
+    const d = Math.hypot(player.x - b.x, player.z - b.z);
+    if (d < nearest) { nearest = d; nearButton = b; }
   }
 }
 
@@ -876,6 +1115,7 @@ function interact() {
 }
 
 function pushButton(b) {
+  if (puzzle.kind === 'rainbow') { pushRainbowButton(b); return; }
   if (b.color === 'red') {
     // THE SIGN LIED. ZAP!
     zap();
@@ -910,6 +1150,36 @@ function pushButton(b) {
   }
 }
 
+// THE RAINBOW BUTTONS. Pick any colour you like. It makes no difference
+// at all: an elevator ALWAYS appears right behind you. (Push another one
+// and it jumps to be behind you again.)
+function pushRainbowButton(b) {
+  if (elevator && elevator.riding) return;
+  puzzle.buttons.forEach(function (other) { other.lit = false; });
+  b.lit = true;
+
+  // "Behind you" is the opposite way to where you're looking. Forward is
+  // (sin, -cos) of your turn angle, so behind is (-sin, +cos).
+  const AWAY = 2.6;
+  let ex = player.x - Math.sin(player.yaw) * AWAY;
+  let ez = player.z + Math.cos(player.yaw) * AWAY;
+  // Keep it inside the room, and away from the buttons.
+  const halfWidth = RAINBOW_ROOM_MAP[0].length / 2;
+  const depth = RAINBOW_ROOM_MAP.length;
+  ex = Math.max(-halfWidth + 1.2, Math.min(halfWidth - 1.2, ex));
+  ez = Math.max(-depth + 4, Math.min(-1.2, ez));
+  // SNAP it to the tile grid (like Minecraft blocks snapping into place),
+  // so its edges line up exactly with the floor tiles. Otherwise there'd be
+  // a thin crack between the elevator and the floor.
+  ex = Math.round(ex * 2) / 2;
+  ez = Math.round(ez * 2) / 2;
+
+  removeElevator();
+  addElevator(ex, ez, true);
+  elevatorDing();
+  say(b.color.toUpperCase() + '! Good choice. *DING* ...an elevator appeared behind you.', 3.5);
+}
+
 function resetPuzzle() {
   puzzle.progress = 0;
   puzzle.buttons.forEach(function (b) { b.lit = false; });
@@ -934,6 +1204,81 @@ function win() {
 // ---------------------------------------------------------------------
 function update(dt, now) {
   if (!started) return;
+
+  // THE TRUCK IS COMING. You're frozen to the spot, and your head tilts
+  // up so you can watch it fall. (You can't look away. Sorry.)
+  if (truck) {
+    player.vx = player.vz = 0;
+    player.yaw += (0 - player.yaw) * Math.min(1, dt * 5);          // face down the hallway
+    player.pitch += (0.6 - player.pitch) * Math.min(1, dt * 5);   // and look up, smoothly
+    if (!truck.squashedAt) {
+      truck.speed += TRUCK_GRAVITY * dt;
+      truck.y -= truck.speed * dt;
+      // The lower it gets, the closer it swoops. At head height: right on you.
+      const start = HALLWAY_HEIGHT - 2.5;
+      truck.ahead = -TRUCK_SWOOP * Math.max(0, (truck.y - BODY_HEIGHT) / (start - BODY_HEIGHT));
+      // Has the bottom of the truck reached the top of your head?
+      if (truck.y <= BODY_HEIGHT) {
+        truck.y = BODY_HEIGHT;
+        truck.squashedAt = now;
+        crash();
+        blackout = 1;
+        falls++;
+        say('SQUASH! 🚚 HONK HONK! A truck fell on you.', 2.5);
+      }
+    } else if (now - truck.squashedAt > 1.8) {
+      // Back to the start, nice and flat. Well, not flat. You're fine.
+      removeTruck();
+      blackout = 0;
+      respawn();
+    }
+    return;
+  }
+
+  // STEPPED ON THE YELLOW LINE? Your feet are on the floor, and touching it.
+  if (yellowLine && player.onGround && player.y < 0.05 &&
+      player.z - FOOT_SIZE < yellowLine.z1 && player.z + FOOT_SIZE > yellowLine.z0) {
+    dropTruck();
+    return;
+  }
+
+  // RIDING THE ELEVATOR. While it goes down, you can look around, but
+  // you can't walk off it. It sinks through the hole in the floor, the
+  // screen fades to black, and then you're DOWN BELOW.
+  if (elevator && elevator.riding) {
+    elevator.drop -= ELEVATOR_SPEED * dt;
+    player.y = elevator.drop;
+    player.vx = player.vy = player.vz = 0;
+    blackout = Math.min(1, -elevator.drop / 4);
+    if (elevator.drop < -4.5) {
+      loadLevel(levelIndex + 1);
+      elevatorDing();
+      say('*DING* ...where ARE we?', 3);
+    }
+    return;
+  }
+  // Step onto the elevator and it starts going down.
+  if (elevator && player.onGround &&
+      Math.abs(player.x - elevator.x) < 0.85 && Math.abs(player.z - elevator.z) < 0.85) {
+    elevator.riding = true;
+    player.x = elevator.x; player.z = elevator.z;   // stand in the middle
+    elevatorHum();
+    say('Going down...', 2);
+  }
+
+  // SPIKES! If your feet are on a spiky square, OUCH.
+  for (const s of spikeCells) {
+    if (player.y < 0.5 &&
+        player.x > s.minX - 0.1 && player.x < s.maxX + 0.1 &&
+        player.z > s.minZ - 0.1 && player.z < s.maxZ + 0.1) {
+      ouch();
+      falls++;
+      flash = 0.7; flashColor = '255, 60, 60';
+      say('OUCH! 🦔 Spiky spiky spiky!', 2);
+      respawn();
+      break;
+    }
+  }
 
   // Which way are you pushing? forward/back and left/right, each -1 to 1.
   let forward = 0, strafe = 0;
@@ -1067,19 +1412,30 @@ function draw() {
   const eye = [player.x, player.y + EYE_HEIGHT, player.z];
   const visible = [];
   for (const f of faces) {
+    // MOVING THINGS. The elevator's pieces get moved down by however far
+    // it has dropped, and the truck's pieces get lifted UP by however
+    // high the truck is. We work this out FIRST, because everything
+    // below needs to know where the face really is right now.
+    let lift = 0, shift = 0;
+    if (f.elevator && elevator) lift = elevator.drop;
+    if (f.truck && truck) { lift = truck.y; shift = truck.ahead; }
+
     // BACKFACE CULLING: if a face is pointing away from you, you can't
     // see it anyway (it's the back of something), so don't bother.
     const n = f.normal, c = f.corners[0];
-    if (n[0] * (eye[0] - c[0]) + n[1] * (eye[1] - c[1]) + n[2] * (eye[2] - c[2]) <= 0) continue;
+    if (n[0] * (eye[0] - c[0]) + n[1] * (eye[1] - (c[1] + lift)) + n[2] * (eye[2] - (c[2] + shift)) <= 0) continue;
 
     // Too far away to see through the fog? Skip it. This keeps the game
     // fast, because the tunnel has thousands of bricks and tiles.
     const m = f.mid;
-    const dist = Math.hypot(m[0] - eye[0], m[1] - eye[1], m[2] - eye[2]);
+    const dist = Math.hypot(m[0] - eye[0], m[1] + lift - eye[1], m[2] + shift - eye[2]);
     // (Glowing things shine through the fog, so never skip those.)
     if (dist > level.fogDistance + 2 && !f.glow) continue;
 
-    const pts = clipNear(f.corners.map(toCamera));
+    const corners = (lift || shift)
+      ? f.corners.map(function (c) { return [c[0], c[1] + lift, c[2] + shift]; })
+      : f.corners;
+    const pts = clipNear(corners.map(toCamera));
     if (pts.length < 3) continue;   // it was all behind you
     // Things with a "layer" get painted last, on top, in layer order.
     // We do that by pretending they're super close.
@@ -1163,6 +1519,11 @@ function draw() {
   // WHOOSH: when you go through the crack, the whole screen flashes purple.
   if (flash > 0) {
     ctx.fillStyle = 'rgba(' + flashColor + ', ' + flash + ')';
+    ctx.fillRect(0, 0, W, H);
+  }
+  // Going down in the elevator: everything fades to black.
+  if (blackout > 0) {
+    ctx.fillStyle = 'rgba(0, 0, 0, ' + blackout + ')';
     ctx.fillRect(0, 0, W, H);
   }
 
@@ -1649,6 +2010,34 @@ function buzz() {
   beep(116, 105, 0.45, 'sawtooth', 0.06);
 }
 // RUMBLE: really low notes that wobble, for the wall cracking open.
+// DING-DONG: the elevator bell. Two notes, high then low.
+function elevatorDing() {
+  beep(1046, 1046, 0.6, 'sine', 0.14);
+  setTimeout(function () { beep(784, 784, 0.9, 'sine', 0.14); }, 250);
+}
+// HMMMMM: the elevator motor, a low steady hum while you go down.
+function elevatorHum() {
+  beep(65, 55, 3.2, 'sawtooth', 0.06);
+  beep(130, 110, 3.2, 'sine', 0.05);
+}
+// OUCH: a quick "boing" down, like a cartoon getting poked.
+// WHEEEEEOOOOO: the cartoon falling-thing whistle, high sliding down to low.
+function whistle() {
+  beep(2200, 500, 0.9, 'sine', 0.1);
+}
+// CRASH + HONK HONK: a big low smash, then the truck's horn, twice.
+function crash() {
+  beep(120, 30, 0.6, 'sawtooth', 0.2);
+  beep(90, 25, 0.7, 'square', 0.15);
+  setTimeout(function () { beep(415, 415, 0.25, 'square', 0.08); beep(330, 330, 0.25, 'square', 0.08); }, 450);
+  setTimeout(function () { beep(415, 415, 0.4, 'square', 0.08); beep(330, 330, 0.4, 'square', 0.08); }, 800);
+}
+
+function ouch() {
+  beep(700, 180, 0.35, 'square', 0.08);
+  beep(350, 90, 0.4, 'sine', 0.12);
+}
+
 function rumble() {
   beep(70, 35, 1.4, 'sawtooth', 0.15);
   beep(55, 30, 1.6, 'square', 0.08);
