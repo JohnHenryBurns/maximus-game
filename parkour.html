@@ -178,6 +178,9 @@ const SKY_COURSE = [
 // The list of levels, in order. Each one says what it's called, where you
 // start, what colour the far-away fog is, and which function builds it.
 const LEVELS = [
+  { name: 'LEVEL 0: SCREAM', start: { x: 0, y: 0, z: -1.5 },
+    fogColor: [20, 20, 22], fogDistance: 30, sky: false, build: buildScream,
+    scream: true },   // a locked door, a key, and lights that won't stay on
   { name: 'LEVEL 1: THE LAVA TUNNEL', start: { x: 0, y: 0, z: -1.5 },
     fogColor: [70, 45, 35], fogDistance: 40, sky: false, build: buildTunnel },
   { name: 'LEVEL 2: THE PUZZLE ROOM', start: { x: 0, y: 0, z: -1.5 },
@@ -363,13 +366,15 @@ function addFace(corners, color, normal, extra) {
 // A checkerboard floor, from x0 to x1 and z0 to z1, at height y.
 // To pick a tile's colour, count which tile it is across and which tile
 // it is forward, and add them up. Even = one colour, odd = the other.
-function addCheckerboard(x0, x1, z0, z1, y, finish) {
+// colors: (you can leave this out) two colours to use instead of black and white.
+function addCheckerboard(x0, x1, z0, z1, y, finish, colors) {
   for (let x = x0; x < x1 - 0.001; x += TILE) {
     for (let z = z0; z < z1 - 0.001; z += TILE) {
       const count = Math.round(x / TILE) + Math.round(z / TILE);
       const even = ((count % 2) + 2) % 2 === 0;
       let color;
       if (finish) color = even ? GOLD : DARK_GOLD;
+      else if (colors) color = even ? colors[0] : colors[1];
       else        color = even ? WHITE : BLACK;
       addFace([[x, y, z], [x + TILE, y, z], [x + TILE, y, z + TILE], [x, y, z + TILE]],
               color, [0, 1, 0]);
@@ -422,7 +427,10 @@ function buildTunnel() {
 // a ceiling. The tunnel and the puzzle room are both made with this.
 // That's the good thing about a FUNCTION: write it once, use it lots.
 // height is how high the ceiling is. Leave it out for the normal height.
-function buildRoom(map, height) {
+// look: (you can leave this out) a different look for the room:
+//   { bricks: a brick style (see addBrickWall), tiles: two floor colours, ceiling: a colour }
+function buildRoom(map, height, look) {
+  look = look || {};
   const rows = map.length;
   const width = map[0].length;
   const left = -width / 2, right = width / 2;
@@ -454,7 +462,7 @@ function buildRoom(map, height) {
       const finish = letter === 'F';
       blocks.push({ minX: x0, maxX: x1, minZ: z0, maxZ: z1,
                     minY: -THICKNESS, maxY: 0, finish: finish });
-      addCheckerboard(x0, x1, z0, z1, 0, finish);
+      addCheckerboard(x0, x1, z0, z1, 0, finish, look.tiles);
 
       // SPIKES on this square?
       if (letter === 'S') {
@@ -484,17 +492,17 @@ function buildRoom(map, height) {
   blocks.push({ minX: left, maxX: right, minY: -2, maxY: top, minZ: front - 1, maxZ: front });
 
   // ...and white bricks painted on the insides of them.
-  addBrickWall([left, 0, back], [0, 0, -1], rows, LAVA_Y, top, [1, 0, 0]);    // left wall
-  addBrickWall([right, 0, back], [0, 0, -1], rows, LAVA_Y, top, [-1, 0, 0]);  // right wall
-  addBrickWall([left, 0, back], [1, 0, 0], width, LAVA_Y, top, [0, 0, -1]);   // wall behind you
-  addBrickWall([left, 0, front], [1, 0, 0], width, LAVA_Y, top, [0, 0, 1]);   // wall at the end
+  addBrickWall([left, 0, back], [0, 0, -1], rows, LAVA_Y, top, [1, 0, 0], look.bricks);    // left wall
+  addBrickWall([right, 0, back], [0, 0, -1], rows, LAVA_Y, top, [-1, 0, 0], look.bricks);  // right wall
+  addBrickWall([left, 0, back], [1, 0, 0], width, LAVA_Y, top, [0, 0, -1], look.bricks);   // wall behind you
+  addBrickWall([left, 0, front], [1, 0, 0], width, LAVA_Y, top, [0, 0, 1], look.bricks);   // wall at the end
 
   // The ceiling: plain grey stone panels.
   for (let z = front; z < back; z++) {
     for (let x = left; x < right; x++) {
       const shade = 95 + (((x + z) % 2 + 2) % 2 === 0 ? 0 : 8);
       addFace([[x, top, z], [x + 1, top, z], [x + 1, top, z + 1], [x, top, z + 1]],
-              [shade, shade - 5, shade - 10], [0, -1, 0]);
+              look.ceiling || [shade, shade - 5, shade - 10], [0, -1, 0]);
     }
   }
 }
@@ -1056,6 +1064,485 @@ function addPyramid(cx, y, cz, halfWidth, height, color, extra) {
   addFace([[a, y, c], [a, y, d], tip], color.map(function (v) { return v * 0.6; }), [-1, 0.4, 0], extra);
 }
 
+// ---------------------------------------------------------------------
+//  LEVEL 0: SCREAM.
+//  A grey room. Grey walls, tiled floor. In the middle, a door, all on
+//  its own, with no wall around it. It's locked. A key lies in the corner.
+//  And the lights... the lights don't work properly.
+// ---------------------------------------------------------------------
+const SCREAM_ROOM_MAP = Array(10).fill('..........');
+const SCREAM_LOOK = {
+  bricks: { color: [125, 125, 130], mortar: [70, 70, 75] },   // grey walls
+  tiles: [[175, 175, 180], [95, 95, 100]],                    // grey and white tiles
+  ceiling: [45, 45, 50],
+};
+const DOOR_Z = -5;            // the door stands in the middle of the room
+const KEY_SPOT = { x: 4, z: -9 };   // the key is in the far corner
+const LIGHTS_OUT_A_LOT = 0.5; // how often the lights go out (0 = never, 1 = all the time)
+const HALL_LENGTH = 40;       // how long the hallway behind the door is
+const HALL_START = -20;       // where the hallway begins (far behind the room, out of sight)
+const HALL_MONSTER_SPEED = 8.5;   // in the hall it's FASTER than you (you run at 6)... but only in the dark
+
+let scream = null;      // the key, the door, and the lights (only on this level)
+let nearScream = null;  // 'key' or 'door' if you're close enough to press E
+
+function buildScream() {
+  buildRoom(SCREAM_ROOM_MAP, 4, SCREAM_LOOK);
+  scream = { hasKey: false, doorOpen: false, doorAngle: 0, openedAt: 0,
+             light: 'on', lightUntil: 0, darkness: 0.35, nextBeat: 0 };
+
+  // THE DOOR FRAME: two posts and a beam across the top. Solid.
+  const FRAME = [70, 55, 45];
+  addBox(-0.75, -0.6, 0, 2.35, DOOR_Z - 0.1, DOOR_Z + 0.1, FRAME);
+  addBox(0.6, 0.75, 0, 2.35, DOOR_Z - 0.1, DOOR_Z + 0.1, FRAME);
+  addBox(-0.75, 0.75, 2.2, 2.35, DOOR_Z - 0.1, DOOR_Z + 0.1, FRAME);
+  blocks.push({ minX: -0.75, maxX: -0.6, minY: 0, maxY: 2.35, minZ: DOOR_Z - 0.1, maxZ: DOOR_Z + 0.1 });
+  blocks.push({ minX: 0.6, maxX: 0.75, minY: 0, maxY: 2.35, minZ: DOOR_Z - 0.1, maxZ: DOOR_Z + 0.1 });
+
+  // THE DOOR. It swings open on a hinge on its left side, so every
+  // piece remembers where it started (base), and the drawing code turns
+  // it around the hinge by however far open the door is.
+  const D = { door: true };
+  addBox(-0.6, 0.6, 0, 2.2, DOOR_Z - 0.04, DOOR_Z + 0.04, [110, 85, 65], D);
+  addBox(0.35, 0.45, 1.05, 1.15, DOOR_Z + 0.04, DOOR_Z + 0.09, [220, 190, 80], D);   // the knob
+  faces.forEach(function (f) {
+    if (!f.door) return;
+    f.baseCorners = f.corners; f.baseNormal = f.normal; f.baseMid = f.mid;
+  });
+  scream.doorBlock = { minX: -0.6, maxX: 0.6, minY: 0, maxY: 2.2, minZ: DOOR_Z - 0.05, maxZ: DOOR_Z + 0.05 };
+  blocks.push(scream.doorBlock);
+
+  addKey();
+  buildScreamHall();
+
+  // THE MONSTER. It's not in the room. It only shows up in the hall.
+  // (active = false means it's hidden and doesn't move.)
+  scream.monster = { active: false, x: MONSTER_HOME.x, z: MONSTER_HOME.z, facing: 0, drag: 0,
+                     restUntil: performance.now() / 1000 + 3,   // 3 seconds head start
+                     nextScrape: 0, sidestepUntil: 0, side: 1,
+                     tilt: 0, armRaise: 0 };   // head tilt and arms up (for the grab)
+  addMonster();
+}
+
+// THE LONG HALL, behind the door. We build it with buildRoom (which
+// always builds at the same spot), then slide every new piece far away
+// down the z line, so it's hidden behind the room's back wall.
+function buildScreamHall() {
+  const firstFace = faces.length, firstBlock = blocks.length;
+  buildRoom(Array(HALL_LENGTH).fill('...'), 3.5, SCREAM_LOOK);
+  for (let i = firstFace; i < faces.length; i++) {
+    const f = faces[i];
+    f.corners = f.corners.map(function (c) { return [c[0], c[1], c[2] + HALL_START]; });
+    f.mid = [f.mid[0], f.mid[1], f.mid[2] + HALL_START];
+  }
+  for (let i = firstBlock; i < blocks.length; i++) {
+    blocks[i].minZ += HALL_START; blocks[i].maxZ += HALL_START;
+  }
+  // And the way out, at the very end.
+  addCrack(HALL_START - HALL_LENGTH, 1);
+}
+
+// Is this spot in the hall? (Everything further than z = -15 is.)
+function inHall(z) { return z < -15; }
+
+// Through the door! Put you at the start of the hall... and put the
+// monster right behind you.
+function enterTheHall(now) {
+  player.x = 0; player.z = HALL_START - 3.5; player.yaw = 0;
+  const m = scream.monster;
+  m.active = true;
+  m.x = 0; m.z = HALL_START - 0.6; m.facing = Math.PI;
+  m.restUntil = now + 0.5;
+  // The lights go out straight away. It's coming.
+  scream.light = 'out'; scream.lightUntil = now + 1.2;
+  lightsOut();
+  say('Something is behind you... RUN!', 3);
+}
+
+// Where is a piece of the door right now? Turn it around the hinge.
+// (Turning a point around another point uses sin and cos, the same maths
+// that turns you around when you move the mouse.)
+function doorCorners(f) {
+  const hingeX = -0.6, hingeZ = DOOR_Z;
+  const a = scream ? scream.doorAngle : 0;
+  const turn = function (p) {
+    const dx = p[0] - hingeX, dz = p[2] - hingeZ;
+    return [hingeX + dx * Math.cos(a) - dz * Math.sin(a), p[1],
+            hingeZ + dx * Math.sin(a) + dz * Math.cos(a)];
+  };
+  f.corners = f.baseCorners.map(turn);
+  f.mid = turn(f.baseMid);
+  const n = f.baseNormal;
+  f.normal = [n[0] * Math.cos(a) - n[2] * Math.sin(a), n[1], n[0] * Math.sin(a) + n[2] * Math.cos(a)];
+}
+
+function updateScream(now, dt) {
+  if (!scream) return;
+  if (scream.grab) { updateGrab(now); return; }   // it's got you!
+
+  // What are you close to? (The screen shows "Press E" if anything.)
+  nearScream = null;
+  if (!scream.hasKey && Math.hypot(player.x - KEY_SPOT.x, player.z - KEY_SPOT.z) < 1.1) nearScream = 'key';
+  if (!scream.doorOpen && Math.abs(player.x) < 1.3 && Math.abs(player.z - DOOR_Z) < 1.8) nearScream = 'door';
+
+  // Step into the dark doorway (from the front) and... you're in the hall.
+  if (scream.doorOpen && Math.abs(player.x) < 0.5 && player.vz < 0 &&
+      player.z < DOOR_Z + 0.1 && player.z > DOOR_Z - 0.4) {
+    enterTheHall(now);
+  }
+
+  // The door swings open over one second, to about 100 degrees.
+  if (scream.doorOpen) {
+    scream.doorAngle = -1.75 * smooth((now - scream.openedAt) / 1.2);
+  }
+
+  // THE LIGHTS. They're either ON (dim), FLICKERING (on, off, on, off,
+  // really fast), or OUT (almost pitch black). They keep switching.
+  if (now > scream.lightUntil) {
+    const r = Math.random();
+    if (scream.light === 'on') {
+      scream.light = r < LIGHTS_OUT_A_LOT ? 'out' : 'flicker';    // never on for long
+    } else if (scream.light === 'flicker') {
+      scream.light = r < 0.5 ? 'out' : 'on';                      // flickering often ends in darkness
+    } else {
+      scream.light = r < 0.7 ? 'on' : 'flicker';
+    }
+    if (scream.light === 'on') scream.lightUntil = now + 1 + Math.random() * 1.5;
+    if (scream.light === 'flicker') { scream.lightUntil = now + 0.3 + Math.random() * 0.8; click(); }
+    if (scream.light === 'out') { scream.lightUntil = now + 0.6 + Math.random() * 2.2; lightsOut(); }
+  }
+  if (scream.light === 'on') scream.darkness = 0.35;
+  if (scream.light === 'flicker') scream.darkness = Math.random() < 0.5 ? 0.35 : 0.92;
+  if (scream.light === 'out') {
+    scream.darkness = 0.95;
+    // In the dark, you can hear your heart.
+    if (now > scream.nextBeat) { heartbeat(); scream.nextBeat = now + 0.75; }
+  }
+
+  updateMonster(now, dt);
+}
+
+// Pressing E on this level.
+function screamInteract() {
+  if (nearScream === 'key') {
+    scream.hasKey = true;
+    faces = faces.filter(function (f) { return !f.key; });
+    ding(1); ding(3);
+    say('You picked up a key. 🔑', 2.5);
+  } else if (nearScream === 'door') {
+    if (!scream.hasKey) {
+      rattle();
+      say("It's locked.", 2);
+      return;
+    }
+    // UNLOCK! Take away the solid door, swing it open, and there it is...
+    scream.doorOpen = true;
+    scream.openedAt = performance.now() / 1000;
+    blocks = blocks.filter(function (b) { return b !== scream.doorBlock; });
+    creak();
+    say('The door creaks open...', 3);
+    // ...and inside the doorway there's just DARKNESS. Only from the
+    // front: go round the back of the door and there's nothing there.
+    addFace([[-0.6, 0, DOOR_Z], [0.6, 0, DOOR_Z], [0.6, 2.2, DOOR_Z], [-0.6, 2.2, DOOR_Z]],
+            [4, 4, 8], [0, 0, 1]);
+  }
+}
+
+// The dark overlay for the flickering lights. The key gets a tiny glint
+// even in the dark, so you can find it if you look carefully.
+function drawScreamDarkness(focal) {
+  if (!scream) return;
+  ctx.fillStyle = 'rgba(0, 0, 0, ' + scream.darkness + ')';
+  ctx.fillRect(0, 0, W, H);
+  drawMonsterEyes(focal);
+  if (scream.grab && scream.grab.phase === 'glitch') drawGrabGlitch();
+}
+
+// ---------------------------------------------------------------------
+//  THE MONSTER of level 0. A tall skinny grey thing with arms SO long
+//  that its hands drag along the floor. It lives in the far corner.
+//  When the lights are on, it stands perfectly still.
+//  When the lights go out... it moves.
+//  If it catches you, it takes the key back.
+// ---------------------------------------------------------------------
+const MONSTER_HOME = { x: -4, z: -9 };   // its corner (the other far corner from the key)
+const MONSTER_SPEED = 2.5;   // how fast it creeps in the dark (you run at 6)
+const MONSTER_REACH = 0.8;   // how close it has to get to grab you
+
+// The monster is built standing at (0, 0), looking towards +z. Every piece
+// remembers that spot (base), and monsterCorners() moves it to wherever
+// the monster really is, turned to face the way it's looking.
+function addMonster() {
+  const SKIN = [60, 60, 68];
+  const BODY = { monster: true };
+  const ARM = { monster: true, arm: true };   // arms drag behind when it walks
+  const HEAD = { monster: true, head: true }; // the head can tilt to the side
+  addBox(-0.18, -0.07, 0, 0.8, -0.06, 0.06, SKIN, BODY);          // left leg
+  addBox(0.07, 0.18, 0, 0.8, -0.06, 0.06, SKIN, BODY);            // right leg
+  addBox(-0.22, 0.22, 0.8, 1.9, -0.1, 0.1, SKIN, BODY);           // long skinny body
+  addBox(-0.16, 0.16, 1.9, 2.25, -0.14, 0.14, [48, 48, 55], HEAD); // head
+  addBox(-0.11, -0.03, 2.05, 2.12, 0.14, 0.16, [255, 240, 150], HEAD);   // eyes
+  addBox(0.03, 0.11, 2.05, 2.12, 0.14, 0.16, [255, 240, 150], HEAD);
+  addBox(-0.4, 0.4, 1.76, 1.88, -0.06, 0.06, SKIN, BODY);         // shoulders
+  addBox(-0.42, -0.33, 0.06, 1.8, -0.04, 0.04, SKIN, ARM);         // left arm (so long!)
+  addBox(0.33, 0.42, 0.06, 1.8, -0.04, 0.04, SKIN, ARM);           // right arm
+  addBox(-0.5, -0.28, 0, 0.07, -0.03, 0.22, [50, 50, 58], ARM);     // big flat hands,
+  addBox(0.28, 0.5, 0, 0.07, -0.03, 0.22, [50, 50, 58], ARM);       // scraping the tiles
+  faces.forEach(function (f) {
+    if (f.monster && !f.baseCorners) {
+      f.baseCorners = f.corners; f.baseNormal = f.normal; f.baseMid = f.mid;
+    }
+  });
+}
+
+// Where is a piece of the monster right now? Turn it the way the monster
+// is looking (sin and cos again, like the door), then move it to where
+// the monster is standing. Arm pieces get pulled backwards a bit, more
+// at the bottom than the top, so the hands drag behind it when it walks.
+function monsterCorners(f) {
+  const m = scream.monster;
+  const cos = Math.cos(m.facing), sin = Math.sin(m.facing);
+  // Tilting the head: turn it sideways around its neck (at height 1.9).
+  const tc = Math.cos(m.tilt), ts = Math.sin(m.tilt);
+  const tilt = function (v, y0) {
+    const y = v[1] - y0;
+    return [v[0] * tc - y * ts, y0 + v[0] * ts + y * tc, v[2]];
+  };
+  // Raising the arms: swing them out to the sides and UP, around the
+  // shoulders. The right arm turns one way, the left arm the other way.
+  const side = f.baseMid[0] > 0 ? 1 : -1;
+  const rc = Math.cos(m.armRaise * side), rs = Math.sin(m.armRaise * side);
+  const raise = function (v, x0, y0) {
+    const x = v[0] - x0, y = v[1] - y0;
+    return [x0 + x * rc - y * rs, y0 + x * rs + y * rc, v[2]];
+  };
+  const place = function (p) {
+    if (f.head) p = tilt(p, 1.9);
+    if (f.arm) p = raise(p, side * 0.38, 1.82);
+    let back = 0;
+    if (f.arm) back = (1.8 - p[1]) / 1.8 * 0.45 * m.drag;
+    const lz = p[2] - back;
+    return [m.x + p[0] * cos + lz * sin, p[1], m.z - p[0] * sin + lz * cos];
+  };
+  f.corners = f.baseCorners.map(place);
+  f.mid = place(f.baseMid);
+  let n = f.baseNormal;
+  if (f.head) n = tilt(n, 0);
+  if (f.arm) n = raise(n, 0, 0);
+  f.normal = [n[0] * cos + n[2] * sin, n[1], -n[0] * sin + n[2] * cos];
+}
+
+// Would the monster bump into something solid (the door, a wall) here?
+function monsterBumps(x, z) {
+  const R = 0.3;
+  return blocks.some(function (b) {
+    return b.maxY > 0.1 && b.minY < 2 &&
+           x + R > b.minX && x - R < b.maxX && z + R > b.minZ && z - R < b.maxZ;
+  });
+}
+
+function updateMonster(now, dt) {
+  const m = scream.monster;
+  if (!m.active) return;   // not here yet...
+  const dx = player.x - m.x, dz = player.z - m.z;
+  const d = Math.hypot(dx, dz);
+  const dark = scream.light === 'out';
+  // Its arms drag behind it while it moves, and swing back when it stops.
+  m.drag += ((dark ? 1 : 0) - m.drag) * Math.min(1, dt * 4);
+  if (now < m.restUntil) return;   // it just grabbed you: give you a moment
+
+  // You went back to the start? It vanishes (until you come back).
+  if (!inHall(player.z)) { m.active = false; return; }
+
+  // ONLY IN THE DARK: turn to face you and creep closer.
+  if (dark && d > 0.01) {
+    m.facing = Math.atan2(dx, dz);
+    const speed = inHall(m.z) ? HALL_MONSTER_SPEED : MONSTER_SPEED;
+    const step = Math.min(d, speed * dt);
+    if (now < m.sidestepUntil) {
+      // Going round the door: keep stepping sideways for a bit, or it
+      // would just turn straight back and get stuck again.
+      if (!monsterBumps(m.x + m.side * step, m.z)) m.x += m.side * step;
+      // Sideways blocked too (it bumped the door frame)? Back up a bit first.
+      else if (!monsterBumps(m.x, m.z - dz / d * step)) m.z -= dz / d * step;
+    } else {
+      const nx = m.x + dx / d * step, nz = m.z + dz / d * step;
+      const before = { x: m.x, z: m.z };
+      if (!monsterBumps(nx, m.z)) m.x = nx;   // one direction at a time,
+      if (!monsterBumps(m.x, nz)) m.z = nz;   // just like you
+      // Totally stuck (the door is in the way)? Sidestep around it.
+      if (Math.hypot(m.x - before.x, m.z - before.z) < step * 0.3) {
+        m.side = m.x >= 0 ? 1 : -1;
+        m.sidestepUntil = now + 0.6;
+      }
+    }
+    // Scrrrape... its hands dragging on the tiles.
+    if (now > m.nextScrape) { scrape(); m.nextScrape = now + 0.45; }
+  }
+
+  // GOTCHA.
+  if (d < MONSTER_REACH && player.y < 1.5) monsterGrabs(now);
+}
+
+// IT CAUGHT YOU. Here's what happens, step by step:
+//   1. You freeze. The lights flicker like crazy.
+//   2. The lights come ON... and it's RIGHT in front of your face.
+//   3. It slowly tilts its head to the side. Its arms slowly rise up.
+//   4. The screen GLITCHES OUT.
+//   5. Then it takes the key back (or drags you back to the start).
+const GRAB_FLICKER = 1.0;   // seconds of flickering
+const GRAB_STARE = 3.0;     // seconds of head tilting and arms rising
+const GRAB_GLITCH = 0.8;    // seconds of glitching
+
+function monsterGrabs(now) {
+  scream.grab = { start: now, phase: 'flicker', yaw: player.yaw };
+  lightsOut();
+}
+
+// Runs every frame while the grab is happening. (You can't move.)
+function updateGrab(now) {
+  const g = scream.grab, m = scream.monster;
+  const t = now - g.start;
+  m.drag = 0;
+  if (t < GRAB_FLICKER) {
+    // 1. FLICKER.
+    scream.darkness = Math.random() < 0.5 ? 0.3 : 0.97;
+    if (Math.random() < 0.15) click();
+  } else if (t < GRAB_FLICKER + GRAB_STARE) {
+    // 2. LIGHTS ON. Put it right in front of your face (the first time).
+    if (g.phase === 'flicker') {
+      g.phase = 'stare';
+      monsterInYourFace();
+      beep(90, 45, 0.5, 'sawtooth', 0.15);   // DUN.
+      beep(1200, 1150, 2.8, 'sine', 0.03);    // a creepy high hum
+    }
+    scream.darkness = 0.15;
+    player.yaw = g.yaw; player.pitch = 0.2;   // you can't look away!
+    // 3. Slowly tilt... slowly raise...
+    const k = smooth((t - GRAB_FLICKER) / GRAB_STARE);
+    m.tilt = 0.6 * k;
+    m.armRaise = 2.2 * k;
+  } else if (t < GRAB_FLICKER + GRAB_STARE + GRAB_GLITCH) {
+    // 4. GLITCH!
+    if (g.phase === 'stare') { g.phase = 'glitch'; glitchSound(); glitchSound(); }
+    if (Math.random() < 0.2) glitchSound();
+    player.yaw = g.yaw; player.pitch = 0.2;
+  } else {
+    // 5. Done. Put everything back to normal and give the punishment.
+    scream.grab = null;
+    m.tilt = 0; m.armRaise = 0;
+    scream.light = 'on'; scream.lightUntil = now + 1.5;
+    monsterPunishes(now);
+  }
+}
+
+// Stand the monster about one step in front of you, looking at you.
+// (If that would put it inside a wall, turn you to face the middle of
+// the room first.)
+function monsterInYourFace() {
+  const m = scream.monster, g = scream.grab;
+  const GAP = 1.7;
+  let yaw = player.yaw;
+  let x = player.x + Math.sin(yaw) * GAP, z = player.z - Math.cos(yaw) * GAP;
+  if (inHall(player.z)) {
+    yaw = 0;   // in the hall: face down the hall
+    x = player.x; z = player.z - GAP;
+  } else if (Math.abs(x) > 4.5 || z > -0.5 || z < -9.5) {
+    yaw = Math.atan2(0 - player.x, player.z + 5);   // face the middle of the room
+    x = player.x + Math.sin(yaw) * GAP; z = player.z - Math.cos(yaw) * GAP;
+  }
+  g.yaw = yaw;
+  m.x = x; m.z = z;
+  m.facing = Math.atan2(player.x - x, player.z - z);
+}
+
+// THE GLITCH OUT: chunks of the screen slide sideways, coloured bars
+// flash, and bits go black.
+function drawGrabGlitch() {
+  for (let i = 0; i < 14; i++) {
+    const y = Math.random() * H;
+    const h = 4 + Math.random() * 60;
+    const slide = (Math.random() - 0.5) * 200;
+    ctx.drawImage(canvas, 0, y, W, h, slide, y, W, h);
+  }
+  const BARS = ['rgba(255, 0, 0, 0.5)', 'rgba(255, 0, 255, 0.35)', 'rgba(0, 255, 255, 0.35)', 'rgba(0, 0, 0, 0.9)'];
+  for (let i = 0; i < 8; i++) {
+    ctx.fillStyle = BARS[i % BARS.length];
+    ctx.fillRect(0, Math.random() * H, W, 3 + Math.random() * 30);
+  }
+}
+
+// What it does to you after the grab. If you've got the key (and haven't
+// used it yet), it snatches it and puts it back in the corner. Otherwise,
+// it drags you back to the start. Then it goes home to its corner.
+function monsterPunishes(now) {
+  const m = scream.monster;
+  roar();
+  if (scream.hasKey && !scream.doorOpen) {
+    scream.hasKey = false;
+    addKey();
+    say('The monster took the key back!', 3);
+  } else {
+    respawn();
+    say('The monster dragged you back!', 3);
+  }
+  m.active = false;   // gone... until you go through the door again
+  m.restUntil = now + 2;
+}
+
+// Two glowing RED eyes. In the dark, they're the only bit of the monster you
+// can see. (Only if it's looking your way, though!)
+function drawMonsterEyes(focal) {
+  const m = scream.monster;
+  if (!m.active) return;
+  if (scream.darkness < 0.5) return;
+  const toYouX = player.x - m.x, toYouZ = player.z - m.z;
+  if (toYouX * Math.sin(m.facing) + toYouZ * Math.cos(m.facing) <= 0) return;   // looking away
+  ctx.save();
+  ctx.fillStyle = '#ff2a2a';    // RED
+  ctx.shadowColor = '#ff0000';
+  ctx.shadowBlur = 18;
+  for (const side of [-0.07, 0.07]) {
+    const cos = Math.cos(m.facing), sin = Math.sin(m.facing);
+    const p = toCamera([m.x + side * cos + 0.16 * sin, 2.09, m.z - side * sin + 0.16 * cos]);
+    if (p[2] < NEAR) continue;
+    const r = Math.max(1.5, focal * 0.035 / p[2]);
+    ctx.beginPath();
+    ctx.arc(W / 2 + p[0] / p[2] * focal, H / 2 - p[1] / p[2] * focal, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+// THE KEY, lying in the corner, bobbing just a little. Gold, so it
+// catches your eye... when the lights are on.
+function addKey() {
+  const K = { key: true, bob: { speed: 1.5, phase: 0, amp: 0.05 } };
+  const GOLD_KEY = [255, 205, 60];
+  const kx = KEY_SPOT.x, kz = KEY_SPOT.z;
+  addBox(kx - 0.25, kx + 0.15, 0.08, 0.14, kz - 0.03, kz + 0.03, GOLD_KEY, K);      // the long bit
+  addBox(kx + 0.15, kx + 0.35, 0.03, 0.2, kz - 0.04, kz + 0.04, GOLD_KEY, K);       // the round end
+  addBox(kx - 0.25, kx - 0.19, 0.01, 0.08, kz - 0.03, kz + 0.03, GOLD_KEY, K);      // a tooth
+  addBox(kx - 0.13, kx - 0.07, 0.01, 0.08, kz - 0.03, kz + 0.03, GOLD_KEY, K);      // another tooth
+}
+
+// Monster sounds. A big growly ROAR, and the scrape of its hands.
+function roar() {
+  beep(160, 55, 0.9, 'sawtooth', 0.16);
+  beep(95, 45, 1, 'square', 0.08);
+}
+function scrape() { beep(500 + Math.random() * 200, 350, 0.15, 'triangle', 0.025); }
+
+// SOUNDS for this level.
+function click() { beep(1800, 1200, 0.03, 'square', 0.04); }                // tik
+function lightsOut() { beep(120, 60, 0.25, 'square', 0.08); }               // thunk
+function rattle() {                                                          // locked!
+  for (let i = 0; i < 4; i++) {
+    setTimeout(function () { beep(300 + Math.random() * 200, 200, 0.06, 'square', 0.08); }, i * 70);
+  }
+}
+function creak() { beep(180, 260, 1.4, 'sawtooth', 0.06); beep(90, 130, 1.4, 'square', 0.03); }
+
 function buildSpikeRoom() {
   buildRoom(SPIKE_ROOM_MAP);
   addElevator(0, -1, false);                // the elevator you arrived in
@@ -1307,6 +1794,8 @@ function loadLevel(index) {
   ghosts = [];         // no ghosts, unless this is the glitch hallway
   wallCracks = [];
   theBreak = null;     // nothing exploding, unless this is the break room
+  scream = null;       // no flickering lights, unless this is level 0
+  nearScream = null;
   respawnPoint = null;
   fogOverride = null;
   blindingLight = 0;
@@ -1583,7 +2072,7 @@ function pushTouchButton() {
   return { x: j.x, y: j.y - j.r * 2.6, r: j.r * 0.8 };
 }
 function inPushButton(x, y) {
-  if (!nearButton) return false;
+  if (!canInteract()) return false;
   const b = pushTouchButton();
   return Math.hypot(x - b.x, y - b.y) < b.r * 1.2;
 }
@@ -1726,6 +2215,11 @@ function checkButtons() {
 // E (or the PUSH button on a phone): push whatever you're next to.
 function interact() {
   if (puzzle && nearButton) pushButton(nearButton);
+  else if (nearScream) screamInteract();
+}
+// Is there anything near you to press E on?
+function canInteract() {
+  return !!(nearButton || nearScream);
 }
 
 function pushButton(b) {
@@ -1821,6 +2315,8 @@ function update(dt, now) {
   updatePunching(now);
   if (LEVELS[levelIndex].glitchHall) updateGlitchHall(now);
   if (LEVELS[levelIndex].theBreak) updateBreak(now);
+  if (LEVELS[levelIndex].scream) updateScream(now, dt);
+  if (scream && scream.grab) return;   // frozen: the monster's got you
 
   // THE TRUCK IS COMING. You're frozen to the spot, and your head tilts
   // up so you can watch it fall. (You can't look away. Sorry.)
@@ -1970,9 +2466,13 @@ function update(dt, now) {
   // WALKED INTO THE CRACK? You're right up against its wall, and lined
   // up with the crack (not off to one side of it).
   if (crackExit && !finished && Math.abs(player.x) < crackExit.halfWidth) {
-    const againstWall = crackExit.facing > 0
+    let againstWall = crackExit.facing > 0
       ? player.z - BODY_RADIUS < crackExit.z + 0.05    // the far wall
       : player.z + BODY_RADIUS > crackExit.z - 0.05;   // the wall behind the start
+    // A thin crack (like the one in the door) only counts if you step into
+    // it from the FRONT. From behind, there's nothing there.
+    // (vz < 0 means you're walking forward, INTO it.)
+    if (crackExit.thin && (player.z <= crackExit.z || player.vz >= 0)) againstWall = false;
     if (againstWall) {
       flash = 1; flashColor = '170, 60, 255';   // purple
       win();
@@ -2068,6 +2568,11 @@ function draw() {
     // high the truck is. We work this out FIRST, because everything
     // below needs to know where the face really is right now.
     // Saws spin and slide, so ask where their corners are right now.
+    // The door swings, so work out where its pieces are right now.
+    if (f.door && f.baseCorners) doorCorners(f);
+    // The monster walks and turns, so work out where its pieces are too.
+    if (f.monster && !scream.monster.active) continue;   // not here yet
+    if (f.monster && f.baseCorners) monsterCorners(f);
     // Growing wall cracks get bigger every frame, so work out their corners too.
     if (f.wallCrack) {
       f.corners = wallCrackCorners(f);
@@ -2242,6 +2747,8 @@ function draw() {
   }
   // A broken screen glitches.
   drawGlitch();
+  // The flickering lights of level 0.
+  drawScreamDarkness(focal);
   // BLINDING PURPLE LIGHT, from the explosion.
   if (blindingLight > 0) {
     ctx.fillStyle = 'rgba(235, 200, 255, ' + Math.min(1, blindingLight) + ')';
@@ -2390,6 +2897,24 @@ function drawHud() {
     });
   }
 
+  // "PRESS E" for the key and the door, on level 0.
+  if (nearScream && started && !nearButton) {
+    const what = nearScream === 'key' ? 'pick up the key' : 'open the door';
+    const hint = (touchUsed ? 'Tap PUSH to ' : 'Press E to ') + what;
+    ctx.textAlign = 'center';
+    ctx.font = 'bold ' + Math.round(Math.min(W, H) * 0.04) + 'px system-ui, sans-serif';
+    ctx.lineWidth = 5; ctx.strokeStyle = '#000';
+    ctx.strokeText(hint, W / 2, H * 0.68);
+    ctx.fillStyle = '#ffe9b8';
+    ctx.fillText(hint, W / 2, H * 0.68);
+  }
+  // Got the key? Show it, top left, so you don't forget.
+  if (scream && scream.hasKey && started) {
+    ctx.textAlign = 'left';
+    ctx.font = Math.round(Math.min(W, H) * 0.06) + 'px system-ui, sans-serif';
+    ctx.fillText('🔑', 14, 90);
+  }
+
   // "PRESS E" when you're standing next to a button.
   if (nearButton && started) {
     const name = nearButton.color.toUpperCase();
@@ -2415,7 +2940,7 @@ function drawHud() {
     ctx.font = 'bold ' + Math.round(b.r * 0.45) + 'px system-ui, sans-serif';
     ctx.fillText('JUMP', b.x, b.y + b.r * 0.16);
     // PUSH: only there when you're next to a button.
-    if (nearButton) {
+    if (canInteract()) {
       const p = pushTouchButton();
       ctx.fillStyle = 'rgba(255, 210, 60, 0.45)';
       ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
