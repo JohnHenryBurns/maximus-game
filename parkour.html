@@ -75,6 +75,7 @@ resize();
 //  Try changing these! What do you think happens if JUMP_POWER is 15?
 // ---------------------------------------------------------------------
 const RUN_SPEED   = 6;    // blocks per second
+const SPRINT_SPEED = 10;  // blocks per second while you hold SHIFT
 const JUMP_POWER  = 9;    // how fast you shoot upward when you jump
 const GRAVITY     = 25;   // how hard the world pulls you back down
 const EYE_HEIGHT  = 1.6;  // your eyes are this far above your feet
@@ -2127,6 +2128,7 @@ canvas.addEventListener('touchmove', function (e) {
     if (role.kind === 'stick') {
       let dx = t.clientX - stick.ox, dy = t.clientY - stick.oy;
       const len = Math.hypot(dx, dy);
+      stick.sprint = len > STICK_RADIUS * 1.6;   // thumb way past the ring = SPRINT
       if (len > STICK_RADIUS) { dx *= STICK_RADIUS / len; dy *= STICK_RADIUS / len; }
       stick.dx = dx / STICK_RADIUS; stick.dy = dy / STICK_RADIUS;
     } else if (role.kind === 'look') {
@@ -2141,7 +2143,7 @@ function endTouch(e) {
   for (const t of e.changedTouches) {
     const role = roles[t.identifier];
     if (!role) continue;
-    if (role.kind === 'stick') { stick.active = false; stick.dx = stick.dy = 0; }
+    if (role.kind === 'stick') { stick.active = false; stick.dx = stick.dy = 0; stick.sprint = false; }
     if (role.kind === 'jump') touchJump = false;
     delete roles[t.identifier];
   }
@@ -2427,8 +2429,11 @@ function update(dt, now) {
   // way you're facing. sin and cos are maths for "which way is that angle".
   const fx = Math.sin(player.yaw), fz = -Math.cos(player.yaw);
   const rx = Math.cos(player.yaw), rz = Math.sin(player.yaw);
-  player.vx = (fx * forward + rx * strafe) * RUN_SPEED;
-  player.vz = (fz * forward + rz * strafe) * RUN_SPEED;
+  // Holding SHIFT (either one), or thumb way out on a phone? SPRINT!
+  const sprinting = keys.ShiftLeft || keys.ShiftRight || (stick.active && stick.sprint);
+  const speed = sprinting ? SPRINT_SPEED : RUN_SPEED;
+  player.vx = (fx * forward + rx * strafe) * speed;
+  player.vz = (fz * forward + rz * strafe) * speed;
 
   // The clock starts the moment you move.
   if (!timerRunning && !finished && push > 0) timerRunning = true;
@@ -2958,7 +2963,7 @@ function drawHud() {
     if (stick.active) {
       ctx.strokeStyle = 'rgba(255,255,255,0.5)';
       ctx.beginPath(); ctx.arc(stick.ox, stick.oy, STICK_RADIUS, 0, Math.PI * 2); ctx.stroke();
-      ctx.fillStyle = 'rgba(255,255,255,0.6)';
+      ctx.fillStyle = stick.sprint ? 'rgba(255,210,60,0.85)' : 'rgba(255,255,255,0.6)';   // yellow = sprinting
       ctx.beginPath();
       ctx.arc(stick.ox + stick.dx * STICK_RADIUS, stick.oy + stick.dy * STICK_RADIUS, 24, 0, Math.PI * 2);
       ctx.fill();
@@ -3747,8 +3752,8 @@ function drawMenu() {
     ctx.fillStyle = '#ddd';
     ctx.font = Math.round(small * 0.03) + 'px system-ui, sans-serif';
     const y = top + 3 * (boxH + gap) + small * 0.03;
-    ctx.fillText('WASD to run · mouse to look · SPACE to jump · R to restart', W / 2, y);
-    ctx.fillText('E to push buttons · V to change the voice · Esc or M for this menu', W / 2, y + small * 0.045);
+    ctx.fillText('WASD to run · SHIFT to sprint · mouse to look · SPACE to jump', W / 2, y);
+    ctx.fillText('E to push buttons · R to restart · V for the voice · Esc or M for this menu', W / 2, y + small * 0.045);
   } else {
     // THE LEVELS LIST. One box per level. Locked ones are grey.
     const boxH = Math.max(36, Math.min(54, (H * 0.68) / (LEVELS.length + 1) - 8)), gap = 8;
