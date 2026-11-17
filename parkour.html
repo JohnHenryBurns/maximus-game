@@ -1281,10 +1281,26 @@ function updateScream(now, dt) {
   }
   if (scream.light === 'on') scream.darkness = 0.35;
   if (scream.light === 'flicker') scream.darkness = Math.random() < 0.5 ? 0.35 : 0.92;
-  if (scream.light === 'out') {
-    scream.darkness = 0.95;
-    // In the dark, you can hear your heart.
-    if (now > scream.nextBeat) { heartbeat(); scream.nextBeat = now + 0.75; }
+  if (scream.light === 'out') scream.darkness = 0.95;
+
+  // YOUR HEART. In the dark, you can hear it. And when the monster gets
+  // close, it beats FASTER and LOUDER, lights on or off. That's your
+  // warning: it's right behind you. RUN!
+  let beatEvery = scream.light === 'out' ? 0.75 : Infinity;   // seconds between beats
+  let loud = 1;
+  const m = scream.monster;
+  if (m.active) {
+    const howFar = Math.hypot(player.x - m.x, player.z - m.z);
+    if (howFar < MONSTER_CLOSE) {
+      const close = 1 - howFar / MONSTER_CLOSE;   // 0 = just noticed, 1 = RIGHT behind you
+      beatEvery = 0.75 - 0.5 * close;            // 0.75 seconds, down to 0.25
+      loud = 1 + 0.8 * close;                     // up to nearly twice as loud
+    }
+  }
+  if (beatEvery < Infinity) {
+    // (If the beat just got faster, don't wait for the old slow one.)
+    scream.nextBeat = Math.min(scream.nextBeat, now + beatEvery);
+    if (now > scream.nextBeat) { heartbeat(loud); scream.nextBeat = now + beatEvery; }
   }
 
   updateMonster(now, dt);
@@ -1335,6 +1351,7 @@ function drawScreamDarkness(focal) {
 // ---------------------------------------------------------------------
 const MONSTER_HOME = { x: -4, z: -9 };   // its corner (the other far corner from the key)
 const MONSTER_REACH = 0.8;   // how close it has to get to grab you
+const MONSTER_CLOSE = 8;     // closer than this and your heart starts racing
 
 // The monster is built standing at (0, 0), looking towards +z. Every piece
 // remembers that spot (base), and monsterCorners() moves it to wherever
@@ -3721,10 +3738,12 @@ function ouch() {
 }
 
 // BA-BUM: a heartbeat. Two deep thumps close together.
-function heartbeat() {
-  beep(70, 40, 0.16, 'sine', 0.45);
-  beep(110, 60, 0.12, 'triangle', 0.12);
-  setTimeout(function () { beep(62, 38, 0.2, 'sine', 0.38); beep(100, 55, 0.14, 'triangle', 0.1); }, 150);
+// loud: (you can leave it out) 1 = normal, 2 = twice as loud.
+function heartbeat(loud) {
+  const v = loud || 1;
+  beep(70, 40, 0.16, 'sine', 0.45 * v);
+  beep(110, 60, 0.12, 'triangle', 0.12 * v);
+  setTimeout(function () { beep(62, 38, 0.2, 'sine', 0.38 * v); beep(100, 55, 0.14, 'triangle', 0.1 * v); }, 150);
 }
 // BOOM: the biggest sound in the game.
 function boom() {
