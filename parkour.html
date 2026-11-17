@@ -450,6 +450,22 @@ function buildRoom(map, height, look) {
       const x0 = left + col, x1 = x0 + 1;
       const z1 = -row, z0 = z1 - 1;    // row 0 is nearest the start
 
+      if (letter === '#') {
+        // WALL: a solid block, floor to ceiling. Bricks go on every side
+        // that faces an open square (the sides that face other walls
+        // can't be seen, so we don't bother painting them).
+        blocks.push({ minX: x0, maxX: x1, minZ: z0, maxZ: z1, minY: LAVA_Y - 1, maxY: top });
+        if (letterAt(row, col + 1) !== '#')
+          addBrickWall([x1, 0, z1], [0, 0, -1], 1, LAVA_Y, top, [1, 0, 0], look.bricks);
+        if (letterAt(row, col - 1) !== '#')
+          addBrickWall([x0, 0, z1], [0, 0, -1], 1, LAVA_Y, top, [-1, 0, 0], look.bricks);
+        if (letterAt(row - 1, col) !== '#')
+          addBrickWall([x0, 0, z1], [1, 0, 0], 1, LAVA_Y, top, [0, 0, 1], look.bricks);
+        if (letterAt(row + 1, col) !== '#')
+          addBrickWall([x0, 0, z0], [1, 0, 0], 1, LAVA_Y, top, [0, 0, -1], look.bricks);
+        continue;
+      }
+
       if (letter === 'L') {
         // LAVA: a block sunk down below the floor, that glows and burns.
         blocks.push({ minX: x0, maxX: x1, minZ: z0, maxZ: z1,
@@ -1080,7 +1096,55 @@ const SCREAM_LOOK = {
 const DOOR_Z = -5;            // the door stands in the middle of the room
 const KEY_SPOT = { x: 4, z: -9 };   // the key is in the far corner
 const LIGHTS_OUT_A_LOT = 0.5; // how often the lights go out (0 = never, 1 = all the time)
-const HALL_LENGTH = 40;       // how long the hallway behind the door is
+// THE WINDY HALL behind the door, drawn with letters, seen from above.
+// The top row is where you come in. The crack is in the middle of the
+// bottom wall.   # = wall   . = floor   L = LAVA (jump it!)
+const SCREAM_HALL_MAP = [
+  '####...####',
+  '####...####',
+  '####...####',
+  '####...####',
+  '####...####',
+  '####LLL####',
+  '####...####',
+  '####...####',
+  '####......#',
+  '####......#',
+  '#######...#',
+  '#######...#',
+  '#######LLL#',
+  '#######LLL#',
+  '#######...#',
+  '#######...#',
+  '#.........#',
+  '#.........#',
+  '#...#######',
+  '#...#######',
+  '#LLL#######',
+  '#...#######',
+  '#...#######',
+  '#...LLL...#',
+  '#...LLL...#',
+  '#######...#',
+  '#######...#',
+  '#######L.L#',
+  '#######L.L#',
+  '#######L.L#',
+  '#######...#',
+  '#######...#',
+  '####......#',
+  '####......#',
+  '####...####',
+  '####...####',
+  '####...####',
+  '####LLL####',
+  '####LLL####',
+  '####LLL####',
+  '####...####',
+  '####...####',
+  '####...####',
+  '####...####',
+];
 const HALL_START = -20;       // where the hallway begins (far behind the room, out of sight)
 const HALL_MONSTER_SPEED = 8.5;   // in the hall it's FASTER than you (you run at 6)... but only in the dark
 
@@ -1120,7 +1184,7 @@ function buildScream() {
   // (active = false means it's hidden and doesn't move.)
   scream.monster = { active: false, x: MONSTER_HOME.x, z: MONSTER_HOME.z, facing: 0, drag: 0,
                      restUntil: performance.now() / 1000 + 3,   // 3 seconds head start
-                     nextScrape: 0, sidestepUntil: 0, side: 1,
+                     nextScrape: 0,
                      tilt: 0, armRaise: 0 };   // head tilt and arms up (for the grab)
   addMonster();
 }
@@ -1130,7 +1194,7 @@ function buildScream() {
 // down the z line, so it's hidden behind the room's back wall.
 function buildScreamHall() {
   const firstFace = faces.length, firstBlock = blocks.length;
-  buildRoom(Array(HALL_LENGTH).fill('...'), 3.5, SCREAM_LOOK);
+  buildRoom(SCREAM_HALL_MAP, 3.5, SCREAM_LOOK);
   for (let i = firstFace; i < faces.length; i++) {
     const f = faces[i];
     f.corners = f.corners.map(function (c) { return [c[0], c[1], c[2] + HALL_START]; });
@@ -1140,7 +1204,7 @@ function buildScreamHall() {
     blocks[i].minZ += HALL_START; blocks[i].maxZ += HALL_START;
   }
   // And the way out, at the very end.
-  addCrack(HALL_START - HALL_LENGTH, 1);
+  addCrack(HALL_START - SCREAM_HALL_MAP.length, 1);
 }
 
 // Is this spot in the hall? (Everything further than z = -15 is.)
@@ -1150,6 +1214,9 @@ function inHall(z) { return z < -15; }
 // monster right behind you.
 function enterTheHall(now) {
   player.x = 0; player.z = HALL_START - 3.5; player.yaw = 0;
+  player.vx = player.vy = player.vz = 0; player.y = 0;
+  // If you fall in the lava now, you come back HERE, not to the room.
+  respawnPoint = { x: 0, y: 0, z: HALL_START - 3.5 };
   const m = scream.monster;
   m.active = true;
   m.x = 0; m.z = HALL_START - 0.6; m.facing = Math.PI;
@@ -1253,8 +1320,8 @@ function screamInteract() {
 // even in the dark, so you can find it if you look carefully.
 function drawScreamDarkness(focal) {
   if (!scream) return;
-  ctx.fillStyle = 'rgba(0, 0, 0, ' + scream.darkness + ')';
-  ctx.fillRect(0, 0, W, H);
+  // (The dark itself is painted onto every wall and floor as they're drawn:
+  // see lightLevel in draw(). That's how the lava can glow through it.)
   drawMonsterEyes(focal);
   if (scream.grab && scream.grab.phase === 'glitch') drawGrabGlitch();
 }
@@ -1267,7 +1334,6 @@ function drawScreamDarkness(focal) {
 //  If it catches you, it takes the key back.
 // ---------------------------------------------------------------------
 const MONSTER_HOME = { x: -4, z: -9 };   // its corner (the other far corner from the key)
-const MONSTER_SPEED = 2.5;   // how fast it creeps in the dark (you run at 6)
 const MONSTER_REACH = 0.8;   // how close it has to get to grab you
 
 // The monster is built standing at (0, 0), looking towards +z. Every piece
@@ -1334,6 +1400,50 @@ function monsterCorners(f) {
 }
 
 // Would the monster bump into something solid (the door, a wall) here?
+// HOW THE MONSTER FINDS YOU round all the corners. Imagine water poured
+// on your square of the map. It spreads out one square at a time:
+// your square is 0 steps away, the squares next to it are 1, the ones
+// next to THOSE are 2... (walls stop the water). When it's spread
+// everywhere, the monster just walks to whichever square next to it has
+// the SMALLEST number. Downhill, all the way to you!
+// (Programmers call this a "breadth-first search".)
+function hallWayTo(x, z) {
+  const map = SCREAM_HALL_MAP;
+  const rows = map.length, cols = map[0].length;
+  const cellOf = function (px, pz) {
+    return { row: Math.floor(HALL_START - pz), col: Math.floor(px + cols / 2) };
+  };
+  const open = function (r, c) { return r >= 0 && r < rows && c >= 0 && c < cols && map[r][c] !== '#'; };
+  const you = cellOf(player.x, player.z), me = cellOf(x, z);
+  if (!open(you.row, you.col) || (you.row === me.row && you.col === me.col)) {
+    return { x: player.x, z: player.z };   // same square (or lost)? Just go straight at you.
+  }
+  // Pour the water.
+  const steps = map.map(function (line) { return Array(line.length).fill(Infinity); });
+  steps[you.row][you.col] = 0;
+  const queue = [you];
+  const NEXT_DOOR = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  while (queue.length) {
+    const cell = queue.shift();
+    for (const n of NEXT_DOOR) {
+      const r = cell.row + n[0], c = cell.col + n[1];
+      if (open(r, c) && steps[r][c] === Infinity) {
+        steps[r][c] = steps[cell.row][cell.col] + 1;
+        queue.push({ row: r, col: c });
+      }
+    }
+  }
+  // Walk downhill: the square next to me with the smallest number.
+  let best = null, bestSteps = open(me.row, me.col) ? steps[me.row][me.col] : Infinity;
+  for (const n of NEXT_DOOR) {
+    const r = me.row + n[0], c = me.col + n[1];
+    if (open(r, c) && steps[r][c] < bestSteps) { best = { row: r, col: c }; bestSteps = steps[r][c]; }
+  }
+  if (!best) return { x: player.x, z: player.z };
+  // The middle of that square.
+  return { x: best.col - cols / 2 + 0.5, z: HALL_START - best.row - 0.5 };
+}
+
 function monsterBumps(x, z) {
   const R = 0.3;
   return blocks.some(function (b) {
@@ -1358,25 +1468,15 @@ function updateMonster(now, dt) {
   // ONLY IN THE DARK: turn to face you and creep closer.
   if (dark && d > 0.01) {
     m.facing = Math.atan2(dx, dz);
-    const speed = inHall(m.z) ? HALL_MONSTER_SPEED : MONSTER_SPEED;
-    const step = Math.min(d, speed * dt);
-    if (now < m.sidestepUntil) {
-      // Going round the door: keep stepping sideways for a bit, or it
-      // would just turn straight back and get stuck again.
-      if (!monsterBumps(m.x + m.side * step, m.z)) m.x += m.side * step;
-      // Sideways blocked too (it bumped the door frame)? Back up a bit first.
-      else if (!monsterBumps(m.x, m.z - dz / d * step)) m.z -= dz / d * step;
-    } else {
-      const nx = m.x + dx / d * step, nz = m.z + dz / d * step;
-      const before = { x: m.x, z: m.z };
-      if (!monsterBumps(nx, m.z)) m.x = nx;   // one direction at a time,
-      if (!monsterBumps(m.x, nz)) m.z = nz;   // just like you
-      // Totally stuck (the door is in the way)? Sidestep around it.
-      if (Math.hypot(m.x - before.x, m.z - before.z) < step * 0.3) {
-        m.side = m.x >= 0 ? 1 : -1;
-        m.sidestepUntil = now + 0.6;
-      }
-    }
+    // Which way to go? Ask the map (see hallWayTo), then walk that way.
+    const target = hallWayTo(m.x, m.z);
+    const tx = target.x - m.x, tz = target.z - m.z;
+    const td = Math.hypot(tx, tz) || 1;
+    const step = Math.min(td, HALL_MONSTER_SPEED * dt);
+    m.facing = Math.atan2(tx, tz);
+    // It doesn't care about lava. It just floats over. (It's a monster.)
+    if (!monsterBumps(m.x + tx / td * step, m.z)) m.x += tx / td * step;
+    if (!monsterBumps(m.x, m.z + tz / td * step)) m.z += tz / td * step;
     // Scrrrape... its hands dragging on the tiles.
     if (now > m.nextScrape) { scrape(); m.nextScrape = now + 0.45; }
   }
@@ -1446,8 +1546,14 @@ function monsterInYourFace() {
   let yaw = player.yaw;
   let x = player.x + Math.sin(yaw) * GAP, z = player.z - Math.cos(yaw) * GAP;
   if (inHall(player.z)) {
-    yaw = 0;   // in the hall: face down the hall
-    x = player.x; z = player.z - GAP;
+    // In the windy hall: try the way you're looking, then each of the
+    // four directions, until there's room for it to stand.
+    const tries = [yaw, 0, Math.PI / 2, Math.PI, -Math.PI / 2];
+    for (const t of tries) {
+      x = player.x + Math.sin(t) * GAP; z = player.z - Math.cos(t) * GAP;
+      yaw = t;
+      if (!monsterBumps(x, z)) break;
+    }
   } else if (Math.abs(x) > 4.5 || z > -0.5 || z < -9.5) {
     yaw = Math.atan2(0 - player.x, player.z + 5);   // face the middle of the room
     x = player.x + Math.sin(yaw) * GAP; z = player.z - Math.cos(yaw) * GAP;
@@ -1484,6 +1590,8 @@ function monsterPunishes(now) {
     addKey();
     say('The monster took the key back!', 3);
   } else {
+    respawnPoint = null;   // all the way back to the room
+    m.active = false;
     respawn();
     say('The monster dragged you back!', 3);
   }
@@ -1772,6 +1880,12 @@ function say(text, seconds) {
 
 // Back to the start of whatever level you're on.
 function respawn() {
+  // Fell in the lava in Level 0's hall? Back to the start of the hall,
+  // and the monster starts chasing you all over again.
+  if (scream && scream.monster.active && respawnPoint) {
+    enterTheHall(performance.now() / 1000);
+    return;
+  }
   const start = respawnPoint || LEVELS[levelIndex].start;
   player.x = start.x; player.y = start.y; player.z = start.z;
   player.vx = player.vy = player.vz = 0;
@@ -2533,6 +2647,10 @@ function draw() {
 
   const level = LEVELS[levelIndex];
   const FOG = fogOverride || level.fogColor;
+  // HOW MUCH LIGHT IS THERE? 1 = all the lights on, 0 = pitch black.
+  // Only level 0 has lights that go out. Everything gets painted darker
+  // when it's dark... except things that GLOW (see below).
+  const lightLevel = scream ? 1 - scream.darkness : 1;
   const time = performance.now() / 1000;
 
   ctx.save();
@@ -2560,7 +2678,7 @@ function draw() {
     ctx.fillStyle = sky;
   } else {
     // Inside a tunnel there's no sky. Just the dark, far away.
-    ctx.fillStyle = 'rgb(' + FOG.join(',') + ')';
+    ctx.fillStyle = 'rgb(' + FOG.map(function (c) { return Math.round(c * lightLevel); }).join(',') + ')';
   }
   ctx.fillRect(0, 0, W, H);
 
@@ -2699,9 +2817,12 @@ function draw() {
       pulse = 0.75 + 0.25 * Math.sin(time * 4);
       color = color.map(function (c) { return c * (0.7 + 0.3 * pulse); });
     }
+    // Lava and the crack make their OWN light, so the dark can't hide them.
+    const glows = f.lava || f.glow;
+    const bright = glows ? Math.max(lightLevel, 0.9) : lightLevel;
     const mix = function (c) {
       return 'rgb(' + c.map(function (val, i) {
-        return Math.round(val + (FOG[i] - val) * fog);
+        return Math.round((val + (FOG[i] - val) * fog) * bright);
       }).join(',') + ')';
     };
     const col = mix(color);
@@ -2729,7 +2850,13 @@ function draw() {
       ctx.globalAlpha = 1;
       continue;   // no outline on glowing things
     }
+    if (f.lava && lightLevel < 0.5) {
+      // A blurry orange "shadow" that's really light, like the crack's glow.
+      ctx.shadowColor = 'rgb(255, 110, 0)';
+      ctx.shadowBlur = 30;
+    }
     ctx.fill();
+    ctx.shadowBlur = 0;
     // An outline. For bricks it's the grey cement between them. For
     // everything else it's the same colour, which hides tiny cracks.
     ctx.strokeStyle = f.edge ? mix(f.edge) : col;
