@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <title>Blob Army</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #1b1530; }
+    canvas { display: block; width: 100vw; height: 100vh; touch-action: none; }
+
+    /* The same "back to the arcade" pill every game has, in the same corner. */
+    a.arcade-pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      font: 600 13px system-ui, -apple-system, "Segoe UI", sans-serif;
+      color: #ffffff; text-decoration: none;
+      background: rgba(0, 0, 0, 0.55);
+      border: 1px solid rgba(255, 255, 255, 0.5);
+      padding: 7px 13px; border-radius: 999px;
+      position: fixed; z-index: 10;
+      top: calc(8px + env(safe-area-inset-top, 0px));
+      left: calc(10px + env(safe-area-inset-left, 0px));
+      -webkit-tap-highlight-color: transparent;
+    }
+  </style>
+</head>
+<body>
+<a id="back" class="arcade-pill" href="index.html"><span>&larr;</span>Arcade</a>
+<canvas id="game"></canvas>
+<script>
+/* The game grabs every touch, which would swallow a tap on the Arcade pill.
+   So the pill handles its own taps first and stops them going any further. */
+(function () {
+  var pill = document.getElementById('back');
+  var go = function (e) { e.stopPropagation(); e.preventDefault(); location.href = 'index.html'; };
+  ['click', 'touchend'].forEach(function (t) { pill.addEventListener(t, go, { passive: false }); });
+  ['mousedown', 'touchstart', 'pointerdown'].forEach(function (t) {
+    pill.addEventListener(t, function (e) { e.stopPropagation(); }, { passive: false });
+  });
+})();
+</script>
+<script>
+// =====================================================================
+//  BLOB ARMY, by Max.
+//
+//  You're one little blob, running down a hall. You never stop.
+//  Doors come in pairs: pick LEFT or RIGHT. Every door does maths to
+//  your army: +1 adds a blob, x2 doubles them, -2 takes two away...
+//  At the end of the hall, a red army is waiting. Bigger army wins!
+// =====================================================================
+
+// ---------------------------------------------------------------------
+//  THE NUMBERS THAT DECIDE HOW IT PLAYS. Try changing them!
+// ---------------------------------------------------------------------
+const RUN_SPEED = 9;          // how fast the army runs down the hall
+const STEER_SPEED = 9;        // how fast you slide left and right (keys)
+const DOOR_PAIRS = 8;         // how many pairs of doors before the fight
+const DOOR_GAP = 32;          // how far apart the pairs of doors are
+const ENEMY_CHARGE_SPEED = 7; // how fast the red army runs at you
+const BATTLE_TIME = 8;       // about how many seconds the big battle lasts
+const FIGHT_GAP = 4;         // how far apart the two armies stand while their fighters battle
+const MOST_BLOBS_DRAWN = 200; // more than this, and we only DRAW 200 (the number still counts them all)
+
+// Every kind of door. "how" is the maths, "chance" is how often it shows up.
+const DOOR_KINDS = [
+  { label: '+1',  how: function (n) { return n + 1; },  good: true,  chance: 3 },
+  { label: '+5',  how: function (n) { return n + 5; },  good: true,  chance: 3 },
+  { label: '+10', how: function (n) { return n + 10; }, good: true,  chance: 2 },
+  { label: 'x2',  how: function (n) { return n * 2; },  good: true,  chance: 3 },
+  { label: 'x4',  how: function (n) { return n * 4; },  good: true,  chance: 1 },
+  { label: '-2',  how: function (n) { return n - 2; },  good: false, chance: 3 },
+  { label: '-5',  how: function (n) { return n - 5; },  good: false, chance: 2 },
+  { label: '-10', how: function (n) { return n - 10; }, good: false, chance: 1 },
+];
+
+// The hall is 8 wide: from x = -4 (left wall) to x = 4 (right wall).
+const HALL_HALF = 4;
+
+// ---------------------------------------------------------------------
+//  THE SCREEN
+// ---------------------------------------------------------------------
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+let W = 0, H = 0;
+function resize() {
+  W = canvas.width = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ---------------------------------------------------------------------
+//  THE GAME'S MEMORY
+// ---------------------------------------------------------------------
+let mode = 'title';       // 'title', 'run', 'fight', 'win' or 'lose'
+let level = 1;
+let army = { x: 0, z: 0, count: 1 };
+let doors = [];           // every pair of doors in this hall
+let enemy = { z: 0, count: 0 };
+let pops = [];            // floating "+5" and "x2" numbers that drift up and fade
+let lastPop = 0;          // when the last fight "pop" sound played
+let fight = null;         // the big fight: who started with how many, and is it charging or smashing?
+let poofs = [];           // little white puffs where blobs pop in the fight
+
+// ---------------------------------------------------------------------
+//  BUILDING A HALL
+// ---------------------------------------------------------------------
+// Pick a door at random. Doors with a bigger "chance" get picked more.
+function randomDoor() {
+  let total = 0;
+  DOOR_KINDS.forEach(function (d) { total += d.chance; });
+  let pick = Math.random() * total;
+  for (const d of DOOR_KINDS) {
+    pick -= d.chance;
+    if (pick < 0) return d;
+  }
+  return DOOR_KINDS[0];
+}
+
+function startLevel() {
+  army = { x: 0, z: 0, count: 1 };
+  doors = [];
+  pops = [];
+  fight = null;
+  poofs = [];
+  // Each pair: one GOOD door for sure, and one random door (could be
+  // good, could be bad). Then flip a coin for which side is which.
+  let best = 1;   // the biggest army you could POSSIBLY have, if you pick perfectly
+  for (let i = 0; i < DOOR_PAIRS; i++) {
+    const goodOnes = DOOR_KINDS.filter(function (d) { return d.good; });
+    const good = goodOnes[Math.floor(Math.random() * goodOnes.length)];
+    const other = randomDoor();
+    const goodOnLeft = Math.random() < 0.5;
+    doors.push({
+      z: 25 + i * DOOR_GAP,
+      left: goodOnLeft ? good : other,
+      right: goodOnLeft ? other : good,
+      picked: null,   // 'left' or 'right', once you've run through
+    });
+    best = Math.max(good.how(best), other.how(best));
+  }
+  // THE ENEMY. It's always smaller than the best you could do, so you
+  // CAN win if you pick well. Every level, it gets closer to your best.
+  const howTough = Math.min(0.9, 0.5 + 0.08 * (level - 1));
+  enemy = { z: 25 + DOOR_PAIRS * DOOR_GAP + 10, count: Math.max(3, Math.round(best * howTough)) };
+}
+
+// ---------------------------------------------------------------------
+//  CONTROLS
+//  Keyboard: A/D or the arrow keys. Mouse or finger: drag left and right.
+//  Space, click or tap to start.
+// ---------------------------------------------------------------------
+const keys = {};
+window.addEventListener('keydown', function (e) {
+  keys[e.code] = true;
+  if (e.code === 'Space' || e.code === 'Enter') { pressGo(); e.preventDefault(); }
+});
+window.addEventListener('keyup', function (e) { keys[e.code] = false; });
+
+// Dragging: where your finger (or mouse) is, side to side, is where the
+// army goes. Left edge of the screen = left wall, right edge = right wall.
+let dragging = false;
+function steerTo(screenX) {
+  const across = screenX / W;           // 0 at the left edge, 1 at the right
+  army.x = clamp((across - 0.5) * 2 * (HALL_HALF - 0.5), -(HALL_HALF - 0.5), HALL_HALF - 0.5);
+}
+canvas.addEventListener('pointerdown', function (e) {
+  unlockAudio();
+  if (mode !== 'run') { pressGo(); return; }
+  dragging = true;
+  steerTo(e.clientX);
+});
+canvas.addEventListener('pointermove', function (e) {
+  if (mode !== 'run') return;
+  // A mouse steers just by moving. A finger has to be touching.
+  if (dragging || e.pointerType === 'mouse') steerTo(e.clientX);
+});
+window.addEventListener('pointerup', function () { dragging = false; });
+
+// Space / click / tap: start, or play again, or next level.
+function pressGo() {
+  unlockAudio();
+  if (mode === 'title' || mode === 'lose') { startLevel(); mode = 'run'; }
+  else if (mode === 'win') { level++; startLevel(); mode = 'run'; }
+}
+
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+// ---------------------------------------------------------------------
+//  UPDATE: what happens every frame
+// ---------------------------------------------------------------------
+function update(dt, now) {
+  if (mode === 'run') {
+    // Steering with keys.
+    if (keys.KeyA || keys.ArrowLeft)  army.x -= STEER_SPEED * dt;
+    if (keys.KeyD || keys.ArrowRight) army.x += STEER_SPEED * dt;
+    army.x = clamp(army.x, -(HALL_HALF - 0.5), HALL_HALF - 0.5);
+
+    // Run! (Never stop.)
+    const before = army.z;
+    army.z += RUN_SPEED * dt;
+
+    // Did we just run through a pair of doors? Left half or right half?
+    for (const d of doors) {
+      if (!d.picked && before < d.z && army.z >= d.z) {
+        d.picked = army.x < 0 ? 'left' : 'right';
+        const door = d[d.picked];
+        army.count = Math.max(0, door.how(army.count));
+        pops.push({ text: door.label, good: door.good, born: now });
+        if (door.good) goodSound(); else badSound();
+        if (army.count === 0) { mode = 'lose'; loseSound(); }
+      }
+    }
+
+    // Reached the enemy? FIGHT!
+    if (army.z >= enemy.z - 14) { mode = 'fight'; fight = { phase: 'charge' }; chargeSound(); }
+  }
+
+  if (mode === 'fight' && fight.phase === 'charge') {
+    // 1. THE CHARGE: both armies run at each other...
+    army.z += RUN_SPEED * dt;
+    enemy.z -= ENEMY_CHARGE_SPEED * dt;
+    // ...until they're close. Then they stop, and the BATTLE begins.
+    if (enemy.z - army.z < FIGHT_GAP) {
+      const smaller = Math.min(army.count, enemy.count);
+      // If the armies are HUGE, each pair of fighters stands for a few
+      // blobs each, or the battle would take forever.
+      const worth = Math.max(1, Math.ceil(smaller / 80));
+      const pairs = Math.ceil(smaller / worth);
+      fight = { phase: 'clash', startArmy: army.count, startEnemy: enemy.count,
+                meetZ: (army.z + enemy.z) / 2,
+                fighters: [],       // the pairs fighting in the middle right now
+                busy: 0,            // how many blobs (on each side) are out fighting
+                worth: worth,
+                spawnEvery: Math.min(0.5, BATTLE_TIME / pairs),
+                nextSpawn: now };
+      smashSound();
+    }
+  }
+
+  if (mode === 'fight' && fight.phase === 'clash') {
+    // 2. THE BATTLE. Every so often, a blue blob and a red blob run out
+    // of their armies into the middle, BONK into each other three times,
+    // and both go POP. Again and again, until one army is all gone. So
+    // whoever had MORE wins, and what's left is BIGGER minus SMALLER.
+    const spare = Math.min(army.count, enemy.count) - fight.busy;
+    if (spare > 0 && now >= fight.nextSpawn) {
+      const worth = Math.min(fight.worth, spare);
+      fight.busy += worth;
+      fight.fighters.push({
+        born: now, worth: worth,
+        x: (Math.random() - 0.5) * 5,                        // where on the battle line
+        blueFromX: army.x + (Math.random() - 0.5) * 2,       // where they ran out from
+        redFromX: (Math.random() - 0.5) * 2,
+        bonks: 0,
+      });
+      fight.nextSpawn = now + fight.spawnEvery * (0.6 + Math.random() * 0.8);
+    }
+    for (const f of fight.fighters.slice()) {
+      const age = now - f.born;
+      // Every time they crash together: BONK!
+      const bonksSoFar = age < FIGHTER_RUN ? 0 : Math.min(3, Math.floor((age - FIGHTER_RUN) / FIGHTER_BONK * 3) + 1);
+      if (bonksSoFar > f.bonks) { f.bonks = bonksSoFar; bonkSound(); }
+      // After three bonks: POP, both of them.
+      if (age > FIGHTER_RUN + FIGHTER_BONK) {
+        army.count -= f.worth;
+        enemy.count -= f.worth;
+        fight.busy -= f.worth;
+        fight.fighters.splice(fight.fighters.indexOf(f), 1);
+        poofs.push({ x: f.x, z: fight.meetZ - 0.25, born: now });
+        poofs.push({ x: f.x, z: fight.meetZ + 0.25, born: now });
+        if (now - lastPop > 0.05) { popSound(); lastPop = now; }
+      }
+    }
+    // 3. Who won? Only the BIGGER army. (A tie means nobody wins.)
+    if ((army.count === 0 || enemy.count === 0) && fight.fighters.length === 0) {
+      if (army.count > 0) { mode = 'win'; winSound(); saveBest(); }
+      else { mode = 'lose'; loseSound(); }
+    }
+  }
+  poofs = poofs.filter(function (p) { return now - p.born < 0.5; });
+
+  // Old pops float away after a second.
+  pops = pops.filter(function (p) { return now - p.born < 1.2; });
+}
+
+// A FIGHTER'S JOURNEY: run out to the battle line (FIGHTER_RUN seconds),
+// then bounce back and forth bonking the other one (FIGHTER_BONK seconds).
+const FIGHTER_RUN = 0.4;
+const FIGHTER_BONK = 0.7;
+function fighterSpot(f, isEnemy, now) {
+  const age = now - f.born;
+  const lineZ = fight.meetZ + (isEnemy ? 0.24 : -0.24);   // where it meets the other one
+  const fromX = isEnemy ? f.redFromX : f.blueFromX;
+  const fromZ = isEnemy ? enemy.z : army.z;
+  if (age < FIGHTER_RUN) {
+    const u = age / FIGHTER_RUN;   // 0 = just left, 1 = arrived
+    return { x: fromX + (f.x - fromX) * u, z: fromZ + (lineZ - fromZ) * u, crash: false };
+  }
+  // Back off, crash in, back off, crash in... (sin makes the bounce)
+  const b = (age - FIGHTER_RUN) / FIGHTER_BONK;
+  const backOff = Math.abs(Math.sin(b * Math.PI * 3)) * 0.35;
+  return { x: f.x, z: lineZ + (isEnemy ? backOff : -backOff), crash: backOff < 0.06 };
+}
+
+// ---------------------------------------------------------------------
+//  3D, BY HAND. The camera floats up and behind your army, looking
+//  down the hall. To draw a point, we measure it from the camera, then
+//  squash it onto the screen: far things get squashed toward the middle.
+// ---------------------------------------------------------------------
+const CAMERA_UP = 6;        // how high the camera floats
+const CAMERA_BACK = 9;      // how far behind the army
+const CAMERA_TILT = 0.42;   // how much it looks down (in radians)
+let cam = { x: 0, y: CAMERA_UP, z: -CAMERA_BACK };
+
+// Turn a point in the world into a spot on the screen.
+// Returns null if it's behind the camera.
+function toScreen(x, y, z) {
+  const rx = x - cam.x, ry = y - cam.y, rz = z - cam.z;
+  const c = Math.cos(CAMERA_TILT), s = Math.sin(CAMERA_TILT);
+  const depth = rz * c - ry * s;          // how far in front of the camera
+  const up = ry * c + rz * s;             // how far above the middle of the view
+  if (depth < 0.3) return null;
+  const focal = H * 0.9;
+  return { x: W / 2 + rx * focal / depth, y: H / 2 - up * focal / depth, depth: depth, scale: focal / depth };
+}
+
+// Fill a 4-cornered shape (all four corners in the world).
+function quad(corners, color) {
+  const pts = corners.map(function (c) { return toScreen(c[0], c[1], c[2]); });
+  if (pts.some(function (p) { return !p; })) return;
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  pts.forEach(function (p, i) { if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y); });
+  ctx.closePath();
+  ctx.fill();
+}
+
+// Far away things fade into the purple haze at the end of the hall.
+const HAZE = [27, 21, 48];
+function hazy(rgb, depth) {
+  const fade = clamp(depth / 80, 0, 1);
+  return 'rgb(' + rgb.map(function (v, i) { return Math.round(v + (HAZE[i] - v) * fade); }).join(',') + ')';
+}
+
+// ---------------------------------------------------------------------
+//  DRAWING
+// ---------------------------------------------------------------------
+function draw(now) {
+  // The camera follows the army (a little bit side to side, too).
+  cam.x = army.x * 0.4;
+  cam.z = army.z - CAMERA_BACK;
+
+  ctx.fillStyle = 'rgb(' + HAZE.join(',') + ')';
+  ctx.fillRect(0, 0, W, H);
+
+  // THE HALL: floor tiles and walls, from far away to close up.
+  const TILE = 2;
+  const first = Math.floor((army.z - 6) / TILE) * TILE;
+  for (let z = first + 90; z >= first; z -= TILE) {
+    const depth = z - cam.z;
+    const row = Math.round(z / TILE);
+    for (let x = -HALL_HALF; x < HALL_HALF; x += TILE) {
+      const light = (row + Math.round(x / TILE)) % 2 === 0;
+      quad([[x, 0, z], [x + TILE, 0, z], [x + TILE, 0, z + TILE], [x, 0, z + TILE]],
+           hazy(light ? [120, 110, 160] : [80, 70, 120], depth));
+    }
+    const stripe = row % 2 === 0;
+    const WALL = stripe ? [70, 60, 110] : [60, 50, 95];
+    quad([[-HALL_HALF, 0, z], [-HALL_HALF, 0, z + TILE], [-HALL_HALF, 4, z + TILE], [-HALL_HALF, 4, z]], hazy(WALL, depth));
+    quad([[HALL_HALF, 0, z], [HALL_HALF, 0, z + TILE], [HALL_HALF, 4, z + TILE], [HALL_HALF, 4, z]], hazy(WALL, depth));
+  }
+
+  // THINGS IN THE HALL: doors, your army, the enemy army. We put them
+  // all in one list and draw the farthest first (the painter's trick).
+  const things = [];
+  doors.forEach(function (d) {
+    if (d.z > cam.z + 1 && d.z < cam.z + 95) things.push({ z: d.z, draw: function () { drawDoors(d); } });
+  });
+  // (Blobs that are out fighting aren't standing in their army any more.)
+  const busy = fight && fight.phase === 'clash' ? fight.busy : 0;
+  if (enemy.count > 0) things.push({ z: enemy.z, draw: function () { drawArmy(enemy.count - busy, 0, enemy.z, true, now, enemy.count); } });
+  if (army.count > 0) things.push({ z: army.z, draw: function () { drawArmy(army.count - busy, army.x, army.z, false, now, army.count); } });
+  if (fight && fight.phase === 'clash') {
+    fight.fighters.forEach(function (f) {
+      [false, true].forEach(function (isEnemy) {
+        const spot = fighterSpot(f, isEnemy, now);
+        things.push({ z: spot.z, draw: function () {
+          drawBlob(spot.x, spot.z, isEnemy, now + f.born);
+          // A crash! Draw a little yellow star where they hit.
+          if (spot.crash && !isEnemy) drawCrash(f.x, fight.meetZ);
+        } });
+      });
+    });
+  }
+  things.sort(function (a, b) { return b.z - a.z; });
+  things.forEach(function (t) { t.draw(); });
+
+  drawPoofs(now);
+  drawPops(now);
+  drawFightSum();
+  drawHud();
+}
+
+// A pair of doors: a see-through panel on each side, with its maths
+// written on it. Good doors are blue, bad doors are red.
+function drawDoors(d) {
+  ['left', 'right'].forEach(function (side) {
+    if (d.picked === side) return;   // you smashed through it!
+    const door = d[side];
+    const x0 = side === 'left' ? -HALL_HALF : 0, x1 = side === 'left' ? 0 : HALL_HALF;
+    const depth = d.z - cam.z;
+    ctx.globalAlpha = 0.55;
+    quad([[x0 + 0.15, 0, d.z], [x1 - 0.15, 0, d.z], [x1 - 0.15, 3.2, d.z], [x0 + 0.15, 3.2, d.z]],
+         door.good ? hazy([60, 160, 255], depth) : hazy([255, 70, 70], depth));
+    ctx.globalAlpha = 1;
+    // The writing, in the middle of the door.
+    const mid = toScreen((x0 + x1) / 2, 1.7, d.z);
+    if (mid) {
+      ctx.fillStyle = '#fff';
+      ctx.textAlign = 'center';
+      ctx.font = 'bold ' + Math.round(mid.scale * 1.3) + 'px system-ui, sans-serif';
+      ctx.fillText(door.label, mid.x, mid.y + mid.scale * 0.45);
+    }
+  });
+  // A post in the middle, between the two doors.
+  quad([[-0.15, 0, d.z], [0.15, 0, d.z], [0.15, 3.4, d.z], [-0.15, 3.4, d.z]], hazy([230, 230, 240], d.z - cam.z));
+}
+
+// AN ARMY: lots of blobs packed together in a swirly bunch. (The bunch
+// uses the "golden angle", the same trick sunflowers use to pack seeds.)
+// count: how many blobs to draw.  label: the number to write (the whole army).
+function drawArmy(count, x, z, isEnemy, now, label) {
+  const shown = Math.min(Math.max(0, count), MOST_BLOBS_DRAWN);
+  const spots = [];
+  for (let i = 0; i < shown; i++) {
+    const r = 0.26 * Math.sqrt(i);
+    const angle = i * 2.39996;
+    spots.push({
+      x: clamp(x + r * Math.cos(angle), -HALL_HALF + 0.3, HALL_HALF - 0.3),
+      z: z + (isEnemy ? 1 : -1) * Math.abs(r * Math.sin(angle)) + (isEnemy ? 0 : 0),
+      i: i,
+    });
+  }
+  spots.sort(function (a, b) { return b.z - a.z; });   // far ones first
+  spots.forEach(function (s) { drawBlob(s.x, s.z, isEnemy, now + s.i * 0.37); });
+
+  // The number. The enemy's floats above them. Yours sits on the floor
+  // just behind your army, so it never covers up the enemy.
+  const top = isEnemy ? toScreen(x, 2.2, z) : toScreen(x, 0, z - 0.26 * Math.sqrt(shown) - 0.7);
+  if (top) {
+    const text = String(label);
+    ctx.font = 'bold ' + Math.round(clamp(top.scale * 0.7, 14, 48)) + 'px system-ui, sans-serif';
+    const w = ctx.measureText(text).width + 18, h = clamp(top.scale * 0.7, 14, 48) + 10;
+    ctx.fillStyle = isEnemy ? 'rgba(200, 30, 30, 0.9)' : 'rgba(30, 110, 220, 0.9)';
+    ctx.fillRect(top.x - w / 2, top.y - h / 2, w, h);
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'center';
+    ctx.fillText(text, top.x, top.y + h * 0.3);
+  }
+}
+
+// ONE BLOB: a round body, two little feet that pitter-patter, and
+// googly eyes. Your blobs are running AWAY from you, so you see their
+// eyes poking up over the top. The enemy blobs face you, angry.
+function drawBlob(x, z, isEnemy, t) {
+  const RADIUS = 0.22;
+  const p = toScreen(x, RADIUS + 0.08, z);
+  if (!p) return;
+  const r = RADIUS * p.scale;
+  const step = Math.sin(t * 14);   // feet go up, down, up, down
+  const running = mode === 'run' || mode === 'fight';
+
+  // Feet.
+  ctx.fillStyle = isEnemy ? '#7a1010' : '#0d3f7a';
+  const footUp = running ? step * r * 0.25 : 0;
+  ctx.beginPath(); ctx.ellipse(p.x - r * 0.45, p.y + r * 0.95 - footUp, r * 0.3, r * 0.18, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(p.x + r * 0.45, p.y + r * 0.95 + footUp, r * 0.3, r * 0.18, 0, 0, Math.PI * 2); ctx.fill();
+
+  // Body (bouncing a little as it runs).
+  const bounce = running ? Math.abs(step) * r * 0.15 : 0;
+  ctx.fillStyle = isEnemy ? '#e83a3a' : '#3fa9ff';
+  ctx.beginPath(); ctx.arc(p.x, p.y - bounce, r, 0, Math.PI * 2); ctx.fill();
+  if (r < 3) return;   // too tiny to bother with eyes
+
+  // Googly eyes.
+  const eyeY = isEnemy ? p.y - bounce - r * 0.2 : p.y - bounce - r * 0.85;
+  [-1, 1].forEach(function (side) {
+    const ex = p.x + side * r * 0.38;
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(ex, eyeY, r * 0.32, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#111';
+    const wobble = Math.sin(t * 9 + side) * r * 0.08;   // googly!
+    ctx.beginPath(); ctx.arc(ex + wobble, eyeY + (isEnemy ? r * 0.08 : -r * 0.08), r * 0.15, 0, Math.PI * 2); ctx.fill();
+  });
+  if (isEnemy) {
+    // Angry eyebrows.
+    ctx.strokeStyle = '#111';
+    ctx.lineWidth = Math.max(1, r * 0.12);
+    ctx.beginPath();
+    ctx.moveTo(p.x - r * 0.65, eyeY - r * 0.45); ctx.lineTo(p.x - r * 0.15, eyeY - r * 0.25);
+    ctx.moveTo(p.x + r * 0.65, eyeY - r * 0.45); ctx.lineTo(p.x + r * 0.15, eyeY - r * 0.25);
+    ctx.stroke();
+  }
+}
+
+// CRASH: a little yellow star where two fighters bonk heads.
+function drawCrash(x, z) {
+  const spot = toScreen(x, 0.4, z);
+  if (!spot) return;
+  const r = spot.scale * 0.22;
+  ctx.fillStyle = '#ffe14d';
+  ctx.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const a = i * Math.PI / 5;
+    const len = i % 2 === 0 ? r : r * 0.45;   // points out, points in, out, in...
+    ctx.lineTo(spot.x + Math.cos(a) * len, spot.y + Math.sin(a) * len);
+  }
+  ctx.closePath();
+  ctx.fill();
+}
+
+// PUFFS: little white clouds that grow and fade where blobs pop.
+function drawPoofs(now) {
+  poofs.forEach(function (p) {
+    const age = (now - p.born) / 0.5;            // 0 = just popped, 1 = gone
+    const spot = toScreen(p.x, 0.4, p.z);
+    if (!spot) return;
+    ctx.globalAlpha = 1 - age;
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(spot.x, spot.y, spot.scale * (0.15 + age * 0.35), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  });
+}
+
+// THE MATHS OF THE FIGHT, written across the top:  57 - 27 = 30
+function drawFightSum() {
+  if (!fight || fight.phase !== 'clash') return;
+  const big = Math.max(fight.startArmy, fight.startEnemy);
+  const small = Math.min(fight.startArmy, fight.startEnemy);
+  const blueBigger = fight.startArmy > fight.startEnemy;
+  ctx.textAlign = 'center';
+  ctx.font = 'bold ' + Math.round(Math.min(W, H) * 0.08) + 'px system-ui, sans-serif';
+  ctx.fillStyle = fight.startArmy === fight.startEnemy ? '#fff' : (blueBigger ? '#5fb8ff' : '#ff6b6b');
+  ctx.fillText(big + ' − ' + small + ' = ' + (big - small), W / 2, H * 0.18);
+}
+
+// The "+5" or "x2" that pops up when you go through a door.
+function drawPops(now) {
+  pops.forEach(function (p) {
+    const age = now - p.born;
+    ctx.globalAlpha = 1 - age / 1.2;
+    ctx.fillStyle = p.good ? '#7dff9a' : '#ff6b6b';
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 64px system-ui, sans-serif';
+    ctx.fillText(p.text, W / 2, H * 0.4 - age * 80);
+    ctx.globalAlpha = 1;
+  });
+}
+
+// Words on the screen: the level, and the big messages.
+function drawHud() {
+  ctx.textAlign = 'right';
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 22px system-ui, sans-serif';
+  ctx.fillText('LEVEL ' + level, W - 16, 34);
+
+  const middle = function (big, small, color) {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+    ctx.fillRect(0, H * 0.3, W, H * 0.3);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = color;
+    ctx.font = 'bold ' + Math.round(Math.min(W, H) * 0.1) + 'px system-ui, sans-serif';
+    ctx.fillText(big, W / 2, H * 0.44);
+    ctx.fillStyle = '#fff';
+    ctx.font = Math.round(Math.min(W, H) * 0.04) + 'px system-ui, sans-serif';
+    ctx.fillText(small, W / 2, H * 0.53);
+  };
+  if (mode === 'title') {
+    middle('BLOB ARMY', 'Tap, click or press SPACE to start.  Steer: drag, mouse, or A / D', '#3fa9ff');
+  } else if (mode === 'win') {
+    middle('YOU WIN! 🎉', army.count + ' blobs left.  Tap for level ' + (level + 1), '#7dff9a');
+  } else if (mode === 'lose') {
+    let why = 'YOUR ARMY IS GONE 💀';
+    if (fight && fight.phase === 'clash') {
+      why = fight.startArmy === fight.startEnemy ? "IT'S A TIE! NOBODY WINS" : 'THE RED ARMY WINS 💀';
+    }
+    middle(why, 'Tap to try again', '#ff6b6b');
+  }
+}
+
+// ---------------------------------------------------------------------
+//  SOUNDS, made from scratch with the browser's sound machine.
+// ---------------------------------------------------------------------
+let audio = null;
+function unlockAudio() {
+  // Browsers only allow sounds after you click or tap.
+  if (audio) return;
+  try { audio = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { audio = null; }
+}
+// One note that slides from one pitch to another, then fades out.
+function beep(startPitch, endPitch, seconds, type, loudness, delay) {
+  if (!audio) return;
+  const t = audio.currentTime + (delay || 0);
+  const osc = audio.createOscillator();
+  const vol = audio.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(startPitch, t);
+  osc.frequency.exponentialRampToValueAtTime(endPitch, t + seconds);
+  vol.gain.setValueAtTime(loudness, t);
+  vol.gain.exponentialRampToValueAtTime(0.0001, t + seconds);
+  osc.connect(vol); vol.connect(audio.destination);
+  osc.start(t); osc.stop(t + seconds + 0.05);
+}
+function goodSound() { beep(500, 700, 0.12, 'square', 0.08); beep(700, 1000, 0.15, 'square', 0.08, 0.1); }
+function badSound()  { beep(300, 120, 0.35, 'sawtooth', 0.1); }
+function popSound()  { beep(500 + Math.random() * 400, 200, 0.06, 'square', 0.04); }
+function chargeSound() { beep(200, 600, 0.6, 'sawtooth', 0.06); }                 // here they come!
+function smashSound()  { beep(150, 40, 0.5, 'square', 0.15); beep(90, 30, 0.6, 'sawtooth', 0.1); }   // CRUNCH
+function bonkSound()  { beep(260 + Math.random() * 80, 160, 0.07, 'square', 0.05); }   // bonk!
+function winSound()  { [0, 0.12, 0.24, 0.4].forEach(function (d, i) { beep(520 * Math.pow(1.26, i), 520 * Math.pow(1.26, i), 0.2, 'square', 0.08, d); }); }
+function loseSound() { beep(400, 80, 0.9, 'sawtooth', 0.1); }
+
+// Remember the highest level you've beaten. ("try" in case the browser
+// won't let us save, like in some private windows.)
+function saveBest() {
+  try {
+    const best = Number(localStorage.getItem('blobArmyBest') || 0);
+    if (level > best) localStorage.setItem('blobArmyBest', String(level));
+  } catch (e) {}
+}
+
+// ---------------------------------------------------------------------
+//  THE GAME LOOP: update, draw, repeat, about 60 times a second.
+// ---------------------------------------------------------------------
+startLevel();
+let last = performance.now();
+function loop(t) {
+  const dt = Math.min(0.05, (t - last) / 1000);   // (capped, in case the tab was asleep)
+  last = t;
+  update(dt, t / 1000);
+  draw(t / 1000);
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
