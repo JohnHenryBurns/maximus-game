@@ -52,7 +52,28 @@
 //  THE NUMBERS THAT DECIDE HOW IT PLAYS. Try changing them!
 // ---------------------------------------------------------------------
 const RUN_SPEED = 9;          // how fast the army runs down the hall
-const STEER_SPEED = 9;        // how fast you slide left and right (keys)
+const STEER_SPEED = 9;        // how fast you slide left and right
+const FAST_STEER_SPEED = 25;  // ...with the FAST MOVEMENT power
+const UNLOCK_EVERYTHING = false;   // true = every skin and power is open (for testing!)
+
+// SKINS: they change how your blobs look. "unlock" = which level you
+// have to BEAT to get it. (0 = you have it from the start.)
+const SKINS = [
+  { id: 'classic', name: 'Classic', unlock: 0, body: '#3fa9ff', feet: '#0d3f7a' },
+  { id: 'ninja',   name: 'Ninja',   unlock: 1, body: '#2a2a33', feet: '#111111' },
+  { id: 'robot',   name: 'Robot',   unlock: 3, body: '#b8c2d0', feet: '#59606b' },
+  { id: 'dino',    name: 'Dino',    unlock: 5, body: '#4cc552', feet: '#226b2a' },
+  { id: 'king',    name: 'King',    unlock: 7, body: '#ffc933', feet: '#a87400' },
+];
+
+// POWERS: you can pick ONE at a time.
+const POWERS = [
+  { id: 'none',    name: 'No power',      icon: '—',   unlock: 0, about: 'Just you and your blobs' },
+  { id: 'fast',    name: 'Fast movement', icon: '⚡',  unlock: 2, about: 'Steer super fast' },
+  { id: 'shield',  name: 'Shield',        icon: '🛡️', unlock: 4, about: 'The first bad door does nothing' },
+  { id: 'double',  name: 'Double good',   icon: '✨',  unlock: 6, about: 'Good doors count twice' },
+  { id: 'hundred', name: '+100 blobs',    icon: '💯',  unlock: 8, about: 'Start every level with 100 more' },
+];
 const DOOR_PAIRS = 8;         // how many pairs of doors before the fight
 const DOOR_GAP = 32;          // how far apart the pairs of doors are
 const ENEMY_CHARGE_SPEED = 7; // how fast the red army runs at you
@@ -70,6 +91,11 @@ const DOOR_KINDS = [
   { label: '-2',  how: function (n) { return n - 2; },  good: false, chance: 3 },
   { label: '-5',  how: function (n) { return n - 5; },  good: false, chance: 2 },
   { label: '-10', how: function (n) { return n - 10; }, good: false, chance: 1 },
+  // DIVIDE doors cut your army into pieces. Math.floor rounds DOWN, because
+  // you can't have half a blob. (7 ÷ 2 = 3.5, so you get 3.)
+  { label: '÷2',  how: function (n) { return Math.floor(n / 2); }, good: false, chance: 2 },
+  { label: '÷3',  how: function (n) { return Math.floor(n / 3); }, good: false, chance: 1 },
+  { label: '÷4',  how: function (n) { return Math.floor(n / 4); }, good: false, chance: 1 },
 ];
 
 // The hall is 8 wide: from x = -4 (left wall) to x = 4 (right wall).
@@ -93,6 +119,11 @@ resize();
 // ---------------------------------------------------------------------
 let mode = 'title';       // 'title', 'run', 'fight', 'win' or 'lose'
 let level = 1;
+let skin = SKINS[0];       // the skin you're wearing
+let power = POWERS[0];     // the power you've got
+let buttons = [];          // the buttons on the screen right now (so we know what you tapped)
+let lockerFrom = 'title';  // which screen to go back to from SKINS & POWERS
+let justUnlocked = [];     // things you JUST unlocked by winning (to show on the win screen)
 let startingArmy = 1;      // how many blobs you start this level with (your leftovers from last time!)
 let army = { x: 0, z: 0, count: 1 };
 let doors = [];           // every pair of doors in this hall
@@ -118,7 +149,9 @@ function randomDoor() {
 }
 
 function startLevel() {
-  army = { x: 0, z: 0, count: startingArmy };
+  // (The +100 power gives you 100 extra blobs at the start.)
+  army = { x: 0, targetX: 0, z: 0, count: startingArmy + (power.id === 'hundred' ? 100 : 0),
+           shield: power.id === 'shield' };
   doors = [];
   pops = [];
   fight = null;
@@ -162,11 +195,21 @@ window.addEventListener('keyup', function (e) { keys[e.code] = false; });
 let dragging = false;
 function steerTo(screenX) {
   const across = screenX / W;           // 0 at the left edge, 1 at the right
-  army.x = clamp((across - 0.5) * 2 * (HALL_HALF - 0.5), -(HALL_HALF - 0.5), HALL_HALF - 0.5);
+  army.targetX = clamp((across - 0.5) * 2 * (HALL_HALF - 0.5), -(HALL_HALF - 0.5), HALL_HALF - 0.5);
 }
 canvas.addEventListener('pointerdown', function (e) {
   unlockAudio();
-  if (mode !== 'run') { pressGo(); return; }
+  if (mode !== 'run') {
+    for (const b of buttons) {
+      if (!b.locked && e.clientX >= b.x && e.clientX <= b.x + b.w && e.clientY >= b.y && e.clientY <= b.y + b.h) {
+        clickSound();
+        b.action();
+        return;
+      }
+    }
+    if (mode !== 'locker' && mode !== 'fight') pressGo();
+    return;
+  }
   dragging = true;
   steerTo(e.clientX);
 });
@@ -183,7 +226,7 @@ function pressGo() {
   // Lost? Try this level again, with the same army you started it with.
   if (mode === 'title' || mode === 'lose') { startLevel(); mode = 'run'; }
   // Won? The blobs you have LEFT march on to the next level with you.
-  else if (mode === 'win') { level++; startingArmy = army.count; startLevel(); mode = 'run'; }
+  else if (mode === 'win') { level++; startingArmy = army.count; startLevel(); mode = 'run'; justUnlocked = []; }
 }
 
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
@@ -193,10 +236,14 @@ function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 // ---------------------------------------------------------------------
 function update(dt, now) {
   if (mode === 'run') {
-    // Steering with keys.
-    if (keys.KeyA || keys.ArrowLeft)  army.x -= STEER_SPEED * dt;
-    if (keys.KeyD || keys.ArrowRight) army.x += STEER_SPEED * dt;
-    army.x = clamp(army.x, -(HALL_HALF - 0.5), HALL_HALF - 0.5);
+    // Steering. Keys move where you're aiming. Then the army slides
+    // toward where you're aiming, at the steering speed. (The FAST power
+    // makes it slide way faster.)
+    const steer = power.id === 'fast' ? FAST_STEER_SPEED : STEER_SPEED;
+    if (keys.KeyA || keys.ArrowLeft)  army.targetX -= steer * dt;
+    if (keys.KeyD || keys.ArrowRight) army.targetX += steer * dt;
+    army.targetX = clamp(army.targetX, -(HALL_HALF - 0.5), HALL_HALF - 0.5);
+    army.x += clamp(army.targetX - army.x, -steer * dt, steer * dt);
 
     // Run! (Never stop.)
     const before = army.z;
@@ -207,8 +254,21 @@ function update(dt, now) {
       if (!d.picked && before < d.z && army.z >= d.z) {
         d.picked = army.x < 0 ? 'left' : 'right';
         const door = d[d.picked];
-        army.count = Math.max(0, door.how(army.count));
-        pops.push({ text: door.label, good: door.good, born: now });
+        if (!door.good && army.shield) {
+          // SHIELD! The bad door bounces off. (But only once.)
+          army.shield = false;
+          pops.push({ text: '🛡️ BLOCKED!', good: true, born: now });
+          shieldSound();
+          continue;
+        }
+        if (door.good && power.id === 'double') {
+          // DOUBLE GOOD: go through the good door TWICE.
+          army.count = door.how(door.how(army.count));
+          pops.push({ text: door.label + ' ' + door.label + ' ✨', good: true, born: now });
+        } else {
+          army.count = Math.max(0, door.how(army.count));
+          pops.push({ text: door.label, good: door.good, born: now });
+        }
         if (door.good) goodSound(); else badSound();
         if (army.count === 0) { mode = 'lose'; loseSound(); }
       }
@@ -494,6 +554,19 @@ function drawArmy(count, x, z, isEnemy, now, label) {
   spots.sort(function (a, b) { return b.z - a.z; });   // far ones first
   spots.forEach(function (s) { drawBlob(s.x, s.z, isEnemy, now + s.i * 0.37); });
 
+  // THE SHIELD: a see-through bubble in front of your army (until it's used).
+  if (!isEnemy && army.shield && mode === 'run' && count > 0) {
+    const front = toScreen(x, 0.5, z + 0.4);
+    if (front) {
+      ctx.strokeStyle = 'rgba(120, 220, 255, 0.8)';
+      ctx.fillStyle = 'rgba(120, 220, 255, 0.15)';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.ellipse(front.x, front.y, front.scale * (0.6 + 0.26 * Math.sqrt(shown)), front.scale * 0.8, 0, 0, Math.PI * 2);
+      ctx.fill(); ctx.stroke();
+    }
+  }
+
   // The number. The enemy's floats above them. Yours sits on the floor
   // just behind your army, so it never covers up the enemy.
   const top = isEnemy ? toScreen(x, 2.2, z) : toScreen(x, 0, z - 0.26 * Math.sqrt(shown) - 0.7);
@@ -520,17 +593,27 @@ function drawBlob(x, z, isEnemy, t) {
   const step = Math.sin(t * 14);   // feet go up, down, up, down
   const running = mode === 'run' || mode === 'fight';
 
+  drawBlobAt(p.x, p.y, r, isEnemy ? null : skin, isEnemy, t, running);
+}
+
+// Draw one blob at a spot ON THE SCREEN, r pixels big, in a skin.
+// (The SKINS & POWERS screen uses this too, to show what each skin looks like.)
+function drawBlobAt(px, py, r, look, isEnemy, t, running) {
+  const p = { x: px, y: py };
+  const step = Math.sin(t * 14);   // feet go up, down, up, down
+
   // Feet.
-  ctx.fillStyle = isEnemy ? '#7a1010' : '#0d3f7a';
+  ctx.fillStyle = isEnemy ? '#7a1010' : look.feet;
   const footUp = running ? step * r * 0.25 : 0;
   ctx.beginPath(); ctx.ellipse(p.x - r * 0.45, p.y + r * 0.95 - footUp, r * 0.3, r * 0.18, 0, 0, Math.PI * 2); ctx.fill();
   ctx.beginPath(); ctx.ellipse(p.x + r * 0.45, p.y + r * 0.95 + footUp, r * 0.3, r * 0.18, 0, 0, Math.PI * 2); ctx.fill();
 
   // Body (bouncing a little as it runs).
   const bounce = running ? Math.abs(step) * r * 0.15 : 0;
-  ctx.fillStyle = isEnemy ? '#e83a3a' : '#3fa9ff';
+  ctx.fillStyle = isEnemy ? '#e83a3a' : look.body;
   ctx.beginPath(); ctx.arc(p.x, p.y - bounce, r, 0, Math.PI * 2); ctx.fill();
   if (r < 3) return;   // too tiny to bother with eyes
+  if (!isEnemy) drawSkinExtras(p.x, p.y - bounce, r, look);
 
   // Googly eyes.
   const eyeY = isEnemy ? p.y - bounce - r * 0.2 : p.y - bounce - r * 0.85;
@@ -550,6 +633,52 @@ function drawBlob(x, z, isEnemy, t) {
     ctx.moveTo(p.x - r * 0.65, eyeY - r * 0.45); ctx.lineTo(p.x - r * 0.15, eyeY - r * 0.25);
     ctx.moveTo(p.x + r * 0.65, eyeY - r * 0.45); ctx.lineTo(p.x + r * 0.15, eyeY - r * 0.25);
     ctx.stroke();
+  }
+}
+
+// THE EXTRA BITS that make each skin special.
+function drawSkinExtras(x, y, r, look) {
+  if (look.id === 'ninja') {
+    // A red headband, with two tails flapping out the back.
+    ctx.fillStyle = '#e02424';
+    ctx.save();
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.clip();   // only inside the body
+    ctx.fillRect(x - r, y - r * 0.45, r * 2, r * 0.28);
+    ctx.restore();
+    ctx.strokeStyle = '#e02424';
+    ctx.lineWidth = Math.max(1, r * 0.14);
+    ctx.beginPath();
+    ctx.moveTo(x + r * 0.1, y - r * 0.3); ctx.lineTo(x + r * 0.5, y + r * 0.3);
+    ctx.moveTo(x - r * 0.1, y - r * 0.3); ctx.lineTo(x - r * 0.3, y + r * 0.4);
+    ctx.stroke();
+  } else if (look.id === 'robot') {
+    // An antenna with a blinking red light on top, and a bolt.
+    ctx.strokeStyle = '#59606b';
+    ctx.lineWidth = Math.max(1, r * 0.1);
+    ctx.beginPath(); ctx.moveTo(x, y - r); ctx.lineTo(x, y - r * 1.55); ctx.stroke();
+    ctx.fillStyle = Math.sin(performance.now() / 200) > 0 ? '#ff3030' : '#801010';
+    ctx.beginPath(); ctx.arc(x, y - r * 1.6, r * 0.15, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#59606b';
+    ctx.beginPath(); ctx.arc(x, y + r * 0.2, r * 0.12, 0, Math.PI * 2); ctx.fill();
+  } else if (look.id === 'dino') {
+    // A row of spikes down the middle of its back.
+    ctx.fillStyle = '#e8f03a';
+    [-0.75, -0.25, 0.25].forEach(function (k) {
+      const sy = y + k * r;
+      ctx.beginPath();
+      ctx.moveTo(x - r * 0.18, sy + r * 0.15); ctx.lineTo(x, sy - r * 0.2); ctx.lineTo(x + r * 0.18, sy + r * 0.15);
+      ctx.closePath(); ctx.fill();
+    });
+  } else if (look.id === 'king') {
+    // A crown, with a red jewel.
+    const cw = r * 0.55, top = y - r * 1.45, base = y - r * 0.9;
+    ctx.fillStyle = '#ffdf3a';
+    ctx.beginPath();
+    ctx.moveTo(x - cw, base); ctx.lineTo(x - cw, top + r * 0.15); ctx.lineTo(x - cw * 0.5, top + r * 0.3);
+    ctx.lineTo(x, top); ctx.lineTo(x + cw * 0.5, top + r * 0.3); ctx.lineTo(x + cw, top + r * 0.15);
+    ctx.lineTo(x + cw, base); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#e02424';
+    ctx.beginPath(); ctx.arc(x, base - r * 0.15, r * 0.1, 0, Math.PI * 2); ctx.fill();
   }
 }
 
@@ -611,10 +740,16 @@ function drawPops(now) {
 
 // Words on the screen: the level, and the big messages.
 function drawHud() {
+  buttons = [];
+  if (mode === 'locker') { drawLocker(); return; }
   ctx.textAlign = 'right';
   ctx.fillStyle = '#fff';
   ctx.font = 'bold 22px system-ui, sans-serif';
   ctx.fillText('LEVEL ' + level, W - 16, 34);
+  if (power.id !== 'none') {
+    ctx.font = 'bold 16px system-ui, sans-serif';
+    ctx.fillText(power.icon + ' ' + power.name, W - 16, 58);
+  }
 
   const middle = function (big, small, color) {
     ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
@@ -628,16 +763,137 @@ function drawHud() {
     ctx.fillText(small, W / 2, H * 0.53);
   };
   if (mode === 'title') {
-    middle('BLOB ARMY', 'Tap, click or press SPACE to start.  Steer: drag, mouse, or A / D', '#3fa9ff');
+    middle('BLOB ARMY', 'Steer: drag, mouse, or A / D', '#3fa9ff');
+    menuButtons('▶ PLAY');
   } else if (mode === 'win') {
-    middle('YOU WIN! 🎉', 'Your ' + army.count + ' blobs march on to level ' + (level + 1) + '. Tap to go!', '#7dff9a');
+    middle('YOU WIN! 🎉', 'Your ' + army.count + ' blobs march on to level ' + (level + 1) + '!', '#7dff9a');
+    if (justUnlocked.length) {
+      ctx.fillStyle = '#ffe14d';
+      ctx.font = 'bold ' + Math.round(Math.min(W, H) * 0.04) + 'px system-ui, sans-serif';
+      ctx.fillText('NEW! ' + justUnlocked.join(', '), W / 2, H * 0.58);
+    }
+    menuButtons('▶ NEXT LEVEL');
   } else if (mode === 'lose') {
     let why = 'YOUR ARMY IS GONE 💀';
     if (fight && fight.phase === 'clash') {
       why = fight.startArmy === fight.startEnemy ? "IT'S A TIE! NOBODY WINS" : 'THE RED ARMY WINS 💀';
     }
-    middle(why, 'Tap to try again', '#ff6b6b');
+    middle(why, '', '#ff6b6b');
+    menuButtons('↻ TRY AGAIN');
   }
+}
+
+// One button. Grey with a lock if you haven't unlocked it yet.
+function drawButton(b) {
+  ctx.fillStyle = b.locked ? 'rgba(60, 60, 70, 0.9)' : (b.picked ? '#ffe14d' : 'rgba(30, 25, 60, 0.92)');
+  ctx.strokeStyle = b.locked ? '#666' : (b.color || '#fff');
+  ctx.lineWidth = 3;
+  ctx.fillRect(b.x, b.y, b.w, b.h);
+  ctx.strokeRect(b.x, b.y, b.w, b.h);
+  if (b.label) {
+    ctx.fillStyle = b.picked ? '#111' : (b.locked ? '#999' : '#fff');
+    ctx.textAlign = 'center';
+    ctx.font = 'bold ' + Math.round(b.h * 0.38) + 'px system-ui, sans-serif';
+    ctx.fillText(b.label, b.x + b.w / 2, b.y + b.h * 0.63);
+  }
+  buttons.push(b);
+}
+
+// The two buttons under the big message: GO, and SKINS & POWERS.
+function menuButtons(goLabel) {
+  const bw = Math.min(230, W * 0.42), bh = 54, gap = 14, y = H * 0.64;
+  drawButton({ label: goLabel, color: '#7dff9a', x: W / 2 - bw - gap / 2, y: y, w: bw, h: bh, action: pressGo });
+  drawButton({ label: '🎨 SKINS & POWERS', color: '#ffe14d', x: W / 2 + gap / 2, y: y, w: bw, h: bh,
+               action: function () { lockerFrom = mode; mode = 'locker'; } });
+}
+
+// Have you beaten enough levels to get this skin or power?
+function bestBeaten() {
+  try { return Number(localStorage.getItem('blobArmyBest') || 0); } catch (e) { return 0; }
+}
+function isUnlocked(thing) { return UNLOCK_EVERYTHING || thing.unlock <= bestBeaten(); }
+
+// THE SKINS & POWERS SCREEN: a row of skins, a row of powers. Tap one
+// to pick it. Locked ones show which level you need to beat.
+function drawLocker() {
+  ctx.fillStyle = 'rgba(15, 10, 35, 0.92)';
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#fff';
+  const small = Math.min(W, H);
+  ctx.font = 'bold ' + Math.round(small * 0.06) + 'px system-ui, sans-serif';
+  ctx.fillText('🎨 SKINS & POWERS', W / 2, H * 0.1);
+
+  const cardW = Math.min(150, (W - 40) / 5 - 10), gap = 10;
+  const rowLeft = (W - (cardW * 5 + gap * 4)) / 2;
+  const now = performance.now() / 1000;
+
+  // SKINS.
+  ctx.font = 'bold ' + Math.round(small * 0.035) + 'px system-ui, sans-serif';
+  ctx.fillStyle = '#9fd4ff';
+  ctx.fillText('SKINS', W / 2, H * 0.18);
+  const skinH = Math.min(cardW * 1.2, H * 0.3);
+  SKINS.forEach(function (sk, i) {
+    const open = isUnlocked(sk);
+    const b = { x: rowLeft + i * (cardW + gap), y: H * 0.21, w: cardW, h: skinH,
+                locked: !open, picked: skin === sk,
+                action: function () { skin = sk; saveChoice('blobArmySkin', sk.id); } };
+    drawButton(b);
+    if (open) drawBlobAt(b.x + cardW / 2, b.y + skinH * 0.48, cardW * 0.2, sk, false, now, true);
+    ctx.fillStyle = b.picked ? '#111' : (open ? '#fff' : '#999');
+    ctx.font = 'bold ' + Math.round(cardW * 0.12) + 'px system-ui, sans-serif';
+    ctx.fillText(open ? sk.name : '🔒 beat level ' + sk.unlock, b.x + cardW / 2, b.y + skinH * 0.9);
+  });
+
+  // POWERS.
+  ctx.font = 'bold ' + Math.round(small * 0.035) + 'px system-ui, sans-serif';
+  ctx.fillStyle = '#ffe9a0';
+  ctx.fillText('POWERS (pick one)', W / 2, H * 0.21 + skinH + 34);
+  const powerY = H * 0.21 + skinH + 46, powerH = Math.min(cardW * 1.1, H * 0.26);
+  POWERS.forEach(function (pw, i) {
+    const open = isUnlocked(pw);
+    const b = { x: rowLeft + i * (cardW + gap), y: powerY, w: cardW, h: powerH,
+                locked: !open, picked: power === pw,
+                action: function () { power = pw; saveChoice('blobArmyPower', pw.id); } };
+    drawButton(b);
+    ctx.fillStyle = b.picked ? '#111' : (open ? '#fff' : '#999');
+    ctx.font = Math.round(cardW * 0.28) + 'px system-ui, sans-serif';
+    ctx.fillText(open ? pw.icon : '🔒', b.x + cardW / 2, b.y + powerH * 0.38);
+    ctx.font = 'bold ' + Math.round(cardW * 0.11) + 'px system-ui, sans-serif';
+    ctx.fillText(open ? pw.name : 'beat level ' + pw.unlock, b.x + cardW / 2, b.y + powerH * 0.62);
+    if (open) {
+      ctx.font = Math.round(cardW * 0.085) + 'px system-ui, sans-serif';
+      wrapText(pw.about, b.x + cardW / 2, b.y + powerH * 0.78, cardW - 10, cardW * 0.1);
+    }
+  });
+
+  // BACK.
+  drawButton({ label: '← BACK', x: W / 2 - 90, y: Math.min(H - 64, powerY + powerH + 18), w: 180, h: 48,
+               action: function () { mode = lockerFrom; } });
+}
+
+// Write words in a box, starting a new line when they don't fit.
+function wrapText(text, x, y, maxWidth, lineHeight) {
+  let line = '';
+  text.split(' ').forEach(function (word) {
+    const test = line ? line + ' ' + word : word;
+    if (ctx.measureText(test).width > maxWidth && line) {
+      ctx.fillText(line, x, y);
+      line = word; y += lineHeight;
+    } else line = test;
+  });
+  ctx.fillText(line, x, y);
+}
+
+// Remember what you picked, for next time.
+function saveChoice(name, id) { try { localStorage.setItem(name, id); } catch (e) {} }
+function loadChoices() {
+  try {
+    const sk = SKINS.find(function (k) { return k.id === localStorage.getItem('blobArmySkin'); });
+    const pw = POWERS.find(function (k) { return k.id === localStorage.getItem('blobArmyPower'); });
+    if (sk && isUnlocked(sk)) skin = sk;
+    if (pw && isUnlocked(pw)) power = pw;
+  } catch (e) {}
 }
 
 // ---------------------------------------------------------------------
@@ -669,6 +925,8 @@ function popSound()  { beep(500 + Math.random() * 400, 200, 0.06, 'square', 0.04
 function chargeSound() { beep(200, 600, 0.6, 'sawtooth', 0.06); }                 // here they come!
 function smashSound()  { beep(150, 40, 0.5, 'square', 0.15); beep(90, 30, 0.6, 'sawtooth', 0.1); }   // CRUNCH
 function bonkSound()  { beep(260 + Math.random() * 80, 160, 0.07, 'square', 0.05); }   // bonk!
+function shieldSound() { beep(900, 1400, 0.25, 'sine', 0.1); beep(1400, 900, 0.25, 'sine', 0.06, 0.1); }   // bwiing!
+function clickSound()  { beep(700, 700, 0.04, 'square', 0.05); }
 function winSound()  { [0, 0.12, 0.24, 0.4].forEach(function (d, i) { beep(520 * Math.pow(1.26, i), 520 * Math.pow(1.26, i), 0.2, 'square', 0.08, d); }); }
 function loseSound() { beep(400, 80, 0.9, 'sawtooth', 0.1); }
 
@@ -677,13 +935,20 @@ function loseSound() { beep(400, 80, 0.9, 'sawtooth', 0.1); }
 function saveBest() {
   try {
     const best = Number(localStorage.getItem('blobArmyBest') || 0);
-    if (level > best) localStorage.setItem('blobArmyBest', String(level));
+    if (level > best) {
+      localStorage.setItem('blobArmyBest', String(level));
+      // Did beating this level unlock anything?
+      justUnlocked = SKINS.concat(POWERS)
+        .filter(function (t) { return t.unlock === level; })
+        .map(function (t) { return (t.icon ? t.icon + ' ' : '🎨 ') + t.name; });
+    }
   } catch (e) {}
 }
 
 // ---------------------------------------------------------------------
 //  THE GAME LOOP: update, draw, repeat, about 60 times a second.
 // ---------------------------------------------------------------------
+loadChoices();
 startLevel();
 let last = performance.now();
 function loop(t) {
