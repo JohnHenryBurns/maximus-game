@@ -1,0 +1,760 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <title>Test Subject 1</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
+    canvas { display: block; width: 100vw; height: 100vh; touch-action: none; }
+
+    /* The same "back to the arcade" pill every game has, in the same corner. */
+    a.arcade-pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      font: 600 13px system-ui, -apple-system, "Segoe UI", sans-serif;
+      color: #ffffff; text-decoration: none;
+      background: rgba(0, 0, 0, 0.55);
+      border: 1px solid rgba(255, 255, 255, 0.5);
+      padding: 7px 13px; border-radius: 999px;
+      position: fixed; z-index: 10;
+      top: calc(8px + env(safe-area-inset-top, 0px));
+      left: calc(10px + env(safe-area-inset-left, 0px));
+      -webkit-tap-highlight-color: transparent;
+    }
+  </style>
+</head>
+<body>
+<a id="back" class="arcade-pill" href="index.html"><span>&larr;</span>Arcade</a>
+<canvas id="show"></canvas>
+<script>
+/* The show grabs every tap, which would swallow a tap on the Arcade pill.
+   So the pill handles its own taps first and stops them going any further. */
+(function () {
+  var pill = document.getElementById('back');
+  var go = function (e) { e.stopPropagation(); e.preventDefault(); location.href = 'index.html'; };
+  ['click', 'touchend'].forEach(function (t) { pill.addEventListener(t, go, { passive: false }); });
+  ['mousedown', 'touchstart', 'pointerdown'].forEach(function (t) {
+    pill.addEventListener(t, function (e) { e.stopPropagation(); }, { passive: false });
+  });
+})();
+</script>
+<script>
+// =====================================================================
+//  TEST SUBJECT 1  -  a cartoon by Max
+//
+//  A cartoon is just pictures that change a tiny bit, really fast.
+//  Every frame we ask: "how many seconds into the show are we?"
+//  and then draw what the scene should look like at that moment.
+// =====================================================================
+
+const canvas = document.getElementById('show');
+const ctx = canvas.getContext('2d');
+
+// We draw everything on a pretend "stage" that is always 1600 wide and
+// 900 tall (the same shape as a TV). Then we stretch the stage to fit
+// whatever screen you're watching on: a laptop, a phone, anything.
+const STAGE_W = 1600;
+const STAGE_H = 900;
+let W, H, dpr, stageScale, stageX, stageY;
+
+function resize() {
+  dpr = window.devicePixelRatio || 1;
+  W = window.innerWidth;
+  H = window.innerHeight;
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  stageScale = Math.min(W / STAGE_W, H / STAGE_H);
+  stageX = (W - STAGE_W * stageScale) / 2;   // black bars on the sides...
+  stageY = (H - STAGE_H * stageScale) / 2;   // ...or on the top and bottom
+}
+window.addEventListener('resize', resize);
+resize();
+
+// Little maths helpers.
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+function lerp(a, b, u) { return a + (b - a) * u; }                 // "go u of the way from a to b"
+function ease(u) { u = clamp(u, 0, 1); return u * u * (3 - 2 * u); } // starts slow, ends slow: smooth!
+
+// ---------------------------------------------------------------------
+//  SOUNDS. Made by the computer, no sound files.
+// ---------------------------------------------------------------------
+let audio = null;
+function startAudio() {
+  if (!audio) {
+    try { audio = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { return; }
+    // The lab machine HUMS the whole time, low and creepy.
+    const hum = audio.createOscillator();
+    const filter = audio.createBiquadFilter();
+    const vol = audio.createGain();
+    hum.type = 'sawtooth';
+    hum.frequency.value = 55;
+    filter.type = 'lowpass';
+    filter.frequency.value = 180;
+    vol.gain.value = 0.05;
+    hum.connect(filter).connect(vol).connect(audio.destination);
+    hum.start();
+  }
+  audio.resume();
+}
+
+// One beep that slides from one pitch to another.
+function beep(fromPitch, toPitch, seconds, wave, volume, wait) {
+  if (!audio) return;
+  const start = audio.currentTime + (wait || 0);
+  const osc = audio.createOscillator();
+  const vol = audio.createGain();
+  osc.type = wave;
+  osc.frequency.setValueAtTime(fromPitch, start);
+  osc.frequency.exponentialRampToValueAtTime(toPitch, start + seconds);
+  vol.gain.setValueAtTime(volume, start);
+  vol.gain.exponentialRampToValueAtTime(0.0001, start + seconds);
+  osc.connect(vol).connect(audio.destination);
+  osc.start(start);
+  osc.stop(start + seconds + 0.05);
+}
+
+// THUNDER is just random noise (like TV static) with the high bits taken out.
+function thunderSound() {
+  if (!audio) return;
+  const seconds = 2.5;
+  const noise = audio.createBuffer(1, audio.sampleRate * seconds, audio.sampleRate);
+  const data = noise.getChannelData(0);
+  for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+  const source = audio.createBufferSource();
+  source.buffer = noise;
+  const filter = audio.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.frequency.value = 350;
+  const vol = audio.createGain();
+  vol.gain.setValueAtTime(0.9, audio.currentTime);
+  vol.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + seconds);
+  source.connect(filter).connect(vol).connect(audio.destination);
+  source.start();
+}
+
+function clickSound()    { beep(2400, 1800, 0.05, 'square', 0.08); }                   // glasses: click!
+function bubbleSound()   { beep(400 + Math.random() * 500, 900 + Math.random() * 600, 0.07, 'sine', 0.04); }
+function screenOnSound() { beep(200, 1600, 0.4, 'square', 0.04); beep(60, 60, 0.6, 'sawtooth', 0.05); }
+function talkBlip(who) {
+  if (englishVoices().length) return;   // a real voice is talking, so no blips
+  // No real voices on this computer? Then every character beeps at their own pitch.
+  if (who === 'THE SCIENTIST') beep(110 + Math.random() * 40, 90, 0.07, 'square', 0.05);
+}
+// Dun... dun... DUNNNN!
+function stingSound() {
+  beep(98, 98, 0.35, 'sawtooth', 0.12, 0);
+  beep(92, 92, 0.35, 'sawtooth', 0.12, 0.45);
+  beep(73, 62, 1.8, 'sawtooth', 0.14, 0.9);
+}
+
+// ---------------------------------------------------------------------
+//  REAL TALKING VOICES.
+//
+//  Browsers come with talking voices built in ("speech synthesis"): you
+//  give it words and it reads them out loud. Every computer has different
+//  voices, so each character has a list of favourites, best first, and
+//  uses the first one this computer has.
+//    - "Natural" voices (in Edge) sound like real people.
+//    - "Google" voices are in Chrome. "Daniel" is on iPhones and iPads.
+//    - "David" and "Mark" are old Windows voices that sound a bit robot-y.
+//
+//  pitch: how high or low (1 is normal). Go too low and it sounds like a robot!
+//  rate:  how fast it talks (1 is normal, 0.8 is slow and dramatic).
+// ---------------------------------------------------------------------
+const VOICES = {
+  'THE SCIENTIST': {
+    favourites: ['Ryan Online (Natural)', 'Thomas Online (Natural)', 'Google UK English Male',
+                 'Daniel', 'Christopher Online (Natural)', 'Natural', 'George', 'David'],
+    pitch: 0.85,
+    rate: 0.85,
+  },
+  // The narrator (lines with no name) gets a deep "movie trailer" voice.
+  '': {
+    favourites: ['Guy Online (Natural)', 'Christopher Online (Natural)', 'Eric Online (Natural)',
+                 'Natural', 'Google US English', 'Mark', 'David'],
+    pitch: 0.9,
+    rate: 0.85,
+  },
+};
+
+function englishVoices() {
+  if (!window.speechSynthesis) return [];
+  return window.speechSynthesis.getVoices().filter(function (v) { return v.lang.indexOf('en') === 0; });
+}
+function pickVoice(favourites) {
+  const english = englishVoices();
+  for (const name of favourites) {
+    const found = english.find(function (v) { return v.name.indexOf(name) !== -1; });
+    if (found) return found;
+  }
+  return english[0] || null;   // no favourites? any English voice will do.
+}
+// The list of voices loads a moment after the page does, so ask for it now.
+if (window.speechSynthesis) window.speechSynthesis.getVoices();
+
+let voiceTalking = false;   // is the scientist's voice making sound RIGHT NOW?
+
+function sayOutLoud(line) {
+  if (!window.speechSynthesis) return;     // some browsers can't talk. that's OK.
+  const who = VOICES[line.who] || VOICES[''];
+  // Lowercase, because some voices spell out CAPITALS letter by letter: "R-E-A-D-Y".
+  const words = new SpeechSynthesisUtterance(line.say.toLowerCase());
+  const voice = pickVoice(who.favourites);
+  if (voice) { words.voice = voice; words.lang = voice.lang; }
+  words.pitch = who.pitch;
+  words.rate = who.rate;
+  // The mouth moves only while the voice is really talking.
+  words.onstart = function () { voiceTalking = line.who === 'THE SCIENTIST'; };
+  words.onend = function () { voiceTalking = false; };
+  words.onerror = function () { voiceTalking = false; };
+  window.speechSynthesis.resume();         // in case it got stuck on "pause"
+  window.speechSynthesis.speak(words);
+}
+function stopTalking() {
+  voiceTalking = false;
+  if (window.speechSynthesis) window.speechSynthesis.cancel();
+}
+
+// ---------------------------------------------------------------------
+//  THE EPISODE, shot by shot.
+//
+//  A "shot" is one bit of the cartoon from one camera. Each shot has:
+//    length: how many seconds it lasts
+//    cam:    where the camera starts and ends ({x, y} = what it looks at,
+//            zoom = how close; 1 is the whole lab, 3 is a close-up)
+//    lines:  who says what, and when (in seconds from the start of the shot)
+//    sounds: sound effects, and when
+//    draw:   draws the picture.  t = seconds into this shot.
+//
+//  Want to change what someone says? Just change the words in "say"!
+// ---------------------------------------------------------------------
+const SHOTS = [
+  { // 1. Somewhere... in a secret lab...
+    length: 6,
+    cam: [{ x: 330, y: 450, zoom: 1.8 }, { x: 800, y: 450, zoom: 1 }],
+    lines: [{ at: 0.8, who: '', say: 'Somewhere... in a secret lab...' }],
+    sounds: [],
+    draw: function (t) {
+      drawLab(t, { screen: 0 });
+      drawScientist(t, { glasses: 0, grin: 0, hands: 'down' });
+    },
+  },
+  { // 2. Click! The glasses light up.
+    length: 7,
+    cam: [{ x: 800, y: 470, zoom: 1.15 }],
+    lines: [{ at: 1.4, who: 'THE SCIENTIST', say: 'Hehehe... At last. Everything is READY.' }],
+    sounds: [{ at: 0.6, play: clickSound }],
+    draw: function (t) {
+      drawLab(t, { screen: 0 });
+      drawScientist(t, { glasses: ease((t - 0.6) / 0.3), grin: ease((t - 1.2) / 0.5),
+                         hands: t > 1.5 ? 'rub' : 'down' });
+    },
+  },
+  { // 3. Close-up on the face.
+    length: 6.5,
+    cam: [{ x: 800, y: 445, zoom: 2.6 }, { x: 800, y: 440, zoom: 2.9 }],
+    lines: [{ at: 0.3, who: 'THE SCIENTIST', say: 'The tubes are bubbling. The machine is humming.' }],
+    sounds: [],
+    draw: function (t) {
+      drawLab(t, { screen: 0 });
+      drawScientist(t, { glasses: 1, grin: 1, hands: 'rub' });
+    },
+  },
+  { // 4. The screen turns on... and the scientist points at it.
+    length: 7,
+    cam: [{ x: 950, y: 400, zoom: 1.3 }, { x: 1040, y: 380, zoom: 1.4 }],
+    lines: [{ at: 2, who: 'THE SCIENTIST', say: 'Now... bring me...' }],
+    sounds: [{ at: 0.8, play: screenOnSound }],
+    draw: function (t) {
+      drawLab(t, { screen: t > 0.8 ? flicker(t - 0.8) : 0 });
+      drawScientist(t, { glasses: 1, grin: 1, hands: t > 1.5 ? 'point' : 'rub' });
+    },
+  },
+  { // 5. SUPER close-up... and LIGHTNING!
+    length: 4.5,
+    cam: [{ x: 800, y: 428, zoom: 4.5 }, { x: 800, y: 428, zoom: 5.5 }],
+    lines: [{ at: 0.3, who: 'THE SCIENTIST', say: '...TEST SUBJECT 1!!' }],
+    sounds: [{ at: 2.3, play: thunderSound }],
+    draw: function (t) {
+      drawLab(t, { screen: 1 });
+      drawScientist(t, { glasses: 1, grin: 1, hands: 'rub' });
+      drawLightning(t - 2.3);
+    },
+  },
+  { // 6. The title!
+    length: 6,
+    cam: [{ x: 800, y: 450, zoom: 1 }],
+    lines: [],
+    sounds: [{ at: 0.2, play: stingSound }],
+    draw: function (t) { drawTitleCard(t); },
+  },
+];
+
+// How long is the whole episode? Add up every shot.
+const EPISODE_LENGTH = SHOTS.reduce(function (sum, shot) { return sum + shot.length; }, 0);
+
+// Which shot is on at this moment, and how far into it are we?
+function findShot(time) {
+  let start = 0;
+  for (const shot of SHOTS) {
+    if (time < start + shot.length) return { shot: shot, t: time - start, start: start };
+    start += shot.length;
+  }
+  const last = SHOTS[SHOTS.length - 1];
+  return { shot: last, t: last.length, start: EPISODE_LENGTH - last.length };
+}
+
+// ---------------------------------------------------------------------
+//  DRAWING THE LAB.
+// ---------------------------------------------------------------------
+function drawLab(t, look) {
+  // The back wall: dark purple, darker at the bottom.
+  const wall = ctx.createLinearGradient(0, 0, 0, 700);
+  wall.addColorStop(0, '#1d1636');
+  wall.addColorStop(1, '#0c0918');
+  ctx.fillStyle = wall;
+  ctx.fillRect(-400, -200, STAGE_W + 800, 900);
+  // Metal panels on the wall.
+  ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+  ctx.lineWidth = 3;
+  for (let x = -400; x < STAGE_W + 400; x += 160) {
+    ctx.beginPath(); ctx.moveTo(x, -200); ctx.lineTo(x, 700); ctx.stroke();
+  }
+  // The floor.
+  ctx.fillStyle = '#08070f';
+  ctx.fillRect(-400, 700, STAGE_W + 800, 400);
+  ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+  for (let y = 720; y < 1000; y += 40) {
+    ctx.beginPath(); ctx.moveTo(-400, y); ctx.lineTo(STAGE_W + 400, y); ctx.stroke();
+  }
+
+  drawMachine(t);
+  drawTubes(t);
+  drawScreen(t, look.screen);
+  drawPanel(t);
+}
+
+// THE GIANT MACHINE: a big glowing ring right behind the scientist.
+// Nobody knows what it does yet...
+function drawMachine(t) {
+  const cx = 800, cy = 380, r = 240;
+  const pulse = 0.5 + 0.5 * Math.sin(t * 2);
+  ctx.lineWidth = 34;
+  ctx.strokeStyle = '#2a2342';
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+  // The glowing purple inside of the ring.
+  ctx.save();
+  ctx.shadowColor = '#b066ff';
+  ctx.shadowBlur = 30 + pulse * 20;
+  ctx.lineWidth = 10;
+  ctx.strokeStyle = 'rgba(176,102,255,' + (0.45 + pulse * 0.3) + ')';
+  ctx.beginPath(); ctx.arc(cx, cy, r - 22, 0, Math.PI * 2); ctx.stroke();
+  ctx.restore();
+  // Bolts around the ring.
+  ctx.fillStyle = '#4a4068';
+  for (let i = 0; i < 12; i++) {
+    const a = i / 12 * Math.PI * 2;
+    ctx.beginPath(); ctx.arc(cx + Math.cos(a) * r, cy + Math.sin(a) * r, 7, 0, Math.PI * 2); ctx.fill();
+  }
+  // Its legs, down to the floor.
+  ctx.fillStyle = '#1f1a33';
+  ctx.fillRect(cx - 200, 560, 40, 150);
+  ctx.fillRect(cx + 160, 560, 40, 150);
+}
+
+// THREE TUBES full of bubbling green goo.
+function drawTubes(t) {
+  for (let i = 0; i < 3; i++) {
+    const x = 90 + i * 150, top = 250, bottom = 690, w = 100;
+    // A green glow on the floor underneath.
+    const glow = ctx.createRadialGradient(x + w / 2, 700, 10, x + w / 2, 700, 160);
+    glow.addColorStop(0, 'rgba(80,255,140,0.25)');
+    glow.addColorStop(1, 'rgba(80,255,140,0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(x - 120, 600, w + 240, 200);
+    // The goo.
+    ctx.save();
+    ctx.shadowColor = '#5dff8f';
+    ctx.shadowBlur = 40;
+    ctx.fillStyle = 'rgba(60,230,120,0.55)';
+    ctx.fillRect(x, top + 50, w, bottom - top - 50);
+    ctx.restore();
+    // BUBBLES. Each one floats up, and when it reaches the top it starts
+    // again at the bottom. (The % sign does the "start again" part.)
+    ctx.fillStyle = 'rgba(210,255,220,0.8)';
+    for (let k = 0; k < 8; k++) {
+      const speed = 60 * (1 + (k % 3) * 0.4);
+      const rise = (t * speed + k * 53 + i * 91) % (bottom - top - 60);
+      const bx = x + 15 + ((k * 37 + i * 20) % 70);
+      ctx.beginPath(); ctx.arc(bx, bottom - rise, 4 + (k % 3) * 2, 0, Math.PI * 2); ctx.fill();
+    }
+    // The glass, and the metal caps on the top and bottom.
+    ctx.strokeStyle = 'rgba(200,255,230,0.35)';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(x, top, w, bottom - top);
+    ctx.fillStyle = '#2b2740';
+    ctx.fillRect(x - 10, top - 25, w + 20, 30);
+    ctx.fillRect(x - 10, bottom - 5, w + 20, 25);
+  }
+}
+
+// The screen flickers when it first turns on: on, off, on, off... ON.
+function flicker(t) {
+  if (t > 0.6) return 1;
+  return Math.floor(t * 20) % 3 === 0 ? 0.2 : 1;
+}
+
+// THE SCREEN on the wall. When it's on, it shows the mystery person.
+function drawScreen(t, on) {
+  const x = 1150, y = 160, w = 330, h = 220;
+  ctx.fillStyle = '#2b2740';
+  ctx.fillRect(x - 14, y - 14, w + 28, h + 28);   // the frame
+  ctx.fillStyle = '#05060a';
+  ctx.fillRect(x, y, w, h);
+  if (on <= 0) return;
+  ctx.save();
+  ctx.globalAlpha = on;
+  ctx.shadowColor = '#3fe0ff';
+  ctx.shadowBlur = 40;
+  ctx.fillStyle = '#0a3a4a';
+  ctx.fillRect(x, y, w, h);
+  ctx.shadowBlur = 0;
+  // The mystery person: just a shape. Who could it be?
+  ctx.fillStyle = '#3fe0ff';
+  ctx.beginPath(); ctx.arc(x + w / 2, y + 85, 36, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(x + w / 2, y + 175, 70, 50, 0, Math.PI, 0); ctx.fill();
+  ctx.fillStyle = '#0a3a4a';
+  ctx.font = 'bold 50px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('?', x + w / 2, y + 103);
+  // The words blink on and off.
+  if (Math.floor(t * 2) % 2 === 0) {
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 26px monospace';
+    ctx.fillText('TEST SUBJECT 1', x + w / 2, y + h - 14);
+  }
+  // Stripy TV lines.
+  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  for (let sy = y; sy < y + h; sy += 6) ctx.fillRect(x, sy, w, 2);
+  ctx.restore();
+}
+
+// The control panel, with blinky lights.
+function drawPanel(t) {
+  ctx.fillStyle = '#1a1628';
+  ctx.fillRect(1120, 560, 400, 140);
+  ctx.fillStyle = '#2b2740';
+  ctx.fillRect(1110, 545, 420, 20);
+  const colors = ['#ff4d4d', '#5dff8f', '#ffd24d'];
+  for (let i = 0; i < 14; i++) {
+    const lightX = 1160 + (i % 7) * 52, lightY = 605 + Math.floor(i / 7) * 50;
+    const on = Math.floor(t * 2 + i * 7.3) % 3 !== 0;   // each light blinks at its own time
+    ctx.fillStyle = on ? colors[i % 3] : '#333';
+    ctx.beginPath(); ctx.arc(lightX, lightY, 10, 0, Math.PI * 2); ctx.fill();
+  }
+}
+
+// ---------------------------------------------------------------------
+//  THE MYSTERIOUS SCIENTIST.
+//  We only ever see their shadow... plus their glasses and their grin.
+//    look.glasses: 0 = dark, 1 = glowing
+//    look.grin:    0 = no grin, 1 = big grin
+//    look.hands:   'down', 'rub' (evil hand rubbing) or 'point'
+// ---------------------------------------------------------------------
+const SHADOW = '#050409';
+
+function drawScientist(t, look) {
+  ctx.save();
+  // A green glow round the edges, from the tubes, so you can see the shape.
+  ctx.shadowColor = 'rgba(90,255,150,0.55)';
+  ctx.shadowBlur = 25;
+  ctx.fillStyle = SHADOW;
+  ctx.strokeStyle = SHADOW;
+  ctx.lineCap = 'round';
+
+  // Breathing: the whole body bobs up and down a tiny bit.
+  const breathe = Math.sin(t * 2) * 3;
+
+  // The lab coat.
+  ctx.beginPath();
+  ctx.moveTo(745, 485 + breathe);
+  ctx.lineTo(855, 485 + breathe);
+  ctx.lineTo(900, 760);
+  ctx.lineTo(700, 760);
+  ctx.closePath();
+  ctx.fill();
+
+  // The arms. Where are the hands?
+  let left, right;
+  if (look.hands === 'rub') {
+    // Hands go round and round in little circles: evil hand rubbing.
+    const spin = t * 9;
+    left = { x: 788 + Math.cos(spin) * 10, y: 550 + Math.sin(spin) * 6 };
+    right = { x: 812 - Math.cos(spin) * 10, y: 550 - Math.sin(spin) * 6 };
+  } else if (look.hands === 'point') {
+    left = { x: 730, y: 640 };
+    right = { x: 1000, y: 400 };   // pointing at the screen!
+  } else {
+    left = { x: 730, y: 640 };
+    right = { x: 870, y: 640 };
+  }
+  ctx.lineWidth = 28;
+  ctx.beginPath(); ctx.moveTo(752, 500 + breathe); ctx.lineTo(left.x, left.y); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(848, 500 + breathe); ctx.lineTo(right.x, right.y); ctx.stroke();
+  ctx.beginPath(); ctx.arc(left.x, left.y, 15, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(right.x, right.y, 15, 0, Math.PI * 2); ctx.fill();
+
+  // The head, and WILD spiky hair.
+  const headX = 800, headY = 430 + breathe;
+  ctx.beginPath(); ctx.arc(headX, headY, 55, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath();
+  for (let i = 0; i <= 14; i++) {
+    const a = Math.PI * (0.95 + i / 14 * 1.1);        // from the left side, over the top, to the right
+    const len = i % 2 === 0 ? 55 : 88;               // in, out, in, out: spikes!
+    ctx.lineTo(headX + Math.cos(a) * len, headY + Math.sin(a) * len);
+  }
+  ctx.fill();
+  ctx.restore();
+
+  // THE GLASSES. When they're on, they glow.
+  if (look.glasses > 0) {
+    ctx.save();
+    ctx.shadowColor = '#7dffb0';
+    ctx.shadowBlur = 30 * look.glasses;
+    ctx.fillStyle = 'rgba(200,255,220,' + look.glasses + ')';
+    [-22, 22].forEach(function (side) {
+      ctx.beginPath(); ctx.arc(headX + side, headY - 5, 16, 0, Math.PI * 2); ctx.fill();
+    });
+    ctx.restore();
+    // Every few seconds, a shiny GLINT slides across the glasses.
+    const glint = (t % 3) / 0.35;
+    if (glint < 1) {
+      ctx.strokeStyle = 'rgba(255,255,255,' + look.glasses + ')';
+      ctx.lineWidth = 4;
+      [-22, 22].forEach(function (side) {
+        const gx = headX + side - 14 + glint * 28;
+        ctx.beginPath(); ctx.moveTo(gx - 4, headY - 14); ctx.lineTo(gx + 4, headY + 4); ctx.stroke();
+      });
+    }
+  }
+
+  // THE GRIN. When the scientist is talking, the mouth moves.
+  if (look.grin > 0) {
+    const open = talking ? 0.3 + 0.7 * Math.abs(Math.sin(t * 18)) : 0.2;
+    ctx.fillStyle = 'rgba(255,255,255,' + look.grin + ')';
+    ctx.beginPath();
+    ctx.moveTo(headX - 28, headY + 22);
+    ctx.quadraticCurveTo(headX, headY + 34 + open * 18, headX + 28, headY + 22);
+    ctx.quadraticCurveTo(headX, headY + 30, headX - 28, headY + 22);
+    ctx.fill();
+  }
+}
+
+// LIGHTNING: the whole screen flashes white, then fades.
+function drawLightning(t) {
+  if (t < 0 || t > 1.2) return;
+  let bright = Math.max(0, 1 - t / 0.6);
+  if (t > 0.15 && t < 0.25) bright = 0.2;            // a quick flicker in the middle
+  ctx.fillStyle = 'rgba(255,255,255,' + bright + ')';
+  ctx.fillRect(-2000, -2000, 6000, 6000);
+}
+
+// THE TITLE CARD.
+function drawTitleCard(t) {
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, STAGE_W, STAGE_H);
+  const grow = ease(t / 0.8);                          // the title zooms in
+  ctx.save();
+  ctx.translate(STAGE_W / 2, 420);
+  ctx.scale(0.6 + grow * 0.4, 0.6 + grow * 0.4);
+  ctx.globalAlpha = grow;
+  ctx.shadowColor = '#5dff8f';
+  ctx.shadowBlur = 40;
+  ctx.fillStyle = '#d8ffe4';
+  ctx.textAlign = 'center';
+  ctx.font = '900 150px system-ui, sans-serif';
+  ctx.fillText('TEST SUBJECT 1', 0, 0);
+  ctx.restore();
+  if (t > 1.5) {
+    ctx.globalAlpha = ease((t - 1.5) / 0.5);
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'center';
+    ctx.font = '600 50px system-ui, sans-serif';
+    ctx.fillText('Episode 1', STAGE_W / 2, 540);
+    ctx.globalAlpha = 1;
+  }
+}
+
+// ---------------------------------------------------------------------
+//  WORDS AT THE BOTTOM (subtitles). The letters appear one at a time,
+//  like someone is typing, and each letter makes a little talking blip.
+// ---------------------------------------------------------------------
+const LETTERS_PER_SECOND = 15;   // about as fast as the voice talks
+let talking = false;          // is someone mid-sentence? (makes the mouth move)
+let lettersShown = {};        // how many letters of each line we've typed so far
+
+function drawWords(now) {
+  talking = false;
+  const here = findShot(showTime);
+  const line = here.shot.lines.filter(function (l) { return here.t >= l.at; }).pop();
+  if (!line) return;
+  const count = Math.min(line.say.length, Math.floor((here.t - line.at) * LETTERS_PER_SECOND));
+  const key = here.start + ':' + line.at;
+  // A brand new line? SAY IT out loud!
+  if (mode === 'playing' && lettersShown[key] === undefined) {
+    lettersShown[key] = 0;
+    sayOutLoud(line);
+  }
+  // A blip for every new letter (but not for spaces).
+  if (mode === 'playing' && count > (lettersShown[key] || 0)) {
+    const letter = line.say[count - 1];
+    if (letter !== ' ' && count % 2 === 0) talkBlip(line.who);
+    lettersShown[key] = count;
+  }
+  // Is the scientist's mouth moving? With a real voice: while it's talking.
+  // Without one: while the letters are still appearing.
+  if (englishVoices().length) talking = voiceTalking;
+  else if (line.who === 'THE SCIENTIST' && count < line.say.length) talking = true;
+
+  // The dark box.
+  ctx.fillStyle = 'rgba(0,0,0,0.65)';
+  ctx.fillRect(120, 760, 1360, 110);
+  // Who's talking (no name means it's the narrator).
+  if (line.who) {
+    ctx.fillStyle = '#5dff8f';
+    ctx.font = 'bold 30px system-ui, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText(line.who, 150, 748);
+  }
+  ctx.fillStyle = '#ffffff';
+  ctx.font = (line.who ? '' : 'italic ') + '46px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(line.say.slice(0, count), STAGE_W / 2, 832);
+}
+
+// ---------------------------------------------------------------------
+//  PLAYING THE SHOW: play, pause, watch again.
+// ---------------------------------------------------------------------
+let mode = 'ready';           // 'ready', 'playing', 'paused' or 'done'
+let showTime = 0;             // how many seconds into the episode we are
+let lastFrame = performance.now();
+
+function press() {
+  startAudio();
+  if (mode === 'ready' || mode === 'done') {
+    showTime = 0;
+    lettersShown = {};
+    stopTalking();
+    mode = 'playing';
+  } else if (mode === 'playing') {
+    mode = 'paused';
+    if (audio) audio.suspend();   // pausing the show pauses the sound too...
+    if (window.speechSynthesis) window.speechSynthesis.pause();   // ...and the voice
+  } else if (mode === 'paused') {
+    mode = 'playing';
+    if (window.speechSynthesis) window.speechSynthesis.resume();
+  }
+}
+canvas.addEventListener('pointerdown', function (e) { e.preventDefault(); press(); });
+window.addEventListener('keydown', function (e) {
+  if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); press(); }
+  if (e.code === 'KeyR') { mode = 'ready'; press(); }        // R = start again
+});
+
+// Play any sound effects whose time came up since the last frame.
+function playSounds(before, after) {
+  let start = 0;
+  SHOTS.forEach(function (shot) {
+    shot.sounds.forEach(function (s) {
+      if (before < start + s.at && start + s.at <= after) s.play();
+    });
+    start += shot.length;
+  });
+}
+
+function frame(nowMs) {
+  const dt = Math.min(0.1, (nowMs - lastFrame) / 1000);
+  lastFrame = nowMs;
+  if (mode === 'playing') {
+    const before = showTime;
+    showTime = Math.min(EPISODE_LENGTH, showTime + dt);
+    playSounds(before, showTime);
+    // Bubble sounds now and then, while we're in the lab.
+    if (findShot(showTime).shot !== SHOTS[SHOTS.length - 1] && Math.random() < dt * 2.5) bubbleSound();
+    if (showTime >= EPISODE_LENGTH) mode = 'done';
+  }
+  draw();
+  requestAnimationFrame(frame);
+}
+
+function draw() {
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+
+  // Move onto the stage, and don't let anything draw outside it.
+  ctx.save();
+  ctx.translate(stageX, stageY);
+  ctx.scale(stageScale, stageScale);
+  ctx.beginPath(); ctx.rect(0, 0, STAGE_W, STAGE_H); ctx.clip();
+
+  // THE CAMERA: slide and zoom from where the shot starts to where it ends.
+  const here = findShot(showTime);
+  const from = here.shot.cam[0];
+  const to = here.shot.cam[1] || from;
+  const u = ease(here.t / here.shot.length);
+  ctx.save();
+  ctx.translate(STAGE_W / 2, STAGE_H / 2);
+  ctx.scale(lerp(from.zoom, to.zoom, u), lerp(from.zoom, to.zoom, u));
+  ctx.translate(-lerp(from.x, to.x, u), -lerp(from.y, to.y, u));
+  here.shot.draw(here.t);
+  ctx.restore();
+
+  drawWords();
+
+  // Before it starts (or after it ends): a big PLAY button.
+  if (mode === 'ready' || mode === 'done') {
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(0, 0, STAGE_W, STAGE_H);
+    ctx.textAlign = 'center';
+    if (mode === 'done') {
+      ctx.fillStyle = '#5dff8f';
+      ctx.font = '900 70px system-ui, sans-serif';
+      ctx.fillText('TO BE CONTINUED...', STAGE_W / 2, 250);
+    }
+    ctx.fillStyle = '#5dff8f';
+    ctx.beginPath(); ctx.arc(STAGE_W / 2, 450, 90, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#000';
+    ctx.beginPath();
+    ctx.moveTo(STAGE_W / 2 - 30, 400); ctx.lineTo(STAGE_W / 2 + 50, 450); ctx.lineTo(STAGE_W / 2 - 30, 500);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.font = '600 40px system-ui, sans-serif';
+    ctx.fillText(mode === 'done' ? 'Tap to watch again' : 'Tap to watch', STAGE_W / 2, 610);
+    ctx.font = '30px system-ui, sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+    ctx.fillText('A cartoon by Max', STAGE_W / 2, 660);
+  }
+  if (mode === 'paused') {
+    ctx.fillStyle = 'rgba(0,0,0,0.4)';
+    ctx.fillRect(0, 0, STAGE_W, STAGE_H);
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(STAGE_W / 2 - 50, 380, 35, 140);   // the two bars of the pause sign
+    ctx.fillRect(STAGE_W / 2 + 15, 380, 35, 140);
+    ctx.textAlign = 'center';
+    ctx.font = '600 36px system-ui, sans-serif';
+    ctx.fillText('Paused: tap to keep watching', STAGE_W / 2, 590);
+  }
+
+  // How far through the episode are we? A thin green bar along the bottom.
+  ctx.fillStyle = 'rgba(255,255,255,0.15)';
+  ctx.fillRect(0, STAGE_H - 8, STAGE_W, 8);
+  ctx.fillStyle = '#5dff8f';
+  ctx.fillRect(0, STAGE_H - 8, STAGE_W * showTime / EPISODE_LENGTH, 8);
+  ctx.restore();
+}
+
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
