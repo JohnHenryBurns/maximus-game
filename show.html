@@ -21,11 +21,53 @@
       left: calc(10px + env(safe-area-inset-left, 0px));
       -webkit-tap-highlight-color: transparent;
     }
+    /* THE VOICE STUDIO: a button in the top-right corner, and a big panel. */
+    #studioButton {
+      position: fixed; z-index: 10;
+      top: calc(8px + env(safe-area-inset-top, 0px));
+      right: calc(10px + env(safe-area-inset-right, 0px));
+      font: 700 16px system-ui, sans-serif; color: #000;
+      background: #5dff8f; border: none; border-radius: 999px; padding: 10px 16px;
+      cursor: pointer; -webkit-tap-highlight-color: transparent;
+    }
+    #studio {
+      position: fixed; inset: 0; z-index: 20; overflow-y: auto;
+      background: rgba(5, 4, 12, 0.96); color: #fff;
+      font: 18px system-ui, sans-serif; padding: 20px 16px 40px;
+    }
+    #studio[hidden] { display: none; }
+    #studio .inside { max-width: 760px; margin: 0 auto; }
+    #studio h1 { color: #5dff8f; margin: 10px 0; }
+    #studio .note { color: #aaa; font-size: 15px; }
+    #studio .line { background: #1a1628; border-radius: 14px; padding: 14px; margin: 12px 0; }
+    #studio .line.recording { outline: 3px solid #ff4d4d; }
+    #studio .who { color: #5dff8f; font-weight: 700; font-size: 14px; }
+    #studio .say { font-size: 22px; margin: 6px 0 10px; }
+    #studio button {
+      font: 700 17px system-ui, sans-serif; border: none; border-radius: 10px;
+      padding: 10px 14px; margin: 4px 6px 4px 0; cursor: pointer;
+    }
+    #studio .rec { background: #ff4d4d; color: #fff; }
+    #studio .play { background: #3fe0ff; color: #000; }
+    #studio .del { background: #444; color: #fff; }
+    #studio .status { font-size: 15px; color: #aaa; margin-left: 4px; }
+    #studio .done { background: #5dff8f; color: #000; font-size: 20px; padding: 14px 22px; }
   </style>
 </head>
 <body>
 <a id="back" class="arcade-pill" href="index.html"><span>&larr;</span>Arcade</a>
 <canvas id="show"></canvas>
+<button id="studioButton">🎙️ Voice Studio</button>
+<div id="studio" hidden>
+  <div class="inside">
+    <h1>🎙️ Voice Studio</h1>
+    <p>You're the voice actor! Tap <b>● Record</b>, say the line, then tap <b>■ Stop</b>.
+       Lines you don't record use the computer's voice.</p>
+    <p class="note">🔒 Your recordings stay on THIS computer only. They don't go on the website.</p>
+    <div id="lineList"></div>
+    <button class="done" id="studioDone">✓ Done! Watch the show</button>
+  </div>
+</div>
 <script>
 /* The show grabs every tap, which would swallow a tap on the Arcade pill.
    So the pill handles its own taps first and stops them going any further. */
@@ -195,6 +237,9 @@ if (window.speechSynthesis) window.speechSynthesis.getVoices();
 let voiceTalking = false;   // is the scientist's voice making sound RIGHT NOW?
 
 function sayOutLoud(line) {
+  // Did you record this line? Then play YOUR voice!
+  const mine = recordings[voiceKey(line)];
+  if (mine && audio) { playMyVoice(line, mine); return; }
   if (!window.speechSynthesis) return;     // some browsers can't talk. that's OK.
   const who = VOICES[line.who] || VOICES[''];
   // Lowercase, because some voices spell out CAPITALS letter by letter: "R-E-A-D-Y".
@@ -213,6 +258,102 @@ function sayOutLoud(line) {
 function stopTalking() {
   voiceTalking = false;
   if (window.speechSynthesis) window.speechSynthesis.cancel();
+  if (myVoice) { try { myVoice.source.stop(); } catch (e) {} myVoice = null; }
+}
+
+// ---------------------------------------------------------------------
+//  YOUR VOICE! Recordings from the Voice Studio.
+//
+//  Each recording is saved in the browser's own little storage box (it's
+//  called IndexedDB). It lives on THIS computer, nowhere else.
+//  Each line's recording is found by its "key": who says it + the words.
+//  So if you change the words of a line, you'll need to record it again!
+// ---------------------------------------------------------------------
+function voiceKey(line) { return line.who + '|' + line.say; }
+
+// Open the storage box. (It's a bit fiddly, so it's all in this one function.)
+function openVoiceBox() {
+  return new Promise(function (resolve, reject) {
+    const request = indexedDB.open('testSubject1', 1);
+    request.onupgradeneeded = function () { request.result.createObjectStore('voices'); };
+    request.onsuccess = function () { resolve(request.result); };
+    request.onerror = function () { reject(request.error); };
+  });
+}
+// Do one thing with the box: 'get', 'put' or 'delete'.
+function storageBox(job, key, recording) {
+  return openVoiceBox().then(function (box) {
+    return new Promise(function (resolve, reject) {
+      const store = box.transaction('voices', 'readwrite').objectStore('voices');
+      const request = job === 'put' ? store.put(recording, key) : store[job](key);
+      request.onsuccess = function () { resolve(request.result); };
+      request.onerror = function () { reject(request.error); };
+    });
+  });
+}
+
+// Some browsers have a storage box that never answers! So recordings are
+// ALSO kept in the page's memory. Memory always works (but forgets when
+// you close the page), and the storage box remembers for next time.
+const voicesInMemory = {};   // key -> recording (or null if you deleted it)
+function voiceBox(job, key, recording) {
+  if (job === 'put') voicesInMemory[key] = recording;
+  if (job === 'delete') voicesInMemory[key] = null;
+  if (job === 'get' && key in voicesInMemory) return Promise.resolve(voicesInMemory[key]);
+  // Ask the storage box... but only wait 1.5 seconds for an answer.
+  const tooSlow = new Promise(function (resolve) { setTimeout(resolve, 1500); });
+  let asking;
+  try { asking = storageBox(job, key, recording).catch(function () {}); } catch (e) { asking = tooSlow; }
+  return Promise.race([asking, tooSlow]).then(function (answer) {
+    if (job === 'get') voicesInMemory[key] = answer || null;
+    return answer;
+  });
+}
+
+// Every line in the whole show, in order.
+function allLines() {
+  const lines = [];
+  SHOTS.forEach(function (shot) { shot.lines.forEach(function (l) { lines.push(l); }); });
+  return lines;
+}
+
+// Before the show plays, turn every recording into sound the show can play.
+let recordings = {};   // voiceKey -> the sound, ready to play
+function loadRecordings() {
+  recordings = {};
+  if (!window.indexedDB || !audio) return;
+  allLines().forEach(function (line) {
+    const key = voiceKey(line);
+    voiceBox('get', key).then(function (blob) {
+      if (!blob) return;
+      return blob.arrayBuffer().then(function (bytes) { return audio.decodeAudioData(bytes); })
+        .then(function (sound) { recordings[key] = sound; });
+    }).catch(function () {});
+  });
+}
+
+// Play YOUR recording of a line. The "analyser" listens to it while it
+// plays, so we can tell how LOUD you are (that's what moves the mouth).
+let myVoice = null;
+function playMyVoice(line, sound) {
+  const source = audio.createBufferSource();
+  source.buffer = sound;
+  const analyser = audio.createAnalyser();
+  analyser.fftSize = 512;
+  source.connect(analyser).connect(audio.destination);
+  source.start();
+  const me = { source: source, analyser: analyser, who: line.who };
+  source.onended = function () { if (myVoice === me) myVoice = null; };
+  myVoice = me;
+}
+
+// How loud is your voice right now? 0 = silent, 1 = SHOUTING.
+const loudnessData = new Float32Array(512);
+function myLoudness() {
+  myVoice.analyser.getFloatTimeDomainData(loudnessData);
+  let total = 0;
+  for (let i = 0; i < loudnessData.length; i++) total += loudnessData[i] * loudnessData[i];
+  return Math.min(1, Math.sqrt(total / loudnessData.length) * 6);
 }
 
 // ---------------------------------------------------------------------
@@ -540,7 +681,9 @@ function drawScientist(t, look) {
 
   // THE GRIN. When the scientist is talking, the mouth moves.
   if (look.grin > 0) {
-    const open = talking ? 0.3 + 0.7 * Math.abs(Math.sin(t * 18)) : 0.2;
+    let open = talking ? 0.3 + 0.7 * Math.abs(Math.sin(t * 18)) : 0.2;
+    // Your recording is playing? The louder you are, the wider it opens!
+    if (myVoice && myVoice.who === 'THE SCIENTIST') open = 0.2 + 0.8 * myLoudness();
     ctx.fillStyle = 'rgba(255,255,255,' + look.grin + ')';
     ctx.beginPath();
     ctx.moveTo(headX - 28, headY + 22);
@@ -613,7 +756,8 @@ function drawWords(now) {
   }
   // Is the scientist's mouth moving? With a real voice: while it's talking.
   // Without one: while the letters are still appearing.
-  if (englishVoices().length) talking = voiceTalking;
+  if (myVoice) talking = false;            // your voice moves the mouth by itself
+  else if (englishVoices().length) talking = voiceTalking;
   else if (line.who === 'THE SCIENTIST' && count < line.say.length) talking = true;
 
   // The dark box.
@@ -645,6 +789,7 @@ function press() {
     showTime = 0;
     lettersShown = {};
     stopTalking();
+    loadRecordings();
     mode = 'playing';
   } else if (mode === 'playing') {
     mode = 'paused';
@@ -657,9 +802,120 @@ function press() {
 }
 canvas.addEventListener('pointerdown', function (e) { e.preventDefault(); press(); });
 window.addEventListener('keydown', function (e) {
+  if (!studio.hidden) return;             // keys in the studio aren't for the show
   if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); press(); }
   if (e.code === 'KeyR') { mode = 'ready'; press(); }        // R = start again
 });
+
+// ---------------------------------------------------------------------
+//  THE VOICE STUDIO SCREEN.
+// ---------------------------------------------------------------------
+const studio = document.getElementById('studio');
+const studioButton = document.getElementById('studioButton');
+let microphone = null;      // the microphone, once you've said it's OK to use it
+let recorder = null;        // the thing that records, while it's recording
+let recordingKey = null;    // which line is being recorded right now
+let listening = null;       // a recording playing in the studio
+
+studioButton.addEventListener('click', function (e) {
+  e.stopPropagation();
+  mode = 'ready';
+  showTime = 0;
+  stopTalking();
+  studio.hidden = false;
+  fillStudio();
+});
+document.getElementById('studioDone').addEventListener('click', function () {
+  if (recorder) recorder.stop();
+  // Turn the microphone off, so the "recording" light on the computer goes off too.
+  if (microphone) { microphone.getTracks().forEach(function (t) { t.stop(); }); microphone = null; }
+  studio.hidden = true;
+});
+['pointerdown', 'touchstart', 'mousedown'].forEach(function (t) {
+  studio.addEventListener(t, function (e) { e.stopPropagation(); });
+  studioButton.addEventListener(t, function (e) { e.stopPropagation(); });
+});
+
+// Draw a box for every line, with its buttons.
+function fillStudio() {
+  const list = document.getElementById('lineList');
+  list.innerHTML = '';
+  allLines().forEach(function (line) {
+    const key = voiceKey(line);
+    const box = document.createElement('div');
+    box.className = 'line' + (recordingKey === key ? ' recording' : '');
+    const who = document.createElement('div');
+    who.className = 'who';
+    who.textContent = line.who || 'THE NARRATOR';
+    const say = document.createElement('div');
+    say.className = 'say';
+    say.textContent = line.say;
+    box.appendChild(who);
+    box.appendChild(say);
+    list.appendChild(box);
+
+    voiceBox('get', key).then(function (blob) {
+      const rec = document.createElement('button');
+      rec.className = 'rec';
+      rec.textContent = recordingKey === key ? '■ Stop' : (blob ? '● Record again' : '● Record');
+      rec.onclick = function () { recordingKey === key ? recorder.stop() : startRecording(key); };
+      box.appendChild(rec);
+      if (blob) {
+        const play = document.createElement('button');
+        play.className = 'play';
+        play.textContent = '▶ Listen';
+        play.onclick = function () {
+          if (listening) listening.pause();
+          listening = new Audio(URL.createObjectURL(blob));
+          listening.play();
+        };
+        const del = document.createElement('button');
+        del.className = 'del';
+        del.textContent = '🗑 Delete';
+        del.onclick = function () { voiceBox('delete', key).then(fillStudio); };
+        box.appendChild(play);
+        box.appendChild(del);
+      }
+      const status = document.createElement('span');
+      status.className = 'status';
+      status.textContent = recordingKey === key ? '🔴 RECORDING... say it now!'
+                         : blob ? '🎙️ your voice' : '🤖 computer voice';
+      box.appendChild(status);
+    }).catch(function () {
+      say.textContent += '  (This browser cannot save recordings 😢)';
+    });
+  });
+}
+
+// RECORD! The first time, the browser asks: "Can this page use the microphone?"
+function startRecording(key) {
+  if (recorder) recorder.stop();
+  if (!navigator.mediaDevices || !window.MediaRecorder) {
+    alert('Sorry, this browser cannot record. 😢');
+    return;
+  }
+  const getMic = microphone ? Promise.resolve(microphone)
+                            : navigator.mediaDevices.getUserMedia({ audio: true });
+  getMic.then(function (mic) {
+    microphone = mic;
+    const pieces = [];                      // the recording comes out in little pieces
+    const thisOne = new MediaRecorder(mic);
+    recorder = thisOne;
+    recordingKey = key;
+    thisOne.ondataavailable = function (e) { pieces.push(e.data); };
+    thisOne.onstop = function () {
+      // Glue the pieces together into one recording, and save it.
+      const blob = new Blob(pieces, { type: thisOne.mimeType });
+      // (Only say "nothing's recording" if a newer recording hasn't started.)
+      if (recorder === thisOne) { recorder = null; recordingKey = null; }
+      voiceBox('put', key, blob).then(fillStudio);
+    };
+    thisOne.start();
+    fillStudio();
+  }).catch(function () {
+    alert('The microphone said no. 🎙️❌ Check that a microphone is plugged in, and that you tapped "Allow".');
+  });
+}
 
 // Play any sound effects whose time came up since the last frame.
 function playSounds(before, after) {
@@ -683,6 +939,7 @@ function frame(nowMs) {
     if (findShot(showTime).shot !== SHOTS[SHOTS.length - 1] && Math.random() < dt * 2.5) bubbleSound();
     if (showTime >= EPISODE_LENGTH) mode = 'done';
   }
+  studioButton.style.display = mode === 'playing' ? 'none' : '';
   draw();
   requestAnimationFrame(frame);
 }
