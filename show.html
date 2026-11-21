@@ -207,6 +207,12 @@ function bonkSound() {
   beep(170, 55, 0.22, 'sine', 0.4);
   beep(700, 350, 0.08, 'square', 0.05);
 }
+// WOOF! A bark is a short, rough sound that drops in pitch, really fast.
+// (wait = how many seconds from now to bark)
+function barkSound(wait) {
+  beep(520, 260, 0.13, 'sawtooth', 0.14, wait);
+  beep(330, 160, 0.16, 'square', 0.07, wait);
+}
 // GRUMBLE... a very hungry tummy.
 function growlSound() {
   beep(85, 55, 0.9, 'sawtooth', 0.07);
@@ -276,6 +282,12 @@ function sayOutLoud(line) {
   // Did you record this line? Then play YOUR voice!
   const mine = recordings[voiceKey(line)];
   if (mine && audio) { playMyVoice(line, mine); return; }
+  // Ruff is a dog. Dogs don't say the word "woof", they BARK!
+  // One bark for every word, 0.4 seconds apart.
+  if (line.who === 'RUFF') {
+    barkWords(line).forEach(function (word, i) { barkSound(i * BARK_GAP); });
+    return;
+  }
   if (!window.speechSynthesis) return;     // some browsers can't talk. that's OK.
   const who = VOICES[line.who] || VOICES[''];
   // Lowercase, because some voices spell out CAPITALS letter by letter: "R-E-A-D-Y".
@@ -291,6 +303,9 @@ function sayOutLoud(line) {
   window.speechSynthesis.resume();         // in case it got stuck on "pause"
   window.speechSynthesis.speak(words);
 }
+const BARK_GAP = 0.4;     // seconds between Ruff's barks
+function barkWords(line) { return line.say.split(' ').filter(function (w) { return w; }); }
+
 function stopTalking() {
   voiceTalking = false;
   if (window.speechSynthesis) window.speechSynthesis.cancel();
@@ -501,6 +516,37 @@ const SHOTS = [
     draw: function (t) {
       drawCell(t, this.bonks);
       drawPrisoner(t, this.bonks);
+    },
+  },
+
+  // ======================= SCENE 3: CELL 2 =======================
+  // Ruff's lines are barks: every word is one bark.
+  { // 9. Meanwhile... in Cell 2...
+    length: 7,
+    cam: [{ x: 700, y: 450, zoom: 1 }, { x: 760, y: 470, zoom: 1.05 }],
+    lines: [
+      { at: 0.5, who: '', say: 'Meanwhile... in Cell 2...' },
+      { at: 3.5, who: 'RUFF', say: 'WOOF! WOOF!' },
+    ],
+    sounds: [],
+    draw: function (t) {
+      drawCell(t, [], 2);
+      drawRuff(t);
+    },
+  },
+  { // 10. The camera CHASES Ruff round the cell.
+    length: 7,
+    // follow: instead of sliding from one spot to another, the camera
+    // looks wherever Ruff is RIGHT NOW.
+    follow: function (t) { return { x: clamp(ruffSpot(t + 7).x, 450, 900), y: 610, zoom: 1.9 }; },
+    lines: [
+      { at: 0.4, who: 'RUFF', say: 'WOOF! WOOF! WOOF!' },
+      { at: 3.6, who: 'RUFF', say: 'ARF! ARF! ARF! ARF!' },
+    ],
+    sounds: [],
+    draw: function (t) {
+      drawCell(t + 7, [], 2);
+      drawRuff(t + 7);      // + 7: he keeps running from where shot 9 left him
     },
   },
 ];
@@ -731,6 +777,31 @@ function drawScientist(t, look) {
     ctx.lineTo(headX + Math.cos(a) * len, headY + Math.sin(a) * len);
   }
   ctx.fill();
+
+  // A HORN, right in the middle, sticking up out of the hair.
+  // (It curves a little, like a horn should.)
+  ctx.beginPath();
+  ctx.moveTo(headX - 16, headY - 70);
+  ctx.quadraticCurveTo(headX - 14, headY - 130, headX + 6, headY - 175);   // up the left side to the tip
+  ctx.quadraticCurveTo(headX + 6, headY - 120, headX + 16, headY - 70);    // back down the right side
+  ctx.fill();
+
+  // TWO POM POMS, one on each side of the head. A pom pom is just a big
+  // circle with lots of little circles round the edge, to make it FLUFFY.
+  // They bounce a tiny bit when the scientist breathes.
+  [-1, 1].forEach(function (side) {
+    const pomX = headX + side * 80, pomY = headY + 8 + breathe * 0.5;
+    // All the circles go into ONE shape, so only the outside edge glows.
+    ctx.beginPath();
+    ctx.arc(pomX, pomY, 22, 0, Math.PI * 2);
+    for (let i = 0; i < 9; i++) {
+      const a = i / 9 * Math.PI * 2;
+      const fluffX = pomX + Math.cos(a) * 20, fluffY = pomY + Math.sin(a) * 20;
+      ctx.moveTo(fluffX + 10, fluffY);
+      ctx.arc(fluffX, fluffY, 10, 0, Math.PI * 2);
+    }
+    ctx.fill();
+  });
   ctx.restore();
 
   // THE GLASSES. When they're on, they glow.
@@ -781,7 +852,7 @@ function sinceBonk(t, bonks) {
   return since;
 }
 
-function drawCell(t, bonks) {
+function drawCell(t, bonks, cellNumber) {
   // Every BONK shakes the whole picture, just for a moment.
   const since = sinceBonk(t, bonks);
   if (since < 0.15) ctx.translate((Math.random() - 0.5) * 12, (Math.random() - 0.5) * 8);
@@ -830,12 +901,25 @@ function drawCell(t, bonks) {
   ctx.fillRect(605, 620, 110, 26);                 // the food slot
   ctx.fillStyle = '#8a8f9a';
   ctx.beginPath(); ctx.arc(735, 560, 9, 0, Math.PI * 2); ctx.fill();   // the handle
+  // The cell's number, on a little metal sign.
+  ctx.fillStyle = '#c9ccd2';
+  ctx.fillRect(630, 490, 60, 50);
+  ctx.fillStyle = '#1b1d22';
+  ctx.font = 'bold 40px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(String(cellNumber || 1), 660, 530);
 
   // The EMPTY food bowl... with a fly buzzing round it.
   ctx.fillStyle = '#9aa0ab';
   ctx.beginPath(); ctx.ellipse(850, 748, 45, 14, 0, 0, Math.PI * 2); ctx.fill();
   ctx.fillStyle = '#5d626d';
   ctx.beginPath(); ctx.ellipse(850, 744, 34, 8, 0, 0, Math.PI * 2); ctx.fill();
+  if (cellNumber === 2) {                          // a DOG bowl, with his name on it
+    ctx.fillStyle = '#c0392b';
+    ctx.font = 'bold 16px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('RUFF', 850, 762);
+  }
   const flyX = 850 + Math.cos(t * 5) * 45, flyY = 700 + Math.sin(t * 7.3) * 18;
   ctx.fillStyle = 'rgba(255,255,255,0.5)';
   const flap = Math.sin(t * 80) * 3;               // wings flapping SUPER fast
@@ -966,6 +1050,112 @@ function drawPrisoner(t, bonks) {
   }
 }
 
+// ---------------------------------------------------------------------
+//  RUFF, the dog in Cell 2. He never, EVER stops running.
+// ---------------------------------------------------------------------
+const RUFF_SPEED = 430;          // how fast he runs (stage pixels per second)
+const RUFF_LEFT = 200;           // he turns round here...
+const RUFF_RIGHT = 1040;         // ...and here (just before the wall)
+const RUFF_BROWN = '#a0622d';
+const RUFF_DARK = '#6b3e1a';
+
+// Where is Ruff at time t, and which way is he facing?
+// He runs right... turns round... runs left... turns round... forever.
+// The % ("remainder") makes the trip start over every time he gets back.
+function ruffSpot(t) {
+  const trip = RUFF_RIGHT - RUFF_LEFT;
+  const p = (t * RUFF_SPEED) % (trip * 2);
+  if (p < trip) return { x: RUFF_LEFT + p, facing: 1 };       // going right
+  return { x: RUFF_RIGHT - (p - trip), facing: -1 };          // coming back
+}
+
+function drawRuff(t) {
+  const spot = ruffSpot(t);
+  const hop = -Math.abs(Math.sin(t * 14)) * 14;   // boing, boing, boing
+  ctx.save();
+  ctx.translate(spot.x, 760 + hop);
+  ctx.scale(spot.facing, 1);   // facing left? Just draw him BACKWARDS! (a mirror)
+  ctx.lineCap = 'round';
+
+  // His tail. Wag, wag, wag.
+  const wag = Math.sin(t * 25) * 0.6;
+  ctx.strokeStyle = RUFF_BROWN;
+  ctx.lineWidth = 11;
+  ctx.beginPath();
+  ctx.moveTo(-58, -70);
+  ctx.lineTo(-58 - Math.cos(1 + wag) * 40, -70 - Math.sin(1 + wag) * 40);
+  ctx.stroke();
+
+  // Four legs, running like crazy. Each pair swings the opposite way.
+  const run = t * 14;
+  function leg(hipX, swing, color) {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 13;
+    ctx.beginPath();
+    ctx.moveTo(hipX, -55);
+    ctx.lineTo(hipX + Math.sin(swing) * 22, -4);
+    ctx.stroke();
+  }
+  leg(-40, run + Math.PI, RUFF_DARK);   // far legs are darker (they're in the shadow)
+  leg(38, run, RUFF_DARK);
+  leg(-30, run, RUFF_BROWN);
+  leg(46, run + Math.PI, RUFF_BROWN);
+
+  // His body.
+  ctx.fillStyle = RUFF_BROWN;
+  ctx.beginPath(); ctx.ellipse(0, -65, 66, 30, 0, 0, Math.PI * 2); ctx.fill();
+  // A red collar.
+  ctx.strokeStyle = '#d63031';
+  ctx.lineWidth = 9;
+  ctx.beginPath(); ctx.moveTo(44, -88); ctx.lineTo(56, -66); ctx.stroke();
+  ctx.fillStyle = '#ffd24d';
+  ctx.beginPath(); ctx.arc(54, -60, 6, 0, Math.PI * 2); ctx.fill();   // his name tag
+
+  // His head and snout.
+  ctx.fillStyle = RUFF_BROWN;
+  ctx.beginPath(); ctx.arc(66, -102, 29, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#c58a4f';
+  ctx.beginPath(); ctx.ellipse(92, -94, 20, 13, 0, 0, Math.PI * 2); ctx.fill();
+
+  // His mouth. When he barks, it opens WIDE (and you can see his tongue).
+  let open = talking ? (Math.sin(t * 16) > 0 ? 1 : 0.15) : 0;
+  if (myVoice && myVoice.who === 'RUFF') open = myLoudness();
+  if (open > 0.05) {
+    ctx.fillStyle = '#5a1f1f';
+    ctx.beginPath(); ctx.ellipse(94, -80, 14, 2 + open * 9, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#ff7b9c';
+    ctx.beginPath(); ctx.ellipse(96, -76 + open * 3, 7, 4, 0, 0, Math.PI * 2); ctx.fill();
+  }
+  // Nose and eye.
+  ctx.fillStyle = '#111';
+  ctx.beginPath(); ctx.arc(111, -98, 7, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(72, -110, 5, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.beginPath(); ctx.arc(74, -112, 1.8, 0, Math.PI * 2); ctx.fill();
+  // A floppy ear that flaps as he runs.
+  ctx.fillStyle = RUFF_DARK;
+  ctx.save();
+  ctx.translate(55, -122);
+  ctx.rotate(0.5 + Math.sin(t * 14) * 0.35);
+  ctx.beginPath(); ctx.ellipse(0, 20, 11, 24, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+  ctx.restore();
+
+  // WOOF! Comic-book words pop out when he barks.
+  if (talking && open > 0.5) {
+    ctx.save();
+    ctx.font = '900 44px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.lineWidth = 8;
+    ctx.strokeStyle = '#000';
+    ctx.fillStyle = '#ffd24d';
+    const wordX = spot.x + spot.facing * 120, wordY = 760 + hop - 150;
+    ctx.strokeText('WOOF!', wordX, wordY);
+    ctx.fillText('WOOF!', wordX, wordY);
+    ctx.restore();
+  }
+}
+
 // A white circle (or oval) with a black outline: his head, hands and feet.
 function dudeCircle(x, y, width, height) {
   ctx.fillStyle = DUDE_WHITE;
@@ -1061,6 +1251,9 @@ function drawWords(now) {
   if (myVoice) talking = false;            // your voice moves the mouth by itself
   else if (englishVoices().length) talking = voiceTalking;
   else if (line.who && count < line.say.length) talking = true;
+  if (line.who === 'RUFF' && !myVoice) {
+    talking = here.t - line.at < barkWords(line).length * BARK_GAP;
+  }
 
   // The dark box.
   ctx.fillStyle = 'rgba(0,0,0,0.65)';
@@ -1319,13 +1512,19 @@ function draw() {
 
   // THE CAMERA: slide and zoom from where the shot starts to where it ends.
   const here = findShot(showTime);
-  const from = here.shot.cam[0];
-  const to = here.shot.cam[1] || from;
-  const u = ease(here.t / here.shot.length);
+  let cam;
+  if (here.shot.follow) {
+    cam = here.shot.follow(here.t);              // a camera that chases someone
+  } else {
+    const from = here.shot.cam[0];
+    const to = here.shot.cam[1] || from;
+    const u = ease(here.t / here.shot.length);
+    cam = { x: lerp(from.x, to.x, u), y: lerp(from.y, to.y, u), zoom: lerp(from.zoom, to.zoom, u) };
+  }
   ctx.save();
   ctx.translate(STAGE_W / 2, STAGE_H / 2);
-  ctx.scale(lerp(from.zoom, to.zoom, u), lerp(from.zoom, to.zoom, u));
-  ctx.translate(-lerp(from.x, to.x, u), -lerp(from.y, to.y, u));
+  ctx.scale(cam.zoom, cam.zoom);
+  ctx.translate(-cam.x, -cam.y);
   labOnScreen = false;
   here.shot.draw(here.t);
   ctx.restore();
