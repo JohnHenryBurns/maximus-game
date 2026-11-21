@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-  <title>Test Subject 1</title>
+  <title>Reincarnated</title>
   <style>
     html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
     canvas { display: block; width: 100vw; height: 100vh; touch-action: none; }
@@ -21,6 +21,20 @@
       left: calc(10px + env(safe-area-inset-left, 0px));
       -webkit-tap-highlight-color: transparent;
     }
+    /* SKIP BUTTONS: back, play/pause, forward. Top middle. */
+    #controls {
+      position: fixed; z-index: 10; left: 50%; transform: translateX(-50%);
+      top: calc(8px + env(safe-area-inset-top, 0px));
+      display: flex; gap: 8px; opacity: 0.85;
+    }
+    #controls button {
+      font: 700 18px system-ui, sans-serif; color: #fff;
+      background: rgba(0, 0, 0, 0.55); border: 1px solid rgba(255, 255, 255, 0.5);
+      border-radius: 999px; width: 48px; height: 40px; cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+    #controls button:hover { background: rgba(93, 255, 143, 0.35); }
+
     /* THE VOICE STUDIO: a button in the top-right corner, and a big panel. */
     #studioButton {
       position: fixed; z-index: 10;
@@ -57,6 +71,11 @@
 <body>
 <a id="back" class="arcade-pill" href="index.html"><span>&larr;</span>Arcade</a>
 <canvas id="show"></canvas>
+<div id="controls">
+  <button id="skipBack" title="Skip back (← key)">⏮</button>
+  <button id="playPause" title="Play / pause (space)">⏯</button>
+  <button id="skipForward" title="Skip forward (→ key)">⏭</button>
+</div>
 <button id="studioButton">🎙️ Voice Studio</button>
 <div id="studio" hidden>
   <div class="inside">
@@ -82,7 +101,7 @@
 </script>
 <script>
 // =====================================================================
-//  TEST SUBJECT 1  -  a cartoon by Max
+//  REINCARNATED  -  a cartoon by Max, starring TEST SUBJECT 1
 //
 //  A cartoon is just pictures that change a tiny bit, really fast.
 //  Every frame we ask: "how many seconds into the show are we?"
@@ -181,6 +200,17 @@ function talkBlip(who) {
   if (englishVoices().length) return;   // a real voice is talking, so no blips
   // No real voices on this computer? Then every character beeps at their own pitch.
   if (who === 'THE SCIENTIST') beep(110 + Math.random() * 40, 90, 0.07, 'square', 0.05);
+  if (who === 'TEST SUBJECT 1') beep(200 + Math.random() * 40, 170, 0.07, 'square', 0.05);
+}
+// BONK! A deep thud (head meets wall) plus a little cartoon "bonk" on top.
+function bonkSound() {
+  beep(170, 55, 0.22, 'sine', 0.4);
+  beep(700, 350, 0.08, 'square', 0.05);
+}
+// GRUMBLE... a very hungry tummy.
+function growlSound() {
+  beep(85, 55, 0.9, 'sawtooth', 0.07);
+  beep(60, 95, 0.7, 'sawtooth', 0.06, 0.6);
 }
 // Dun... dun... DUNNNN!
 function stingSound() {
@@ -209,6 +239,12 @@ const VOICES = {
                  'Daniel', 'Christopher Online (Natural)', 'Natural', 'George', 'David'],
     pitch: 0.85,
     rate: 0.85,
+  },
+  'TEST SUBJECT 1': {
+    favourites: ['Andrew Online (Natural)', 'Brian Online (Natural)', 'Eric Online (Natural)',
+                 'Google US English', 'Natural', 'Mark', 'David'],
+    pitch: 1.05,
+    rate: 0.7,
   },
   // The narrator (lines with no name) gets a deep "movie trailer" voice.
   '': {
@@ -249,7 +285,7 @@ function sayOutLoud(line) {
   words.pitch = who.pitch;
   words.rate = who.rate;
   // The mouth moves only while the voice is really talking.
-  words.onstart = function () { voiceTalking = line.who === 'THE SCIENTIST'; };
+  words.onstart = function () { voiceTalking = line.who !== ''; };   // the narrator has no mouth!
   words.onend = function () { voiceTalking = false; };
   words.onerror = function () { voiceTalking = false; };
   window.speechSynthesis.resume();         // in case it got stuck on "pause"
@@ -311,9 +347,17 @@ function voiceBox(job, key, recording) {
 }
 
 // Every line in the whole show, in order.
+// (If a line is said more than once, like "food...", it's only listed once,
+// so you only have to record it once.)
 function allLines() {
-  const lines = [];
-  SHOTS.forEach(function (shot) { shot.lines.forEach(function (l) { lines.push(l); }); });
+  const lines = [], seen = {};
+  SHOTS.forEach(function (shot) {
+    shot.lines.forEach(function (l) {
+      if (seen[voiceKey(l)]) return;
+      seen[voiceKey(l)] = true;
+      lines.push(l);
+    });
+  });
   return lines;
 }
 
@@ -429,6 +473,36 @@ const SHOTS = [
     sounds: [{ at: 0.2, play: stingSound }],
     draw: function (t) { drawTitleCard(t); },
   },
+
+  // ======================= SCENE 2: CELL 1 =======================
+  // bonks: the moments his head hits the wall (in seconds from the
+  // start of the shot). Each one makes a BONK and some spinning stars.
+  { // 7. Meanwhile... in Cell 1...
+    length: 7,
+    cam: [{ x: 800, y: 450, zoom: 1 }, { x: 860, y: 470, zoom: 1.1 }],
+    lines: [{ at: 0.5, who: '', say: 'Meanwhile... in Cell 1...' }],
+    sounds: [{ at: 2.3, play: growlSound }],
+    bonks: [3.6, 5.6],
+    draw: function (t) {
+      drawCell(t, this.bonks);
+      drawPrisoner(t, this.bonks);
+    },
+  },
+  { // 8. Close-up. BONK. "food..." BONK. "food..." BONK. "food..."
+    length: 8,
+    cam: [{ x: 1060, y: 500, zoom: 2.1 }, { x: 1070, y: 490, zoom: 2.3 }],
+    lines: [
+      { at: 1.2, who: 'TEST SUBJECT 1', say: 'food...' },
+      { at: 3.7, who: 'TEST SUBJECT 1', say: 'food...' },
+      { at: 6.2, who: 'TEST SUBJECT 1', say: 'food...' },
+    ],
+    sounds: [],
+    bonks: [1.0, 3.5, 6.0],
+    draw: function (t) {
+      drawCell(t, this.bonks);
+      drawPrisoner(t, this.bonks);
+    },
+  },
 ];
 
 // How long is the whole episode? Add up every shot.
@@ -448,7 +522,9 @@ function findShot(time) {
 // ---------------------------------------------------------------------
 //  DRAWING THE LAB.
 // ---------------------------------------------------------------------
+let labOnScreen = false;   // is the lab showing? (only the lab has bubble sounds)
 function drawLab(t, look) {
+  labOnScreen = true;
   // The back wall: dark purple, darker at the bottom.
   const wall = ctx.createLinearGradient(0, 0, 0, 700);
   wall.addColorStop(0, '#1d1636');
@@ -693,6 +769,232 @@ function drawScientist(t, look) {
   }
 }
 
+// ---------------------------------------------------------------------
+//  CELL 1. A small grey prison cell with one tiny window.
+// ---------------------------------------------------------------------
+const WALL_X = 1140;   // where the right-hand wall starts (the one he bonks)
+
+// How long ago was the last bonk? (A big number if there hasn't been one yet.)
+function sinceBonk(t, bonks) {
+  let since = 99;
+  bonks.forEach(function (b) { if (t >= b) since = Math.min(since, t - b); });
+  return since;
+}
+
+function drawCell(t, bonks) {
+  // Every BONK shakes the whole picture, just for a moment.
+  const since = sinceBonk(t, bonks);
+  if (since < 0.15) ctx.translate((Math.random() - 0.5) * 12, (Math.random() - 0.5) * 8);
+
+  // The back wall: grey bricks.
+  ctx.fillStyle = '#3b404b';
+  ctx.fillRect(-400, -200, 2400, 960);
+  drawBricks(-400, -200, WALL_X + 400, 960, '#2f333c');
+  // The floor.
+  ctx.fillStyle = '#22252c';
+  ctx.fillRect(-400, 760, 2400, 400);
+
+  // The tiny window, with bars, and moonlight shining down through it.
+  ctx.fillStyle = '#0d1430';
+  ctx.fillRect(250, 150, 150, 100);
+  ctx.fillStyle = '#f4f1d0';
+  ctx.beginPath(); ctx.arc(355, 185, 18, 0, Math.PI * 2); ctx.fill();   // the moon!
+  ctx.fillStyle = '#666c78';
+  for (let x = 270; x < 400; x += 30) ctx.fillRect(x, 150, 8, 100);
+  ctx.fillStyle = 'rgba(190,210,255,0.07)';
+  ctx.beginPath();
+  ctx.moveTo(250, 250); ctx.lineTo(400, 250); ctx.lineTo(640, 760); ctx.lineTo(330, 760);
+  ctx.fill();
+
+  // The metal bed.
+  ctx.fillStyle = '#555b66';
+  ctx.fillRect(120, 640, 360, 22);
+  ctx.fillRect(130, 662, 14, 98);
+  ctx.fillRect(456, 662, 14, 98);
+  ctx.fillStyle = '#7d7a6e';                       // a thin, lumpy mattress
+  ctx.fillRect(125, 615, 350, 28);
+  ctx.fillStyle = '#9a967f';                       // the flattest pillow ever
+  ctx.fillRect(135, 600, 80, 18);
+
+  // The door, with a little slot where food comes through (when it comes...)
+  ctx.fillStyle = '#4b505c';
+  ctx.fillRect(560, 360, 200, 400);
+  ctx.strokeStyle = '#2a2d34';
+  ctx.lineWidth = 6;
+  ctx.strokeRect(560, 360, 200, 400);
+  ctx.fillStyle = '#1b1d22';
+  ctx.fillRect(610, 400, 100, 60);                 // the peephole window
+  ctx.fillStyle = '#666c78';
+  for (let x = 625; x < 710; x += 25) ctx.fillRect(x, 400, 6, 60);
+  ctx.fillStyle = '#2a2d34';
+  ctx.fillRect(605, 620, 110, 26);                 // the food slot
+  ctx.fillStyle = '#8a8f9a';
+  ctx.beginPath(); ctx.arc(735, 560, 9, 0, Math.PI * 2); ctx.fill();   // the handle
+
+  // The EMPTY food bowl... with a fly buzzing round it.
+  ctx.fillStyle = '#9aa0ab';
+  ctx.beginPath(); ctx.ellipse(850, 748, 45, 14, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#5d626d';
+  ctx.beginPath(); ctx.ellipse(850, 744, 34, 8, 0, 0, Math.PI * 2); ctx.fill();
+  const flyX = 850 + Math.cos(t * 5) * 45, flyY = 700 + Math.sin(t * 7.3) * 18;
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  const flap = Math.sin(t * 80) * 3;               // wings flapping SUPER fast
+  ctx.beginPath(); ctx.ellipse(flyX - 3, flyY - 5 - flap, 4, 6, -0.4, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(flyX + 3, flyY - 5 + flap, 4, 6, 0.4, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#000';
+  ctx.beginPath(); ctx.arc(flyX, flyY, 4, 0, Math.PI * 2); ctx.fill();
+
+  // The right-hand wall: the one he keeps bonking. It sticks out towards us.
+  ctx.fillStyle = '#30343e';
+  ctx.fillRect(WALL_X, -200, 800, 960);
+  drawBricks(WALL_X, -200, 800, 960, '#262931');
+  ctx.fillStyle = '#4a505c';
+  ctx.fillRect(WALL_X, -200, 6, 960);              // its edge catches the light
+  // A shadow on the floor in front of it.
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.fillRect(WALL_X, 760, 800, 400);
+
+  // Dust falls from the wall after every bonk.
+  if (since < 1) {
+    ctx.fillStyle = 'rgba(200,200,200,' + (1 - since) + ')';
+    for (let i = 0; i < 6; i++) {
+      ctx.fillRect(WALL_X - 4 - (i % 3) * 6, 380 + i * 17 + since * 220, 4, 4);
+    }
+  }
+}
+
+// Bricks: rows of rectangles, and every other row slides over by half a
+// brick, just like a real wall.
+function drawBricks(x, y, w, h, mortar) {
+  ctx.strokeStyle = mortar;
+  ctx.lineWidth = 4;
+  let row = 0;
+  for (let by = y; by < y + h; by += 45) {
+    ctx.beginPath(); ctx.moveTo(x, by); ctx.lineTo(x + w, by); ctx.stroke();
+    for (let bx = x + (row % 2) * 55; bx < x + w; bx += 110) {
+      ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(bx, by + 45); ctx.stroke();
+    }
+    row++;
+  }
+}
+
+// ---------------------------------------------------------------------
+//  TEST SUBJECT 1. We see him from the side, facing the wall.
+//
+//  HOW THE BONK WORKS: his body tips around his hips, like a door on a
+//  hinge. "lean" says how far: -1 = leaning way back (winding up),
+//  0 = standing up, 1 = forehead on the wall. BONK!
+// ---------------------------------------------------------------------
+// He's all WHITE, with BLACK outlines. Like a doodle that came to life.
+const DUDE_WHITE = '#ffffff';
+const DUDE_LINE = '#000000';
+const DUDE_LINE_WIDTH = 5;
+
+function leanAt(t, bonks) {
+  for (const b of bonks) {
+    const u = t - (b - 0.9);                       // 0.9 seconds before the bonk...
+    if (u >= 0 && u < 0.7) return -ease(u / 0.7);  // ...slowly lean back...
+    if (u >= 0.7 && u < 0.9) return -1 + 2 * ((u - 0.7) / 0.2);   // ...then SWING forward!
+    if (t >= b && t < b + 0.5) return 1 - ease((t - b) / 0.5);    // ...and bounce back off.
+  }
+  return Math.sin(t * 1.5) * 0.04;                 // otherwise: just swaying sadly
+}
+
+function drawPrisoner(t, bonks) {
+  const lean = leanAt(t, bonks);
+  const tip = lean > 0 ? lean * 0.67 : lean * 0.3;    // how many "radians" to tip
+  const hipX = 1000, hipY = 640;
+
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = DUDE_LINE_WIDTH;
+  ctx.strokeStyle = DUDE_LINE;
+
+  // Legs: two black lines, with little feet (these don't tip over).
+  ctx.beginPath(); ctx.moveTo(hipX - 16, hipY - 5); ctx.lineTo(hipX - 18, 748); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(hipX + 16, hipY - 5); ctx.lineTo(hipX + 16, 748); ctx.stroke();
+  dudeCircle(hipX - 12, 752, 12, 7);
+  dudeCircle(hipX + 24, 752, 12, 7);
+
+  // Everything above the hips tips over together.
+  ctx.save();
+  ctx.translate(hipX, hipY);
+  ctx.rotate(tip);
+  ctx.lineWidth = DUDE_LINE_WIDTH;
+  ctx.strokeStyle = DUDE_LINE;
+
+  // The back arm goes BEHIND the body, so we draw it first.
+  const swing = Math.sin(t * 3) * 5 - lean * 10;   // a floppy arm, too hungry to lift it
+  dudeArm(-6, -95, -14 - swing, -30);
+
+  // The body: a rectangle.
+  ctx.fillStyle = DUDE_WHITE;
+  ctx.fillRect(-35, -125, 70, 125);
+  ctx.strokeRect(-35, -125, 70, 125);
+
+  // The head: a bald circle.
+  dudeCircle(0, -170, 42, 42);
+
+  // A tired eye: a black dot with a droopy eyelid line over it.
+  ctx.fillStyle = DUDE_LINE;
+  ctx.beginPath(); ctx.arc(20, -175, 5, 0, Math.PI * 2); ctx.fill();
+  ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.moveTo(10, -184); ctx.lineTo(30, -181); ctx.stroke();
+
+  // The mouth. It opens when he talks.
+  let open = talking ? 0.3 + 0.7 * Math.abs(Math.sin(t * 12)) : 0;
+  if (myVoice && myVoice.who === 'TEST SUBJECT 1') open = myLoudness();
+  if (open > 0.05) {
+    ctx.beginPath(); ctx.ellipse(27, -150, 7, 1 + open * 8, 0, 0, Math.PI * 2); ctx.fill();
+  } else {
+    ctx.beginPath(); ctx.moveTo(20, -150); ctx.lineTo(33, -151); ctx.stroke();   // closed: a flat, hungry line
+  }
+
+  // The front arm goes IN FRONT of the body, so we draw it last.
+  ctx.lineWidth = DUDE_LINE_WIDTH;
+  dudeArm(8, -95, 18 + swing, -28);
+  ctx.restore();
+
+  // STARS spin round his head after every bonk.
+  const since = sinceBonk(t, bonks);
+  if (since < 1.3) {
+    const headX = hipX + Math.sin(tip) * 170, headY = hipY - Math.cos(tip) * 170 - 50;
+    for (let k = 0; k < 3; k++) {
+      const a = since * 7 + k * 2.1;
+      drawStar(headX + Math.cos(a) * 55, headY + Math.sin(a) * 14, 13, '#ffe14d');
+    }
+  }
+}
+
+// A white circle (or oval) with a black outline: his head, hands and feet.
+function dudeCircle(x, y, width, height) {
+  ctx.fillStyle = DUDE_WHITE;
+  ctx.beginPath(); ctx.ellipse(x, y, width, height, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.lineWidth = DUDE_LINE_WIDTH;
+  ctx.strokeStyle = DUDE_LINE;
+  ctx.stroke();
+}
+// An arm: a black line from the shoulder, with a little circle hand on the end.
+function dudeArm(shoulderX, shoulderY, handX, handY) {
+  ctx.lineWidth = DUDE_LINE_WIDTH;
+  ctx.strokeStyle = DUDE_LINE;
+  ctx.beginPath(); ctx.moveTo(shoulderX, shoulderY); ctx.lineTo(handX, handY); ctx.stroke();
+  dudeCircle(handX, handY, 9, 9);
+}
+
+// A five-pointed star.
+function drawStar(x, y, r, color) {
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const a = -Math.PI / 2 + i * Math.PI / 5;
+    const len = i % 2 === 0 ? r : r * 0.45;         // points out, points in, out, in...
+    ctx.lineTo(x + Math.cos(a) * len, y + Math.sin(a) * len);
+  }
+  ctx.closePath();
+  ctx.fill();
+}
+
 // LIGHTNING: the whole screen flashes white, then fades.
 function drawLightning(t) {
   if (t < 0 || t > 1.2) return;
@@ -716,7 +1018,7 @@ function drawTitleCard(t) {
   ctx.fillStyle = '#d8ffe4';
   ctx.textAlign = 'center';
   ctx.font = '900 150px system-ui, sans-serif';
-  ctx.fillText('TEST SUBJECT 1', 0, 0);
+  ctx.fillText('REINCARNATED', 0, 0);
   ctx.restore();
   if (t > 1.5) {
     ctx.globalAlpha = ease((t - 1.5) / 0.5);
@@ -758,7 +1060,7 @@ function drawWords(now) {
   // Without one: while the letters are still appearing.
   if (myVoice) talking = false;            // your voice moves the mouth by itself
   else if (englishVoices().length) talking = voiceTalking;
-  else if (line.who === 'THE SCIENTIST' && count < line.say.length) talking = true;
+  else if (line.who && count < line.say.length) talking = true;
 
   // The dark box.
   ctx.fillStyle = 'rgba(0,0,0,0.65)';
@@ -800,11 +1102,68 @@ function press() {
     if (window.speechSynthesis) window.speechSynthesis.resume();
   }
 }
-canvas.addEventListener('pointerdown', function (e) { e.preventDefault(); press(); });
+// ---------------------------------------------------------------------
+//  SKIPPING. The show is just "how many seconds in are we?" (showTime),
+//  so skipping is easy: change that number, and the next picture we
+//  draw is from the new moment!
+// ---------------------------------------------------------------------
+
+// When does each shot start? (Shot 1 at 0 seconds, shot 2 at 6 seconds...)
+function shotStarts() {
+  const starts = [];
+  let start = 0;
+  SHOTS.forEach(function (shot) { starts.push(start); start += shot.length; });
+  return starts;
+}
+
+function jumpTo(time) {
+  startAudio();
+  stopTalking();               // stop whatever someone was saying
+  lettersShown = {};           // so the line we land on gets said from the start
+  showTime = clamp(time, 0, EPISODE_LENGTH);
+  if (mode === 'ready' || mode === 'done') { loadRecordings(); mode = 'playing'; }
+  if (showTime >= EPISODE_LENGTH) mode = 'done';
+}
+
+// ⏭ Skip forward: to the start of the NEXT shot.
+function skipForward() {
+  const next = shotStarts().find(function (start) { return start > showTime + 0.01; });
+  jumpTo(next === undefined ? EPISODE_LENGTH : next);
+}
+
+// ⏮ Skip back: to the start of THIS shot. Already at the start? Then the one before.
+function skipBack() {
+  const starts = shotStarts();
+  const now = mode === 'done' ? EPISODE_LENGTH : showTime;
+  let target = 0;
+  starts.forEach(function (start) { if (start < now - 1.5) target = start; });
+  jumpTo(target);
+}
+
+document.getElementById('skipForward').addEventListener('click', skipForward);
+document.getElementById('skipBack').addEventListener('click', skipBack);
+document.getElementById('playPause').addEventListener('click', press);
+['pointerdown', 'touchstart', 'mousedown'].forEach(function (t) {
+  document.getElementById('controls').addEventListener(t, function (e) { e.stopPropagation(); });
+});
+
+// Tapping the screen: on the progress bar, jump there. Anywhere else: play/pause.
+canvas.addEventListener('pointerdown', function (e) {
+  e.preventDefault();
+  const stageTapX = (e.clientX - stageX) / stageScale;   // where you tapped, on the stage
+  const stageTapY = (e.clientY - stageY) / stageScale;
+  if (stageTapY > STAGE_H - 50 && stageTapY <= STAGE_H + 30 && mode !== 'ready') {
+    jumpTo(EPISODE_LENGTH * clamp(stageTapX / STAGE_W, 0, 1));
+  } else {
+    press();
+  }
+});
 window.addEventListener('keydown', function (e) {
   if (!studio.hidden) return;             // keys in the studio aren't for the show
   if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); press(); }
   if (e.code === 'KeyR') { mode = 'ready'; press(); }        // R = start again
+  if (e.code === 'ArrowRight') skipForward();
+  if (e.code === 'ArrowLeft') skipBack();
 });
 
 // ---------------------------------------------------------------------
@@ -924,6 +1283,9 @@ function playSounds(before, after) {
     shot.sounds.forEach(function (s) {
       if (before < start + s.at && start + s.at <= after) s.play();
     });
+    (shot.bonks || []).forEach(function (b) {
+      if (before < start + b && start + b <= after) bonkSound();
+    });
     start += shot.length;
   });
 }
@@ -936,7 +1298,7 @@ function frame(nowMs) {
     showTime = Math.min(EPISODE_LENGTH, showTime + dt);
     playSounds(before, showTime);
     // Bubble sounds now and then, while we're in the lab.
-    if (findShot(showTime).shot !== SHOTS[SHOTS.length - 1] && Math.random() < dt * 2.5) bubbleSound();
+    if (labOnScreen && Math.random() < dt * 2.5) bubbleSound();
     if (showTime >= EPISODE_LENGTH) mode = 'done';
   }
   studioButton.style.display = mode === 'playing' ? 'none' : '';
@@ -964,6 +1326,7 @@ function draw() {
   ctx.translate(STAGE_W / 2, STAGE_H / 2);
   ctx.scale(lerp(from.zoom, to.zoom, u), lerp(from.zoom, to.zoom, u));
   ctx.translate(-lerp(from.x, to.x, u), -lerp(from.y, to.y, u));
+  labOnScreen = false;
   here.shot.draw(here.t);
   ctx.restore();
 
@@ -1003,11 +1366,16 @@ function draw() {
     ctx.fillText('Paused: tap to keep watching', STAGE_W / 2, 590);
   }
 
-  // How far through the episode are we? A thin green bar along the bottom.
+  // How far through the episode are we? A green bar along the bottom.
+  // (Tap it to jump!) The little lines show where each shot starts.
   ctx.fillStyle = 'rgba(255,255,255,0.15)';
-  ctx.fillRect(0, STAGE_H - 8, STAGE_W, 8);
+  ctx.fillRect(0, STAGE_H - 14, STAGE_W, 14);
   ctx.fillStyle = '#5dff8f';
-  ctx.fillRect(0, STAGE_H - 8, STAGE_W * showTime / EPISODE_LENGTH, 8);
+  ctx.fillRect(0, STAGE_H - 14, STAGE_W * showTime / EPISODE_LENGTH, 14);
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  shotStarts().forEach(function (start) {
+    if (start > 0) ctx.fillRect(STAGE_W * start / EPISODE_LENGTH - 2, STAGE_H - 14, 4, 14);
+  });
   ctx.restore();
 }
 
