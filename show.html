@@ -272,6 +272,17 @@ function clangSound() {
   beep(950, 620, 0.45, 'square', 0.05);
   beep(1400, 1100, 0.3, 'triangle', 0.04, 0.05);
 }
+// BOOM. A giant robot footstep.
+function stompSound() { beep(75, 30, 0.35, 'sine', 0.55); }
+// WHOOSH! A sword swinging through the air.
+function swooshSound() { beep(1400, 180, 0.25, 'sawtooth', 0.035); }
+// BZZZZZZZ! Laser eyes. (Two buzzy notes that go on and on.)
+function laserSound() {
+  beep(1500, 1400, 7, 'sawtooth', 0.025);
+  beep(760, 720, 7, 'square', 0.02);
+}
+// boop.
+function boopSound() { beep(800, 1300, 0.12, 'sine', 0.25); }
 // Wheeeeeooooo... something falling from the sky. The pitch goes DOWN as it falls.
 function fallingSound() { beep(2200, 500, 1.1, 'sine', 0.12); }
 // THUD. Landing on your feet.
@@ -297,11 +308,16 @@ function stopMetal() {
   metalBus = null;
 }
 
-function metalMusic() {
+// The intro's music: 11 seconds, loud, with a HUGE crash on the SMASH.
+function metalMusic() { playMetal(INTRO.end, 0.45, INTRO.smash - 0.01); }
+
+// Play the metal band for "length" seconds. bigCrashAt: when to hit a
+// HUGE cymbal crash (or null for none).
+function playMetal(length, volume, bigCrashAt) {
   if (!audio) return;
   stopMetal();
   const bus = audio.createGain();
-  bus.gain.value = 0.45;
+  bus.gain.value = volume;
   bus.connect(audio.destination);
   metalBus = bus;
 
@@ -324,9 +340,7 @@ function metalMusic() {
   }
 
   const start = audio.currentTime + 0.02;
-  const end = INTRO.end - 0.6;   // stop chugging just before the intro is over
-  // How long after the music starts is the SMASH? (The music starts at 0.01.)
-  const smashAt = INTRO.smash - 0.01;
+  const end = length - 0.6;     // stop chugging just before the end
 
   // Play one power chord: the note, the note a "fifth" up, and the note an octave up.
   function chord(time, note, seconds) {
@@ -371,7 +385,7 @@ function metalMusic() {
   }
 
   hiss(start, 4000, 0.3, 1.5);                 // CRASH to start!
-  hiss(start + smashAt, 3000, 0.5, 2.5);       // a HUGE crash on the SMASH
+  if (bigCrashAt !== null) hiss(start + bigCrashAt, 3000, 0.5, 2.5);   // a HUGE crash
   for (let i = 0; i * METAL_BEAT < end; i++) {
     const time = start + i * METAL_BEAT;
     chord(time, METAL_RIFF[i % METAL_RIFF.length], METAL_BEAT * 0.85);   // chug!
@@ -913,6 +927,146 @@ const SHOTS = [
     },
   },
 ];
+
+// =====================================================================
+//  SCENE 7: THE BIG BATTLE! (4 whole minutes)
+//
+//  KEYFRAMES: this is how real animators work. Instead of saying where
+//  everyone is on EVERY frame, we only say where they are at a few
+//  important moments: "at 12 seconds, be HERE. At 17 seconds, be THERE."
+//  The computer fills in everything in between. Each list below is a
+//  "track" of [time, place] keyframes. Times are seconds into the battle.
+// =====================================================================
+const BEAT_TIMES = [0, 14, 30, 50, 70, 90, 110, 130, 150, 170, 200, 215, 240];   // 12 parts
+const BATTLE_LENGTH = 240;    // 4 minutes = 240 seconds!
+const BIG_SCALE = 0.85;       // how big the robot is out here
+
+// --- THE ROBOT ---
+const BOT_X = [[0, 350], [7, 350], [12, 600], [20, 600], [22, 850], [50, 850], [56, 1500], [59, 1500],
+  [65, 700], [70, 700], [72, 900], [90, 900], [92, 1000], [134, 1000], [136, 1050], [152, 1050],
+  [156, 1600], [166, 1600], [170, 1100]];
+const BOT_WALKS = [[7, 12], [20, 22], [50, 56], [59, 65], [70, 72], [90, 92], [134, 136], [152, 156], [166, 170]];
+const BOT_TWIRLS = [[57, 58.5], [69, 70], [161, 162]];       // spinning round to turn and face someone
+const SLASHES = [17.45, 24.05, 41.4, 93, 95.5, 98, 100.5, 103, 150];   // right-sword slashes
+const CLASHES = [];                                          // fist vs sword! (filled in below)
+for (let k = 0; k < 10; k++) CLASHES.push(136.6 + k * 1.2);
+const DODGES = [93, 95.5, 98, 100.5, 103];                   // Test Subject 1 backflips over these
+const COMBO = [];                                            // Ruff's punch combo
+for (let k = 0; k <= 10; k++) COMBO.push(77 + k * 0.5);
+const RUFF_PUNCHES = [33].concat(COMBO, CLASHES, [219.5]);
+const LASER_AIM = [[116, 1250], [117.5, 1600], [119, 1400], [120.5, 1700], [123, 1750]];
+
+// Robot arm tracks: 0 = sword down, 1 = sword up high.
+const ARM_R = [[0, 0.25]], ARM_L = [[0, 0.25]];
+SLASHES.forEach(function (when) {
+  ARM_R.push([when - 0.55, 0.25], [when - 0.15, 1], [when + 0.1, 0.03], [when + 0.8, 0.25]);
+});
+CLASHES.forEach(function (when) { ARM_R.push([when - 0.5, 0.75], [when, 0.35]); });
+// Both swords up... SLAM... STUCK in the ground... YANK!
+[ARM_R, ARM_L].forEach(function (arm) {
+  arm.push([70.5, 0.25], [72, 1], [72.8, 1], [73.05, 0], [84, 0], [84.4, 0.7], [85.5, 0.25]);
+  arm.push([157, 0.25], [158, 1], [161, 1], [162, 0.25]);     // "GOODBYE... DOG."
+});
+function byTime(a, b) { return a[0] - b[0]; }
+ARM_R.sort(byTime);
+ARM_L.sort(byTime);
+
+// --- TEST SUBJECT 1 ---
+const TS1_X = [[0, 1000], [17.0, 1000], [17.4, 1300], [23.6, 1300], [23.95, 1550], [50, 1550],
+  [53.5, 1950], [54, 1950], [57.5, 900], [58, 900], [60, 450], [61, 450], [64, 1500], [70, 1500],
+  [71, 1300], [72.9, 1300], [73.3, 1550], [90, 1550], [91.5, 1350], [105, 1350], [112, 1350],
+  [115, 1720], [124, 1720], [127.5, 2450], [157.4, 2450], [157.45, 150], [159, 700],
+  [199, 800], [203, 800], [206, 960], [232, 960], [240, 1500]];
+DODGES.forEach(function (when) { TS1_X.push([when - 0.1, 1350], [when + 0.4, 1530], [when + 1.6, 1350]); });
+TS1_X.sort(byTime);
+const TS1_FACING = [[0, 1], [12.5, -1], [17.0, 1], [17.5, -1], [23.7, 1], [24.1, -1], [50, 1], [53.8, -1],
+  [60.5, 1], [64.2, -1], [73.0, 1], [73.4, -1], [112, 1], [115.2, -1], [124, 1], [157.45, 1]];
+const TS1_JUMPS = [[17.0, 17.4, 120], [23.6, 23.95, 130], [72.9, 73.3, 130]];   // [start, end, how high]
+DODGES.forEach(function (when) { TS1_JUMPS.push([when - 0.1, when + 0.4, 190]); });
+const TS1_HIDDEN = [127.6, 157.46];    // off-screen (so he doesn't zoom across when he moves sides)
+
+// --- RUFF ---
+const RUFF_X = [[0, 1150], [17.0, 1150], [17.4, 1450], [29, 1450], [31, 1035], [41.4, 1035], [42.8, 2400],
+  [74, 2400], [76.5, 1085], [84.9, 1085], [86.3, 1900], [112, 1900], [115, 1790], [124, 1790],
+  [128, 2450], [130, 2450], [131.5, 1700], [135, 1700], [136, 1380], [149.9, 1380], [151.5, 1950],
+  [216, 1950], [219, 1060], [232, 1060], [240, 1600]];
+CLASHES.forEach(function (when) { RUFF_X.push([when - 0.45, 1430], [when, 1380]); });
+RUFF_X.sort(byTime);
+const RUFF_FACING = [[0, -1], [17.0, 1], [17.5, -1], [124, 1], [130, -1], [232, 1]];
+const RUFF_FLIGHTS = [[41.4, 42.8, 350], [84.9, 86.3, 300], [149.9, 151.5, 250]];   // WHACKED!
+const RUFF_JUMPS = RUFF_FLIGHTS.concat([[17.0, 17.4, 150], [216.3, 218.7, 330], [219.2, 219.8, 60]]);
+const RUFF_LYING = [[86.3, 107, 108], [151.5, 215, 216]];   // [lands, starts getting up, up]
+
+// --- THE CAMERA ---
+const CAM_X = [[0, 1000], [14, 1100], [50, 1100], [53, 1400], [56, 1400], [59, 1000], [63, 900], [66, 1000],
+  [70, 1100], [110, 1100], [113, 1300], [128, 1300], [130, 1350], [150, 1350], [156, 1300], [170, 1100],
+  [200, 1100], [215, 1150], [232, 1050], [240, 1350]];
+const CAM_ZOOM = [[0, 1], [130, 1], [136, 1.1], [149, 1.1], [152, 1], [156, 0.9], [166, 0.9], [170, 1],
+  [205, 1], [208, 1.1], [213, 1], [219, 1.25], [230, 1.25], [234, 1]];
+
+// --- WHO SAYS WHAT ---
+const BATTLE_LINES = [
+  [1.0, 'TEST SUBJECT 1', 'we... we escaped...'], [3.2, 'RUFF', 'WOOF! WOOF!'], [4.6, '', ''],
+  [12.6, 'BIG ROBOT', 'FOUND... YOU.'], [15.2, '', ''],
+  [18.0, 'TEST SUBJECT 1', 'whoa!'], [19.2, '', ''], [25, 'RUFF', 'GRRRR!'], [26.5, '', ''],
+  [33.6, 'RUFF', 'OW! OW! OW!'], [36.2, 'BIG ROBOT', 'HA. HA. HA.'], [38.8, '', ''],
+  [44, 'TEST SUBJECT 1', 'ruff!'], [45.5, '', ''], [51, 'TEST SUBJECT 1', 'aaaah!'], [52.5, '', ''],
+  [66, 'BIG ROBOT', 'WHERE... DID... HE... GO?'], [68.6, 'TEST SUBJECT 1', '...over here.'],
+  [74.5, 'TEST SUBJECT 1', 'its swords are stuck!'], [76.3, '', ''],
+  [86.6, 'TEST SUBJECT 1', 'ruff! no!'], [88, '', ''],
+  [104, 'TEST SUBJECT 1', 'missed me!'], [106, 'BIG ROBOT', 'STAND... STILL.'], [108.5, '', ''],
+  [110.3, 'BIG ROBOT', 'ACTIVATING... LASER EYES.'], [112.5, 'TEST SUBJECT 1', 'hide!'], [113.8, '', ''],
+  [125, 'TEST SUBJECT 1', 'run!'], [126.3, '', ''], [132, 'RUFF', 'GRRRRRR!'], [133.5, '', ''],
+  [158.2, 'BIG ROBOT', 'GOODBYE... DOG.'], [159.8, 'TEST SUBJECT 1', 'hey! robot! over here!'],
+  [162.5, '', ''], [163.5, 'TEST SUBJECT 1', 'bet you cant catch me!'], [166, '', ''],
+  [180, 'BIG ROBOT', 'TARGET... TARGET...'], [183, '', ''], [188, 'BIG ROBOT', 'TAR... GET...'],
+  [190.5, '', ''], [202, 'BIG ROBOT', 'SYSTEMS... DIZZY...'], [205, '', ''],
+  [207, 'TEST SUBJECT 1', 'boop.'], [208, '', ''], [212.5, 'BIG ROBOT', 'DOES... NOT... COMPUTE...'],
+  [215.5, '', ''], [220.5, 'RUFF', 'WOOF! WOOF! WOOF!'], [223.2, 'TEST SUBJECT 1', 'we did it...'],
+  [225, '', ''], [226.5, 'TEST SUBJECT 1', '...now can we get food?'], [229.5, 'RUFF', 'WOOF!'], [231, '', ''],
+];
+
+// --- SOUNDS ---
+const BATTLE_SOUNDS = [[4.0, stompSound], [5.2, stompSound], [6.2, stompSound], [7, wallBreakSound],
+  [116, laserSound], [123, wallBreakSound], [131.5, powerUpSound], [207, boopSound],
+  [211.5, wallBreakSound], [211.6, stompSound], [219.6, victorySound]];
+BOT_WALKS.forEach(function (w) {               // BOOM... BOOM... BOOM...
+  for (let when = w[0] + 0.3; when < w[1]; when += 0.55) BATTLE_SOUNDS.push([when, stompSound]);
+});
+SLASHES.forEach(function (when) { BATTLE_SOUNDS.push([when - 0.1, swooshSound], [when + 0.08, clangSound]); });
+BATTLE_SOUNDS.push([72.95, swooshSound], [73.05, clangSound]);
+RUFF_PUNCHES.forEach(function (when) { if (when < 219) BATTLE_SOUNDS.push([when + 0.05, robotHitSound]); });
+RUFF_FLIGHTS.forEach(function (f) { BATTLE_SOUNDS.push([f[1], thudSound]); });
+
+// --- SHAKES, and things that pop up (words, dust, sparks) ---
+const SHAKES = [[4, 6], [5.2, 7], [6.2, 8], [7, 25], [73.05, 28], [123, 22], [211.5, 40]];
+SLASHES.forEach(function (when) { if (when !== 41.4 && when !== 150) SHAKES.push([when + 0.08, 16]); });
+const POP_WORDS = [[7.1, 350, 300, 'KRASH!'], [17.55, 950, 450, 'WHAM!'], [24.15, 1200, 450, 'WHAM!'],
+  [73.15, 900, 420, 'STUCK!'], [123.05, 1750, 450, 'KABLAM!'], [211.6, 1400, 420, 'KA-BOOM!'],
+  [219.55, 1010, 400, 'HIGH FIVE!']];
+const PUNCH_WORDS = ['POW!', 'BAM!', 'WHAM!', 'BONK!', 'KAPOW!', 'SMACK!', 'THWACK!', 'BIFF!', 'ZONK!', 'KRAK!', 'BOOM!'];
+COMBO.forEach(function (when, k) { POP_WORDS.push([when + 0.05, 930 + (k % 3) * 40, 330 + (k % 2) * 90, PUNCH_WORDS[k]]); });
+POP_WORDS.push([33.05, 950, 450, 'CLANG!']);
+CLASHES.forEach(function (when, k) { if (k % 2 === 0) POP_WORDS.push([when + 0.05, 1260, 420, 'CLANG!']); });
+
+// Make the 12 shots. Each one is one part of the battle.
+BEAT_TIMES.slice(0, -1).forEach(function (start, i) {
+  const end = BEAT_TIMES[i + 1];
+  const inThisPart = function (item) { return item[0] >= start && item[0] < end; };
+  const sounds = BATTLE_SOUNDS.filter(inThisPart).map(function (snd) { return { at: snd[0] - start, play: snd[1] }; });
+  // Heavy metal for the fighting! (Part 1 starts it when the robot bursts out.)
+  if (i === 0) sounds.push({ at: 7.05, play: function () { playMetal(7, 0.28, null); } });
+  if (i >= 1 && i <= 10) sounds.push({ at: 0.01, play: function () { playMetal(end - start, 0.28, null); } });
+  SHOTS.push({
+    length: end - start,
+    follow: function (t) {
+      return { x: keyAt(CAM_X, start + t), y: 450, zoom: keyAt(CAM_ZOOM, start + t) };
+    },
+    lines: BATTLE_LINES.filter(inThisPart).map(function (l) { return { at: l[0] - start, who: l[1], say: l[2] }; }),
+    sounds: sounds,
+    draw: function (t) { drawBattle(start + t); },
+  });
+});
 
 // How long is the whole episode? Add up every shot.
 const EPISODE_LENGTH = SHOTS.reduce(function (sum, shot) { return sum + shot.length; }, 0);
@@ -2599,8 +2753,9 @@ function drawBigRobot(t, look) {
     ctx.restore();
   }
   // Arms (and swords). They go on top of the body.
-  bigArm(t, -1, look.raise, on, leftArm, swords);
-  bigArm(t, 1, look.raise, on, rightArm, swords);
+  // Each arm can move on its own (raiseL, raiseR), or both together (raise).
+  bigArm(t, -1, look.raiseL !== undefined ? look.raiseL : look.raise, on, leftArm, swords);
+  bigArm(t, 1, look.raiseR !== undefined ? look.raiseR : look.raise, on, rightArm, swords);
 
   if (head !== null) {
     ctx.save();
@@ -2623,6 +2778,22 @@ function drawBigRobot(t, look) {
       ctx.fill();
     });
     ctx.restore();
+    // DIZZY? Then its eyes turn into spinning spirals!
+    if (look.dizzy) {
+      ctx.fillStyle = '#111';
+      ctx.fillRect(745, 118, 110, 38);
+      ctx.strokeStyle = '#ffe14d';
+      ctx.lineWidth = 3;
+      [775, 825].forEach(function (cx) {
+        ctx.beginPath();
+        for (let a = 0; a < Math.PI * 5; a += 0.3) {
+          const r = a * 1.1;
+          const x = cx + Math.cos(a + t * 8) * r, y = 137 + Math.sin(a + t * 8) * r * 0.9;
+          if (a === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      });
+    }
     ctx.strokeStyle = '#111';                                                 // mouth grille
     ctx.lineWidth = 4;
     for (let k = 0; k < 4; k++) {
@@ -2648,6 +2819,402 @@ function drawBigRobot(t, look) {
       ctx.stroke();
     }
   });
+}
+
+// ---------------------------------------------------------------------
+//  KEYFRAME HELPERS
+// ---------------------------------------------------------------------
+// keyAt: where should something be at time T? Find the two keyframes T
+// is between, and go the right fraction of the way from one to the next.
+function keyAt(track, T) {
+  if (T <= track[0][0]) return track[0][1];
+  for (let i = 0; i < track.length - 1; i++) {
+    const a = track[i], b = track[i + 1];
+    if (T < b[0]) return lerp(a[1], b[1], (T - a[0]) / (b[0] - a[0]));
+  }
+  return track[track.length - 1][1];
+}
+// stepAt: like keyAt, but it SNAPS to each new value (for things like
+// which way someone faces, that don't slide smoothly).
+function stepAt(track, T) {
+  let value = track[0][1];
+  track.forEach(function (k) { if (T >= k[0]) value = k[1]; });
+  return value;
+}
+// bumpsAt: jumps! Each [start, end, height] makes a hop that goes up and down.
+function bumpsAt(list, T) {
+  let up = 0;
+  list.forEach(function (j) {
+    if (T > j[0] && T < j[1]) up += Math.sin((T - j[0]) / (j[1] - j[0]) * Math.PI) * j[2];
+  });
+  return up;
+}
+function isMoving(track, T) { return Math.abs(keyAt(track, T + 0.03) - keyAt(track, T - 0.03)) > 1; }
+
+// ---------------------------------------------------------------------
+//  THE BATTLE: who is where, at time T?
+// ---------------------------------------------------------------------
+// Test Subject 1's CLEVER PLAN: run round and round the robot, faster and
+// faster. (a = the angle around the circle.)
+const CIRCLE_START = 172, CIRCLE_END = 196;
+function circleAngle(T) {
+  const s = T - CIRCLE_START;
+  return Math.PI + 2 * s + 0.125 * s * s;   // speed goes up and up!
+}
+const CIRCLE_TOP_SPEED = 2 + 0.25 * (CIRCLE_END - CIRCLE_START);
+// The robot keeps spinning after he stops... and slows down, and stops
+// facing the front (a whole number of turns). How long does that take?
+const SPIN_AT_END = circleAngle(CIRCLE_END) - Math.PI;
+const SPIN_STOP = Math.ceil((SPIN_AT_END + CIRCLE_TOP_SPEED * 2.5) / (Math.PI * 2)) * Math.PI * 2;
+const SPIN_SLOWDOWN_TIME = 2 * (SPIN_STOP - SPIN_AT_END) / CIRCLE_TOP_SPEED;
+const ROBOT_STILL_AT = CIRCLE_END + SPIN_SLOWDOWN_TIME;
+
+function robotPose(T) {
+  const pose = { x: keyAt(BOT_X, T), bob: 0, spin: 0, tilt: 0,
+                 raiseL: keyAt(ARM_L, T), raiseR: keyAt(ARM_R, T),
+                 on: keyAt([[0, 1], [212.5, 1], [215, 0]], T), dizzy: T > 188 && T < 215 };
+  BOT_WALKS.forEach(function (w) {                       // stomping makes it bob
+    if (T > w[0] && T < w[1]) pose.bob = Math.abs(Math.sin((T - w[0]) / 0.55 * Math.PI)) * 10;
+  });
+  BOT_TWIRLS.forEach(function (w) {                      // turning round
+    if (T > w[0] && T < w[1]) pose.spin = ease((T - w[0]) / (w[1] - w[0])) * Math.PI * 2;
+  });
+  if (T >= CIRCLE_START && T < CIRCLE_END) pose.spin = circleAngle(T) - Math.PI;   // following him round
+  if (T >= CIRCLE_END && T < ROBOT_STILL_AT) {           // ...still spinning, slowing down
+    const s = T - CIRCLE_END;
+    pose.spin = SPIN_AT_END + CIRCLE_TOP_SPEED * s - 0.5 * (CIRCLE_TOP_SPEED / SPIN_SLOWDOWN_TIME) * s * s;
+  }
+  if (T >= ROBOT_STILL_AT && T < 208) pose.tilt = Math.sin(T * 3.2) * 0.08;   // wobble, wobble...
+  if (T >= 208) {                                        // ...TIMBERRRR!
+    const u = Math.min(1, (T - 208) / 3.5);
+    pose.tilt = u * u * Math.PI / 2;                     // u * u: slow at first, then FAST
+    if (T > 211.5 && T < 211.8) pose.tilt -= Math.sin((T - 211.5) / 0.3 * Math.PI) * 0.05;   // bounce
+  }
+  return pose;
+}
+
+function ts1Pose(T) {
+  const pose = { x: keyAt(TS1_X, T), lift: bumpsAt(TS1_JUMPS, T), facing: stepAt(TS1_FACING, T),
+                 flip: 0, squash: 1, lean: 0, size: 1, yOff: 0, behind: false,
+                 moving: isMoving(TS1_X, T), hidden: T > TS1_HIDDEN[0] && T < TS1_HIDDEN[1] };
+  DODGES.forEach(function (when, k) {                    // backflips!
+    if (k % 2 === 1 && T > when - 0.1 && T < when + 0.4) pose.flip = -((T - when + 0.1) / 0.5) * Math.PI * 2;
+  });
+  if (T > 115.2 && T < 123) pose.squash = 0.7;           // crouching behind the rock
+  if (T >= CIRCLE_START && T < CIRCLE_END) {             // running round the robot
+    const a = circleAngle(T);
+    pose.x = 1100 + Math.cos(a) * 380;
+    pose.behind = Math.sin(a) < 0;                       // round the back = behind the robot
+    pose.yOff = Math.sin(a) * 25;                        // further away = a bit higher up...
+    pose.size = 1 + Math.sin(a) * 0.08;                  // ...and a bit smaller
+    pose.facing = Math.sin(a) > 0 ? -1 : 1;
+    pose.moving = true;
+  }
+  if (T >= CIRCLE_END && T < 199) {
+    pose.x = lerp(1100 + Math.cos(circleAngle(CIRCLE_END)) * 380, 800, (T - CIRCLE_END) / 3);
+    pose.facing = pose.x > 800 ? -1 : 1;
+    pose.moving = true;
+  }
+  if (T >= 199 && T < 232) pose.facing = 1;
+  if (T > 206.8 && T < 207.6) pose.lean = Math.sin((T - 206.8) / 0.8 * Math.PI) * 0.25;   // boop!
+  if (pose.moving) pose.lift += Math.abs(Math.sin(T * 12)) * 12;   // running bounce
+  return pose;
+}
+
+function ruffPose(T) {
+  const pose = { x: keyAt(RUFF_X, T), lift: bumpsAt(RUFF_JUMPS, T), facing: stepAt(RUFF_FACING, T),
+                 spin: 0, lying: 0, moving: isMoving(RUFF_X, T), punch: 0,
+                 arms: T > 131.5 ? lerp(1, 1.35, ease((T - 131.5) / 3)) : 1, glow: T > 131.5 };
+  if (T > 33.3 && T < 36) pose.lift += Math.abs(Math.sin((T - 33.3) * 9)) * 35;   // OW OW OW hops
+  RUFF_FLIGHTS.forEach(function (f) {                    // tumbling through the air
+    if (T > f[0] && T < f[1]) { pose.spin = (T - f[0]) / (f[1] - f[0]) * Math.PI * 4; pose.moving = false; }
+  });
+  RUFF_LYING.forEach(function (l) {                      // knocked out... then getting up
+    if (T >= l[1] && T < l[2]) pose.lying = 1 - (T - l[1]) / (l[2] - l[1]);
+    else if (T >= l[0] && T < l[1]) pose.lying = 1;
+  });
+  RUFF_PUNCHES.forEach(function (when) {
+    const u = T - when;
+    if (u > -0.02 && u < 0.35) pose.punch = Math.min(1, (u + 0.02) / 0.08);
+    else if (u >= 0.35 && u < 0.5) pose.punch = Math.max(pose.punch, 1 - (u - 0.35) / 0.15);
+  });
+  return pose;
+}
+
+// ---------------------------------------------------------------------
+//  THE BATTLE: drawing it all.
+// ---------------------------------------------------------------------
+function drawField(T) {
+  // The sky, which turns into a SUNSET at the very end.
+  const sunset = clamp((T - 222) / 14, 0, 1);
+  const sky = ctx.createLinearGradient(0, -400, 0, 760);
+  sky.addColorStop(0, sunset > 0 ? mixColor([126, 200, 255], [255, 130, 80], sunset) : '#7ec8ff');
+  sky.addColorStop(1, sunset > 0 ? mixColor([216, 240, 255], [255, 214, 130], sunset) : '#d8f0ff');
+  ctx.fillStyle = sky;
+  ctx.fillRect(-1200, -600, 4800, 1500);
+  ctx.fillStyle = sunset > 0 ? mixColor([255, 243, 160], [255, 120, 60], sunset) : '#fff3a0';
+  ctx.beginPath(); ctx.arc(2000, lerp(120, 560, sunset), 70, 0, Math.PI * 2); ctx.fill();   // the sun
+  // Far-away hills.
+  ctx.fillStyle = '#86c98a';
+  [[200, 300], [900, 380], [1700, 320], [2500, 400]].forEach(function (h) {
+    ctx.beginPath(); ctx.ellipse(h[0], 760, h[1] * 1.6, h[1] * 0.55, 0, Math.PI, 0); ctx.fill();
+  });
+
+  // THE PRISON (where they escaped from).
+  ctx.fillStyle = '#5f6472';
+  ctx.fillRect(-600, 150, 1200, 610);
+  drawBricks(-600, 150, 1200, 610, '#4d515d');
+  ctx.fillStyle = '#3c404a';
+  ctx.fillRect(-620, 130, 1240, 30);                       // roof edge
+  ctx.fillStyle = '#0b0c10';
+  ctx.fillRect(470, 480, 110, 280);                        // the EXIT they ran out of
+  ctx.fillStyle = '#1f9d55';
+  ctx.fillRect(470, 430, 110, 38);
+  ctx.fillStyle = '#eafff0';
+  ctx.font = 'bold 28px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('EXIT', 525, 459);
+  if (T >= 7) {                                            // the giant hole the robot smashed
+    ctx.fillStyle = '#07080b';
+    ctx.beginPath();
+    HOLE_EDGE.forEach(function (r, i) {
+      const a = i / HOLE_EDGE.length * Math.PI * 2;
+      const x = 330 + Math.cos(a) * 200 * r, y = Math.min(760, 470 + Math.sin(a) * 310 * r);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // Grass.
+  ctx.fillStyle = '#5dbb63';
+  ctx.fillRect(-1200, 760, 4800, 500);
+  ctx.fillStyle = '#4ea654';
+  ctx.fillRect(-1200, 760, 4800, 10);
+}
+
+// Mix two colors: u = 0 is the first one, 1 is the second.
+function mixColor(a, b, u) {
+  return 'rgb(' + Math.round(lerp(a[0], b[0], u)) + ',' + Math.round(lerp(a[1], b[1], u)) + ',' + Math.round(lerp(a[2], b[2], u)) + ')';
+}
+
+// The big rock they hide behind. After the lasers hit it: KABLAM, pieces everywhere!
+const ROCK_X = 1750, ROCK_BOOM = 123;
+const ROCK_SHAPE = [[-120, 0], [-130, -70], [-80, -150], [10, -175], [90, -140], [130, -60], [120, 0]];
+function drawRock(T) {
+  if (T < ROCK_BOOM) {
+    chunkyShape(ROCK_SHAPE.map(function (pt) { return [ROCK_X + pt[0], 760 + pt[1]]; }), '#8a8f99');
+    ctx.fillStyle = 'rgba(255,255,255,0.12)';
+    ctx.beginPath(); ctx.ellipse(ROCK_X - 30, 650, 40, 22, -0.4, 0, Math.PI * 2); ctx.fill();
+    return;
+  }
+  const since = T - ROCK_BOOM;
+  for (let k = 0; k < 10; k++) {
+    const s = Math.min(since, 1.0);   // pieces fly for a second, then lie on the ground
+    const x = ROCK_X - 60 + wobbly(k + 300) * 120 + (wobbly(k + 310) - 0.5) * 900 * s;
+    const y = Math.min(745, 680 - (300 + wobbly(k + 320) * 500) * s + 0.5 * 2200 * s * s);
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(s * (wobbly(k + 330) * 12 - 6));
+    chunkyShape([[-22, 12], [-26, -8], [0, -22], [24, -10], [20, 12]], '#8a8f99');
+    ctx.restore();
+  }
+}
+
+function drawBattleRobot(T, pose) {
+  if (T < 7) return;                       // still inside the prison!
+  let squeeze = Math.cos(pose.spin);       // SPINNING: squish it sideways (that's how you fake 3D turning!)
+  if (Math.abs(squeeze) < 0.1) squeeze = squeeze < 0 ? -0.1 : 0.1;
+  ctx.save();
+  ctx.translate(pose.x, 760 - pose.bob - Math.sin(pose.tilt) * 205 * BIG_SCALE);
+  ctx.rotate(pose.tilt);
+  ctx.scale(squeeze * BIG_SCALE, BIG_SCALE);
+  ctx.translate(-800, -724);
+  drawBigRobot(T, { built: 99, on: pose.on, raiseL: pose.raiseL, raiseR: pose.raiseR, dizzy: pose.dizzy });
+  ctx.restore();
+  // Dizzy stars round its head.
+  if (pose.dizzy && pose.tilt < 0.5) {
+    for (let k = 0; k < 4; k++) {
+      const a = T * 5 + k * Math.PI / 2;
+      drawStar(pose.x + Math.cos(a) * 110, 760 - 600 * BIG_SCALE + Math.sin(a) * 20, 16, '#ffe14d');
+    }
+  }
+}
+
+function drawLasers(T, pose) {
+  if (T < 116 || T > ROCK_BOOM) return;
+  const aimX = keyAt(LASER_AIM, T), aimY = T > 121.5 ? 680 : 745;
+  [772, 828].forEach(function (eyeX) {
+    const fromX = pose.x + (eyeX - 800) * BIG_SCALE, fromY = 760 - pose.bob + (138 - 724) * BIG_SCALE;
+    ctx.lineCap = 'round';
+    [['rgba(255,40,40,0.35)', 22], ['#ff3030', 10], ['#fff2f2', 4]].forEach(function (beam) {
+      ctx.strokeStyle = beam[0];
+      ctx.lineWidth = beam[1];
+      ctx.beginPath(); ctx.moveTo(fromX, fromY); ctx.lineTo(aimX + (eyeX - 800) * 0.3, aimY); ctx.stroke();
+    });
+  });
+  // Where they hit: a fizzing hot spot with sparks.
+  ctx.fillStyle = 'rgba(255,220,120,0.8)';
+  ctx.beginPath(); ctx.arc(aimX, aimY, 18 + Math.sin(T * 40) * 5, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#ffe14d';
+  ctx.lineWidth = 3;
+  for (let k = 0; k < 6; k++) {
+    const a = -Math.PI * wobbly(k + Math.floor(T * 20)), r = 30 + wobbly(k + 50) * 25;
+    ctx.beginPath(); ctx.moveTo(aimX, aimY); ctx.lineTo(aimX + Math.cos(a) * r, aimY + Math.sin(a) * r); ctx.stroke();
+  }
+}
+
+function drawBattleTS1(T, pose) {
+  if (pose.hidden) return;
+  ctx.save();
+  ctx.translate(pose.x, 760 + pose.yOff - pose.lift);
+  ctx.scale(pose.facing * pose.size, pose.size);
+  ctx.translate(0, -110); ctx.rotate(pose.flip); ctx.translate(0, 110);   // backflip round his middle
+  ctx.rotate(pose.lean);
+  ctx.scale(1 / Math.sqrt(pose.squash), pose.squash);
+  ctx.translate(-1000, -760);
+  drawPrisoner(T, []);
+  ctx.restore();
+}
+
+function drawBattleRuff(T, pose) {
+  const y = 760 - pose.lift;
+  if (pose.glow) {                                         // POWERED UP: a glowing aura!
+    const glow = ctx.createRadialGradient(pose.x, y - 130, 20, pose.x, y - 130, 190);
+    glow.addColorStop(0, 'rgba(255,230,90,' + (0.35 + Math.sin(T * 8) * 0.1) + ')');
+    glow.addColorStop(1, 'rgba(255,230,90,0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(pose.x - 200, y - 330, 400, 400);
+  }
+  // Tumbling or lying down: turn him round his middle.
+  const turn = pose.spin + pose.lying * -Math.PI / 2;
+  ctx.save();
+  ctx.translate(pose.x, y - 110 + pose.lying * 55);
+  ctx.rotate(turn);
+  ctx.translate(-pose.x, -(y - 110));
+  drawRuff(T, { x: pose.x, y: y, facing: pose.facing, arms: pose.arms, punch: pose.punch, still: !pose.moving });
+  ctx.restore();
+  if (pose.lying > 0.5) {                                  // knocked out: dizzy stars
+    for (let k = 0; k < 3; k++) {
+      const a = T * 6 + k * 2.1;
+      drawStar(pose.x + 60 + Math.cos(a) * 50, 690 + Math.sin(a) * 12, 13, '#ffe14d');
+    }
+  }
+}
+
+// Pop-up words, dust and sparks.
+function drawBattleEffects(T) {
+  POP_WORDS.forEach(function (w, i) {
+    const since = T - w[0];
+    if (since < 0 || since > 0.75) return;
+    const pop = 0.6 + Math.min(1, since / 0.1) * 0.5;
+    ctx.save();
+    ctx.translate(w[1], w[2]);
+    ctx.rotate(i % 2 ? 0.14 : -0.14);
+    ctx.scale(pop, pop);
+    ctx.font = '900 80px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.lineWidth = 11;
+    ctx.strokeStyle = '#000';
+    ctx.fillStyle = ['#ffd24d', '#ff7b3a', '#7dffb0', '#ff5d8f'][i % 4];
+    ctx.strokeText(w[3], 0, 0);
+    ctx.fillText(w[3], 0, 0);
+    ctx.restore();
+  });
+  // Dust where swords slam into the ground.
+  SLASHES.concat([73.05]).forEach(function (when, k) {
+    const since = T - when - 0.08;
+    if (since < 0 || since > 0.9) return;
+    const tipX = keyAt(BOT_X, when) + 310;
+    ctx.fillStyle = 'rgba(160,140,110,' + (0.8 * (1 - since / 0.9)) + ')';
+    for (let j = 0; j < 6; j++) {
+      const side = j % 2 ? 1 : -1;
+      ctx.beginPath();
+      ctx.arc(tipX + side * (20 + since * (80 + j * 20)), 750 - j * 4 - since * 30, 14 + since * 26, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  });
+  // A HUGE dust cloud when the robot crashes down.
+  const crash = T - 211.5;
+  if (crash > 0 && crash < 1.5) {
+    ctx.fillStyle = 'rgba(160,140,110,' + (0.85 * (1 - crash / 1.5)) + ')';
+    for (let j = 0; j < 14; j++) {
+      ctx.beginPath();
+      ctx.arc(1100 + j * 50 + (j % 2 ? 1 : -1) * crash * 60, 740 - (j % 3) * 15 - crash * 50, 30 + crash * 50, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  // Sparks when fist meets sword.
+  CLASHES.forEach(function (when) {
+    const since = T - when;
+    if (since < 0 || since > 0.4) return;
+    ctx.strokeStyle = '#ffe14d';
+    ctx.lineWidth = 4;
+    for (let k = 0; k < 10; k++) {
+      const a = wobbly(k + when * 10) * Math.PI * 2, r1 = since * 300, r2 = r1 + 20;
+      ctx.beginPath();
+      ctx.moveTo(1255 + Math.cos(a) * r1, 625 + Math.sin(a) * r1);
+      ctx.lineTo(1255 + Math.cos(a) * r2, 625 + Math.sin(a) * r2);
+      ctx.stroke();
+    }
+  });
+  // Bricks bursting out of the prison wall.
+  const burst = T - 7;
+  if (burst > 0 && burst < 2) {
+    for (let i = 0; i < 16; i++) {
+      const x = 330 + (wobbly(i + 400) - 0.3) * 1100 * burst;
+      const y = 300 + wobbly(i + 410) * 400 - (200 + wobbly(i + 420) * 500) * burst + 0.5 * 2200 * burst * burst;
+      if (y > 1000) continue;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(burst * (wobbly(i + 430) * 14 - 7));
+      ctx.fillStyle = '#5f6472';
+      ctx.fillRect(-28, -12, 56, 24);
+      ctx.strokeStyle = '#4d515d';
+      ctx.lineWidth = 4;
+      ctx.strokeRect(-28, -12, 56, 24);
+      ctx.restore();
+    }
+  }
+  // HIGH FIVE! A burst of stars.
+  const five = T - 219.5;
+  if (five > 0 && five < 0.8) {
+    for (let k = 0; k < 8; k++) {
+      const a = k / 8 * Math.PI * 2;
+      drawStar(1010 + Math.cos(a) * five * 200, 560 + Math.sin(a) * five * 200, 14, '#ffe14d');
+    }
+  }
+}
+
+function drawBattle(T) {
+  ctx.save();
+  // Shake the camera for every BOOM, CLANG and CRASH.
+  let shake = 0;
+  SHAKES.forEach(function (sh) {
+    const since = T - sh[0];
+    if (since > 0 && since < 0.5) shake = Math.max(shake, (1 - since / 0.5) * sh[1]);
+  });
+  BOT_WALKS.forEach(function (w) {
+    if (T > w[0] && T < w[1] && ((T - w[0]) % 0.55) < 0.12) shake = Math.max(shake, 6);
+  });
+  ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+
+  drawField(T);
+  const robot = robotPose(T), ts1 = ts1Pose(T), ruff = ruffPose(T);
+  if (ts1.behind) drawBattleTS1(T, ts1);     // round the back of the robot? Draw him FIRST.
+  drawBattleRobot(T, robot);
+  drawBattleRuff(T, ruff);
+  if (!ts1.behind) drawBattleTS1(T, ts1);
+  drawRock(T);                               // the rock goes in FRONT, so they can hide behind it
+  drawLasers(T, robot);
+  drawBattleEffects(T);
+  ctx.restore();
+
+  // The end: fade to black.
+  if (T > 237) {
+    ctx.fillStyle = 'rgba(0,0,0,' + ease((T - 237) / 3) + ')';
+    ctx.fillRect(-2000, -2000, 10000, 6000);
+  }
 }
 
 // A white circle (or oval) with a black outline: his head, hands and feet.
