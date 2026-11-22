@@ -1077,30 +1077,6 @@ function drawScientist(t, look) {
   }
   ctx.fill();
 
-  // A HORN, right in the middle, sticking up out of the hair.
-  // (It curves a little, like a horn should.)
-  ctx.beginPath();
-  ctx.moveTo(headX - 16, headY - 70);
-  ctx.quadraticCurveTo(headX - 14, headY - 130, headX + 6, headY - 175);   // up the left side to the tip
-  ctx.quadraticCurveTo(headX + 6, headY - 120, headX + 16, headY - 70);    // back down the right side
-  ctx.fill();
-
-  // TWO POM POMS, one on each side of the head. A pom pom is just a big
-  // circle with lots of little circles round the edge, to make it FLUFFY.
-  // They bounce a tiny bit when the scientist breathes.
-  [-1, 1].forEach(function (side) {
-    const pomX = headX + side * 80, pomY = headY + 8 + breathe * 0.5;
-    // All the circles go into ONE shape, so only the outside edge glows.
-    ctx.beginPath();
-    ctx.arc(pomX, pomY, 22, 0, Math.PI * 2);
-    for (let i = 0; i < 9; i++) {
-      const a = i / 9 * Math.PI * 2;
-      const fluffX = pomX + Math.cos(a) * 20, fluffY = pomY + Math.sin(a) * 20;
-      ctx.moveTo(fluffX + 10, fluffY);
-      ctx.arc(fluffX, fluffY, 10, 0, Math.PI * 2);
-    }
-    ctx.fill();
-  });
   ctx.restore();
 
   // THE GLASSES. When they're on, they glow.
