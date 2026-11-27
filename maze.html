@@ -117,8 +117,13 @@ let walkTime = 0;   // used to bob your view up and down as you walk
 //  He waits near the spawn point, in the room just ahead of you.
 //  (Not TOO close, or he's so near your face you can't see his shape!)
 //  state can be: "floor" (sitting in the maze), "held" (in your hands),
-//  "popped" (OUT OF THE BOX!!), or "eaten" (uh oh).
+//  "popped" (OUT OF THE BOX!!), "eaten" (uh oh),
+//  or "dud" (he didn't pop... the box is back on the floor, shut).
 // ---------------------------------------------------------------------
+
+// 🎲 How likely he is to pop out when the song gets to "POP".
+// 1/3 = 1 in 3. Try 1/2 for a coin flip, or 1 for EVERY time!
+const popChance = 1 / 3;
 const jackRoomX = maze[2][1] === 0 ? 1 : 3;   // the room 2 squares in front of you
 const jackRoomY = maze[2][1] === 0 ? 3 : 1;
 const jack = {
@@ -399,6 +404,21 @@ function playNoise(when, length, pitch, loudness) {
   source.start(when);
 }
 
+// 📦 Clunk. The sound of nothing happening. (Phew.)
+function playClunk() {
+  const now = audio.currentTime;
+  playNoise(now, 0.12, 180, 0.5);
+  const thud = audio.createOscillator();
+  const gain = audio.createGain();
+  thud.frequency.setValueAtTime(110, now);
+  thud.frequency.exponentialRampToValueAtTime(50, now + 0.2);
+  gain.gain.setValueAtTime(0.4, now);
+  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+  thud.connect(gain).connect(audio.destination);
+  thud.start(now);
+  thud.stop(now + 0.3);
+}
+
 // 🦷 CHOMP! Two quick crunchy bites.
 function playChomp() {
   const now = audio.currentTime;
@@ -515,11 +535,23 @@ function update(seconds) {
     // Wait as long as this note lasts in the song, then play the next one.
     if (jack.windTimer >= length * 0.25) {
       jack.windTimer = 0;
-      // The "POP" is the high A note. Instead of playing it... HE POPS OUT!
-      if (note === A) {
-        jack.state = "popped";
+      // The "POP" is the high A note. Roll the dice... does he pop out?
+      if (note === A && Math.random() < popChance) {
+        jack.state = "popped";            // 💥 YES. Uh oh.
         jack.popTime = performance.now();
         playBoing();
+      } else if (note === A) {
+        // 😮‍💨 ...no. Clunk. Nothing happens. You put the box down.
+        jack.state = "dud";
+        jack.dudTime = performance.now();
+        playClunk();
+        bgMusic.gain.setTargetAtTime(1, audio.currentTime, 1.5);  // the creepy music comes back
+        // Set it on the floor just in front of you (if that's not inside a wall).
+        const dropX = player.x + Math.cos(player.angle) * 0.6;
+        const dropY = player.y + Math.sin(player.angle) * 0.6;
+        const floorThere = whatIsAt(dropX, dropY) === 0;
+        jack.x = floorThere ? dropX : player.x;
+        jack.y = floorThere ? dropY : player.y;
       } else {
         playMusicBoxNote(note, audio.currentTime, windOut);
         jack.notesWound++;
@@ -880,7 +912,7 @@ function draw(now) {
   }
 
   // 📦 The 3D box sitting in the maze.
-  if (jack.state === "floor") {
+  if (jack.state === "floor" || jack.state === "dud") {
     const boxSizeInWorld = 0.35;   // 0.35 of a square wide (walls are 1 tall)
     // The box sits a bit crooked, so you see TWO sides and it looks like a cube.
     const boxTurn = 0.7;           // how much it's turned (0 = straight)
@@ -928,7 +960,7 @@ function draw(now) {
   }
 
   // ✋ The box in your hands (and maybe... HIM).
-  if (jack.state !== "floor") drawHeldJack(w, h, now);
+  if (jack.state !== "floor" && jack.state !== "dud") drawHeldJack(w, h, now);
 
   // 🔦 The flashlight circle: the edges of the screen fade to black.
   const edge = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.2 * flicker,
@@ -976,7 +1008,9 @@ function draw(now) {
   ctx.font = "18px Georgia, serif";
   ctx.fillStyle = "rgba(255,255,255,0.7)";
   const canGrab = jack.state === "floor" && nearJack();
-  if (started && canGrab) {
+  if (jack.state === "dud" && now - jack.dudTime < 4000) {
+    ctx.fillText("...nothing happened. phew.", w / 2, h - 30);
+  } else if (started && canGrab) {
     ctx.fillText(usingTouch ? "tap ✋ to pick it up" : "press E to pick it up", w / 2, h - 30);
   } else if (jack.state === "held") {
     ctx.fillText(usingTouch ? "hold 🔄 to wind it..." : "hold E to wind it...", w / 2, h - 30);
