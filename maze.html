@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>THE DARK MAZE</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; touch-action: none; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+// =====================================================================
+//  THE DARK MAZE  —  a spooky black-and-white FIRST-PERSON maze by Max
+//  (the name is just a placeholder — Max gets to pick the real one!)
+// =====================================================================
+
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+// Make the canvas match the screen size (and fix it if the window changes).
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+window.addEventListener("resize", resize);
+resize();
+
+// ---------------------------------------------------------------------
+//  KNOBS — numbers you can change to make the game feel different!
+// ---------------------------------------------------------------------
+const mazeSize       = 10;   // how many rooms across and down
+const walkSpeed      = 2.2;  // squares per second
+const turnSpeed      = 2.4;  // how fast you spin around
+const flashlightSize = 4;    // how many squares away your flashlight reaches
+const mouseSensitivity = 0.003; // how much you turn when you move the mouse
+const musicVolume    = 4;    // 0 = silent, 10 = LOUD
+
+// ---------------------------------------------------------------------
+//  BUILDING THE MAZE
+//  The maze is a grid of squares. 1 = wall, 0 = floor, 2 = EXIT DOOR.
+//  We start with ALL walls, then a "digger" wanders around knocking
+//  walls down. It never digs into a room it already visited, so every
+//  maze is different but there's always exactly one way through.
+// ---------------------------------------------------------------------
+const gridSize = mazeSize * 2 + 1;   // rooms + the walls between them
+const maze = [];
+for (let row = 0; row < gridSize; row++) {
+  maze.push(new Array(gridSize).fill(1));   // a whole row of walls
+}
+
+function digMaze(roomX, roomY) {
+  maze[roomY * 2 + 1][roomX * 2 + 1] = 0;   // dig out this room
+  // The four directions, shuffled so the maze is random:
+  const directions = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  directions.sort(() => Math.random() - 0.5);
+  for (const [dx, dy] of directions) {
+    const nextX = roomX + dx, nextY = roomY + dy;
+    const insideMaze = nextX >= 0 && nextY >= 0 && nextX < mazeSize && nextY < mazeSize;
+    if (insideMaze && maze[nextY * 2 + 1][nextX * 2 + 1] === 1) {
+      maze[roomY * 2 + 1 + dy][roomX * 2 + 1 + dx] = 0;  // knock down the wall between
+      digMaze(nextX, nextY);                              // keep digging from there
+    }
+  }
+}
+digMaze(0, 0);
+
+// The exit door is in the outside wall next to the bottom-right room —
+// as far from the start as possible.
+maze[gridSize - 2][gridSize - 1] = 2;
+
+// ---------------------------------------------------------------------
+//  THE PLAYER — now it's YOU, looking through your own eyes!
+//  x and y say where you're standing. "angle" says which way you face.
+// ---------------------------------------------------------------------
+const player = { x: 1.5, y: 1.5, angle: 0 };
+// Start facing an open hallway instead of staring at a wall:
+if (maze[2][1] === 0) player.angle = Math.PI / 2;
+let escaped = false;
+let started = false;
+let walkTime = 0;   // used to bob your view up and down as you walk
+
+// What's at this spot? (1 = wall, 0 = floor, 2 = exit)
+function whatIsAt(x, y) {
+  const col = Math.floor(x), row = Math.floor(y);
+  if (row < 0 || col < 0 || row >= gridSize || col >= gridSize) return 1;
+  return maze[row][col];
+}
+
+// ---------------------------------------------------------------------
+//  CONTROLS
+//  Keyboard: W / ↑ = walk forward, S / ↓ = back, A D / ← → = turn
+//  Touch: put your thumb down and slide it. Up = forward, sideways = turn.
+// ---------------------------------------------------------------------
+const keysDown = {};
+window.addEventListener("keydown", e => { keysDown[e.key.toLowerCase()] = true; startGame(); });
+window.addEventListener("keyup",   e => { keysDown[e.key.toLowerCase()] = false; });
+
+const thumb = { active: false, id: null, startX: 0, startY: 0, x: 0, y: 0 };
+canvas.addEventListener("touchstart", e => {
+  e.preventDefault();
+  startGame();
+  const t = e.changedTouches[0];
+  if (!thumb.active) {
+    thumb.active = true; thumb.id = t.identifier;
+    thumb.startX = thumb.x = t.clientX;
+    thumb.startY = thumb.y = t.clientY;
+  }
+}, { passive: false });
+canvas.addEventListener("touchmove", e => {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    if (t.identifier === thumb.id) { thumb.x = t.clientX; thumb.y = t.clientY; }
+  }
+}, { passive: false });
+function endTouch(e) {
+  for (const t of e.changedTouches) if (t.identifier === thumb.id) thumb.active = false;
+}
+canvas.addEventListener("touchend", endTouch);
+canvas.addEventListener("touchcancel", endTouch);
+// 🖱️ MOUSE LOOK. Click the game and the browser "locks" the mouse to it
+// (the pointer disappears). Press Esc to get it back.
+let lookUpDown = 0;   // how far you're looking up (+) or down (-), in pixels
+canvas.addEventListener("mousedown", () => {
+  startGame();
+  if (canvas.requestPointerLock) canvas.requestPointerLock();
+});
+document.addEventListener("mousemove", e => {
+  if (document.pointerLockElement !== canvas) return;   // only when locked
+  // movementX = how far the mouse slid sideways since last time.
+  player.angle += e.movementX * mouseSensitivity;
+  // movementY = how far it slid up or down. We don't let you look TOO far,
+  // or you'd be staring straight at the floor.
+  const maxLook = canvas.height * 0.35;
+  lookUpDown = Math.max(-maxLook, Math.min(maxLook, lookUpDown - e.movementY));
+});
+
+// Returns how much to walk (-1 back … 1 forward) and turn (-1 left … 1 right).
+function getControls() {
+  let walk = 0, turn = 0;
+  if (keysDown["arrowup"]    || keysDown["w"]) walk += 1;
+  if (keysDown["arrowdown"]  || keysDown["s"]) walk -= 1;
+  if (keysDown["arrowleft"]  || keysDown["a"]) turn -= 1;
+  if (keysDown["arrowright"] || keysDown["d"]) turn += 1;
+  if (thumb.active) {
+    const dx = thumb.x - thumb.startX, dy = thumb.y - thumb.startY;
+    const clamp = n => Math.max(-1, Math.min(1, n));
+    if (Math.abs(dy) > 12) walk = clamp(-dy / 60);
+    if (Math.abs(dx) > 12) turn = clamp(dx / 60);
+  }
+  return { walk, turn };
+}
+
+// ---------------------------------------------------------------------
+//  THE CREEPY MUSIC BOX 🎵
+//  "Pop Goes the Weasel" — the classic jack-in-the-box song.
+//  We play it SLOW and a tiny bit out of tune. That's what makes it creepy.
+//  Each note is [which note, how long]. Notes are piano-key numbers.
+// ---------------------------------------------------------------------
+const C = 60, D = 62, E = 64, F = 65, G = 67, A = 69;
+const song = [
+  [C,2],[C,1],[D,2],[D,1], [E,1],[G,1],[E,1],[C,3],
+  [C,2],[C,1],[D,2],[D,1], [E,3],[C,3],
+  [C,2],[C,1],[D,2],[D,1], [E,1],[G,1],[E,1],[C,3],
+  [A,3],[D,2],[F,1],        [E,3],[C,3],
+];
+let audio = null;
+let musicOut = null;   // every note goes here first, then through the distortion
+
+// 🎸 THE DISTORTION PEDAL. A "wave shaper" bends the sound wave.
+// Squashing the loud parts flat makes the sound crunchy and broken.
+// Bigger crunch number = more distorted.
+function makeDistortion(crunch) {
+  const shaper = audio.createWaveShaper();
+  const curve = new Float32Array(1024);
+  for (let i = 0; i < curve.length; i++) {
+    const x = (i / curve.length) * 2 - 1;          // goes from -1 to 1
+    curve[i] = Math.tanh(x * crunch);               // squash it!
+  }
+  shaper.curve = curve;
+  return shaper;
+}
+
+function setUpSpeakers() {
+  audio = new (window.AudioContext || window.webkitAudioContext)();
+  musicOut = audio.createGain();
+  const distortion = makeDistortion(30);
+  // A "low-pass filter" cuts off the high sounds, so it's muffled,
+  // like it's playing from inside a closet...
+  const muffle = audio.createBiquadFilter();
+  muffle.type = "lowpass";
+  muffle.frequency.value = 1800;
+  const volume = audio.createGain();
+  // Turn the 0-to-10 knob into the tiny number the speakers want.
+  // (Distortion makes things LOUD, so even 10 is only 0.35.)
+  volume.gain.value = musicVolume * 0.035;
+  musicOut.connect(distortion).connect(muffle).connect(volume).connect(audio.destination);
+}
+
+function playMusicBoxNote(note, when) {
+  // Turn a piano-key number into a frequency (how fast the sound wiggles).
+  const wobble = (Math.random() - 0.5) * 0.3;          // a little out of tune...
+  const freq = 440 * Math.pow(2, (note + 12 + wobble - 69) / 12);
+  // A music box "ding" = a pure tone + a quieter higher tone, fading out fast.
+  for (const [mult, volume] of [[1, 0.25], [4, 0.06]]) {
+    const osc = audio.createOscillator();
+    const gain = audio.createGain();
+    osc.type = "sine";
+    osc.frequency.value = freq * mult;
+    // 〰️ The warble: the note sags DOWN in pitch as it plays, like a
+    // music box whose spring is running out.
+    osc.frequency.setValueAtTime(freq * mult, when);
+    osc.frequency.linearRampToValueAtTime(freq * mult * 0.97, when + 1.8);
+    gain.gain.setValueAtTime(volume, when);
+    gain.gain.exponentialRampToValueAtTime(0.0001, when + 1.8);
+    osc.connect(gain).connect(musicOut);
+    osc.start(when);
+    osc.stop(when + 1.9);
+  }
+}
+
+function playSongOnce() {
+  const beat = 0.8;                 // seconds per beat — bigger = slower & creepier
+  let time = audio.currentTime + 0.1;
+  for (const [note, length] of song) {
+    playMusicBoxNote(note, time);
+    time += length * beat;
+  }
+  const songLength = time - audio.currentTime;
+  setTimeout(playSongOnce, (songLength + 1.5) * 1000);  // a creepy pause, then again
+}
+
+function startGame() {
+  if (started) return;
+  started = true;
+  // Browsers only allow sound after you press or tap something.
+  setUpSpeakers();
+  playSongOnce();
+}
+
+// ---------------------------------------------------------------------
+//  UPDATE — move things. Runs every frame.
+// ---------------------------------------------------------------------
+function update(seconds) {
+  if (!started || escaped) return;
+  const { walk, turn } = getControls();
+
+  player.angle += turn * turnSpeed * seconds;
+
+  // Which way is "forward"? cos and sin turn an angle into an x and y step.
+  const stepX = Math.cos(player.angle) * walk * walkSpeed * seconds;
+  const stepY = Math.sin(player.angle) * walk * walkSpeed * seconds;
+
+  // Look a little bit ahead (0.25 squares) so your nose doesn't go into the wall.
+  const bodySize = 0.25 * Math.sign(walk);
+  const aheadX = whatIsAt(player.x + stepX + Math.cos(player.angle) * bodySize, player.y);
+  const aheadY = whatIsAt(player.x, player.y + stepY + Math.sin(player.angle) * bodySize);
+
+  if (aheadX === 2 || aheadY === 2) escaped = true;   // you walked into the EXIT!
+  if (aheadX === 0) player.x += stepX;                // slide along walls
+  if (aheadY === 0) player.y += stepY;
+
+  if (walk !== 0) walkTime += seconds;
+}
+
+// ---------------------------------------------------------------------
+//  RAYCASTING — the trick that makes it look 3D!
+//  For every thin column of the screen, we shoot an invisible ray out
+//  from your eyes and walk it forward until it hits a wall.
+//  Close wall = draw it TALL. Far wall = draw it SHORT.
+// ---------------------------------------------------------------------
+const fieldOfView = 0.66;   // how wide you can see (bigger = more fish-eye)
+const columnWidth = 2;      // draw every 2 pixels — faster, and looks old-school
+
+function castRay(rayAngleX, rayAngleY) {
+  // Which square are we in, and which way is the ray going?
+  let col = Math.floor(player.x), row = Math.floor(player.y);
+  const stepCol = rayAngleX < 0 ? -1 : 1;
+  const stepRow = rayAngleY < 0 ? -1 : 1;
+  // How far the ray travels to cross one whole square, sideways or up/down:
+  const crossX = Math.abs(1 / rayAngleX), crossY = Math.abs(1 / rayAngleY);
+  let nextX = (rayAngleX < 0 ? player.x - col : col + 1 - player.x) * crossX;
+  let nextY = (rayAngleY < 0 ? player.y - row : row + 1 - player.y) * crossY;
+  let hitSide = 0;
+  // Hop from square to square until we bump into something.
+  for (let hops = 0; hops < 64; hops++) {
+    if (nextX < nextY) { nextX += crossX; col += stepCol; hitSide = 0; }
+    else               { nextY += crossY; row += stepRow; hitSide = 1; }
+    const thing = whatIsAt(col + 0.5, row + 0.5);
+    if (thing !== 0) {
+      const distance = hitSide === 0 ? nextX - crossX : nextY - crossY;
+      // Where on the wall did we hit? (0 = left edge, 1 = right edge)
+      let spot = hitSide === 0 ? player.y + distance * rayAngleY : player.x + distance * rayAngleX;
+      spot -= Math.floor(spot);
+      return { distance, thing, hitSide, spot };
+    }
+  }
+  return { distance: 99, thing: 1, hitSide: 0, spot: 0 };
+}
+
+// ---------------------------------------------------------------------
+//  DRAW — paint the picture. Runs every frame.
+// ---------------------------------------------------------------------
+function draw() {
+  const w = canvas.width, h = canvas.height;
+  // Your view bobs up and down a little while you walk, like real footsteps.
+  // Looking up moves the horizon DOWN the screen (so you see more ceiling).
+  const horizon = h / 2 + lookUpDown + Math.sin(walkTime * 9) * 6;
+
+  // Ceiling and floor: black, with the floor getting a tiny bit gray close to you.
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, w, h);
+  const floor = ctx.createLinearGradient(0, horizon, 0, h);
+  floor.addColorStop(0, "#000");
+  floor.addColorStop(1, "#3a3a3a");
+  ctx.fillStyle = floor;
+  ctx.fillRect(0, horizon, w, h - horizon);
+
+  // Which way you're looking, and the "screen" sideways from that.
+  const lookX = Math.cos(player.angle), lookY = Math.sin(player.angle);
+  const sideX = -lookY * fieldOfView, sideY = lookX * fieldOfView;
+
+  // The flashlight flickers a tiny bit...
+  const flicker = Math.random() < 0.03 ? 0.6 : 1;
+  const lightReach = flashlightSize * flicker;
+
+  for (let x = 0; x < w; x += columnWidth) {
+    const screenSpot = (2 * x) / w - 1;      // -1 = left edge, 1 = right edge
+    const ray = castRay(lookX + sideX * screenSpot, lookY + sideY * screenSpot);
+    const wallHeight = h / ray.distance;
+
+    // Brightness: close = bright, far = black. That's the flashlight!
+    let brightness = Math.max(0, 1 - ray.distance / lightReach);
+    if (ray.hitSide === 1) brightness *= 0.75;    // one side darker = looks 3D
+
+    let shade;
+    if (ray.thing === 2) {
+      // THE EXIT DOOR: bright white, with a dark doorway in the middle.
+      const inDoorway = ray.spot > 0.25 && ray.spot < 0.75;
+      shade = inDoorway ? 40 : 255;
+      brightness = Math.max(brightness, 0.35);   // the exit glows a little
+    } else {
+      // Plain wall: gray, with dark cracks between the stone blocks.
+      const crack = ray.spot < 0.04 || ray.spot > 0.96 || Math.abs(ray.spot - 0.5) < 0.02;
+      shade = crack ? 90 : 190;
+    }
+    const gray = Math.floor(shade * brightness);
+    ctx.fillStyle = `rgb(${gray},${gray},${gray})`;
+    ctx.fillRect(x, horizon - wallHeight / 2, columnWidth, wallHeight);
+  }
+
+  // 🔦 The flashlight circle: the edges of the screen fade to black.
+  const edge = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.2 * flicker,
+                                        w / 2, h / 2, Math.max(w, h) * 0.6);
+  edge.addColorStop(0, "rgba(0,0,0,0)");
+  edge.addColorStop(1, "rgba(0,0,0,1)");
+  ctx.fillStyle = edge;
+  ctx.fillRect(0, 0, w, h);
+
+  // Old-movie film grain: little random specks.
+  ctx.fillStyle = "rgba(255,255,255,0.08)";
+  for (let i = 0; i < 60; i++) ctx.fillRect(Math.random() * w, Math.random() * h, 2, 2);
+
+  // Words on the screen.
+  ctx.fillStyle = "#fff";
+  ctx.textAlign = "center";
+  ctx.font = "bold 28px Georgia, serif";
+  if (!started) {
+    ctx.fillText("THE DARK MAZE", w / 2, h / 2 - 60);
+    ctx.font = "18px Georgia, serif";
+    ctx.fillText("click to begin...", w / 2, h / 2 + 60);
+    ctx.font = "14px Georgia, serif";
+    ctx.fillText("mouse = look   ·   W A S D = move   ·   Esc = get your mouse back", w / 2, h / 2 + 90);
+  } else if (escaped) {
+    ctx.fillText("YOU ESCAPED!", w / 2, h / 2);
+  }
+}
+
+// ---------------------------------------------------------------------
+//  THE GAME LOOP — update, draw, repeat, about 60 times a second.
+// ---------------------------------------------------------------------
+let lastTime = performance.now();
+function gameLoop(now) {
+  const seconds = Math.min((now - lastTime) / 1000, 0.05);
+  lastTime = now;
+  update(seconds);
+  draw();
+  requestAnimationFrame(gameLoop);
+}
+requestAnimationFrame(gameLoop);
+</script>
+</body>
+</html>
