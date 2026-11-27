@@ -73,24 +73,30 @@ digMaze(0, 0);
 maze[gridSize - 2][gridSize - 1] = 2;
 
 // ---------------------------------------------------------------------
-//  🏹 COUNTING STEPS TO THE EXIT (so the arrows know where to point)
-//  Start at the exit room = 0 steps. Its neighbors = 1 step. THEIR
+//  💧 COUNTING STEPS (a function we use TWICE: for the arrows AND the monster)
+//  Start at one square = 0 steps. Its neighbors = 1 step. THEIR
 //  neighbors = 2 steps... spreading out like water. When we're done,
-//  every square knows how far it is from the exit.
+//  every square knows how many steps away it is from the start.
 // ---------------------------------------------------------------------
-const stepsToExit = maze.map(row => row.map(() => Infinity));
-const toVisit = [[gridSize - 2, gridSize - 2]];     // [x, y] of the exit room
-stepsToExit[gridSize - 2][gridSize - 2] = 0;
-while (toVisit.length > 0) {
-  const [x, y] = toVisit.shift();
-  for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-    const nx = x + dx, ny = y + dy;
-    if (maze[ny][nx] === 0 && stepsToExit[ny][nx] === Infinity) {
-      stepsToExit[ny][nx] = stepsToExit[y][x] + 1;
-      toVisit.push([nx, ny]);
+function countStepsFrom(startX, startY) {
+  const steps = maze.map(row => row.map(() => Infinity));
+  const toVisit = [[startX, startY]];
+  steps[startY][startX] = 0;
+  while (toVisit.length > 0) {
+    const [x, y] = toVisit.shift();
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nx = x + dx, ny = y + dy;
+      if (maze[ny][nx] === 0 && steps[ny][nx] === Infinity) {
+        steps[ny][nx] = steps[y][x] + 1;
+        toVisit.push([nx, ny]);
+      }
     }
   }
+  return steps;
 }
+
+// 🏹 For the arrows: how far is every square from the exit room?
+const stepsToExit = countStepsFrom(gridSize - 2, gridSize - 2);
 
 // From this floor square, which way gets you closer to the exit?
 function wayToExit(x, y) {
@@ -124,6 +130,75 @@ let walkTime = 0;   // used to bob your view up and down as you walk
 // 🎲 How likely he is to pop out when the song gets to "POP".
 // 1/3 = 1 in 3. Try 1/2 for a coin flip, or 1 for EVERY time!
 const popChance = 1 / 3;
+
+// ---------------------------------------------------------------------
+//  👣 THE HUNTER
+//  If the box is EMPTY, that means HE's not in it... he's out in the maze,
+//  hunting you. He walks slower than you, so keep moving!
+// ---------------------------------------------------------------------
+const hunterSpeed = 1.1;     // squares per second (you walk at 2.2)
+const hunter = { loose: false, x: 0, y: 0, caughtYou: false };
+let boxMessage = "", boxMessageTime = 0;   // what the box "tells" you, and when
+const hunterCanvas = document.createElement("canvas");   // a hidden canvas for drawing him
+
+function letHunterLoose() {
+  hunter.loose = true;
+  // He starts in the room FARTHEST from you (count steps from you, pick the biggest).
+  const stepsFromYou = countStepsFrom(Math.floor(player.x), Math.floor(player.y));
+  let farthest = 0;
+  for (let y = 1; y < gridSize; y += 2) {
+    for (let x = 1; x < gridSize; x += 2) {
+      if (stepsFromYou[y][x] !== Infinity && stepsFromYou[y][x] > farthest) {
+        farthest = stepsFromYou[y][x];
+        hunter.x = x + 0.5;
+        hunter.y = y + 0.5;
+      }
+    }
+  }
+}
+
+// Every frame: take a little step toward you, following the hallways.
+function moveHunter(seconds) {
+  const myX = Math.floor(player.x), myY = Math.floor(player.y);
+  const hisX = Math.floor(hunter.x), hisY = Math.floor(hunter.y);
+  let targetX = player.x, targetY = player.y;          // same square? come straight at you
+  if (myX !== hisX || myY !== hisY) {
+    // Otherwise: count steps from YOU, then he moves to whichever
+    // neighbor square is one step closer. (Water flowing downhill... to you.)
+    const stepsFromYou = countStepsFrom(myX, myY);
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      if (stepsFromYou[hisY + dy][hisX + dx] < stepsFromYou[hisY][hisX]) {
+        targetX = hisX + dx + 0.5;
+        targetY = hisY + dy + 0.5;
+      }
+    }
+    // Stay in the middle of the hallway so he doesn't cut through corners.
+    if (targetX !== hisX + 0.5) hunter.y += (hisY + 0.5 - hunter.y) * Math.min(1, seconds * 8);
+    if (targetY !== hisY + 0.5) hunter.x += (hisX + 0.5 - hunter.x) * Math.min(1, seconds * 8);
+  }
+  const dx = targetX - hunter.x, dy = targetY - hunter.y;
+  const distance = Math.hypot(dx, dy);
+  if (distance > 0.01) {
+    const step = Math.min(distance, hunterSpeed * seconds);
+    hunter.x += dx / distance * step;
+    hunter.y += dy / distance * step;
+  }
+}
+
+// 📦🔍 The empty box tells you where he is: how far, and which way.
+function whereIsHunter() {
+  const stepsFromYou = countStepsFrom(Math.floor(player.x), Math.floor(player.y));
+  const steps = stepsFromYou[Math.floor(hunter.y)][Math.floor(hunter.x)];
+  const howFar = steps < 6 ? "he's VERY close..." : steps < 14 ? "he's getting closer..." : "he's far away...";
+  // Which way is he, compared to where you're looking? (-180° to 180°)
+  let turn = Math.atan2(hunter.y - player.y, hunter.x - player.x) - player.angle;
+  turn = Math.atan2(Math.sin(turn), Math.cos(turn));
+  const degrees = turn * 180 / Math.PI;
+  const whichWay = Math.abs(degrees) < 45 ? "in front of you."
+                 : Math.abs(degrees) > 135 ? "behind you."
+                 : degrees > 0 ? "to your right." : "to your left.";
+  return howFar + " " + whichWay;
+}
 const jackRoomX = maze[2][1] === 0 ? 1 : 3;   // the room 2 squares in front of you
 const jackRoomY = maze[2][1] === 0 ? 3 : 1;
 const jack = {
@@ -530,6 +605,18 @@ function update(seconds) {
 
   if (walk !== 0) walkTime += seconds;
 
+  // 👣 The hunter creeps toward you... and if he reaches you: ROAR, CHOMP.
+  if (hunter.loose) {
+    moveHunter(seconds);
+    if (Math.hypot(hunter.x - player.x, hunter.y - player.y) < 0.45) {
+      hunter.caughtYou = true;
+      hunter.loose = false;
+      jack.state = "popped";
+      jack.popTime = performance.now() - screamTime * 1000;   // skip straight to the ROAR
+      bgMusic.gain.setTargetAtTime(0, audio.currentTime, 0.1);
+    }
+  }
+
   // 🔄 WINDING THE JACK-IN-THE-BOX (hold E, or hold the button)
   const winding = keysDown["e"] || grabButton.touchId !== null;
   if (jack.state === "held" && winding) {
@@ -540,12 +627,20 @@ function update(seconds) {
     if (jack.windTimer >= length * 0.25) {
       jack.windTimer = 0;
       // The "POP" is the high A note. Roll the dice... does he pop out?
-      if (note === A && Math.random() < popChance) {
+      // (He can't pop if he's already out in the maze!)
+      if (note === A && !hunter.loose && Math.random() < popChance) {
         jack.state = "popped";            // 💥 YES. Uh oh.
         jack.popTime = performance.now();
         playBoing();
       } else if (note === A) {
-        // 😮‍💨 ...no. Clunk. Nothing happens. You put the box down.
+        // 📦 Clunk. The box is EMPTY. You put it down.
+        if (!hunter.loose) {
+          letHunterLoose();                // ...which means he's out there. Hunting.
+          boxMessage = "...the box is empty. he's out there somewhere. hunting you.";
+        } else {
+          boxMessage = whereIsHunter();    // the box tells you where he is
+        }
+        boxMessageTime = performance.now();
         jack.state = "dud";
         jack.dudTime = performance.now();
         playClunk();
@@ -809,13 +904,17 @@ function drawHeldJack(w, h, now) {
   ];
   const handFacing = out => out[0] > 0 || out[1] < 0;   // right side and front
   const lidOpen = jack.state !== "held";
-  const drawTheBox = () =>
-    drawBox3D(handProject, handFacing, 1, jack.crankAngle, lidOpen, boxSize * 0.06);
+  const drawTheBox = () => {
+    // If he caught you in the maze, you're not holding the box. No box to draw!
+    if (!hunter.caughtYou) drawBox3D(handProject, handFacing, 1, jack.crankAngle, lidOpen, boxSize * 0.06);
+  };
 
   if (jack.state !== "popped") { drawTheBox(); return; }
 
   const t = (now - jack.popTime) / 1000;     // seconds since he popped
-  const [neckX, neckY] = handProject(0.5, 0.5, 0.9);   // he comes out of the middle of the top
+  // He comes out of the middle of the box top... or, if he caught you in
+  // the maze, up from the bottom of the screen.
+  const [neckX, neckY] = hunter.caughtYou ? [w / 2, h + size] : handProject(0.5, 0.5, 0.9);
   // SPRING! Shoots up, overshoots, and bounces... boing boing boing.
   const springy = 1 - Math.exp(-t * 4) * Math.cos(t * 16);
   const neckLength = Math.min(neckY - h * 0.28, size * 2.2) * springy;
@@ -963,6 +1062,40 @@ function draw(now) {
     }
   }
 
+  // 👣 THE HUNTER, creeping through the maze.
+  if (hunter.loose) {
+    const flip = 1 / (sideX * lookY - lookX * sideY);
+    const dx = hunter.x - player.x, dy = hunter.y - player.y;
+    const across = flip * (lookY * dx - lookX * dy);
+    const ahead = flip * (-sideY * dx + sideX * dy);
+    if (ahead > 0.2) {
+      const screenX = (w / 2) * (1 + across / ahead);
+      const wallSize = h / ahead;                       // far = small, like the walls
+      const floorY = horizon + wallSize / 2;            // where the floor is under him
+      const sway = Math.sin(now / 400) * wallSize * 0.05;
+      // Draw him on a hidden canvas first (so his neck doesn't show
+      // through his head when we fade him)...
+      if (hunterCanvas.width !== w || hunterCanvas.height !== h) {
+        hunterCanvas.width = w; hunterCanvas.height = h;
+      }
+      const hc = hunterCanvas.getContext("2d");
+      hc.clearRect(0, 0, w, h);
+      drawCreature(hc, screenX, floorY, screenX + sway, horizon - wallSize * 0.15,
+                   wallSize * 0.35, 1.3);
+      ctx.save();
+      // ...then fade the whole picture into the dark at the edge of your flashlight...
+      ctx.globalAlpha = Math.max(0.05, Math.min(1, 1.3 - ahead / lightReach));
+      // ...and walls in front of him hide him (same "clip" trick as the box).
+      ctx.beginPath();
+      wallDistances.forEach((wallDistance, col) => {
+        if (ahead < wallDistance) ctx.rect(col * columnWidth, 0, columnWidth + 0.5, h);
+      });
+      ctx.clip();
+      ctx.drawImage(hunterCanvas, 0, 0);
+      ctx.restore();
+    }
+  }
+
   // ✋ The box in your hands (and maybe... HIM).
   if (jack.state !== "floor" && jack.state !== "dud") drawHeldJack(w, h, now);
 
@@ -1012,8 +1145,8 @@ function draw(now) {
   ctx.font = "18px Georgia, serif";
   ctx.fillStyle = "rgba(255,255,255,0.7)";
   const canGrab = (jack.state === "floor" || jack.state === "dud") && nearJack();
-  if (jack.state === "dud" && now - jack.dudTime < 4000) {
-    ctx.fillText("...nothing happened. phew.", w / 2, h - 30);
+  if (jack.state === "dud" && now - boxMessageTime < 5000) {
+    ctx.fillText(boxMessage, w / 2, h - 30);
   } else if (started && canGrab) {
     ctx.fillText(usingTouch ? "tap ✋ to pick it up" : "press E to pick it up", w / 2, h - 30);
   } else if (jack.state === "held") {
