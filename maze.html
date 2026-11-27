@@ -34,9 +34,10 @@ resize();
 const mazeSize       = 10;   // how many rooms across and down
 const walkSpeed      = 2.2;  // squares per second
 const turnSpeed      = 2.4;  // how fast you spin around
-const flashlightSize = 4;    // how many squares away your flashlight reaches
+const flashlightSize = 2.5;  // how many squares away your flashlight reaches
+const flashlightPower = 0.45; // how bright it is: 1 = new batteries, 0 = dead
 const mouseSensitivity = 0.003; // how much you turn when you move the mouse
-const musicVolume    = 4;    // 0 = silent, 10 = LOUD
+const musicVolume    = 1;    // 0 = silent, 10 = LOUD
 
 // ---------------------------------------------------------------------
 //  BUILDING THE MAZE
@@ -70,6 +71,35 @@ digMaze(0, 0);
 // The exit door is in the outside wall next to the bottom-right room —
 // as far from the start as possible.
 maze[gridSize - 2][gridSize - 1] = 2;
+
+// ---------------------------------------------------------------------
+//  🏹 COUNTING STEPS TO THE EXIT (so the arrows know where to point)
+//  Start at the exit room = 0 steps. Its neighbors = 1 step. THEIR
+//  neighbors = 2 steps... spreading out like water. When we're done,
+//  every square knows how far it is from the exit.
+// ---------------------------------------------------------------------
+const stepsToExit = maze.map(row => row.map(() => Infinity));
+const toVisit = [[gridSize - 2, gridSize - 2]];     // [x, y] of the exit room
+stepsToExit[gridSize - 2][gridSize - 2] = 0;
+while (toVisit.length > 0) {
+  const [x, y] = toVisit.shift();
+  for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    const nx = x + dx, ny = y + dy;
+    if (maze[ny][nx] === 0 && stepsToExit[ny][nx] === Infinity) {
+      stepsToExit[ny][nx] = stepsToExit[y][x] + 1;
+      toVisit.push([nx, ny]);
+    }
+  }
+}
+
+// From this floor square, which way gets you closer to the exit?
+function wayToExit(x, y) {
+  if (x === gridSize - 2 && y === gridSize - 2) return [1, 0];  // the door is right there →
+  for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    if (stepsToExit[y + dy][x + dx] < stepsToExit[y][x]) return [dx, dy];
+  }
+  return [0, 0];
+}
 
 // ---------------------------------------------------------------------
 //  THE PLAYER — now it's YOU, looking through your own eyes!
@@ -294,10 +324,67 @@ function castRay(rayAngleX, rayAngleY) {
       // Where on the wall did we hit? (0 = left edge, 1 = right edge)
       let spot = hitSide === 0 ? player.y + distance * rayAngleY : player.x + distance * rayAngleX;
       spot -= Math.floor(spot);
-      return { distance, thing, hitSide, spot };
+      // The floor square the ray was in just before it hit the wall:
+      const floorX = hitSide === 0 ? col - stepCol : col;
+      const floorY = hitSide === 1 ? row - stepRow : row;
+      return { distance, thing, hitSide, spot, floorX, floorY, wallX: col, wallY: row };
     }
   }
-  return { distance: 99, thing: 1, hitSide: 0, spot: 0 };
+  return { distance: 99, thing: 1, hitSide: 0, spot: 0, floorX: 1, floorY: 1, wallX: 0, wallY: 0 };
+}
+
+// 🎲 A "pretend random" number between 0 and 1. Give it the same input and
+// you ALWAYS get the same answer, so the arrows don't flicker every frame.
+function fakeRandom(n) {
+  const s = Math.sin(n * 127.1) * 43758.5453;
+  return s - Math.floor(s);
+}
+
+// 🖋️ Is there a messy ink arrow on this bit of wall?
+// Returns a list of ink blobs, each one [top, bottom], measured from
+// 0 = top of the wall to 1 = bottom of the wall. Or null for no ink.
+function arrowOnWall(ray) {
+  if (ray.thing !== 1) return null;
+  const [dx, dy] = wayToExit(ray.floorX, ray.floorY);
+  // hitSide 0 = a wall that runs up/down, so the arrow must point up/down (dy).
+  // hitSide 1 = a wall that runs sideways, so the arrow must point sideways (dx).
+  const along = ray.hitSide === 0 ? dy : dx;
+  if (along === 0) return null;            // the exit way isn't along this wall
+
+  // Roll the dice for THIS wall. Only about 1 in 10 walls gets an arrow.
+  const wallNumber = ray.wallX * 31 + ray.wallY * 17 + ray.floorX * 7 + ray.floorY * 3;
+  const roll = fakeRandom(wallNumber);
+  if (roll > 0.1) return null;
+
+  // Flip the arrow around if it points the other way.
+  const u = along > 0 ? ray.spot : 1 - ray.spot;
+  if (u < 0.15 || u > 0.82) return null;
+
+  // Shaky hand: the line wobbles up and down, and slants a bit.
+  const middle = 0.47 + Math.sin(u * 9 + roll * 50) * 0.025 + (u - 0.5) * (roll - 0.12) * 0.3;
+  // Chop the wall into little strips so each strip gets its own messiness.
+  const strip = Math.floor(u * 50) + wallNumber * 100;
+  const shaky = 0.6 + fakeRandom(strip) * 0.8;     // thicker here, thinner there
+  const blobs = [];
+
+  // The stick of the arrow.
+  const stickThick = 0.022 * shaky;
+  blobs.push([middle - stickThick, middle + stickThick]);
+
+  // The head: two scratchy strokes, like a ">" shape.
+  if (u > 0.58) {
+    const spread = (0.82 - u) * 0.75;
+    const strokeThick = 0.02 * shaky;
+    blobs.push([middle - spread - strokeThick, middle - spread + strokeThick]);
+    blobs.push([middle + spread - strokeThick, middle + spread + strokeThick]);
+  }
+
+  // 💧 Ink drips! Some strips have ink running down below the line.
+  if (fakeRandom(strip + 0.5) > 0.82) {
+    const dripLength = 0.05 + fakeRandom(strip + 0.7) * 0.25;
+    blobs.push([middle, middle + stickThick + dripLength]);
+  }
+  return blobs;
 }
 
 // ---------------------------------------------------------------------
@@ -314,7 +401,7 @@ function draw() {
   ctx.fillRect(0, 0, w, h);
   const floor = ctx.createLinearGradient(0, horizon, 0, h);
   floor.addColorStop(0, "#000");
-  floor.addColorStop(1, "#3a3a3a");
+  floor.addColorStop(1, "#1a1a1a");   // dim floor, for a dim flashlight
   ctx.fillStyle = floor;
   ctx.fillRect(0, horizon, w, h - horizon);
 
@@ -346,9 +433,21 @@ function draw() {
       const crack = ray.spot < 0.04 || ray.spot > 0.96 || Math.abs(ray.spot - 0.5) < 0.02;
       shade = crack ? 90 : 190;
     }
+    brightness *= flashlightPower;
     const gray = Math.floor(shade * brightness);
+    const wallTop = horizon - wallHeight / 2;
     ctx.fillStyle = `rgb(${gray},${gray},${gray})`;
-    ctx.fillRect(x, horizon - wallHeight / 2, columnWidth, wallHeight);
+    ctx.fillRect(x, wallTop, columnWidth, wallHeight);
+
+    // 🖋️ Paint the ink arrow on top (almost black, like old ink).
+    const inkBlobs = arrowOnWall(ray);
+    if (inkBlobs) {
+      const ink = Math.floor(gray * 0.15);
+      ctx.fillStyle = `rgb(${ink},${ink},${ink})`;
+      for (const [top, bottom] of inkBlobs) {
+        ctx.fillRect(x, wallTop + top * wallHeight, columnWidth, (bottom - top) * wallHeight);
+      }
+    }
   }
 
   // 🔦 The flashlight circle: the edges of the screen fade to black.
