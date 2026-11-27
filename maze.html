@@ -142,8 +142,12 @@ function nearJack() {
 // Press E (or the ✋ button) near the box to pick it up.
 function grabPress() {
   startGame();
-  if (jack.state === "floor" && nearJack()) {
+  // You can pick it up from the floor, OR again after he didn't pop. Feeling lucky?
+  const onTheFloor = jack.state === "floor" || jack.state === "dud";
+  if (onTheFloor && nearJack()) {
     jack.state = "held";
+    jack.notesWound = 0;   // the song starts over from the beginning
+    jack.windTimer = 0;
     bgMusic.gain.setTargetAtTime(0, audio.currentTime, 0.4);  // the music fades away...
   }
 }
@@ -1007,7 +1011,7 @@ function draw(now) {
   // Little hints at the bottom of the screen.
   ctx.font = "18px Georgia, serif";
   ctx.fillStyle = "rgba(255,255,255,0.7)";
-  const canGrab = jack.state === "floor" && nearJack();
+  const canGrab = (jack.state === "floor" || jack.state === "dud") && nearJack();
   if (jack.state === "dud" && now - jack.dudTime < 4000) {
     ctx.fillText("...nothing happened. phew.", w / 2, h - 30);
   } else if (started && canGrab) {
