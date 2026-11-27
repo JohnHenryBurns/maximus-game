@@ -112,6 +112,42 @@ let escaped = false;
 let started = false;
 let walkTime = 0;   // used to bob your view up and down as you walk
 
+// ---------------------------------------------------------------------
+//  🎁 THE JACK-IN-THE-BOX
+//  He hides in a random room far-ish from the start.
+//  state can be: "floor" (sitting in the maze), "held" (in your hands),
+//  or "popped" (OUT OF THE BOX!!)
+// ---------------------------------------------------------------------
+const farRooms = [];
+for (let y = 1; y < gridSize - 1; y += 2) {
+  for (let x = 1; x < gridSize - 1; x += 2) {
+    const isExitRoom = x === gridSize - 2 && y === gridSize - 2;
+    if (x + y >= gridSize && !isExitRoom) farRooms.push([x, y]);
+  }
+}
+const [jackRoomX, jackRoomY] = farRooms[Math.floor(Math.random() * farRooms.length)];
+const jack = {
+  x: jackRoomX + 0.5, y: jackRoomY + 0.5,
+  state: "floor",
+  notesWound: 0,     // how far into the song you've cranked
+  windTimer: 0,      // counts up while you crank, until it's time for the next note
+  crankAngle: 0,     // how far the crank handle has turned
+  popTime: 0,        // WHEN he popped (so we can animate the spring)
+};
+
+function nearJack() {
+  return Math.hypot(jack.x - player.x, jack.y - player.y) < 1.1;
+}
+
+// Press E (or the ✋ button) near the box to pick it up.
+function grabPress() {
+  startGame();
+  if (jack.state === "floor" && nearJack()) {
+    jack.state = "held";
+    bgMusic.gain.setTargetAtTime(0, audio.currentTime, 0.4);  // the music fades away...
+  }
+}
+
 // What's at this spot? (1 = wall, 0 = floor, 2 = exit)
 function whatIsAt(x, y) {
   const col = Math.floor(x), row = Math.floor(y);
@@ -125,18 +161,33 @@ function whatIsAt(x, y) {
 //  Touch: put your thumb down and slide it. Up = forward, sideways = turn.
 // ---------------------------------------------------------------------
 const keysDown = {};
-window.addEventListener("keydown", e => { keysDown[e.key.toLowerCase()] = true; startGame(); });
+window.addEventListener("keydown", e => {
+  keysDown[e.key.toLowerCase()] = true;
+  startGame();
+  if (e.key.toLowerCase() === "e") grabPress();
+});
 window.addEventListener("keyup",   e => { keysDown[e.key.toLowerCase()] = false; });
 
 const thumb = { active: false, id: null, startX: 0, startY: 0, x: 0, y: 0 };
+// The ✋ / 🔄 button for phones. (Where it is gets worked out in draw.)
+const grabButton = { x: 0, y: 0, radius: 44, showing: false, touchId: null };
+let usingTouch = false;
+
 canvas.addEventListener("touchstart", e => {
   e.preventDefault();
   startGame();
-  const t = e.changedTouches[0];
-  if (!thumb.active) {
-    thumb.active = true; thumb.id = t.identifier;
-    thumb.startX = thumb.x = t.clientX;
-    thumb.startY = thumb.y = t.clientY;
+  usingTouch = true;
+  for (const t of e.changedTouches) {
+    const onButton = grabButton.showing &&
+      Math.hypot(t.clientX - grabButton.x, t.clientY - grabButton.y) < grabButton.radius;
+    if (onButton) {
+      grabButton.touchId = t.identifier;   // this finger is pressing the button
+      grabPress();
+    } else if (!thumb.active) {
+      thumb.active = true; thumb.id = t.identifier;   // this finger is walking
+      thumb.startX = thumb.x = t.clientX;
+      thumb.startY = thumb.y = t.clientY;
+    }
   }
 }, { passive: false });
 canvas.addEventListener("touchmove", e => {
@@ -146,7 +197,10 @@ canvas.addEventListener("touchmove", e => {
   }
 }, { passive: false });
 function endTouch(e) {
-  for (const t of e.changedTouches) if (t.identifier === thumb.id) thumb.active = false;
+  for (const t of e.changedTouches) {
+    if (t.identifier === thumb.id) thumb.active = false;
+    if (t.identifier === grabButton.touchId) grabButton.touchId = null;
+  }
 }
 canvas.addEventListener("touchend", endTouch);
 canvas.addEventListener("touchcancel", endTouch);
@@ -227,9 +281,41 @@ function setUpSpeakers() {
   // (Distortion makes things LOUD, so even 10 is only 0.35.)
   volume.gain.value = musicVolume * 0.035;
   musicOut.connect(distortion).connect(muffle).connect(volume).connect(audio.destination);
+
+  // The background song goes through its own volume knob, so we can
+  // fade it to silence when you pick up the jack-in-the-box. 🤫
+  bgMusic = audio.createGain();
+  bgMusic.connect(musicOut);
+
+  // The box in your HANDS gets its own speaker: clear and close,
+  // no distortion. It sounds like it's right in front of you.
+  windOut = audio.createGain();
+  windOut.gain.value = 0.5;
+  windOut.connect(audio.destination);
+}
+let bgMusic = null, windOut = null;
+
+// 💥 BOING! A sound that zooms up in pitch, then wobbles. That's the "POP".
+function playBoing() {
+  const now = audio.currentTime;
+  const osc = audio.createOscillator();
+  const gain = audio.createGain();
+  osc.type = "triangle";
+  osc.frequency.setValueAtTime(120, now);
+  osc.frequency.exponentialRampToValueAtTime(700, now + 0.15);  // zoom up!
+  // wobble wobble wobble...
+  for (let i = 0; i < 8; i++) {
+    osc.frequency.linearRampToValueAtTime(i % 2 ? 500 : 300, now + 0.2 + i * 0.07);
+  }
+  gain.gain.setValueAtTime(0.4, now);
+  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.9);
+  osc.connect(gain).connect(audio.destination);
+  osc.start(now);
+  osc.stop(now + 1);
 }
 
-function playMusicBoxNote(note, when) {
+// "output" = which speaker to play through. Normally the background music.
+function playMusicBoxNote(note, when, output = bgMusic) {
   // Turn a piano-key number into a frequency (how fast the sound wiggles).
   const wobble = (Math.random() - 0.5) * 0.3;          // a little out of tune...
   const freq = 440 * Math.pow(2, (note + 12 + wobble - 69) / 12);
@@ -245,7 +331,7 @@ function playMusicBoxNote(note, when) {
     osc.frequency.linearRampToValueAtTime(freq * mult * 0.97, when + 1.8);
     gain.gain.setValueAtTime(volume, when);
     gain.gain.exponentialRampToValueAtTime(0.0001, when + 1.8);
-    osc.connect(gain).connect(musicOut);
+    osc.connect(gain).connect(output);
     osc.start(when);
     osc.stop(when + 1.9);
   }
@@ -293,6 +379,27 @@ function update(seconds) {
   if (aheadY === 0) player.y += stepY;
 
   if (walk !== 0) walkTime += seconds;
+
+  // 🔄 WINDING THE JACK-IN-THE-BOX (hold E, or hold the button)
+  const winding = keysDown["e"] || grabButton.touchId !== null;
+  if (jack.state === "held" && winding) {
+    jack.crankAngle += seconds * 7;
+    jack.windTimer += seconds;
+    const [note, length] = song[jack.notesWound];
+    // Wait as long as this note lasts in the song, then play the next one.
+    if (jack.windTimer >= length * 0.25) {
+      jack.windTimer = 0;
+      // The "POP" is the high A note. Instead of playing it... HE POPS OUT!
+      if (note === A) {
+        jack.state = "popped";
+        jack.popTime = performance.now();
+        playBoing();
+      } else {
+        playMusicBoxNote(note, audio.currentTime, windOut);
+        jack.notesWound++;
+      }
+    }
+  }
 }
 
 // ---------------------------------------------------------------------
@@ -388,9 +495,162 @@ function arrowOnWall(ray) {
 }
 
 // ---------------------------------------------------------------------
+//  🎁 DRAWING THE JACK-IN-THE-BOX
+// ---------------------------------------------------------------------
+const BLUE = "#1e4fd8", RED = "#d81e1e", YELLOW = "#f2d21b";
+
+// Draws the box. (x, y) = its top-left corner, size = how big.
+// crank = how far the handle has turned. lidOpen = has he popped?
+function drawJackBox(c, x, y, size, crank, lidOpen) {
+  // The blue box with a red border and a red diamond.
+  c.fillStyle = BLUE;
+  c.fillRect(x, y, size, size);
+  c.strokeStyle = RED;
+  c.lineWidth = size * 0.08;
+  c.strokeRect(x + size * 0.06, y + size * 0.06, size * 0.88, size * 0.88);
+  c.fillStyle = RED;
+  c.beginPath();
+  c.moveTo(x + size / 2, y + size * 0.25);
+  c.lineTo(x + size * 0.75, y + size / 2);
+  c.lineTo(x + size / 2, y + size * 0.75);
+  c.lineTo(x + size * 0.25, y + size / 2);
+  c.fill();
+
+  // The lid: flat on top when closed, flipped open when he's popped.
+  c.save();
+  c.translate(x, y);
+  if (lidOpen) c.rotate(-2.2);
+  c.fillStyle = RED;
+  c.fillRect(0, -size * 0.1, size, size * 0.1);
+  c.restore();
+
+  // The crank on the right side. Seen from the front, the handle
+  // swings up and down as it goes round.
+  const axleX = x + size, axleY = y + size / 2;
+  c.fillRect(axleX, axleY - size * 0.04, size * 0.12, size * 0.08);
+  const handleX = axleX + size * 0.12;
+  const handleY = axleY + Math.sin(crank) * size * 0.18;
+  c.strokeStyle = RED;
+  c.lineWidth = size * 0.06;
+  c.beginPath();
+  c.moveTo(handleX, axleY);
+  c.lineTo(handleX, handleY);
+  c.stroke();
+  c.fillStyle = BLUE;
+  c.beginPath();
+  c.arc(handleX, handleY, size * 0.06, 0, Math.PI * 2);
+  c.fill();
+}
+
+// HIM. 😱 A yellow creature: round head, long wobbly neck, SHARP teeth.
+function drawCreature(c, neckBottomX, neckBottomY, headX, headY, size) {
+  // The long neck: a thick yellow bendy line.
+  c.strokeStyle = "#8a7400";
+  c.lineWidth = size * 0.18;
+  c.lineCap = "round";
+  c.beginPath();
+  c.moveTo(neckBottomX, neckBottomY);
+  c.quadraticCurveTo(neckBottomX, (neckBottomY + headY) / 2, headX, headY);
+  c.stroke();
+  c.strokeStyle = YELLOW;
+  c.lineWidth = size * 0.13;
+  c.stroke();
+
+  // The round head.
+  const r = size * 0.5;
+  c.fillStyle = YELLOW;
+  c.strokeStyle = "#8a7400";
+  c.lineWidth = size * 0.04;
+  c.beginPath();
+  c.arc(headX, headY, r, 0, Math.PI * 2);
+  c.fill();
+  c.stroke();
+
+  // Eyes: big and white with tiny pupils. Staring right at you.
+  for (const side of [-1, 1]) {
+    const eyeX = headX + side * r * 0.38, eyeY = headY - r * 0.25;
+    c.fillStyle = "#fff";
+    c.beginPath();
+    c.arc(eyeX, eyeY, r * 0.22, 0, Math.PI * 2);
+    c.fill();
+    c.fillStyle = "#000";
+    c.beginPath();
+    c.arc(eyeX, eyeY, r * 0.07, 0, Math.PI * 2);
+    c.fill();
+    // Angry eyebrow, slanting down toward the middle.
+    c.strokeStyle = "#000";
+    c.lineWidth = size * 0.04;
+    c.beginPath();
+    c.moveTo(eyeX + side * r * 0.25, eyeY - r * 0.35);
+    c.lineTo(eyeX - side * r * 0.2, eyeY - r * 0.22);
+    c.stroke();
+  }
+
+  // The mouth: a big black grin...
+  const mouthLeft = headX - r * 0.7, mouthWidth = r * 1.4;
+  const mouthTop = headY + r * 0.15, mouthHeight = r * 0.5;
+  c.fillStyle = "#000";
+  c.beginPath();
+  c.ellipse(headX, mouthTop + mouthHeight / 2, mouthWidth / 2, mouthHeight / 2, 0, 0, Math.PI * 2);
+  c.fill();
+  // ...full of VERY SHARP teeth. Top row points down, bottom row points up.
+  c.fillStyle = "#fff";
+  const teeth = 7, toothWidth = mouthWidth * 0.8 / teeth;
+  for (let i = 0; i < teeth; i++) {
+    const tx = mouthLeft + mouthWidth * 0.1 + i * toothWidth;
+    c.beginPath();                                   // top tooth
+    c.moveTo(tx, mouthTop + mouthHeight * 0.15);
+    c.lineTo(tx + toothWidth, mouthTop + mouthHeight * 0.15);
+    c.lineTo(tx + toothWidth / 2, mouthTop + mouthHeight * 0.55);
+    c.fill();
+    c.beginPath();                                   // bottom tooth
+    c.moveTo(tx, mouthTop + mouthHeight * 0.85);
+    c.lineTo(tx + toothWidth, mouthTop + mouthHeight * 0.85);
+    c.lineTo(tx + toothWidth / 2, mouthTop + mouthHeight * 0.45);
+    c.fill();
+  }
+}
+
+// We paint the box ONCE onto a little hidden canvas, then reuse that
+// picture every frame when it's sitting in the maze. Saves work!
+const boxPicture = document.createElement("canvas");
+boxPicture.width = 80; boxPicture.height = 64;
+drawJackBox(boxPicture.getContext("2d"), 2, 8, 54, 0, false);
+// A second hidden canvas for the box with flashlight darkness on top.
+const darkBoxPicture = document.createElement("canvas");
+darkBoxPicture.width = 80; darkBoxPicture.height = 64;
+const darkCtx = darkBoxPicture.getContext("2d");
+
+// The box in your hands (and HIM, if he's popped).
+function drawHeldJack(w, h, now) {
+  const size = Math.min(w, h) * 0.3;
+  const bob = Math.sin(walkTime * 9) * 8;
+  const boxX = w * 0.6 - size / 2;
+  const boxY = h - size * 0.8 + bob;
+
+  if (jack.state === "popped") {
+    const t = (now - jack.popTime) / 1000;     // seconds since he popped
+    // SPRING! Shoots up, overshoots, and bounces... boing boing boing.
+    const springy = 1 - Math.exp(-t * 4) * Math.cos(t * 16);
+    const neckLength = Math.min(boxY - h * 0.28, size * 2.2) * springy;
+    const sway = Math.sin(t * 2.3) * size * 0.3 * Math.min(1, t);
+    drawCreature(ctx, boxX + size / 2, boxY + size * 0.2,
+                 boxX + size / 2 + sway, boxY - neckLength, size);
+    // "POP!" flashes on screen for the first second.
+    if (t < 1) {
+      ctx.fillStyle = "#fff";
+      ctx.font = `bold ${Math.floor(size * 0.6)}px Georgia, serif`;
+      ctx.textAlign = "center";
+      ctx.fillText("POP!", w * 0.3, h * 0.35);
+    }
+  }
+  drawJackBox(ctx, boxX, boxY, size, jack.crankAngle, jack.state === "popped");
+}
+
+// ---------------------------------------------------------------------
 //  DRAW — paint the picture. Runs every frame.
 // ---------------------------------------------------------------------
-function draw() {
+function draw(now) {
   const w = canvas.width, h = canvas.height;
   // Your view bobs up and down a little while you walk, like real footsteps.
   // Looking up moves the horizon DOWN the screen (so you see more ceiling).
@@ -413,9 +673,11 @@ function draw() {
   const flicker = Math.random() < 0.03 ? 0.6 : 1;
   const lightReach = flashlightSize * flicker;
 
+  const wallDistances = [];   // how far the wall is in each column (for the box)
   for (let x = 0; x < w; x += columnWidth) {
     const screenSpot = (2 * x) / w - 1;      // -1 = left edge, 1 = right edge
     const ray = castRay(lookX + sideX * screenSpot, lookY + sideY * screenSpot);
+    wallDistances.push(ray.distance);
     const wallHeight = h / ray.distance;
 
     // Brightness: close = bright, far = black. That's the flashlight!
@@ -450,6 +712,43 @@ function draw() {
     }
   }
 
+  // 🎁 The box sitting in the maze (a "sprite": a flat picture facing you).
+  if (jack.state === "floor") {
+    // Where is the box compared to you? Turn that into "how far ahead"
+    // (ahead) and "how far to the side" (across).
+    const dx = jack.x - player.x, dy = jack.y - player.y;
+    const flip = 1 / (sideX * lookY - lookX * sideY);
+    const across = flip * (lookY * dx - lookX * dy);
+    const ahead = flip * (-sideY * dx + sideX * dy);
+    if (ahead > 0.2) {                                 // only if it's in front of you
+      const screenX = (w / 2) * (1 + across / ahead);
+      const wallSize = h / ahead;                      // same rule as walls: far = small
+      const boxH = wallSize * 0.4, boxW = boxH * 80 / 64;
+      const boxTop = horizon + wallSize / 2 - boxH;    // sitting on the floor
+      const boxLeft = screenX - boxW / 2;
+      // Darken it with the flashlight, just like the walls.
+      const light = Math.max(0.15, 1 - ahead / lightReach) * Math.min(1, flashlightPower * 1.6);
+      darkCtx.clearRect(0, 0, 80, 64);
+      darkCtx.drawImage(boxPicture, 0, 0);
+      darkCtx.globalCompositeOperation = "source-atop";  // only darken the box, not the empty bits
+      darkCtx.fillStyle = `rgba(0,0,0,${1 - light})`;
+      darkCtx.fillRect(0, 0, 80, 64);
+      darkCtx.globalCompositeOperation = "source-over";
+      // Draw it one thin slice at a time, skipping slices hidden behind a wall.
+      const firstColumn = Math.max(0, Math.floor(boxLeft / columnWidth));
+      for (let col = firstColumn; col * columnWidth < Math.min(w, boxLeft + boxW); col++) {
+        if (ahead >= wallDistances[col]) continue;     // a wall is in front of it
+        const sliceX = col * columnWidth;
+        const pictureX = Math.max(0, Math.min(79, (sliceX - boxLeft) / boxW * 80));
+        ctx.drawImage(darkBoxPicture, pictureX, 0, Math.max(1, columnWidth / boxW * 80), 64,
+                      sliceX, boxTop, columnWidth, boxH);
+      }
+    }
+  }
+
+  // ✋ The box in your hands (and maybe... HIM).
+  if (jack.state !== "floor") drawHeldJack(w, h, now);
+
   // 🔦 The flashlight circle: the edges of the screen fade to black.
   const edge = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.2 * flicker,
                                         w / 2, h / 2, Math.max(w, h) * 0.6);
@@ -475,6 +774,33 @@ function draw() {
   } else if (escaped) {
     ctx.fillText("YOU ESCAPED!", w / 2, h / 2);
   }
+
+  // Little hints at the bottom of the screen.
+  ctx.font = "18px Georgia, serif";
+  ctx.fillStyle = "rgba(255,255,255,0.7)";
+  const canGrab = jack.state === "floor" && nearJack();
+  if (started && canGrab) {
+    ctx.fillText(usingTouch ? "tap ✋ to pick it up" : "press E to pick it up", w / 2, h - 30);
+  } else if (jack.state === "held") {
+    ctx.fillText(usingTouch ? "hold 🔄 to wind it..." : "hold E to wind it...", w / 2, h - 30);
+  }
+
+  // 📱 The grab / wind button (only for touch screens).
+  grabButton.showing = usingTouch && (canGrab || jack.state === "held");
+  if (grabButton.showing) {
+    grabButton.x = w - 70;
+    grabButton.y = h * 0.5;
+    ctx.fillStyle = grabButton.touchId !== null ? "rgba(255,255,255,0.4)" : "rgba(255,255,255,0.15)";
+    ctx.strokeStyle = "rgba(255,255,255,0.6)";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(grabButton.x, grabButton.y, grabButton.radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.font = "34px sans-serif";
+    ctx.fillStyle = "#fff";
+    ctx.fillText(jack.state === "held" ? "🔄" : "✋", grabButton.x, grabButton.y + 12);
+  }
 }
 
 // ---------------------------------------------------------------------
@@ -485,7 +811,7 @@ function gameLoop(now) {
   const seconds = Math.min((now - lastTime) / 1000, 0.05);
   lastTime = now;
   update(seconds);
-  draw();
+  draw(now);
   requestAnimationFrame(gameLoop);
 }
 requestAnimationFrame(gameLoop);
